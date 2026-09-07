@@ -88,7 +88,11 @@ To build from source, you will also need:
 
 ### Download a release
 
-Download the latest DMG from [GitHub Releases](https://github.com/Blaizzy/nativ/releases/latest), drag **Nativ** to Applications, and launch it. Nativ uses Sparkle for subsequent in-app updates.
+Download the latest DMG from [GitHub Releases](https://github.com/Blaizzy/nativ/releases/latest), drag **Nativ** to Applications, and launch it. Alternatively, install it via Homebrew:
+```sh
+brew install --cask nativ
+```
+Nativ uses Sparkle for subsequent in-app updates.
 
 On first launch:
 

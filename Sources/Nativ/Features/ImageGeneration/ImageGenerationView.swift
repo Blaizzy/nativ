@@ -9,11 +9,10 @@ struct ImageGenerationView: View {
         static let horizontalPadding: CGFloat = 32
     }
 
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
-    let conversationWidthReduction: CGFloat
     let onExploreImageModels: () -> Void
     @StateObject private var localLibrary = LocalModelLibrary()
     @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
@@ -33,10 +32,7 @@ struct ImageGenerationView: View {
                     onSelectWorkspaceMode: onSelectWorkspaceMode,
                     onExploreImageModels: onExploreImageModels
                 )
-                    .frame(
-                        maxWidth: Layout.composerMaxWidth
-                            - conversationWidthReduction
-                    )
+                    .frame(maxWidth: Layout.composerMaxWidth)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, Layout.horizontalPadding)
                     .onGeometryChange(for: CGFloat.self) { proxy in
@@ -148,7 +144,7 @@ struct ImageGenerationView: View {
 }
 
 private struct ImageGenerationComposer: View {
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
     let localModels: [LocalModel]
     let isScanningForModels: Bool
@@ -221,6 +217,7 @@ private struct ImageGenerationComposer: View {
                     }
                     .buttonStyle(.plain)
                     .help("Image settings")
+                    .disabled(viewModel.isCurrentSessionActiveInAnotherWindow)
                     .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
                         ImageGenerationSettingsView(viewModel: viewModel)
                     }
@@ -295,11 +292,13 @@ private struct ImageGenerationComposer: View {
         model.isRunning
             && selectedModelID != nil
             && !viewModel.isGenerating
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
     }
 
     private var canSubmit: Bool {
         selectedModelID != nil
             && viewModel.canSubmit(isRunning: model.isRunning)
+            && !viewModel.isCurrentSessionActiveInAnotherWindow
             && (!selectedModelIsEditOnly || viewModel.nextRequestIsEdit)
     }
 
@@ -318,7 +317,7 @@ private struct ImageGenerationComposer: View {
 
     private var modelLabel: String {
         guard let selectedModelID else {
-            return "Choose model"
+            return "Choose Model"
         }
         return selectedModelID.split(separator: "/").last.map(String.init)
             ?? selectedModelID
@@ -331,12 +330,14 @@ private struct ImageGenerationComposer: View {
             selectedModelLabel: modelLabel,
             selectedModelProvider: selectedModelProvider,
             selectedModelDetail: nil,
-            secondarySection: nil,
+            showsFastIndicator: false,
+            secondarySections: [],
+            secondarySectionsForModel: nil,
             isModelLoading: isSelectedModelLoading,
             modelLoadingPercentage: isSelectedModelLoading
                 ? model.modelLoadingPercentage
                 : nil,
-            isDisabled: model.isModelLoading || viewModel.isGenerating,
+            isDisabled: model.isModelLoading || model.inferenceActivityInProgress,
             statusLabel: localModelStatusLabel,
             helpText: modelPickerHelp,
             accessibilityValue: modelLabel,
@@ -391,8 +392,8 @@ private struct ImageGenerationComposer: View {
     }
 
     private var modelPickerHelp: String {
-        if viewModel.isGenerating {
-            return "Model switching is unavailable while generating"
+        if viewModel.isGenerating || model.inferenceActivityInProgress {
+            return "Models can’t be changed while a response is being generated."
         }
         if model.isModelLoading {
             return model.modelLoadingStatusText ?? "Loading \(modelLabel)"
@@ -406,6 +407,9 @@ private struct ImageGenerationComposer: View {
     private var unavailableReason: String? {
         if !model.isRunning {
             return "Server is stopped."
+        }
+        if viewModel.isCurrentSessionActiveInAnotherWindow {
+            return "This image session is active in another window."
         }
         return nil
     }

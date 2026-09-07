@@ -534,19 +534,22 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     }
 }
 
-public final class NativChatClient {
+public struct MLXPromptTokenCount: Decodable, Equatable, Sendable {
+    public let inputTokens: Int
+
+    enum CodingKeys: String, CodingKey {
+        case inputTokens = "input_tokens"
+    }
+}
+
+public final class NativChatClient: @unchecked Sendable {
     private let baseURL: URL
     private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
-    private let decoder = JSONDecoder()
-    private let encoder = JSONEncoder()
 
-    /// How long a streaming response may go without delivering any bytes before
-    /// the request fails. `timeoutIntervalForRequest` is an inactivity timer that
-    /// URLSession resets whenever new data arrives, so this bounds a stalled
-    /// stream without limiting a healthy one.
-    public static let defaultIdleTimeout: TimeInterval = 120
+
+    public static let defaultIdleTimeout: TimeInterval = 600
 
     /// Total budget for one request. Long generations legitimately run for many
     /// minutes, so this only exists to stop a connection leaking forever; stalls
@@ -590,7 +593,7 @@ public final class NativChatClient {
             throw NativChatError.httpStatus(httpResponse.statusCode, String(decoding: data, as: UTF8.self))
         }
 
-        let decoded = try decoder.decode(ChatCompletionResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
         guard let choice = decoded.choices.first else {
             throw NativChatError.missingAssistantContent
         }
@@ -611,6 +614,23 @@ public final class NativChatClient {
         )
     }
 
+    public func countPromptTokens(
+        for request: MLXChatCompletionRequest
+    ) async throws -> MLXPromptTokenCount {
+        let urlRequest = try makePromptTokenCountURLRequest(for: request)
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativChatError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativChatError.httpStatus(
+                httpResponse.statusCode,
+                String(decoding: data, as: UTF8.self)
+            )
+        }
+        return try JSONDecoder().decode(MLXPromptTokenCount.self, from: data)
+    }
+
     public func streamChat(
         _ request: MLXChatCompletionRequest,
         onDelta: @escaping @Sendable (String) async -> Void
@@ -626,6 +646,7 @@ public final class NativChatClient {
         _ request: MLXChatCompletionRequest,
         onEvent: @escaping @Sendable (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXChatCompletion {
+        let decoder = JSONDecoder()
         var payload = request
         payload.stream = true
         payload.streamOptions = MLXChatStreamOptions(includeUsage: true)
@@ -782,8 +803,24 @@ public final class NativChatClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accepts, forHTTPHeaderField: "Accept")
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
-        request.httpBody = try encoder.encode(payload)
+        request.httpBody = try JSONEncoder().encode(payload)
         return request
+    }
+
+    func makePromptTokenCountURLRequest(
+        for request: MLXChatCompletionRequest
+    ) throws -> URLRequest {
+        var urlRequest = URLRequest(
+            url: baseURL.appendingPathComponent("v1/responses/input_tokens")
+        )
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = timeout
+        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&urlRequest, apiKey: apiKey)
+        urlRequest.httpBody = try JSONEncoder().encode(PromptTokenCountRequest(request))
+        return urlRequest
     }
 
     private func resolvedUsage(
@@ -828,6 +865,39 @@ public final class NativChatClient {
         }
 
         return body
+    }
+}
+
+private struct PromptTokenCountRequest: Encodable {
+    let input: [MLXChatMessage]
+    let model: String
+    let tools: [MLXChatToolDefinition]?
+    let toolChoice: String?
+    let enableThinking: Bool?
+    let thinkingBudget: Int?
+    let thinkingStartToken: String?
+    let thinkingEndToken: String?
+
+    init(_ request: MLXChatCompletionRequest) {
+        input = request.messages
+        model = request.model
+        tools = request.tools
+        toolChoice = request.toolChoice
+        enableThinking = request.enableThinking
+        thinkingBudget = request.thinkingBudget
+        thinkingStartToken = request.thinkingStartToken
+        thinkingEndToken = request.thinkingEndToken
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case input
+        case model
+        case tools
+        case toolChoice = "tool_choice"
+        case enableThinking = "enable_thinking"
+        case thinkingBudget = "thinking_budget"
+        case thinkingStartToken = "thinking_start_token"
+        case thinkingEndToken = "thinking_end_token"
     }
 }
 

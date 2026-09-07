@@ -365,7 +365,7 @@ final class VoiceCaptureCoordinator {
                 }
                 self.finishOverlayTranscription(overlayTranscriptionID)
                 self.showTranscriptionError(
-                    title: "Transcription Failed",
+                    title: "Transcription failed",
                     message: error.localizedDescription
                 )
             }
@@ -410,7 +410,7 @@ final class VoiceCaptureCoordinator {
             // the user may not have been trying to use.
             finishOverlayTranscription(overlayTranscriptionID)
             showTranscriptionError(
-                title: "Preparing On-Device Dictation",
+                title: "Preparing on-device dictation",
                 message: """
                 macOS is downloading its \(language) speech model. Your recording is saved \
                 in Audio — dictate again once it has finished.
@@ -460,7 +460,7 @@ final class VoiceCaptureCoordinator {
             showMissingSpeechModelAlert()
         case .serverStopped:
             showTranscriptionError(
-                title: "Nativ Server Is Not Running",
+                title: "Nativ server is not running",
                 message: "Start the Nativ server, then record again to transcribe the audio."
             )
         }
@@ -520,7 +520,7 @@ final class VoiceCaptureCoordinator {
     private func showRecentRecordingUnavailable() {
         let preferences = VoiceShortcutPreferences.shared
         showTranscriptionError(
-            title: "No Recent Recording",
+            title: "No recent recording",
             message: """
             Audio is available for five minutes after recording. Use \
             \(preferences.recordShortcut.displayName) to record again, then use \
@@ -538,12 +538,12 @@ final class VoiceCaptureCoordinator {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Speech-to-Text Model Required"
+        alert.messageText = "Speech-to-text model required"
         alert.informativeText = """
         Install a speech-to-text model such as Parakeet, Qwen3-ASR, or \
         MOSS-Transcribe from the Models table, then record again.
         """
-        alert.addButton(withTitle: "Open Speech Models")
+        alert.addButton(withTitle: "Open Models")
         alert.addButton(withTitle: "Cancel")
         let response = alert.runModal()
         isPresentingAlert = false
@@ -584,7 +584,7 @@ final class VoiceCaptureCoordinator {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Nativ Could Not Insert Text"
+        alert.messageText = "Nativ could not insert text"
         alert.informativeText = """
         The transcript is on the clipboard. macOS denied Nativ permission to \
         paste it at the cursor. Enable Nativ in System Settings to insert future \
@@ -610,7 +610,7 @@ final class VoiceCaptureCoordinator {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Microphone Access Needed"
+        alert.messageText = "Microphone access needed"
         alert.informativeText = """
         Nativ needs microphone access to record dictation. Enable Nativ under \
         Microphone in System Settings, then try the shortcut again.

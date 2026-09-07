@@ -6,6 +6,7 @@ on:
     paths:
       - "website/**"
       - "scripts/capture_download_history.mjs"
+      - "scripts/capture_star_history.mjs"
       - ".github/workflows/pages.yml"
   schedule:
     - cron: "17 0 * * *"
@@ -40,16 +41,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/capture_download_history.mjs
 
-      - name: Commit download history
+      - name: Capture star history
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/capture_star_history.mjs
+
+      - name: Commit history snapshots
         if: github.ref == 'refs/heads/main'
         run: |
-          if git diff --quiet -- website/data/download-history.json; then
+          if git diff --quiet -- website/data/download-history.json website/data/star-history.json; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add website/data/download-history.json
-          git commit -m "Update download history"
+          git add website/data/download-history.json website/data/star-history.json
+          git commit -m "Update download and star history"
           git pull --rebase origin main
           git push origin HEAD:main
 

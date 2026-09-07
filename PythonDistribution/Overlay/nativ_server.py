@@ -877,6 +877,12 @@ def current_runtime_snapshot() -> dict[str, Any]:
     config = base.model_cache.get("config") if isinstance(base.model_cache, dict) else None
     text_config = getattr(config, "text_config", None)
     loaded_context_size = getattr(text_config, "max_position_embeddings", None)
+    configured_context_limit = base_generation.get_configured_context_limit()
+    effective_context_limit = (
+        min(loaded_context_size, configured_context_limit)
+        if loaded_context_size is not None and configured_context_limit is not None
+        else configured_context_limit or loaded_context_size
+    )
 
     queue_depth = 0
     requests_queue = getattr(getattr(base, "response_generator", None), "requests", None)
@@ -896,8 +902,8 @@ def current_runtime_snapshot() -> dict[str, Any]:
         "loaded_model": base.model_cache.get("model_path") if isinstance(base.model_cache, dict) else None,
         "loaded_adapter": base.model_cache.get("adapter_path") if isinstance(base.model_cache, dict) else None,
         "loaded_context_size": loaded_context_size,
-        "configured_context_limit": loaded_context_size,
-        "effective_context_limit": loaded_context_size,
+        "configured_context_limit": configured_context_limit,
+        "effective_context_limit": effective_context_limit,
         "loaded_tool_parser": current_tool_parser(),
         "analytics_db_path": ANALYTICS_STORE.path,
         "continuous_batching_enabled": getattr(base, "response_generator", None) is not None,

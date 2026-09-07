@@ -1,6 +1,5 @@
 import AVKit
 import AppKit
-import Quartz
 import SwiftUI
 
 struct ArtifactPreview: View {
@@ -58,17 +57,17 @@ struct ArtifactPreview: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
-                    .font(.system(size: 14, weight: .semibold))
+                    .nativTextStyle(.compactCardTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
-                    .font(.system(size: 11))
+                    .nativTextStyle(.metadata)
                     .foregroundStyle(.white.opacity(0.6))
             }
             Spacer(minLength: 0)
 
             Button(action: { onOpenChat(artifact) }) {
-                Label("Open in chat", systemImage: "bubble.left.and.bubble.right")
+                Label("Open in Chat", systemImage: "bubble.left.and.bubble.right")
             }
             .buttonStyle(.bordered)
             .tint(.white)
@@ -91,7 +90,7 @@ struct ArtifactPreview: View {
         switch artifact.kind {
         case .image:
             if let image = NSImage(contentsOf: url) {
-                ZoomableImage(image: image)
+                FilePreviewImage(image: image)
             } else {
                 unavailable
             }
@@ -99,7 +98,7 @@ struct ArtifactPreview: View {
             ArtifactVideoPlayer(url: url)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         case .document:
-            QuickLookPreview(url: url)
+            QuickLookFilePreview(url: url)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
@@ -108,7 +107,7 @@ struct ArtifactPreview: View {
         HStack {
             if let prompt = artifact.prompt, !prompt.isEmpty {
                 Text(prompt)
-                    .font(.system(size: 12))
+                    .nativTextStyle(.body)
                     .foregroundStyle(.white.opacity(0.7))
                     .lineLimit(2)
                     .textSelection(.enabled)
@@ -116,7 +115,7 @@ struct ArtifactPreview: View {
             Spacer(minLength: 0)
             if let index {
                 Text("\(index + 1) of \(artifacts.count)")
-                    .font(.system(size: 11).monospacedDigit())
+                    .nativTextStyle(.metadataNumeric)
                     .foregroundStyle(.white.opacity(0.5))
             }
         }
@@ -129,7 +128,7 @@ struct ArtifactPreview: View {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 28))
             Text("Preview unavailable")
-                .font(.system(size: 13))
+                .nativTextStyle(.body)
         }
         .foregroundStyle(.white.opacity(0.6))
     }
@@ -168,49 +167,6 @@ struct ArtifactPreview: View {
             return
         }
         selectedID = artifacts[index + 1].id
-    }
-}
-
-private struct ZoomableImage: View {
-    let image: NSImage
-
-    @State private var scale: CGFloat = 1
-    @GestureState private var pinch: CGFloat = 1
-
-    var body: some View {
-        Image(nsImage: image)
-            .resizable()
-            .scaledToFit()
-            .scaleEffect(scale * pinch)
-            .gesture(
-                MagnifyGesture()
-                    .updating($pinch) { value, state, _ in
-                        state = value.magnification
-                    }
-                    .onEnded { value in
-                        scale = min(max(scale * value.magnification, 1), 6)
-                    }
-            )
-            .onTapGesture(count: 2) {
-                withAnimation(.easeOut(duration: 0.2)) {
-                    scale = scale > 1 ? 1 : 2
-                }
-            }
-    }
-}
-
-private struct QuickLookPreview: NSViewRepresentable {
-    let url: URL
-
-    func makeNSView(context: Context) -> QLPreviewView {
-        let view = QLPreviewView(frame: .zero, style: .normal) ?? QLPreviewView()
-        view.autostarts = true
-        view.previewItem = url as NSURL
-        return view
-    }
-
-    func updateNSView(_ nsView: QLPreviewView, context: Context) {
-        nsView.previewItem = url as NSURL
     }
 }
 

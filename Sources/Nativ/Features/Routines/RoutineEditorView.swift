@@ -6,7 +6,7 @@ struct RoutineEditor: View {
     let draft: RoutineDraft
     let availableModelIDs: [String]
     let toolCapableModelIDs: Set<String>
-    @ObservedObject var model: NativModel
+    var model: NativModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject private var notifications = NativNotificationService.shared
     let isExistingTask: Bool
@@ -67,7 +67,8 @@ struct RoutineEditor: View {
             case .skill:
                 return false
             case .kit(let id):
-                return NativKit.all.first(where: { $0.id == id })?.mcpServerIDs.isEmpty == false
+                guard let kit = model.kitLibrary.catalog.kit(id: id) else { return false }
+                return !kit.mcpReferences.isEmpty || kit.toolCount > 0
             case .mcpServer, .tool:
                 return true
             }
@@ -75,7 +76,7 @@ struct RoutineEditor: View {
     }
 
     private var capabilityOptions: [ScheduledCapabilityOption] {
-        var options = NativKit.all.map { kit in
+        var options = model.kitLibrary.catalog.kits.map { kit in
             ScheduledCapabilityOption(
                 capability: .kit(kit.id),
                 section: .kits,
@@ -102,8 +103,13 @@ struct RoutineEditor: View {
         options += ChatToolRegistry.descriptors(canEditImage: false)
             .filter {
                 $0.definition.function.name != ChatSwitchModelToolRegistry.toolName
+                    && $0.configuration != .fileWrite
                     && !disabledNames.contains($0.definition.function.name)
                     && ($0.configuration != .webSearch || ChatWebSearchToolRegistry.isConfigured())
+                    && ($0.configuration != .fileRead
+                        || FileReadAccessPolicy.isConfigured(
+                            rootPath: model.settings.fileReadRootPath
+                        ))
             }
             .map { descriptor in
                 let definition = descriptor.definition.function
@@ -111,7 +117,9 @@ struct RoutineEditor: View {
                     capability: .tool(ScheduledTool(provider: .builtIn, name: definition.name)),
                     section: .tools,
                     title: descriptor.configuration?.displayName ?? humanized(definition.name),
-                    detail: definition.description,
+                    detail: ChatReadFileToolRegistry.toolNames.contains(definition.name)
+                        ? "Reads or searches only within \(model.settings.fileReadRootPath ?? "the configured File Read folder"). Runs without confirmation in scheduled tasks."
+                        : definition.description,
                     systemImage: "hammer"
                 )
             }
@@ -181,8 +189,8 @@ struct RoutineEditor: View {
                         .font(.system(size: 17, weight: .medium))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("No tools selected")
-                            .font(.system(size: 13, weight: .medium))
+                        Text("No capabilities selected")
+                            .nativTextStyle(.rowTitle)
                     }
                 }
             } else {
@@ -196,15 +204,15 @@ struct RoutineEditor: View {
                                 .frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
-                                    .font(.system(size: 12, weight: .medium))
+                                    .nativTextStyle(.supportingEmphasized)
                                 Text(option.summaryLine)
-                                    .font(.system(size: 10))
+                                    .nativTextStyle(.metadata)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 8)
                             Text(option.section.singularTitle)
-                                .font(.system(size: 9, weight: .semibold))
+                                .nativTextStyle(.badge)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
@@ -230,14 +238,14 @@ struct RoutineEditor: View {
                     isSelectingCapabilities = true
                 } label: {
                     Label(
-                        capabilities.isEmpty ? "Add tools" : "Manage tools",
+                        capabilities.isEmpty ? "Add Capabilities" : "Manage Capabilities",
                         systemImage: "plus"
                     )
                 }
                 .controlSize(.small)
                 Spacer()
                 if !capabilities.isEmpty {
-                    Text("\(capabilities.count) selected")
+                    Text("\(capabilities.count) capabilities selected")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -268,7 +276,7 @@ struct RoutineEditor: View {
                     field("Model") {
                         VStack(alignment: .leading, spacing: 8) {
                             Picker("Model", selection: $modelID) {
-                                Text("Select a model").tag("")
+                                Text("Choose Model").tag("")
                                 ForEach(availableModelIDs, id: \.self) { id in
                                     Text(NativFormatting.truncateModelName(id, maxLength: 52)).tag(id)
                                 }
@@ -287,7 +295,7 @@ struct RoutineEditor: View {
                     if draft.routine.runsOnSchedule {
                         field("Schedule") { scheduleContent }
                     }
-                    field("Tools") {
+                    field("Capabilities") {
                         capabilitySelection
                     }
                     notificationPreference
@@ -546,7 +554,7 @@ private struct ScheduledCapabilityOption: Identifiable {
             capability: capability,
             section: section,
             title: title,
-            detail: "This tool is no longer available.",
+            detail: "This capability is no longer available.",
             systemImage: systemImage
         )
     }
@@ -559,6 +567,16 @@ private struct ScheduledCapabilityPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var section: ScheduledCapabilitySection = .all
     @State private var query = ""
+    @State private var draftSelection: Set<ScheduledCapability>
+
+    init(
+        options: [ScheduledCapabilityOption],
+        selection: Binding<Set<ScheduledCapability>>
+    ) {
+        self.options = options
+        _selection = selection
+        _draftSelection = State(initialValue: selection.wrappedValue)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -579,10 +597,10 @@ private struct ScheduledCapabilityPicker: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Tools")
-                    .font(.system(size: 18, weight: .semibold))
-                Text("Choose the tools this scheduled task can use.")
-                    .font(.system(size: 12))
+                Text("Capabilities")
+                    .nativTextStyle(.sheetTitle)
+                Text("Choose the capabilities this scheduled task can use.")
+                    .nativTextStyle(.supporting)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -611,11 +629,11 @@ private struct ScheduledCapabilityPicker: View {
                         let count = count(for: item)
                         if count > 0 {
                             Text("\(count)")
-                                .font(.system(size: 10, weight: .medium))
+                                .nativTextStyle(.badgeMuted)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 12, weight: .medium))
+                    .nativTextStyle(.supportingEmphasized)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .foregroundStyle(section == item ? Color.accentColor : Color.primary)
@@ -638,7 +656,7 @@ private struct ScheduledCapabilityPicker: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Search tools", text: $query)
+                TextField("Search capabilities", text: $query)
                     .textFieldStyle(.plain)
                 if !query.isEmpty {
                     Button {
@@ -661,7 +679,7 @@ private struct ScheduledCapabilityPicker: View {
 
             if filteredOptions.isEmpty {
                 ContentUnavailableView(
-                    "No tools",
+                    "No capabilities",
                     systemImage: "magnifyingglass",
                     description: Text(emptyMessage)
                 )
@@ -670,7 +688,9 @@ private struct ScheduledCapabilityPicker: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(filteredOptions.enumerated()), id: \.element.id) { index, option in
-                            if index > 0 { Divider().padding(.leading, 52) }
+                            if showsDivider(before: option, at: index) {
+                                Divider().padding(.leading, 52)
+                            }
                             capabilityRow(option)
                         }
                     }
@@ -683,15 +703,17 @@ private struct ScheduledCapabilityPicker: View {
     }
 
     private func capabilityRow(_ option: ScheduledCapabilityOption) -> some View {
-        let isSelected = selection.contains(option.capability)
+        let isSelected = draftSelection.contains(option.capability)
         return Button {
             if isSelected {
-                selection.remove(option.capability)
+                draftSelection.remove(option.capability)
             } else {
-                selection.insert(option.capability)
+                draftSelection.insert(option.capability)
             }
         } label: {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                NativBulkSelectionCheckbox(isSelected: isSelected)
+
                 Image(systemName: option.systemImage)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
@@ -700,40 +722,59 @@ private struct ScheduledCapabilityPicker: View {
                         (isSelected ? Color.accentColor : Color.secondary).opacity(0.1),
                         in: RoundedRectangle(cornerRadius: 6, style: .continuous)
                     )
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
                         Text(option.title)
-                            .font(.system(size: 13, weight: .medium))
+                            .nativTextStyle(.rowTitle)
                         Text(option.section.singularTitle)
-                            .font(.system(size: 9, weight: .semibold))
+                            .nativTextStyle(.badge)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
                     Text(option.summaryLine)
-                        .font(.system(size: 11))
+                        .nativTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.55))
+
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 12)
             .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(option.title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func showsDivider(before option: ScheduledCapabilityOption, at index: Int) -> Bool {
+        guard index > 0 else { return false }
+        let previous = filteredOptions[index - 1]
+        return !draftSelection.contains(previous.capability)
+            || !draftSelection.contains(option.capability)
     }
 
     private var footer: some View {
         HStack {
-            Text(selection.isEmpty ? "No tools selected" : "\(selection.count) selected")
-                .font(.system(size: 11))
+            Text(
+                draftSelection.isEmpty
+                    ? "No capabilities selected"
+                    : "\(draftSelection.count) capabilities selected"
+            )
+                .nativTextStyle(.metadata)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Done", action: dismiss.callAsFunction)
+            Button("Done") {
+                selection = draftSelection
+                dismiss()
+            }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
         }
@@ -769,8 +810,8 @@ private struct ScheduledCapabilityPicker: View {
     }
 
     private func count(for section: ScheduledCapabilitySection) -> Int {
-        guard section != .all else { return selection.count }
+        guard section != .all else { return draftSelection.count }
         let available = Set(options.filter { $0.section == section }.map(\.capability))
-        return selection.intersection(available).count
+        return draftSelection.intersection(available).count
     }
 }

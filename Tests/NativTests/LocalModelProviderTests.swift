@@ -1,3 +1,4 @@
+import NativServerKit
 import XCTest
 
 final class LocalModelProviderTests: XCTestCase {
@@ -167,6 +168,18 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         )
     }
 
+    func testDrafterDiscoverySearchesKnownTagVariants() {
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTagSets(for: [.drafter]),
+            [
+                ["draft-model"],
+                ["drafter"],
+                ["speculative-decoding-draft"],
+                ["speculative-decoding"],
+            ]
+        )
+    }
+
     func testSupportedCapabilitiesUseCanonicalPipelineTasks() {
         XCTAssertEqual(
             HuggingFaceCapabilityFilter.pipelineTag(for: [.text]),
@@ -249,6 +262,37 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         )
     }
 
+    func testBroadSpeculativeDecodingCandidateUsesConfigMetadata() throws {
+        let model = try decodeModel(
+            pipelineTag: "text-generation",
+            tags: ["speculative-decoding"],
+            config: [
+                "model_type": "qwen3",
+                "architectures": ["DFlashDraftModel"],
+                "dflash_config": [:],
+            ]
+        )
+
+        XCTAssertTrue(model.capabilities.contains(.drafter))
+        XCTAssertEqual(model.drafterKind, "dflash")
+    }
+
+    func testMalformedDrafterConfigDoesNotBreakHubModelDecoding() throws {
+        let model = try decodeModel(
+            pipelineTag: "text-generation",
+            tags: ["draft-model"],
+            config: [
+                "model_type": 42,
+                "architectures": "DFlashDraftModel",
+                "dflash_config": "invalid",
+                "markov_rank": "invalid",
+            ]
+        )
+
+        XCTAssertTrue(model.capabilities.contains(.drafter))
+        XCTAssertNil(model.drafterKind)
+    }
+
     func testGGUFTaggedSafetensorsRepositoryRemainsVisible() throws {
         let model = try decodeModel(
             id: "test/model-GGUF",
@@ -285,7 +329,8 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         id: String = "test/model",
         pipelineTag: String,
         tags: [String] = [],
-        safetensors: [String: Any]? = nil
+        safetensors: [String: Any]? = nil,
+        config: [String: Any]? = nil
     ) throws -> HuggingFaceModel {
         var payload: [String: Any] = [
             "id": id,
@@ -293,8 +338,68 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             "tags": tags,
         ]
         payload["safetensors"] = safetensors
+        payload["config"] = config
         let data = try JSONSerialization.data(withJSONObject: payload)
         return try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+    }
+}
+
+final class NativModelTypeRegistryDrafterTests: XCTestCase {
+    func testDrafterKindsFollowCanonicalLoaderAndAliases() throws {
+        var capabilities: [String: Any] = [:]
+        for capability in NativModelCapability.allCases {
+            capabilities[capability.rawValue] = [
+                "model_types": ["test_\(capability.rawValue)"],
+                "aliases": [:],
+            ]
+        }
+        capabilities[NativModelCapability.speculativeDrafters.rawValue] = [
+            "model_types": ["qwen3_dflash"],
+            "aliases": ["qwen3-dflash": "qwen3_dflash"],
+            "kinds": ["qwen3_dflash": "dflash"],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1,
+            "package_versions": ["mlx-vlm": "1.0", "mlx-audio": "1.0"],
+            "capabilities": capabilities,
+        ])
+
+        let registry = try NativModelTypeRegistry(data: data)
+
+        XCTAssertEqual(registry.drafterKind(for: "qwen3_dflash"), "dflash")
+        XCTAssertEqual(registry.drafterKind(for: "qwen3-dflash"), "dflash")
+        XCTAssertNil(registry.drafterKind(for: "qwen3"))
+    }
+
+    func testDrafterKindsRejectUnknownRuntimeKinds() throws {
+        var capabilities: [String: Any] = [:]
+        for capability in NativModelCapability.allCases {
+            capabilities[capability.rawValue] = [
+                "model_types": ["test_\(capability.rawValue)"],
+                "aliases": [:],
+            ]
+        }
+        capabilities[NativModelCapability.speculativeDrafters.rawValue] = [
+            "model_types": ["future_drafter"],
+            "aliases": [:],
+            "kinds": ["future_drafter": "unknown"],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1,
+            "package_versions": ["mlx-vlm": "1.0", "mlx-audio": "1.0"],
+            "capabilities": capabilities,
+        ])
+
+        XCTAssertThrowsError(try NativModelTypeRegistry(data: data)) { error in
+            XCTAssertEqual(
+                error as? NativModelTypeRegistryError,
+                .invalidModelKind(
+                    "future_drafter",
+                    "unknown",
+                    .speculativeDrafters
+                )
+            )
+        }
     }
 }
 
@@ -475,19 +580,19 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinalizingState() throws {
+    func testNearCompleteProgressUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_000)
         var state = HuggingFaceDownloadProgressState(now: start)
         let progress = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 995, totalBytes: 1_000)
+            ModelDownloadProgress(completedBytes: 950, totalBytes: 1_000)
         )
 
         _ = state.recordProgress(progress, at: start)
 
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
-    func testTransferEstimateCeilingUsesFinalizingState() throws {
+    func testTransferEstimateCeilingUsesFinishingState() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_500)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
@@ -499,9 +604,9 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
             state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
         )
 
-        XCTAssertEqual(capped.completedBytes, 996)
+        XCTAssertEqual(capped.completedBytes, 951)
         XCTAssertLessThan(capped.fractionCompleted, 1)
-        XCTAssertTrue(state.isFinalizing)
+        XCTAssertTrue(state.isFinishing)
     }
 
     func testTransferredBytesProduceSmoothedTransferSpeed() {
@@ -556,10 +661,10 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
     }
 
-    func testNearCompleteDownloadUsesFinalizingState() {
-        XCTAssertFalse(ModelDownloadProgressPresentation.isFinalizing(0.994))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(0.995))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinalizing(1))
+    func testNearCompleteDownloadUsesFinishingState() {
+        XCTAssertFalse(ModelDownloadProgressPresentation.isFinishing(0.949))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(0.95))
+        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(1))
     }
 
     func testActiveProgressRingDoesNotBecomeComplete() {

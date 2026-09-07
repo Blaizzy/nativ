@@ -17,12 +17,12 @@ final class PDFDocumentTextExtractorTests: XCTestCase {
 
         XCTAssertEqual(content.filename, "report.pdf")
         XCTAssertEqual(content.mimeType, "application/pdf")
-        XCTAssertEqual(content.pageCount, 1)
+        XCTAssertEqual(content.sourceSectionCount, 1)
         XCTAssertEqual(
             content.sections,
             [
                 ExtractedDocumentSection(
-                    pageNumber: 1,
+                    location: .page(1),
                     text: "Quarterly report\nRevenue increased by 12%."
                 )
             ]
@@ -46,8 +46,8 @@ final class PDFDocumentTextExtractorTests: XCTestCase {
             mimeType: "application/pdf"
         )
 
-        XCTAssertEqual(content.pageCount, 3)
-        XCTAssertEqual(content.sections.map(\.pageNumber), [1, 3])
+        XCTAssertEqual(content.sourceSectionCount, 3)
+        XCTAssertEqual(content.sections.map(\.location), [.page(1), .page(3)])
         XCTAssertEqual(content.sections.map(\.text), ["First page", "Third page"])
         XCTAssertEqual(content.text, "First page\n\nThird page")
     }

@@ -13,27 +13,18 @@ struct StatsEntry {
 }
 
 enum NativFormatting {
-    private static let integerFormatter: NumberFormatter = {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.maximumFractionDigits = 0
-        return formatter
-    }()
+    static let missingValue = "—"
 
-    private static let decimalFormatters: [Int: NumberFormatter] = {
-        Dictionary(uniqueKeysWithValues: (0...4).map { digits in
-            let formatter = NumberFormatter()
-            formatter.numberStyle = .decimal
-            formatter.minimumFractionDigits = digits
-            formatter.maximumFractionDigits = digits
-            return (digits, formatter)
-        })
-    }()
+    static func accessibleValue(_ value: String) -> String {
+        value == missingValue ? String(localized: "Not available") : value
+    }
 
-    static func compactCount(_ value: Int) -> FormattedCount {
-        let raw = integerFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
-        let sign = value < 0 ? "-" : ""
-        let absoluteValue = Double(abs(value))
+    static func compactCount(
+        _ value: Int,
+        locale: Locale = .autoupdatingCurrent
+    ) -> FormattedCount {
+        let raw = value.formatted(.number.locale(locale))
+        let absoluteValue = Double(value).magnitude
         let units: [(suffix: String, factor: Double)] = [
             ("T", 1_000_000_000_000),
             ("B", 1_000_000_000),
@@ -42,77 +33,110 @@ enum NativFormatting {
         ]
 
         for unit in units where absoluteValue >= unit.factor {
-            let scaled = absoluteValue / unit.factor
-            let formatted = scaled >= 100
-                ? String(format: "%.0f%@", scaled, unit.suffix)
-                : String(format: "%.1f%@", scaled, unit.suffix)
+            let scaled = Double(value) / unit.factor
+            let formatted = scaled.magnitude >= 100
+                ? scaled.formatted(
+                    .number.precision(.fractionLength(0)).locale(locale)
+                ) + unit.suffix
+                : scaled.formatted(
+                    .number.precision(.fractionLength(0...1)).locale(locale)
+                ) + unit.suffix
             return FormattedCount(
-                display: sign + formatted.replacingOccurrences(of: ".0", with: ""),
+                display: formatted,
                 tooltip: raw
             )
         }
 
-        return FormattedCount(display: "\(value)", tooltip: raw)
+        return FormattedCount(display: raw, tooltip: raw)
     }
 
     static func rate(_ value: Double?) -> String {
-        guard let value, value > 0, value.isFinite else {
-            return "--"
-        }
-        return String(format: "%.1f tok/s", value)
+        rate(value, locale: .autoupdatingCurrent)
     }
 
-    static func decimal(_ value: Double?, fractionDigits: Int = 2) -> String {
+    static func rate(_ value: Double?, locale: Locale) -> String {
+        guard let value, value > 0, value.isFinite else {
+            return missingValue
+        }
+        return "\(decimal(value, fractionDigits: 1, locale: locale)) tok/s"
+    }
+
+    static func decimal(
+        _ value: Double?,
+        fractionDigits: Int = 2,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value, value.isFinite else {
-            return "--"
+            return missingValue
         }
 
         let digits = min(max(fractionDigits, 0), 4)
-        if let formatter = decimalFormatters[digits] {
-            return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
-        }
-        return "\(value)"
+        return value.formatted(
+            .number.precision(.fractionLength(digits)).locale(locale)
+        )
     }
 
-    static func integer(_ value: Int?) -> String {
+    static func integer(
+        _ value: Int?,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value else {
-            return "--"
+            return missingValue
         }
-        return integerFormatter.string(from: NSNumber(value: value)) ?? "\(value)"
+        return value.formatted(.number.locale(locale))
     }
 
-    static func milliseconds(_ value: Double?, fractionDigits: Int = 0) -> String {
+    static func milliseconds(
+        _ value: Double?,
+        fractionDigits: Int = 0,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value, value >= 0, value.isFinite else {
-            return "--"
+            return missingValue
         }
-        return "\(decimal(value, fractionDigits: fractionDigits)) ms"
+        return "\(decimal(value, fractionDigits: fractionDigits, locale: locale)) ms"
     }
 
-    static func seconds(fromMilliseconds value: Int64?, fractionDigits: Int = 2) -> String {
+    static func seconds(
+        fromMilliseconds value: Int64?,
+        fractionDigits: Int = 2,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value, value >= 0 else {
-            return "--"
+            return missingValue
         }
-        return decimal(Double(value) / 1_000, fractionDigits: fractionDigits)
+        return decimal(
+            Double(value) / 1_000,
+            fractionDigits: fractionDigits,
+            locale: locale
+        )
     }
 
-    static func gigabytes(fromBytes value: Int64?, fractionDigits: Int = 1) -> String {
+    static func gigabytes(
+        fromBytes value: Int64?,
+        fractionDigits: Int = 1,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value, value >= 0 else {
-            return "--"
+            return missingValue
         }
         let gigabytes = Double(value) / Double(1024 * 1024 * 1024)
-        return "\(decimal(gigabytes, fractionDigits: fractionDigits)) GB"
+        return "\(decimal(gigabytes, fractionDigits: fractionDigits, locale: locale)) GB"
     }
 
-    static func duration(_ value: Double?) -> String {
+    static func duration(
+        _ value: Double?,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard let value, value >= 0, value.isFinite else {
-            return "--"
+            return missingValue
         }
 
         if value < 1 {
-            return String(format: "%.2fs", value)
+            return "\(decimal(value, fractionDigits: 2, locale: locale))s"
         }
         if value < 60 {
-            return String(format: "%.1fs", value)
+            return "\(decimal(value, fractionDigits: 1, locale: locale))s"
         }
 
         let totalSeconds = Int(value.rounded())
@@ -120,14 +144,17 @@ enum NativFormatting {
         let minutes = (totalSeconds % 3600) / 60
         let seconds = totalSeconds % 60
         if hours > 0 {
-            return "\(hours)h \(minutes)m"
+            return "\(integer(hours, locale: locale))h \(integer(minutes, locale: locale))m"
         }
-        return "\(minutes)m \(seconds)s"
+        return "\(integer(minutes, locale: locale))m \(integer(seconds, locale: locale))s"
     }
 
-    static func elapsedDuration(_ value: TimeInterval) -> String {
+    static func elapsedDuration(
+        _ value: TimeInterval,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
         guard value.isFinite else {
-            return "0s"
+            return "\(integer(0, locale: locale))s"
         }
 
         let totalSeconds = max(0, Int(value.rounded(.down)))
@@ -136,27 +163,59 @@ enum NativFormatting {
         let seconds = totalSeconds % 60
 
         if hours > 0 {
-            return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
+            return minutes > 0
+                ? "\(integer(hours, locale: locale))h \(integer(minutes, locale: locale))m"
+                : "\(integer(hours, locale: locale))h"
         }
         if minutes > 0 {
-            return "\(minutes)m \(seconds)s"
+            return "\(integer(minutes, locale: locale))m \(integer(seconds, locale: locale))s"
         }
-        return "\(seconds)s"
+        return "\(integer(seconds, locale: locale))s"
+    }
+
+    static func clockDuration(
+        _ value: TimeInterval,
+        locale: Locale = .autoupdatingCurrent
+    ) -> String {
+        guard value.isFinite else {
+            return "0:00"
+        }
+
+        let totalSeconds = max(0, Int(value.rounded(.down)))
+        let duration = Duration.seconds(totalSeconds)
+        if totalSeconds >= 3_600 {
+            return duration.formatted(
+                .time(pattern: .hourMinuteSecond).locale(locale)
+            )
+        }
+        return duration.formatted(
+            .time(pattern: .minuteSecond).locale(locale)
+        )
     }
 
     static func gigabytes(_ value: Double) -> String {
-        guard value.isFinite else {
-            return "--"
+        gigabytes(value, locale: .autoupdatingCurrent)
+    }
+
+    static func gigabytes(_ value: Double, locale: Locale) -> String {
+        guard value >= 0, value.isFinite else {
+            return missingValue
         }
-        return String(format: "%.2f GB", value)
+        return "\(decimal(value, fractionDigits: 2, locale: locale)) GB"
     }
 
     static func percent(_ value: Double) -> String {
-        guard value.isFinite else {
-            return "--"
+        percent(value, locale: .autoupdatingCurrent)
+    }
+
+    static func percent(_ value: Double, locale: Locale) -> String {
+        guard value >= 0, value.isFinite else {
+            return missingValue
         }
-        let percent = value <= 1 ? value * 100 : value
-        return String(format: "%.1f%%", percent)
+        let fraction = value.magnitude <= 1 ? value : value / 100
+        return fraction.formatted(
+            .percent.precision(.fractionLength(1)).locale(locale)
+        )
     }
 
     static func truncateModelName(_ value: String, maxLength: Int = 48) -> String {
@@ -164,15 +223,15 @@ enum NativFormatting {
             return value
         }
 
-        let keep = max(8, (maxLength - 3) / 2)
+        let keep = max(8, (maxLength - 1) / 2)
         let prefix = value.prefix(keep)
         let suffix = value.suffix(keep)
-        return "\(prefix)...\(suffix)"
+        return "\(prefix)…\(suffix)"
     }
 
     static func timestamp(_ value: Double?) -> String {
         guard let value, value > 0 else {
-            return "--"
+            return missingValue
         }
         return Date(timeIntervalSince1970: value).formatted(
             date: .abbreviated,
@@ -184,7 +243,7 @@ enum NativFormatting {
         guard let rawValue = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawValue.isEmpty
         else {
-            return "--"
+            return missingValue
         }
 
         return rawValue
@@ -245,14 +304,14 @@ enum NativStats {
     }
 
     static func latestRequestEntries(_ latest: NativLatestRequest) -> [StatsEntry] {
-        let fullModel = latest.model ?? "None"
+        let fullModel = latest.model ?? NativFormatting.missingValue
         var entries: [StatsEntry] = [
             StatsEntry(
                 label: "Model",
                 value: NativFormatting.truncateModelName(fullModel),
                 tooltip: fullModel
             ),
-            StatsEntry(label: "Endpoint", value: latest.endpoint ?? "--", tooltip: nil),
+            StatsEntry(label: "Endpoint", value: latest.endpoint ?? NativFormatting.missingValue, tooltip: nil),
             statsEntry("Prompt tokens", latest.promptTokens),
             statsEntry("Completion tokens", latest.completionTokens),
             statsEntry("Generated tokens", latest.generatedTokens),
@@ -387,7 +446,7 @@ enum NativStats {
         if latest.apcEnabled {
             flags.append("APC")
         }
-        return flags.isEmpty ? "--" : flags.joined(separator: ", ")
+        return flags.isEmpty ? NativFormatting.missingValue : flags.joined(separator: ", ")
     }
 }
 

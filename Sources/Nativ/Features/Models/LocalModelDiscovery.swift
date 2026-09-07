@@ -1,4 +1,5 @@
 import Foundation
+import NativServerKit
 
 extension Notification.Name {
     static let localModelLibraryDidChange = Notification.Name("LocalModelLibraryDidChange")
@@ -55,9 +56,9 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
         case .imageEditing:
             "Image Editing"
         case .speechToText:
-            "Speech to Text"
+            "Speech-to-Text"
         case .textToSpeech:
-            "Text to Speech"
+            "Text-to-Speech"
         case .embeddings:
             "Embeddings"
         case .reranking:
@@ -107,6 +108,14 @@ struct LocalModel: Identifiable, Equatable, Sendable {
         }
         let components = snapshotURL.standardizedFileURL.pathComponents.suffix(2)
         return components.joined(separator: "/")
+    }
+
+    var displayTitle: String {
+        Self.displayTitle(for: repoID)
+    }
+
+    static func displayTitle(for modelID: String) -> String {
+        modelID.split(separator: "/").last.map(String.init) ?? modelID
     }
 
     var isDeletable: Bool {
@@ -203,9 +212,74 @@ struct LocalModel: Identifiable, Equatable, Sendable {
 
     private static func compactCount(_ value: Double, suffix: String) -> String {
         if value.rounded() == value {
-            return "\(Int(value))\(suffix)"
+            return Int(value).formatted() + suffix
         }
-        return String(format: "%.1f%@", value, suffix)
+        return value.formatted(.number.precision(.fractionLength(1))) + suffix
+    }
+}
+
+enum DrafterModelCompatibility {
+    static func compatibleDrafters(
+        in models: [LocalModel],
+        with target: LocalModel
+    ) -> [LocalModel] {
+        models.filter { isCompatible($0, with: target) }
+    }
+
+    static func isCompatible(_ drafter: LocalModel, with target: LocalModel) -> Bool {
+        guard drafter.drafterKind != nil,
+              drafter.repoID != target.repoID,
+              pairingKey(for: drafter.repoID) == pairingKey(for: target.repoID)
+        else {
+            return false
+        }
+
+        if let drafterHiddenSize = drafter.hiddenSize,
+           let targetHiddenSize = target.hiddenSize,
+           drafterHiddenSize != targetHiddenSize {
+            return false
+        }
+        return true
+    }
+
+    static func discoveryQuery(for targetModelID: String) -> String {
+        let modelName = targetModelID
+            .split(separator: "/", omittingEmptySubsequences: true)
+            .last
+            .map(String.init) ?? targetModelID
+        let components = modelName.components(separatedBy: modelNameSeparators)
+            .filter { !$0.isEmpty && !isNonTargetComponent($0) }
+        return components.isEmpty ? modelName : components.joined(separator: "-")
+    }
+
+    private static let modelNameSeparators = CharacterSet(charactersIn: "-_ ")
+    private static let nonTargetComponents: Set<String> = [
+        "assistant", "dflash", "dflash2", "draft", "drafter", "draftmodel",
+        "dspark", "eagle", "eagle3", "gguf", "mlx", "mtp", "speculator",
+        "bf16", "f16", "float16", "fp16", "fp8", "int4", "int8", "mxfp4",
+        "mxfp8", "quantized",
+    ]
+
+    private static func pairingKey(for modelID: String) -> String {
+        discoveryQuery(for: modelID)
+            .lowercased()
+            .unicodeScalars
+            .filter(CharacterSet.alphanumerics.contains)
+            .map(String.init)
+            .joined()
+    }
+
+    private static func isNonTargetComponent(_ component: String) -> Bool {
+        let normalized = component.lowercased()
+        if nonTargetComponents.contains(normalized) {
+            return true
+        }
+        if normalized.hasSuffix("bit"), Int(normalized.dropLast(3)) != nil {
+            return true
+        }
+        let dottedComponents = normalized.split(separator: ".").map(String.init)
+        return dottedComponents.count > 1
+            && dottedComponents.allSatisfy(nonTargetComponents.contains)
     }
 }
 
@@ -274,6 +348,220 @@ struct LocalModelConfigurationMetadata: Equatable, Sendable {
     let contextSize: Int?
     let defaultSystemPrompt: String?
     let hiddenSize: Int?
+}
+
+struct DrafterModelConfiguration: Decodable, Equatable, Sendable {
+    struct DFlashConfiguration: Decodable, Equatable, Sendable {
+        let projectorType: String?
+        let markovRank: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case projectorType = "projector_type"
+            case markovRank = "markov_rank"
+        }
+
+        init(projectorType: String?, markovRank: Int?) {
+            self.projectorType = projectorType
+            self.markovRank = markovRank
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            projectorType = try? container.decode(String.self, forKey: .projectorType)
+            markovRank = try? container.decode(Int.self, forKey: .markovRank)
+        }
+    }
+
+    let modelType: String?
+    let speculatorsModelType: String?
+    let architectures: [String]
+    let dflashConfiguration: DFlashConfiguration?
+    let markovRank: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case modelType = "model_type"
+        case speculatorsModelType = "speculators_model_type"
+        case architectures
+        case dflashConfiguration = "dflash_config"
+        case markovRank = "markov_rank"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        modelType = try? container.decode(String.self, forKey: .modelType)
+        speculatorsModelType = try? container.decode(
+            String.self,
+            forKey: .speculatorsModelType
+        )
+        architectures = (try? container.decode(
+            [String].self,
+            forKey: .architectures
+        )) ?? []
+        dflashConfiguration = try? container.decode(
+            DFlashConfiguration.self,
+            forKey: .dflashConfiguration
+        )
+        markovRank = try? container.decode(Int.self, forKey: .markovRank)
+    }
+
+    init(config: [String: Any]) {
+        modelType = config["model_type"] as? String
+        speculatorsModelType = config["speculators_model_type"] as? String
+        architectures = config["architectures"] as? [String] ?? []
+        markovRank = (config["markov_rank"] as? NSNumber)?.intValue
+
+        if let dflashConfig = config["dflash_config"] as? [String: Any] {
+            dflashConfiguration = DFlashConfiguration(
+                projectorType: dflashConfig["projector_type"] as? String,
+                markovRank: (dflashConfig["markov_rank"] as? NSNumber)?.intValue
+            )
+        } else {
+            dflashConfiguration = nil
+        }
+    }
+}
+
+struct MLXDrafterMetadata: Equatable, Sendable {
+    let loaderModelType: String
+    let kind: String
+}
+
+/// Resolves config metadata to a speculative drafter loader bundled with Nativ.
+/// Repository names are intentionally not considered.
+struct MLXDrafterModelResolver: Sendable {
+    static let shared = Self(
+        registry: try? Nativ.modelTypeRegistry(),
+        fallbackKinds: [:]
+    )
+
+    private let registry: NativModelTypeRegistry?
+    private let fallbackKinds: [String: String]
+
+    private init(
+        registry: NativModelTypeRegistry?,
+        fallbackKinds: [String: String]
+    ) {
+        self.registry = registry
+        self.fallbackKinds = fallbackKinds
+    }
+
+    init(supportedDrafterKinds: [String: String]) {
+        registry = nil
+        fallbackKinds = supportedDrafterKinds
+    }
+
+    func metadata(for configuration: DrafterModelConfiguration?) -> MLXDrafterMetadata? {
+        guard let configuration else {
+            return nil
+        }
+
+        for candidate in candidateModelTypes(for: configuration) {
+            let loader: String
+            if let registry {
+                guard
+                    let bundledLoader = registry.loader(
+                        for: candidate,
+                        capability: .speculativeDrafters
+                    )
+                else {
+                    continue
+                }
+                loader = bundledLoader
+            } else {
+                guard fallbackKinds[candidate] != nil else {
+                    continue
+                }
+                loader = candidate
+            }
+
+            let kind =
+                registry?.drafterKind(for: candidate)
+                ?? fallbackKinds[loader]
+            if let kind {
+                return MLXDrafterMetadata(loaderModelType: loader, kind: kind)
+            }
+        }
+        return nil
+    }
+
+    static func inferredKind(fromModelType modelType: String?) -> String? {
+        guard let modelType = normalized(modelType) else {
+            return nil
+        }
+        let explicitKinds: [String: String] = [
+            "gemma4_assistant": "mtp",
+            "gemma4_unified_assistant": "mtp",
+            "inkling_mtp": "mtp",
+            "laguna": "dflash",
+            "muse_glimmer_assistant": "dflash",
+        ]
+        if let kind = explicitKinds[modelType] {
+            return kind
+        }
+        if modelType.contains("mtp") {
+            return "mtp"
+        }
+        if modelType.contains("dflash") || modelType.contains("dspark") {
+            return "dflash"
+        }
+        if modelType.contains("eagle") {
+            return "eagle3"
+        }
+        return nil
+    }
+
+    private func candidateModelTypes(
+        for configuration: DrafterModelConfiguration
+    ) -> [String] {
+        let modelType = Self.normalized(configuration.modelType)
+        let speculatorsModelType = Self.normalized(configuration.speculatorsModelType)
+        let architectures = configuration.architectures.map { $0.lowercased() }
+        var candidates: [String] = []
+
+        func append(_ candidate: String?) {
+            guard let candidate, !candidates.contains(candidate) else {
+                return
+            }
+            candidates.append(candidate)
+        }
+
+        if architectures.contains(where: { $0.contains("dflash2") }) {
+            append("dflash2")
+        } else if architectures.contains(where: { $0.contains("gemma4dspark") }) {
+            append("gemma4_dspark")
+        } else if architectures.contains(where: { $0.contains("dspark") }) {
+            append("dspark")
+        } else if architectures.contains(where: { $0.contains("eagle3") }) {
+            append("eagle3")
+        } else if let baseModelType = modelType,
+            architectures.contains(where: { $0.contains("dflash") })
+        {
+            append("\(baseModelType)_dflash")
+        }
+
+        if configuration.dflashConfiguration != nil {
+            if isDSpark(configuration) {
+                append("dspark")
+            } else if let baseModelType = modelType ?? speculatorsModelType {
+                append("\(baseModelType)_dflash")
+            }
+        }
+
+        append(modelType ?? speculatorsModelType)
+        return candidates
+    }
+
+    private func isDSpark(_ configuration: DrafterModelConfiguration) -> Bool {
+        configuration.dflashConfiguration?.projectorType?.lowercased() == "dspark"
+            || (configuration.markovRank ?? 0) > 0
+            || (configuration.dflashConfiguration?.markovRank ?? 0) > 0
+    }
+
+    private static func normalized(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
+    }
 }
 
 enum LocalModelDiscovery {
@@ -345,20 +633,27 @@ enum LocalModelDiscovery {
             fileManager: FileManager.default
         )
         do {
-            return Self.sortedByDisplayName(try Self.scanSynchronously(path: path) + externalModels)
+            return Self.sortedByDisplayTitle(try Self.scanSynchronously(path: path) + externalModels)
         } catch {
             guard !externalModels.isEmpty else {
                 throw error
             }
-            return Self.sortedByDisplayName(externalModels)
+            return Self.sortedByDisplayTitle(externalModels)
         }
     }
 
-    static func delete(repoID: String, path: String) async throws {
+    static func delete(
+        repoID: String,
+        path: String,
+        volumeIdentifier: String?
+    ) async throws {
         let expandedPath = Self.expandedPath(path)
         try await Task.detached(priority: .utility) {
+            let cacheURL = try ExternalModelCacheReference.validateForUse(
+                path: expandedPath,
+                expectedVolumeIdentifier: volumeIdentifier
+            )
             let directoryName = "models--" + repoID.replacingOccurrences(of: "/", with: "--")
-            let cacheURL = URL(fileURLWithPath: expandedPath, isDirectory: true)
             let fileManager = FileManager.default
             let repositoryURL = cacheURL.appendingPathComponent(directoryName, isDirectory: true)
             let lockURL = cacheURL
@@ -462,15 +757,15 @@ enum LocalModelDiscovery {
         return models
     }
 
-    private static func sortedByDisplayName(_ models: [LocalModel]) -> [LocalModel] {
+    private static func sortedByDisplayTitle(_ models: [LocalModel]) -> [LocalModel] {
         models.sorted { lhs, rhs in
-            switch lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) {
+            switch lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) {
             case .orderedAscending:
                 return true
             case .orderedDescending:
                 return false
             case .orderedSame:
-                return lhs.repoID < rhs.repoID
+                return lhs.repoID.localizedStandardCompare(rhs.repoID) == .orderedAscending
             }
         }
     }
@@ -736,6 +1031,11 @@ enum LocalModelDiscovery {
             return true
         case .incomplete:
             return false
+        case .stale:
+            // The index describes a different build of the model, so fall back
+            // to the shards on disk — but only accept a set that is complete on
+            // its own, so a partially downloaded snapshot stays hidden.
+            return safetensorsShardsLookComplete(at: snapshotURL, fileManager: fileManager)
         case .absent:
             break
         }
@@ -766,6 +1066,10 @@ enum LocalModelDiscovery {
         case absent
         case complete
         case incomplete
+        /// The index references shards, none of whose filenames exist in the
+        /// snapshot. The index describes a different build of the model rather
+        /// than a download that is still in flight.
+        case stale
     }
 
     private struct SafetensorsShardIndex: Decodable {
@@ -776,9 +1080,77 @@ enum LocalModelDiscovery {
         }
     }
 
+    /// Decides whether the `.safetensors` files in a snapshot form a complete
+    /// set on their own, without consulting a shard index. A snapshot qualifies
+    /// when it holds a single unsharded file, or every shard of one
+    /// `model-0000N-of-0000M` series.
+    private static func safetensorsShardsLookComplete(
+        at snapshotURL: URL,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: snapshotURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        var shardTotals: Set<Int> = []
+        var shardNumbers: Set<Int> = []
+        var hasUnshardedWeights = false
+
+        for fileURL in contents where fileURL.pathExtension == "safetensors" {
+            guard let values = try? fileURL.resolvingSymlinksInPath().resourceValues(
+                    forKeys: [.isRegularFileKey, .fileSizeKey]
+                  ),
+                  values.isRegularFile == true,
+                  let fileSize = values.fileSize,
+                  fileSize > 0
+            else {
+                continue
+            }
+
+            if let numbering = shardNumbering(forFilename: fileURL.lastPathComponent) {
+                shardTotals.insert(numbering.total)
+                shardNumbers.insert(numbering.index)
+            } else {
+                hasUnshardedWeights = true
+            }
+        }
+
+        // Shards from more than one series mean the snapshot holds leftovers of
+        // another build, which is not a set this check can vouch for.
+        if let total = shardTotals.first, shardTotals.count == 1 {
+            return shardNumbers == Set(1...total)
+        }
+        return shardTotals.isEmpty && hasUnshardedWeights
+    }
+
+    /// Parses the `model-00001-of-00004.safetensors` shard naming convention.
+    private static func shardNumbering(forFilename filename: String) -> (index: Int, total: Int)? {
+        let components = (filename as NSString).deletingPathExtension.components(separatedBy: "-")
+        guard components.count >= 4,
+              components[components.count - 2] == "of",
+              let index = Int(components[components.count - 3]),
+              let total = Int(components[components.count - 1]),
+              index >= 1,
+              total >= 1,
+              index <= total
+        else {
+            return nil
+        }
+        return (index, total)
+    }
+
     /// A shard index is downloaded before the weight shards it describes. Treat
     /// the snapshot as usable only after every referenced shard is a non-empty
     /// regular file inside the snapshot directory.
+    ///
+    /// When none of the referenced filenames are present the index is reporting
+    /// on a different build of the model, so it says nothing about whether this
+    /// snapshot finished downloading; that case is reported as `.stale` and the
+    /// shards themselves are inspected instead.
     private static func safetensorsShardIndexStatus(
         at snapshotURL: URL,
         fileManager: FileManager
@@ -801,7 +1173,7 @@ enum LocalModelDiscovery {
 
         let snapshotPath = snapshotURL.standardizedFileURL.path
         let snapshotPrefix = snapshotPath.hasSuffix("/") ? snapshotPath : snapshotPath + "/"
-        let allShardsAreAvailable = shardFilenames.allSatisfy { filename in
+        let availableShardCount = shardFilenames.filter { filename in
             guard !filename.isEmpty,
                   !(filename as NSString).isAbsolutePath
             else {
@@ -820,8 +1192,12 @@ enum LocalModelDiscovery {
                 return false
             }
             return true
+        }.count
+
+        if availableShardCount == shardFilenames.count {
+            return .complete
         }
-        return allShardsAreAvailable ? .complete : .incomplete
+        return availableShardCount == 0 ? .stale : .incomplete
     }
 
     private static func snapshotSize(at snapshotURL: URL, fileManager: FileManager) -> Int64? {
@@ -1188,7 +1564,8 @@ enum LocalModelDiscovery {
         )
         var capabilities = Set<LocalModelCapability>()
 
-        if drafterKind(fromModelType: drafterModelType(in: config)) != nil {
+        let drafterConfiguration = DrafterModelConfiguration(config: config)
+        if MLXDrafterModelResolver.shared.metadata(for: drafterConfiguration) != nil {
             capabilities.insert(.drafter)
         }
 
@@ -1440,35 +1817,7 @@ enum LocalModelDiscovery {
     }
 
     static func drafterKind(fromModelType modelType: String?) -> String? {
-        guard let modelType = modelType?.lowercased(), !modelType.isEmpty else {
-            return nil
-        }
-        let exactKinds: [String: String] = [
-            "deepseek_v4_mtp": "mtp",
-            "eagle3": "eagle3",
-            "gemma4_assistant": "mtp",
-            "gemma4_unified_assistant": "mtp",
-            "glm4_moe_lite_mtp": "mtp",
-            "inkling_mtp": "mtp",
-            "qwen3_5_mtp": "mtp"
-        ]
-        if let kind = exactKinds[modelType] {
-            return kind
-        }
-        if modelType.contains("mtp") {
-            return "mtp"
-        }
-        if modelType.contains("dflash") {
-            return "dflash"
-        }
-        if modelType.contains("eagle") {
-            return "eagle3"
-        }
-        return nil
-    }
-
-    private static func drafterModelType(in config: [String: Any]) -> String? {
-        (config["model_type"] as? String) ?? (config["speculators_model_type"] as? String)
+        MLXDrafterModelResolver.inferredKind(fromModelType: modelType)
     }
 
     private static func hiddenSize(in config: [String: Any]) -> Int? {
@@ -1502,7 +1851,9 @@ enum LocalModelDiscovery {
             return (nil, nil)
         }
         return (
-            drafterKind(fromModelType: drafterModelType(in: config)),
+            MLXDrafterModelResolver.shared.metadata(
+                for: DrafterModelConfiguration(config: config)
+            )?.kind,
             hiddenSize(in: config)
         )
     }
@@ -1678,6 +2029,7 @@ final class LocalModelLibrary: ObservableObject {
     func delete(
         model: LocalModel,
         path: String,
+        volumeIdentifier: String?,
         onCompletion: @escaping () -> Void
     ) {
         guard !deletingModelIDs.contains(model.repoID) else { return }
@@ -1686,7 +2038,11 @@ final class LocalModelLibrary: ObservableObject {
 
         Task { [weak self] in
             do {
-                try await LocalModelDiscovery.delete(repoID: model.repoID, path: path)
+                try await LocalModelDiscovery.delete(
+                    repoID: model.repoID,
+                    path: path,
+                    volumeIdentifier: volumeIdentifier
+                )
                 self?.models.removeAll { $0.repoID == model.repoID }
                 self?.deletingModelIDs.remove(model.repoID)
                 onCompletion()

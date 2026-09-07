@@ -8,6 +8,7 @@ extension IntegrationModelDescriptor {
         self.init(
             id: localModel.repoID,
             displayName: localModel.repoID.split(separator: "/").last.map(String.init) ?? localModel.repoID,
+            provider: localModel.provider,
             contextWindow: localModel.contextSize,
             supportsVision: localModel.capabilities.contains(.vision),
             supportsReasoning: localModel.capabilities.contains(.reasoning),
@@ -116,6 +117,7 @@ final class IntegrationsViewModel: ObservableObject {
     func refreshStatuses() {
         guard !isRefreshingStatuses else { return }
         isRefreshingStatuses = true
+        profiles.migrateConfiguredBaseURLs()
         let baseURL = integrationServerBaseURL
         let apiKey = serverAPIKey
         Task {
@@ -182,6 +184,7 @@ final class IntegrationsViewModel: ObservableObject {
                 statuses[tool] = status
 
                 try await prepareServer(modelID: selectedModelID)
+                profiles.migrateConfiguredBaseURLs()
                 try profiles.launch(
                     tool: tool,
                     executableURL: executableURL,
@@ -245,7 +248,9 @@ final class IntegrationsViewModel: ObservableObject {
     }
 
     private func configureProfile(tool: IntegrationTool, selectedModelID: String) throws {
-        try profiles.configure(
+        let manager = profiles
+        manager.recordServerOrigin()
+        try manager.configure(
             tool: tool,
             selectedModelID: selectedModelID,
             models: eligibleModels,
@@ -396,7 +401,7 @@ struct IntegrationsView: View {
         .onChange(of: viewModel.library.models) { _, _ in
             viewModel.resolveSelectedModel()
         }
-        .alert("Integration Error", isPresented: Binding(
+        .alert("Integration error", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { if !$0 { viewModel.errorMessage = nil } }
         )) {
@@ -440,7 +445,7 @@ private struct IntegrationCatalogView: View {
             }
             .padding(.horizontal, 22)
             .padding(.leading, titleLeadingInset)
-            .padding(.top, 20)
+            .controlPanelDetailHeaderTopPadding()
             .padding(.bottom, 16)
 
             Divider()
@@ -561,7 +566,8 @@ private struct IntegrationDetailView: View {
             }
             .padding(.horizontal, 24)
             .padding(.leading, titleLeadingInset)
-            .padding(.vertical, 18)
+            .controlPanelDetailHeaderTopPadding()
+            .padding(.bottom, 18)
 
             Divider()
 
@@ -592,7 +598,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var guidedSetupPanel: some View {
-        IntegrationPanel(title: "Guided setup", systemImage: "sparkles") {
+        IntegrationPanel(title: "Guided Setup", systemImage: "sparkles") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "API key", value: "nativ")
@@ -622,7 +628,7 @@ private struct IntegrationDetailView: View {
                     openGuidedApp()
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Setup guide") {
+                Button("View Setup Guide") {
                     NSWorkspace.shared.open(tool.installURL)
                 }
                 .buttonStyle(.bordered)
@@ -640,15 +646,15 @@ private struct IntegrationDetailView: View {
     }
 
     private var missingToolPanel: some View {
-        IntegrationPanel(title: "Installation required", systemImage: "arrow.down.app") {
+        IntegrationPanel(title: "Installation Required", systemImage: "arrow.down.app") {
             Text("Install \(tool.displayName), then return here and refresh its status.")
                 .foregroundStyle(.secondary)
             HStack {
-                Button("View installation guide") {
+                Button("View Installation Guide") {
                     NSWorkspace.shared.open(tool.installURL)
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Check again") {
+                Button("Check Again") {
                     viewModel.refreshStatuses()
                 }
                 .buttonStyle(.bordered)
@@ -664,12 +670,13 @@ private struct IntegrationDetailView: View {
                     Text("Scanning installed models…").foregroundStyle(.secondary)
                 }
             } else if viewModel.eligibleModels.isEmpty {
-                Text("No installed chat models were found. Add a model folder or download one from Models.")
+                Text("No installed language models were found. Add a model folder or download one from Models.")
                     .foregroundStyle(.secondary)
             } else {
                 Picker("Model", selection: $viewModel.selectedModelID) {
                     ForEach(viewModel.eligibleModels) { model in
-                        Text(model.id).tag(Optional(model.id))
+                        IntegrationModelPickerLabel(model: model)
+                            .tag(Optional(model.id))
                     }
                 }
                 .labelsHidden()
@@ -710,7 +717,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var projectPanel: some View {
-        IntegrationPanel(title: "Project folder", systemImage: "folder") {
+        IntegrationPanel(title: "Project Folder", systemImage: "folder") {
             HStack(spacing: 10) {
                 Text(workingDirectory?.path ?? "Choose a folder")
                     .font(.system(.callout, design: .monospaced))
@@ -727,7 +734,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var configurationPanel: some View {
-        IntegrationPanel(title: "Managed configuration", systemImage: "gearshape.2") {
+        IntegrationPanel(title: "Managed Configuration", systemImage: "gearshape.2") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
                 IntegrationConfigurationRow(label: "Endpoint", value: viewModel.integrationEndpoint)
                 IntegrationConfigurationRow(label: "Profile", value: IntegrationProfileManager.providerID)
@@ -742,7 +749,7 @@ private struct IntegrationDetailView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Button("Show configuration in Finder") {
+            Button("Show Configuration in Finder") {
                 viewModel.revealConfiguration(for: tool)
             }
             .buttonStyle(.link)
@@ -750,7 +757,7 @@ private struct IntegrationDetailView: View {
     }
 
     private var launchCommandPanel: some View {
-        IntegrationPanel(title: "Launch command", systemImage: "terminal") {
+        IntegrationPanel(title: "Launch Command", systemImage: "terminal") {
             if let workingDirectory,
                let command = viewModel.launchCommand(for: tool, workingDirectory: workingDirectory) {
                 if tool == .codex {
@@ -850,6 +857,42 @@ private struct IntegrationDetailView: View {
     }
 }
 
+private struct IntegrationModelPickerLabel: View {
+    let model: IntegrationModelDescriptor
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Label {
+            Text(model.id)
+        } icon: {
+            ZStack {
+                if model.provider?.needsLightIconBackgroundInDarkMode == true,
+                   colorScheme == .dark {
+                    Circle()
+                        .fill(Color.white.opacity(0.94))
+                        .frame(width: 18, height: 18)
+                }
+
+                if let provider = model.provider,
+                   let image = LocalModelProviderIcon.image(for: provider) {
+                    Image(nsImage: image)
+                        .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                } else if let provider = model.provider {
+                    Text(provider.monogram)
+                        .font(.system(size: provider.monogram.count > 2 ? 7 : 9, weight: .bold))
+                        .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                } else {
+                    Image(systemName: "cube.transparent")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 18, height: 18)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
 private struct IntegrationLogo: View {
     let tool: IntegrationTool
     let size: CGFloat
@@ -869,16 +912,31 @@ private struct IntegrationAvailabilityBadge: View {
     var isGuidedSetup: Bool = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(isGuidedSetup ? Color.accentColor : (status.executableURL == nil ? Color.secondary : (status.isConfigured ? .green : .orange)))
-                .frame(width: 7, height: 7)
-            Text(isGuidedSetup ? "Guided setup" : (status.executableURL == nil ? "Not installed" : (status.isConfigured ? "Configured" : "Not configured")))
+        NativStatusBadge(
+            text: title,
+            tone: tone,
+            showsDot: true
+        )
+    }
+
+    private var title: String {
+        if isGuidedSetup {
+            return "Guided setup"
         }
-        .font(.caption.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(.quaternary, in: Capsule())
+        guard status.executableURL != nil else {
+            return "Not installed"
+        }
+        return status.isConfigured ? "Configured" : "Not configured"
+    }
+
+    private var tone: NativStatusTone {
+        if isGuidedSetup {
+            return .active
+        }
+        guard status.executableURL != nil else {
+            return .neutral
+        }
+        return status.isConfigured ? .success : .warning
     }
 }
 

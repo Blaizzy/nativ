@@ -51,6 +51,7 @@ enum AudioCaptureLibraryError: LocalizedError {
     case missingSpeechModel
     case missingLanguageModel
     case recordingUnavailable
+    case invalidAudioFile
     case emptyTranscript
 
     var errorDescription: String? {
@@ -64,11 +65,13 @@ enum AudioCaptureLibraryError: LocalizedError {
         case .missingSpeechModel:
             "Install a speech-to-text model before transcribing recordings."
         case .missingLanguageModel:
-            "Select a language model before generating a summary."
+            "Choose a language model before generating a summary."
         case .recordingUnavailable:
             "The saved audio file is no longer available."
+        case .invalidAudioFile:
+            "The selected file does not contain a readable audio track."
         case .emptyTranscript:
-            "The recording was saved, but the speech model did not produce a transcript."
+            "The recording was saved, but the speech-to-text model did not produce a transcript."
         }
     }
 }
@@ -418,6 +421,52 @@ final class AudioCaptureLibrary: ObservableObject {
                 duration: record.durationSeconds ?? 0,
                 automaticallySummarize: false
             )
+        }
+    }
+
+    func importAudio(from sourceURL: URL) async {
+        clearLastError()
+        let isAccessingSecurityScopedResource = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if isAccessingSecurityScopedResource {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        do {
+            let asset = AVURLAsset(url: sourceURL)
+            let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+            guard !audioTracks.isEmpty else {
+                throw AudioCaptureLibraryError.invalidAudioFile
+            }
+
+            let duration = try await asset.load(.duration).seconds
+            guard duration.isFinite, duration > 0 else {
+                throw AudioCaptureLibraryError.invalidAudioFile
+            }
+
+            let recordingURL = try Self.copyImportedAudio(from: sourceURL)
+            let title = sourceURL.deletingPathExtension().lastPathComponent
+            let importedAt = Date()
+            analytics.addCapture(
+                recordingURL: recordingURL,
+                kind: .voiceNote,
+                title: title.isEmpty ? "Imported audio" : title,
+                durationSeconds: duration,
+                recordedAt: importedAt
+            )
+
+            let recordID = recordingURL.deletingPathExtension().lastPathComponent
+            processingRecordIDs.insert(recordID)
+            await processRecording(
+                recordingURL,
+                kind: .voiceNote,
+                title: title.isEmpty ? "Imported audio" : title,
+                duration: duration,
+                automaticallySummarize: true
+            )
+        } catch {
+            lastErrorMessage = "The audio could not be imported: \(error.localizedDescription)"
         }
     }
 
@@ -836,6 +885,19 @@ final class AudioCaptureLibrary: ObservableObject {
         return try recordingsDirectory
             .appendingPathComponent("\(prefix) \(formatter.string(from: Date()))")
             .appendingPathExtension("wav")
+    }
+
+    private static func copyImportedAudio(from sourceURL: URL) throws -> URL {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
+        let fileName = "Imported Audio \(formatter.string(from: Date())) \(UUID().uuidString.prefix(8))"
+        let destinationURL = try recordingsDirectory
+            .appendingPathComponent(fileName)
+            .appendingPathExtension(sourceURL.pathExtension.lowercased())
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+        return destinationURL
     }
 
     private static func defaultTitle(for kind: AudioRecordKind, date: Date) -> String {

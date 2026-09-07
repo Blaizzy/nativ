@@ -7,7 +7,7 @@ enum ChatServerStatsToolRegistry {
     static func definitions() -> [MLXChatToolDefinition] {
         [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,
-            description: "Get this Mac's local model server performance stats: requests, tokens, speed, time to first token.",
+            description: "Get this Mac’s local model server performance stats: requests, tokens, speed, time to first token.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
