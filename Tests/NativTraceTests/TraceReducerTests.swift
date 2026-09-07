@@ -111,10 +111,10 @@ final class TraceReducerTests: XCTestCase {
     func testDeniedConsentStopsTheCall() throws {
         let items = TraceReducer.items(for: [
             event(.toolConsent, try ToolConsentPayload(
-                callID: "c1", name: "terminal", decision: "requested"
+                callID: "c1", name: "terminal", decision: .requested
             ).makePayload()),
             event(.toolConsent, try ToolConsentPayload(
-                callID: "c1", decision: "denied"
+                callID: "c1", decision: .denied
             ).makePayload()),
         ])
 
@@ -123,13 +123,13 @@ final class TraceReducerTests: XCTestCase {
             return XCTFail("expected a tool item")
         }
         XCTAssertEqual(tool.status, .denied)
-        XCTAssertEqual(tool.consentDecision, "denied")
+        XCTAssertEqual(tool.consentDecision, .denied)
     }
 
     func testApprovedConsentLetsTheCallRun() throws {
         let items = TraceReducer.items(for: [
-            event(.toolConsent, try ToolConsentPayload(callID: "c1", name: "terminal", decision: "requested").makePayload()),
-            event(.toolConsent, try ToolConsentPayload(callID: "c1", decision: "approved").makePayload()),
+            event(.toolConsent, try ToolConsentPayload(callID: "c1", name: "terminal", decision: .requested).makePayload()),
+            event(.toolConsent, try ToolConsentPayload(callID: "c1", decision: .approved).makePayload()),
             event(.toolCall, try ToolCallPayload(callID: "c1", name: "terminal").makePayload()),
         ])
 
@@ -172,7 +172,7 @@ final class TraceReducerTests: XCTestCase {
             event(.toolCall, try ToolCallPayload(callID: "c1", name: "web_search").makePayload(), requestID: "r1"),
             event(.toolResult, try ToolResultPayload(callID: "c1", output: "ok").makePayload(), requestID: "r1"),
             event(.responseCompleted, try ResponseCompletedPayload(messageID: "a1", content: "Paris").makePayload(), requestID: "r1"),
-            event(.turnEnded, try TurnEndedPayload(status: "completed", roundCount: 2).makePayload()),
+            event(.turnEnded, try TurnEndedPayload(status: .completed, roundCount: 2).makePayload()),
         ]
 
         var incremental = TraceReducer()

@@ -81,7 +81,7 @@ public struct TraceToolBody: Sendable, Hashable {
     public var output: String?
     public var durationMilliseconds: Int?
     /// `nil` when the call was never gated on the user.
-    public var consentDecision: String?
+    public var consentDecision: TraceConsentDecision?
 
     public init(
         callID: String,
@@ -92,7 +92,7 @@ public struct TraceToolBody: Sendable, Hashable {
         status: Status = .running,
         output: String? = nil,
         durationMilliseconds: Int? = nil,
-        consentDecision: String? = nil
+        consentDecision: TraceConsentDecision? = nil
     ) {
         self.callID = callID
         self.name = name

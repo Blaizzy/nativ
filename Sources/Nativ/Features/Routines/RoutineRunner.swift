@@ -231,7 +231,7 @@ final class RoutineRunner {
         // FINDING 13: without this, cancellation or a throwing tool left the
         // turn open forever and a reader could not tell an aborted run from one
         // still in flight.
-        var outcome = "completed"
+        var outcome = TraceTurnStatus.completed
         var recordedRounds = 0
         defer {
             let producer = tracer
@@ -419,7 +419,7 @@ final class RoutineRunner {
             toolRound += 1
         }
         } catch {
-            outcome = ChatIsCancellation(error) ? "cancelled" : "failed"
+            outcome = ChatIsCancellation(error) ? .cancelled : .failed
             throw error
         }
     }

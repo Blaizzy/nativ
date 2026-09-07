@@ -44,13 +44,26 @@ public struct TurnStartedPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
+/// How a turn ended.
+///
+/// A closed enum on purpose. This was a `String` on both sides of the
+/// producer/reducer seam and drifted immediately: the reducer handled values no
+/// producer emitted. An unrecognised value now fails the payload view, which
+/// surfaces the event as `.unknown` rather than as a turn that silently means
+/// nothing.
+public enum TraceTurnStatus: String, Sendable, Hashable, Codable {
+    case completed
+    case cancelled
+    case failed
+}
+
 public struct TurnEndedPayload: TracePayloadView, Codable, Hashable {
     public static let kind = TraceEventKind.turnEnded
 
-    public var status: String
+    public var status: TraceTurnStatus
     public var roundCount: Int?
 
-    public init(status: String, roundCount: Int? = nil) {
+    public init(status: TraceTurnStatus, roundCount: Int? = nil) {
         self.status = status
         self.roundCount = roundCount
     }
@@ -185,15 +198,22 @@ public struct ToolResultPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
+/// What the user decided about a gated tool call.
+public enum TraceConsentDecision: String, Sendable, Hashable, Codable {
+    case requested
+    case approved
+    case denied
+    case cancelled
+}
+
 public struct ToolConsentPayload: TracePayloadView, Codable, Hashable {
     public static let kind = TraceEventKind.toolConsent
 
     public var callID: String
     public var name: String?
-    /// `requested`, `approved`, `denied`, or `cancelled`.
-    public var decision: String
+    public var decision: TraceConsentDecision
 
-    public init(callID: String, name: String? = nil, decision: String) {
+    public init(callID: String, name: String? = nil, decision: TraceConsentDecision) {
         self.callID = callID
         self.name = name
         self.decision = decision

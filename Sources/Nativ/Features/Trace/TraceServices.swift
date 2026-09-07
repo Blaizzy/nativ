@@ -51,13 +51,12 @@ final class TraceServices {
     /// Call whenever the setting may have changed, not only once: leaving a
     /// stale producer attached is the difference between "recording off" and
     /// "the toggle looks off".
+    ///
+    /// Does not tear the shared producer down. Callers cache the reference, and
+    /// one caller answering "off" must not invalidate it for another that is
+    /// still recording — a routine run would otherwise detach the chat.
     func producer(enabled: Bool) -> ChatTraceProducer? {
-        guard enabled else {
-            producer = nil
-            recorder = nil
-            return nil
-        }
-        return start()
+        enabled ? start() : nil
     }
 
     /// Applies a retention window now. Runs at most once per distinct window

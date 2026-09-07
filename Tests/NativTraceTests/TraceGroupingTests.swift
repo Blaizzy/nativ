@@ -98,7 +98,7 @@ final class TraceGroupingTests: XCTestCase {
             event(.toolCall, try ToolCallPayload(callID: "c1", name: "web_search").makePayload(), requestID: "r1"),
             event(.toolResult, try ToolResultPayload(callID: "c1", output: "ok").makePayload(), requestID: "r1"),
             event(.responseCompleted, try ResponseCompletedPayload(messageID: "a1", content: "Paris").makePayload(), requestID: "r1"),
-            event(.turnEnded, try TurnEndedPayload(status: "completed").makePayload()),
+            event(.turnEnded, try TurnEndedPayload(status: .completed).makePayload()),
         ]
     }
 

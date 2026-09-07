@@ -78,12 +78,14 @@ final class TraceInspectorViewModel: ObservableObject {
     /// Every trace belonging to a chat, folded separately.
     func loadSession(_ sessionID: UUID) async {
         await load { store in
+            // One query for the chat's events, grouped in memory, rather than a
+            // listing query followed by one more per trace.
             let summaries = try await store.traces(forSession: sessionID.uuidString)
-            var loaded: [(TraceSummary, [TraceEvent])] = []
-            for summary in summaries {
-                loaded.append((summary, try await store.events(forTrace: summary.traceID)))
-            }
-            return loaded
+            let eventsByTrace = Dictionary(
+                grouping: try await store.events(forSession: sessionID.uuidString),
+                by: \.traceID
+            )
+            return summaries.map { ($0, eventsByTrace[$0.traceID] ?? []) }
         }
     }
 

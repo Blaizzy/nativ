@@ -67,7 +67,7 @@ func runTraceSmokeTest() async -> Bool {
         )
         producer.toolCall(callID: "c1", name: "web_search", argumentsJSON: #"{"q":"paris"}"#, in: call)
         producer.toolResult(callID: "c1", name: "web_search", output: "Paris", isError: false, in: call)
-        producer.turnEnded(turn, status: "completed", roundCount: 1)
+        producer.turnEnded(turn, status: .completed, roundCount: 1)
 
         // A second model takes over the same chat. It must get its own trace,
         // and that trace must still account for what it was shown.
@@ -107,7 +107,7 @@ func runTraceSmokeTest() async -> Bool {
             messageID: UUID(), content: "Berlin.", reasoning: nil,
             usage: nil, finishReason: "stop", in: secondCall
         )
-        producer.turnEnded(secondCall.turn, status: "completed", roundCount: 1)
+        producer.turnEnded(secondCall.turn, status: .completed, roundCount: 1)
         await producer.drain()
 
         let allTraces = try await store.traces(forSession: sessionID.uuidString)

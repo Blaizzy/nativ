@@ -23,8 +23,8 @@ struct TraceToolRow: View {
                     }
                     if let decision = tool.consentDecision {
                         TraceOriginChip(
-                            label: decision,
-                            tone: decision == "denied" ? .negative : .secondary
+                            label: decision.rawValue,
+                            tone: decision == .denied ? .negative : .secondary
                         )
                     }
                     Spacer(minLength: 4)

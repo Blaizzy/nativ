@@ -58,7 +58,7 @@ final class ChatTraceProducer {
         )
     }
 
-    func turnEnded(_ turn: ChatTraceTurn, status: String, roundCount: Int) {
+    func turnEnded(_ turn: ChatTraceTurn, status: TraceTurnStatus, roundCount: Int) {
         record(TurnEndedPayload(status: status, roundCount: roundCount), turn: turn)
         turnContextBySession[turn.sessionID] = nil
     }
@@ -136,7 +136,12 @@ final class ChatTraceProducer {
         )
     }
 
-    func toolConsent(callID: String, name: String?, decision: String, in call: ChatTraceCall) {
+    func toolConsent(
+        callID: String,
+        name: String?,
+        decision: TraceConsentDecision,
+        in call: ChatTraceCall
+    ) {
         record(ToolConsentPayload(callID: callID, name: name, decision: decision), call: call)
     }
 

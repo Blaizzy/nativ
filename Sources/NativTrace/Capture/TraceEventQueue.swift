@@ -58,18 +58,13 @@ public final class TraceEventQueue: Sendable {
         traceID: String,
         scope: TraceScope
     ) {
-        do {
-            let json = try TraceJSON(encoding: payload)
-            record(kind: Payload.kind, payload: json, traceID: traceID, scope: scope)
-        } catch {
-            // Counted rather than discarded: a payload that cannot be encoded
-            // is a missing row, and a silently shorter trace is the failure this
-            // design is meant to make impossible.
-            let message = String(describing: error)
-            continuation.yield(.run {
-                await $0.noteEncodeFailure(kind: Payload.kind, message: message)
-            })
-        }
+        // Encoded on the consumer, not here. Every producer runs on the main
+        // actor, so encoding before the hand-off put a JSONEncoder pass over a
+        // whole tool output or a full answer on the main thread — the opposite
+        // of what this type is for.
+        continuation.yield(.run {
+            await $0.record(payload, traceID: traceID, scope: scope)
+        })
     }
 
     public func delta(

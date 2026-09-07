@@ -1481,21 +1481,21 @@ final class ChatViewModel: ObservableObject {
             text: message(queuedRequest.userMessageID, in: queuedRequest.sessionID)?.content ?? "",
             modelID: queuedRequest.settings.languageModelID
         )
-        var outcome = ChatTurnOutcome.completed
+        var outcome = TraceTurnStatus.completed
         activeTurnRounds = 0
         defer {
             activeTraceCall = nil
             // Read from the loop rather than from runTurn's return value: a turn
             // that throws never returns one, and reporting zero rounds for a
             // turn that had already made calls is worse than not reporting.
-            traceProducer?.turnEnded(turn, status: outcome.rawValue, roundCount: activeTurnRounds)
+            traceProducer?.turnEnded(turn, status: outcome, roundCount: activeTurnRounds)
             completedTurnCount += 1
         }
 
         do {
             try await runTurn(queuedRequest, turn: turn)
         } catch {
-            outcome = ChatTurnOutcome(error: error)
+            outcome = ChatIsCancellation(error) ? .cancelled : .failed
             throw error
         }
     }
@@ -1505,15 +1505,7 @@ final class ChatViewModel: ObservableObject {
     /// Derived from the thrown error rather than from `Task.isCancelled`, which
     /// is false for every failure that is not a cancellation and would report a
     /// model load failure as a completed turn.
-    private enum ChatTurnOutcome: String {
-        case completed
-        case cancelled
-        case failed
 
-        init(error: Error) {
-            self = ChatIsCancellation(error) ? .cancelled : .failed
-        }
-    }
 
     private func runTurn(
         _ queuedRequest: QueuedChatRequest,
@@ -2431,11 +2423,18 @@ final class ChatViewModel: ObservableObject {
         switch status {
         case .awaitingConsent:
             traceProducer?.toolConsent(
-                callID: callID, name: message.toolName, decision: "requested", in: traceCall
+                callID: callID, name: message.toolName, decision: .requested, in: traceCall
             )
         case .declined:
             traceProducer?.toolConsent(
-                callID: callID, name: message.toolName, decision: "denied", in: traceCall
+                callID: callID, name: message.toolName, decision: .denied, in: traceCall
+            )
+        case .running where message.toolStatus == .awaitingConsent:
+            // Approval has no status of its own — it is the move off
+            // awaitingConsent. Without recording it, a tool the user allowed
+            // reads as still blocked on them while it executes.
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: .approved, in: traceCall
             )
         case .succeeded, .failed, .cancelled:
             traceProducer?.toolResult(

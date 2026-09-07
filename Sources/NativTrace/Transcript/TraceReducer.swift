@@ -86,7 +86,7 @@ public struct TraceReducer: Sendable {
         sealOpenAssistants()
         append(event, body: .lifecycle(TraceLifecycleBody(
             kind: .turnEnded,
-            title: payload.status,
+            title: payload.status.rawValue,
             detail: payload.roundCount.map { "\($0) round\($0 == 1 ? "" : "s")" }
         )))
     }
@@ -170,7 +170,7 @@ public struct TraceReducer: Sendable {
             tool.origin = payload.origin ?? tool.origin
             tool.originDetail = payload.originDetail ?? tool.originDetail
             tool.arguments = payload.arguments ?? tool.arguments
-            if tool.status == .awaitingConsent, tool.consentDecision == "approved" {
+            if tool.status == .awaitingConsent, tool.consentDecision == .approved {
                 tool.status = .running
             }
             items[index].body = .tool(tool)
@@ -251,15 +251,13 @@ public struct TraceReducer: Sendable {
     // MARK: - Helpers
 
     private func status(
-        afterConsent decision: String,
+        afterConsent decision: TraceConsentDecision,
         current: TraceToolBody.Status
     ) -> TraceToolBody.Status {
         switch decision {
-        case "approved": .running
-        case "denied": .denied
-        case "cancelled": .denied
-        case "requested": .awaitingConsent
-        default: current
+        case .approved: .running
+        case .denied, .cancelled: .denied
+        case .requested: .awaitingConsent
         }
     }
 

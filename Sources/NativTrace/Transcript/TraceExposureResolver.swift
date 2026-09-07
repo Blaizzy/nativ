@@ -35,6 +35,12 @@ public struct ResolvedExposure: Sendable, Hashable {
 /// reference scheme exists to avoid paying in storage.
 public struct TraceExposureIndex: Sendable {
     private let bodiesByID: [String: String]
+    /// Verification results by message id and expected hash.
+    ///
+    /// A tool loop re-sends the whole conversation every round, so without this
+    /// the same body is hashed once per round it survives into — quadratic in
+    /// turn length, which is the cost the reference scheme exists to avoid.
+    private let verified: [String: Bool]
 
     public init(items: [TraceItem]) {
         var bodies: [String: String] = [:]
@@ -49,6 +55,13 @@ public struct TraceExposureIndex: Sendable {
             }
         }
         bodiesByID = bodies
+        verified = bodies.reduce(into: [:]) { result, entry in
+            result[Self.verificationKey(entry.key, TraceHash.content(entry.value))] = true
+        }
+    }
+
+    private static func verificationKey(_ messageID: String, _ hash: String) -> String {
+        "\(messageID)|\(hash)"
     }
 
     public func resolve(_ payload: RequestComposedPayload) -> ResolvedExposure {
@@ -66,10 +79,10 @@ public struct TraceExposureIndex: Sendable {
         guard let body = reference.inlineBody ?? bodiesByID[reference.messageID] else {
             return ResolvedMessage(reference: reference, text: nil, isVerified: false)
         }
-        return ResolvedMessage(
-            reference: reference,
-            text: body,
-            isVerified: TraceHash.content(body) == reference.contentHash
-        )
+        // An inlined body is not in the index, so it still hashes once.
+        let matches = reference.inlineBody == nil
+            ? verified[Self.verificationKey(reference.messageID, reference.contentHash)] ?? false
+            : TraceHash.content(body) == reference.contentHash
+        return ResolvedMessage(reference: reference, text: body, isVerified: matches)
     }
 }
