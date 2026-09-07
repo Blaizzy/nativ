@@ -145,7 +145,7 @@ final class ChatViewModel: ObservableObject {
         applyCurrentSession(
             ChatSession(
                 id: UUID(),
-                title: ChatSession.timestampTitle(for: now),
+                title: ChatSession.newChatTitle,
                 createdAt: now,
                 updatedAt: now,
                 messages: []
@@ -390,7 +390,7 @@ final class ChatViewModel: ObservableObject {
         let createdAt = Date()
         let session = ChatSession(
             id: UUID(),
-            title: ChatSession.timestampTitle(for: createdAt),
+            title: ChatSession.newChatTitle,
             createdAt: createdAt,
             updatedAt: createdAt,
             messages: [],
@@ -2432,7 +2432,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         session.messages = messages
-        session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
+        session.title = ChatSession.defaultTitle(for: messages)
         if updateTimestamp {
             session.updatedAt = Date()
         }
@@ -2482,8 +2482,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         storedSessions[index].title = ChatSession.defaultTitle(
-            for: storedSessions[index].messages,
-            createdAt: storedSessions[index].createdAt
+            for: storedSessions[index].messages
         )
         if updateTimestamp {
             storedSessions[index].updatedAt = Date()

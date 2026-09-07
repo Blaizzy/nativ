@@ -922,7 +922,7 @@ private enum KitComponentInventory {
                 component: component,
                 section: .skills,
                 title: skill.name,
-                subtitle: skill.instructions,
+                subtitle: skillSummary(skill.instructions),
                 symbol: "sparkles",
                 tint: .purple,
                 logoAssetName: nil,
@@ -967,5 +967,13 @@ private enum KitComponentInventory {
 
     private static func humanized(_ name: String) -> String {
         name.split(separator: "_").map { String($0).capitalized }.joined(separator: " ")
+    }
+
+    private static func skillSummary(_ instructions: String) -> String? {
+        instructions
+            .components(separatedBy: "\n\n")
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 }

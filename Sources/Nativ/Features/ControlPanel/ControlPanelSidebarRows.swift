@@ -26,7 +26,9 @@ struct ControlPanelRecentSessionRow: View {
     let folders: [ChatFolder]
     let onMoveToFolder: (UUID?) -> Void
     let onCreateFolderForSession: () -> Void
+    let renameCommitRequests: PassthroughSubject<Void, Never>
     var allowsFolderOrganization = true
+    var alignsContentWithSectionHeader = false
     @State private var isHovering = false
     @State private var isDeleteHovering = false
     @State private var isRenaming = false
@@ -37,10 +39,9 @@ struct ControlPanelRecentSessionRow: View {
         ZStack(alignment: .trailing) {
             if isRenaming {
                 HStack(spacing: 7) {
-                    Circle()
-                        .fill(isCurrent ? Color.accentColor : Color.clear)
-                        .frame(width: 5, height: 5)
-                        .accessibilityHidden(true)
+                    if isCurrent || !alignsContentWithSectionHeader {
+                        currentSessionIndicator
+                    }
 
                     TextField("Name", text: $renameDraft)
                         .textFieldStyle(.plain)
@@ -50,6 +51,7 @@ struct ControlPanelRecentSessionRow: View {
                         }
                         .onExitCommand {
                             isRenaming = false
+                            renameFieldFocused = false
                         }
                         // Clicking away ends the rename (commit) instead of
                         // leaving a stuck field/caret that swallows clicks.
@@ -57,6 +59,7 @@ struct ControlPanelRecentSessionRow: View {
                             if !focused, isRenaming { commitRename() }
                         }
                 }
+                .padding(.leading, alignsContentWithSectionHeader ? 1 : 0)
                 .padding(.trailing, isHovering && !isSelecting ? 52 : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .sidebarRowSelectionStyle(isSelected: isSelecting ? isChecked : isSelected)
@@ -70,11 +73,8 @@ struct ControlPanelRecentSessionRow: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
                                 .accessibilityLabel(isChecked ? "Selected" : "Not selected")
-                        } else {
-                            Circle()
-                                .fill(isCurrent ? Color.accentColor : Color.clear)
-                                .frame(width: 5, height: 5)
-                                .accessibilityHidden(true)
+                        } else if isCurrent || !alignsContentWithSectionHeader {
+                            currentSessionIndicator
                         }
 
                         if let badgeSystemImage = recent.badgeSystemImage {
@@ -96,6 +96,7 @@ struct ControlPanelRecentSessionRow: View {
 
                         Spacer(minLength: 0)
                     }
+                    .padding(.leading, alignsContentWithSectionHeader ? 1 : 0)
                     .padding(.trailing, isHovering && !isSelecting ? 52 : 0)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(.rect)
@@ -146,9 +147,19 @@ struct ControlPanelRecentSessionRow: View {
         .padding(.vertical, 1)
         .opacity(isSelectionDisabled && !isCurrent && !isSelecting ? 0.55 : 1)
         .onHover { isHovering = $0 }
+        .onReceive(renameCommitRequests) { _ in
+            commitRename()
+        }
         .contextMenu {
             rowMenuContents
         }
+    }
+
+    private var currentSessionIndicator: some View {
+        Circle()
+            .fill(isCurrent ? Color.accentColor : Color.clear)
+            .frame(width: 5, height: 5)
+            .accessibilityHidden(true)
     }
 
     private func activateRow() {
@@ -241,22 +252,26 @@ struct ControlPanelRecentSessionRow: View {
     }
 
     private func beginRename() {
+        guard !isRenaming else { return }
+        renameCommitRequests.send()
         renameDraft = recent.title
         isRenaming = true
         DispatchQueue.main.async {
+            guard isRenaming else { return }
             renameFieldFocused = true
         }
     }
 
     private func commitRename() {
+        guard isRenaming else { return }
         isRenaming = false
+        renameFieldFocused = false
         onRename(renameDraft)
     }
 }
 
 struct ControlPanelProjectHeaderView: View {
     let project: ChatProject
-    let count: Int
     let isAvailable: Bool
     let onToggleCollapse: () -> Void
     let onNewChat: () -> Void
@@ -264,25 +279,16 @@ struct ControlPanelProjectHeaderView: View {
     let onReveal: () -> Void
     let onLocate: () -> Void
     let onRemove: () -> Void
+    @State private var isHovering = false
     @State private var isRenaming = false
     @State private var renameDraft = ""
     @FocusState private var renameFieldFocused: Bool
 
     var body: some View {
         HStack(spacing: 7) {
-            Button(action: onToggleCollapse) {
-                Image(systemName: project.isCollapsed ? "chevron.right" : "chevron.down")
-                    .nativTextStyle(.badge)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 12)
-            }
-            .buttonStyle(.plain)
-
-            Image(systemName: isAvailable ? "folder.fill" : "folder.badge.questionmark")
-                .nativTextStyle(.metadata)
-                .foregroundStyle(isAvailable ? Color.secondary : Color.orange)
-
             if isRenaming {
+                folderIcon
+
                 TextField("Name", text: $renameDraft)
                     .textFieldStyle(.plain)
                     .focused($renameFieldFocused)
@@ -292,28 +298,47 @@ struct ControlPanelProjectHeaderView: View {
                         if !focused, isRenaming { commitRename() }
                     }
             } else {
-                Text(project.name)
-                    .nativTextStyle(.rowTitle)
-                    .lineLimit(1)
+                Button(action: onToggleCollapse) {
+                    HStack(spacing: 7) {
+                        folderIcon
 
-                Spacer(minLength: 4)
+                        Text(project.name)
+                            .nativTextStyle(.sidebarItem)
+                            .lineLimit(1)
 
-                if !isAvailable {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.orange)
-                        .help("Project folder unavailable")
+                        Spacer(minLength: 4)
+
+                        if !isAvailable {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.orange)
+                                .help("Project folder unavailable")
+                        }
+                    }
+                    .frame(minHeight: 24)
+                    .contentShape(.rect)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(project.name)
+                .accessibilityValue(project.isCollapsed ? "Collapsed" : "Expanded")
 
-                Text("\(count)")
-                    .nativTextStyle(.metadata)
-                    .foregroundStyle(.secondary.opacity(0.7))
+                Button(action: onNewChat) {
+                    Label("New Chat in \(project.name)", systemImage: "square.and.pencil")
+                        .labelStyle(.iconOnly)
+                        .nativTextStyle(.rowTitle)
+                        .frame(width: 24, height: 24)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.secondary.opacity(0.7))
+                .help("New Chat in \(project.name)")
+                .opacity(isHovering ? 1 : 0)
+                .allowsHitTesting(isHovering)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
+        .padding(.vertical, 4)
         .contentShape(.rect)
-        .onTapGesture(count: 2) { beginRename() }
+        .onHover { isHovering = $0 }
         .contextMenu {
             Button(action: onNewChat) {
                 Label("New Chat", systemImage: "square.and.pencil")
@@ -346,6 +371,13 @@ struct ControlPanelProjectHeaderView: View {
             }
         }
         .help(isAvailable ? project.rootPath : "Project folder unavailable: \(project.rootPath)")
+    }
+
+    private var folderIcon: some View {
+        Image(systemName: project.isCollapsed ? "folder" : "folder.fill")
+            .nativTextStyle(.metadata)
+            .foregroundStyle(isAvailable ? Color.secondary : Color.orange)
+            .contentTransition(.opacity)
     }
 
     private func beginRename() {

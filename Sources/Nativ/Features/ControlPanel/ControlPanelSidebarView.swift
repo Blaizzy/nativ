@@ -35,23 +35,20 @@ extension ControlPanelView {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 5)
+                .padding(.bottom, 16)
 
             if isSelectingRecents {
                 bulkSelectionBar
                     .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            } else {
-                sidebarActionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
                     .padding(.bottom, 8)
             }
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    projectsSection
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if !isSelectingRecents {
+                        projectsSection
+                            .transition(.opacity)
+                    }
                     if showsPinnedSection {
                         pinnedSection
                     }
@@ -62,6 +59,10 @@ extension ControlPanelView {
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
+                // Animate the shared layout so sibling sections move with the fading rows.
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarProjectsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarSessionsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: isSelectingRecents)
             }
             .frame(maxHeight: .infinity)
 
