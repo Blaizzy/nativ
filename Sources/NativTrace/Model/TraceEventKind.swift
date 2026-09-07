@@ -38,8 +38,6 @@ extension TraceEventKind {
     /// wire. Carries system-prompt provenance and tool origins that cannot be
     /// recovered from the request body alone.
     public static let requestComposed = TraceEventKind(rawValue: "request_composed")
-    /// The request body as sent. Emitted for calls Nativ did not compose.
-    public static let requestSent = TraceEventKind(rawValue: "request_sent")
     /// Coalesced streaming output for one model call.
     public static let responseDelta = TraceEventKind(rawValue: "response_delta")
     /// A model call finished, with usage and timings.

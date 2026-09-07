@@ -291,10 +291,10 @@ final class RoutineRunner {
             )
             await tracer?.requestComposed(
                 Self.exposure(
+                    request: request,
                     capabilities: capabilities,
                     advertisesTools: advertisesTools,
                     toolDefinitions: toolDefinitions,
-                    settings: settings,
                     messages: sentRefs
                 ),
                 in: call
@@ -309,10 +309,9 @@ final class RoutineRunner {
             } catch {
                 await tracer?.responseFailed(
                     message: String(describing: error),
-                    isCancellation: error is CancellationError,
+                    isCancellation: ChatIsCancellation(error),
                     in: call
                 )
-                await tracer?.turnEnded(turn, status: "failed", roundCount: toolRound + 1)
                 throw ScheduledCompletionFailure(underlying: error, transcript: transcript)
             }
             let assistantMessageID = UUID()
@@ -344,7 +343,6 @@ final class RoutineRunner {
                         reasoningContent: completion.reasoningContent ?? "",
                         modelID: routine.modelID
                     ))
-                await tracer?.turnEnded(turn, status: "completed", roundCount: toolRound + 1)
                 return ScheduledExecutionResult(
                     finalContent: completion.content,
                     transcript: transcript
@@ -586,10 +584,10 @@ final class RoutineRunner {
     }
 
     private static func exposure(
+        request: MLXChatCompletionRequest,
         capabilities: ResolvedCapabilities,
         advertisesTools: Bool,
         toolDefinitions: [MLXChatToolDefinition]?,
-        settings: NativSettings,
         messages: [TraceMessageRef]
     ) -> RequestComposedPayload {
         var sections: [PromptSection] = []
@@ -621,26 +619,7 @@ final class RoutineRunner {
                     parameters: try? TraceJSON(encoding: definition.function.parameters)
                 )
             },
-            parameters: SamplingParameters(
-                temperature: settings.temperature,
-                topP: settings.topP,
-                topK: settings.topK,
-                minP: settings.minP,
-                maxTokens: settings.maxTokens,
-                repetitionPenalty: settings.repetitionPenaltyEnabled
-                    ? settings.repetitionPenalty
-                    : nil,
-                thinkingEnabled: settings.thinkingEnabled,
-                thinkingBudget: settings.thinkingEnabled
-                    && settings.thinkingBudgetEnabled
-                    && !settings.speculativeDecodingActive
-                    ? settings.thinkingBudget
-                    : nil,
-                toolChoice: toolDefinitions == nil ? nil : "auto",
-                responseFormat: toolDefinitions == nil
-                    ? settings.chatResponseFormat.flatMap { try? TraceJSON(encoding: $0) }
-                    : nil
-            ),
+            parameters: SamplingParameters(request),
             messages: messages,
             advertisesTools: advertisesTools
         )

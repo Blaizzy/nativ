@@ -55,6 +55,7 @@ final class TraceInspectorViewModel: ObservableObject {
 
     /// Request whose call should be selected once loading finishes.
     private var pendingCallSelection: String?
+    private var labelsByItemID: [String: String] = [:]
     private var exposuresByItemID: [String: ResolvedExposure] = [:]
     private var diffsByItemID: [String: TraceExposureDiff] = [:]
     private let injectedStore: TraceStore?
@@ -124,11 +125,7 @@ final class TraceInspectorViewModel: ObservableObject {
     /// Label for an exposure row, numbered within its trace rather than by the
     /// per-turn round index.
     func callLabel(for itemID: String) -> String {
-        instances
-            .lazy
-            .flatMap(\.calls)
-            .first { $0.id == itemID }?
-            .title ?? "Model call"
+        labelsByItemID[itemID] ?? "Model call"
     }
 
     private func load(
@@ -153,6 +150,7 @@ final class TraceInspectorViewModel: ObservableObject {
     private func apply(_ traces: [(TraceSummary, [TraceEvent])]) {
         var exposures: [String: ResolvedExposure] = [:]
         var diffs: [String: TraceExposureDiff] = [:]
+        var labels: [String: String] = [:]
 
         let foldedItems = traces.map { TraceReducer.items(for: $0.1) }
 
@@ -193,6 +191,7 @@ final class TraceInspectorViewModel: ObservableObject {
                         index: callIndex
                     )
                 )
+                labels[item.id] = calls[calls.count - 1].title
                 previous = payload
             }
 
@@ -223,6 +222,7 @@ final class TraceInspectorViewModel: ObservableObject {
 
         exposuresByItemID = exposures
         diffsByItemID = diffs
+        labelsByItemID = labels
         instances = folded
 
         if selectedInstanceID == nil || !folded.contains(where: { $0.id == selectedInstanceID }) {

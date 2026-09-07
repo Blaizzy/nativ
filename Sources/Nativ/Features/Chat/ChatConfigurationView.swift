@@ -21,12 +21,15 @@ private enum ModelConfigurationLayoutMetrics {
 struct ModelConfigurationAuxiliaryPane<Content: View> {
     let title: String
     let systemImage: String
-    let content: Content
+    /// Held as a builder, not a built view. Calling `content()` in the
+    /// initialiser would construct the pane on every enclosing body pass even
+    /// while the panel is shut — and this app's model ticks once a second.
+    let content: () -> Content
 
-    init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+    init(title: String, systemImage: String, @ViewBuilder content: @escaping () -> Content) {
         self.title = title
         self.systemImage = systemImage
-        self.content = content()
+        self.content = content
     }
 }
 
@@ -150,7 +153,7 @@ struct ModelConfigurationLayoutContent<Content: View, Auxiliary: View>: View {
                 }
 
                 if showsAuxiliary, let auxiliary {
-                    auxiliary.content
+                    auxiliary.content()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     ModelConfigurationView(

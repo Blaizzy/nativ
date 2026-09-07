@@ -50,13 +50,8 @@ struct TraceTranscriptView: View {
             if let prompt = turn.prompt {
                 row(for: prompt)
             }
-            ForEach(turn.segments) { segment in
-                switch segment {
-                case .item(let item):
-                    row(for: item)
-                case .toolRun(let run):
-                    TraceToolRunRow(run: run)
-                }
+            ForEach(turn.segments) { item in
+                row(for: item)
             }
         }
     }
@@ -91,8 +86,6 @@ struct TraceTranscriptView: View {
                 )
                 .id(item.id)
             }
-        case .wireRequest(let payload):
-            TraceWireRequestRow(payload: payload).id(item.id)
         case .tool(let tool):
             TraceToolRow(tool: tool).id(item.id)
         case .lifecycle(let lifecycle):
@@ -346,30 +339,6 @@ struct TraceUnknownRow: View {
             }
         }
         .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .nativPanelStyle(cornerRadius: .compact)
-    }
-}
-
-struct TraceWireRequestRow: View {
-    let payload: RequestSentPayload
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                TraceOriginChip(label: payload.client ?? "external", tone: .secondary)
-                if let endpoint = payload.endpoint {
-                    Text(endpoint).font(.caption.monospaced()).foregroundStyle(.secondary)
-                }
-            }
-            if let text = try? payload.body.canonicalString() {
-                Text(text)
-                    .font(.caption.monospaced())
-                    .lineLimit(12)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .nativPanelStyle(cornerRadius: .compact)
     }

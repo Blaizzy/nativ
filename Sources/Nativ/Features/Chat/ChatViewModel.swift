@@ -47,6 +47,9 @@ final class ChatViewModel: ObservableObject {
     private var activeTraceCall: ChatTraceCall?
     /// Model calls made so far in the turn in flight.
     private var activeTurnRounds = 0
+    /// Increments once a turn has finished recording, so a trace reader can
+    /// reload when there is something new rather than twice per turn.
+    @Published private(set) var completedTurnCount = 0
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
     private struct QueuedChatRequest {
@@ -1486,6 +1489,7 @@ final class ChatViewModel: ObservableObject {
             // that throws never returns one, and reporting zero rounds for a
             // turn that had already made calls is worse than not reporting.
             traceProducer?.turnEnded(turn, status: outcome.rawValue, roundCount: activeTurnRounds)
+            completedTurnCount += 1
         }
 
         do {
@@ -1585,7 +1589,9 @@ final class ChatViewModel: ObservableObject {
             )
             activeTraceCall = call
             activeTurnRounds = toolRounds + 1
-            traceProducer?.requestComposed(composed.exposure, in: call)
+            if let exposure = composed.exposure {
+                traceProducer?.requestComposed(exposure, in: call)
+            }
 
             let streamingMessageID = assistantMessageID
             let streamingSessionID = queuedRequest.sessionID
@@ -2287,43 +2293,7 @@ final class ChatViewModel: ObservableObject {
                 at: 0
             )
         }
-        let exposure = RequestComposedPayload(
-            systemSections: systemSections,
-            tools: (tools ?? []).map { definition in
-                let origin = toolOrigins[definition.function.name]
-                return ToolDescriptor(
-                    name: definition.function.name,
-                    origin: origin?.origin ?? .builtIn,
-                    originDetail: origin?.detail,
-                    summary: definition.function.description,
-                    parameters: try? TraceJSON(encoding: definition.function.parameters)
-                )
-            },
-            parameters: SamplingParameters(
-                temperature: settings.temperature,
-                topP: settings.topP,
-                topK: settings.topK,
-                minP: settings.minP,
-                maxTokens: settings.maxTokens,
-                repetitionPenalty: settings.repetitionPenaltyEnabled ? settings.repetitionPenalty : nil,
-                thinkingEnabled: settings.thinkingEnabled,
-                thinkingBudget: settings.thinkingEnabled && settings.thinkingBudgetEnabled
-                    ? settings.thinkingBudget
-                    : nil,
-                toolChoice: tools == nil ? nil : "auto"
-            ),
-            messages: sentMessageRefs,
-            omissions: (documentOmissionsBySessionID[queuedRequest.sessionID] ?? []).map {
-                TraceOmission(
-                    subject: $0.filename,
-                    reason: $0.reason == .contextLimit ? "context limit" : "unreadable"
-                )
-            },
-            advertisesTools: advertisesToolsForModel
-        )
-
-        return ComposedChatRequest(
-            request: MLXChatCompletionRequest(
+        let wireRequest = MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
             maxTokens: settings.maxTokens,
@@ -2344,9 +2314,40 @@ final class ChatViewModel: ObservableObject {
             tools: tools,
             toolChoice: tools == nil ? nil : "auto",
             stream: true
-            ),
-            exposure: exposure
         )
+
+        // Describing the request costs a hash of every preceding message and an
+        // encode of every tool schema, and fittedDocumentContext calls this
+        // method up to four more times per round for token preflight, throwing
+        // the exposure away each time. Skip it when nothing is recording.
+        guard traceProducer != nil else {
+            return ComposedChatRequest(request: wireRequest, exposure: nil)
+        }
+
+        let exposure = RequestComposedPayload(
+            systemSections: systemSections,
+            tools: (tools ?? []).map { definition in
+                let origin = toolOrigins[definition.function.name]
+                return ToolDescriptor(
+                    name: definition.function.name,
+                    origin: origin?.origin ?? .builtIn,
+                    originDetail: origin?.detail,
+                    summary: definition.function.description,
+                    parameters: try? TraceJSON(encoding: definition.function.parameters)
+                )
+            },
+            parameters: SamplingParameters(wireRequest),
+            messages: sentMessageRefs,
+            omissions: (documentOmissionsBySessionID[queuedRequest.sessionID] ?? []).map {
+                TraceOmission(
+                    subject: $0.filename,
+                    reason: $0.reason == .contextLimit ? "context limit" : "unreadable"
+                )
+            },
+            advertisesTools: advertisesToolsForModel
+        )
+
+        return ComposedChatRequest(request: wireRequest, exposure: exposure)
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {

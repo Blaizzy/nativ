@@ -180,7 +180,10 @@ func runTraceSmokeTest() async -> Bool {
         return turn
     }
     check(turns.count == 1, "the transcript folded into one turn")
-    check(turns.first?.calls.count == 1, "the turn holds one model call")
+    let turnCalls = turns.first?.segments.filter {
+        if case .exposure = $0.body { true } else { false }
+    } ?? []
+    check(turnCalls.count == 1, "the turn holds one model call")
 
     let exposure = exposures.first
     check(exposure?.systemSections.count == 2, "both system sections survived the round trip")
@@ -192,8 +195,8 @@ func runTraceSmokeTest() async -> Bool {
     check(exposure?.messages.first?.text == prompt, "the message reference resolved to its body")
     check(exposure?.messages.first?.isVerified == true, "the resolved body matches what was sent")
 
-    let toolRows = turns.first?.segments.compactMap { segment -> TraceToolBody? in
-        guard case .item(let item) = segment, case .tool(let tool) = item.body else { return nil }
+    let toolRows = turns.first?.segments.compactMap { item -> TraceToolBody? in
+        guard case .tool(let tool) = item.body else { return nil }
         return tool
     } ?? []
     check(toolRows.count == 1, "the call and its result collapsed into one row")

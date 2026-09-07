@@ -37,8 +37,6 @@ public struct TraceReducer: Sendable {
             applyTurnEnded(event)
         case .requestComposed:
             applyRequestComposed(event)
-        case .requestSent:
-            applyRequestSent(event)
         case .responseDelta:
             applyResponseDelta(event)
         case .responseCompleted:
@@ -98,13 +96,6 @@ public struct TraceReducer: Sendable {
             return appendUnreadable(event)
         }
         append(event, body: .exposure(payload))
-    }
-
-    private mutating func applyRequestSent(_ event: TraceEvent) {
-        guard let payload = RequestSentPayload(event: event) else {
-            return appendUnreadable(event)
-        }
-        append(event, body: .wireRequest(payload))
     }
 
     private mutating func applyResponseDelta(_ event: TraceEvent) {

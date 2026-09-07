@@ -38,62 +38,6 @@ final class TraceGroupingTests: XCTestCase {
         XCTAssertEqual(prompt.text, "hi")
     }
 
-    func testConsecutiveToolCallsCollapseOnceTheRunIsLongEnough() throws {
-        var events: [TraceEvent] = [
-            event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "go").makePayload())
-        ]
-        for index in 0..<4 {
-            events.append(event(.toolCall, try ToolCallPayload(callID: "c\(index)", name: "read_file").makePayload()))
-            events.append(event(.toolResult, try ToolResultPayload(callID: "c\(index)", output: "ok").makePayload()))
-        }
-
-        let blocks = TraceGrouping.blocks(for: TraceReducer.items(for: events))
-        guard case .turn(let turn) = try XCTUnwrap(blocks.first) else {
-            return XCTFail("expected a turn")
-        }
-
-        let runs = turn.segments.compactMap { segment -> TraceToolRun? in
-            guard case .toolRun(let run) = segment else { return nil }
-            return run
-        }
-        XCTAssertEqual(runs.count, 1)
-        XCTAssertEqual(runs.first?.count, 4)
-        XCTAssertEqual(runs.first?.label, "read_file ×4")
-    }
-
-    func testShortToolRunsStayExpanded() throws {
-        let events = [
-            event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "go").makePayload()),
-            event(.toolCall, try ToolCallPayload(callID: "c0", name: "read_file").makePayload()),
-            event(.toolCall, try ToolCallPayload(callID: "c1", name: "read_file").makePayload()),
-        ]
-
-        let blocks = TraceGrouping.blocks(for: TraceReducer.items(for: events))
-        guard case .turn(let turn) = try XCTUnwrap(blocks.first) else {
-            return XCTFail("expected a turn")
-        }
-
-        XCTAssertFalse(turn.segments.contains { if case .toolRun = $0 { true } else { false } })
-    }
-
-    func testMixedToolRunGetsACountLabel() throws {
-        var events = [event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "go").makePayload())]
-        for (index, name) in ["read_file", "web_search", "terminal"].enumerated() {
-            events.append(event(.toolCall, try ToolCallPayload(callID: "c\(index)", name: name).makePayload()))
-        }
-
-        let blocks = TraceGrouping.blocks(for: TraceReducer.items(for: events))
-        guard case .turn(let turn) = try XCTUnwrap(blocks.first) else {
-            return XCTFail("expected a turn")
-        }
-        let run = turn.segments.compactMap { segment -> TraceToolRun? in
-            guard case .toolRun(let run) = segment else { return nil }
-            return run
-        }.first
-
-        XCTAssertEqual(run?.label, "3 tool calls")
-    }
-
     func testModelSwitchDrawsABoundaryBetweenTurns() throws {
         let events = [
             event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "one").makePayload(), turnID: "u1"),
@@ -111,6 +55,20 @@ final class TraceGroupingTests: XCTestCase {
         XCTAssertEqual(boundary.detail, "from qwen")
     }
 
+    func testEveryToolRowSurvivesGrouping() throws {
+        var events = [event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "go").makePayload())]
+        for index in 0..<4 {
+            events.append(event(.toolCall, try ToolCallPayload(callID: "c\(index)", name: "read_file").makePayload()))
+        }
+
+        let blocks = TraceGrouping.blocks(for: TraceReducer.items(for: events))
+        guard case .turn(let turn) = try XCTUnwrap(blocks.first) else {
+            return XCTFail("expected a turn")
+        }
+
+        XCTAssertEqual(turn.segments.count, 4, "an inspector shows every call, it does not hide them")
+    }
+
     func testCallsExposesOneEntryPerModelCall() throws {
         let events = [
             event(.turnStarted, try TurnStartedPayload(messageID: "m1", text: "go").makePayload()),
@@ -124,7 +82,8 @@ final class TraceGroupingTests: XCTestCase {
             return XCTFail("expected a turn")
         }
 
-        XCTAssertEqual(turn.calls.count, 2)
+        let calls = turn.segments.filter { if case .exposure = $0.body { true } else { false } }
+        XCTAssertEqual(calls.count, 2)
     }
 
     // MARK: - Helpers
@@ -147,12 +106,7 @@ final class TraceGroupingTests: XCTestCase {
             case .boundary(let boundary): [boundary.id]
             case .loose(let item): [item.id]
             case .turn(let turn):
-                (turn.prompt.map { [$0.id] } ?? []) + turn.segments.flatMap { segment -> [String] in
-                    switch segment {
-                    case .item(let item): [item.id]
-                    case .toolRun(let run): run.items.map(\.id)
-                    }
-                }
+                (turn.prompt.map { [$0.id] } ?? []) + turn.segments.map(\.id)
             }
         }
     }

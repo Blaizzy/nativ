@@ -24,8 +24,6 @@ public struct TraceItem: Sendable, Hashable, Identifiable {
         case message(TraceMessageBody)
         /// What Nativ composed for one call: system sections, tools, sampling.
         case exposure(RequestComposedPayload)
-        /// A call Nativ did not compose, captured off the wire.
-        case wireRequest(RequestSentPayload)
         case tool(TraceToolBody)
         case lifecycle(TraceLifecycleBody)
         /// An event this build does not recognise. Kept so a trace written by a

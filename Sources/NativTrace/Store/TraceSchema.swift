@@ -1,32 +1,17 @@
 import Foundation
 
-/// One idempotent, named schema change.
-///
-/// Migrations are append-only: once a name has shipped it is never renamed,
-/// reordered, or edited, because a database in the field records that name as
-/// applied and will skip it forever.
-struct TraceMigration: Sendable {
-    let name: String
-    let apply: @Sendable (SQLiteConnection) throws -> Void
-
-    init(name: String, sql: String) {
-        self.name = name
-        self.apply = { try $0.execute(sql) }
-    }
-
-    init(name: String, apply: @escaping @Sendable (SQLiteConnection) throws -> Void) {
-        self.name = name
-        self.apply = apply
-    }
-}
-
 enum TraceSchema {
     /// Tables created on a fresh database.
     ///
     /// `trace_events` is the source of truth and is append-only: no code in
     /// this framework may `UPDATE` or `DELETE` a row except the retention
-    /// sweep, which drops whole traces. `trace_index` is a derived convenience
-    /// and is rebuildable from `trace_events` — never treat it as authoritative.
+    /// sweep, which drops whole traces. `trace_index` and `trace_models` are
+    /// derived and rebuildable — never treat them as authoritative.
+    ///
+    /// Every statement is `CREATE ... IF NOT EXISTS`, so a build that needs to
+    /// change an existing table introduces a versioned migration registry
+    /// together with its first migration. Shipping the registry ahead of any
+    /// migration to run through it only invites drift between the two.
     static let baseSQL = """
         CREATE TABLE IF NOT EXISTS trace_events (
             trace_id         TEXT    NOT NULL,
@@ -72,44 +57,9 @@ enum TraceSchema {
             model_id TEXT NOT NULL,
             PRIMARY KEY (trace_id, model_id)
         );
-
-        CREATE TABLE IF NOT EXISTS trace_meta (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS trace_migrations (
-            name       TEXT PRIMARY KEY,
-            applied_at REAL NOT NULL
-        );
         """
-
-    /// Append new entries here. Never edit or remove an existing one.
-    static let migrations: [TraceMigration] = []
 
     static func open(_ connection: SQLiteConnection) throws {
         try connection.execute(baseSQL)
-        try runMigrations(on: connection)
-    }
-
-    private static func runMigrations(on connection: SQLiteConnection) throws {
-        let applied = Set(
-            try connection.withStatement("SELECT name FROM trace_migrations;") { statement in
-                try statement.rows { $0.string(0) }.compactMap { $0 }
-            }
-        )
-
-        for migration in migrations where !applied.contains(migration.name) {
-            try connection.transaction {
-                try migration.apply(connection)
-                try connection.withStatement(
-                    "INSERT OR IGNORE INTO trace_migrations (name, applied_at) VALUES (?, ?);"
-                ) { statement in
-                    statement.bind(migration.name)
-                    statement.bind(Date())
-                    try statement.run()
-                }
-            }
-        }
     }
 }

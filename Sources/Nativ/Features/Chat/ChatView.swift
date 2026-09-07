@@ -24,11 +24,11 @@ struct ChatView: View {
         ModelConfigurationLayout(
             model: model,
             isConfigurationVisible: $showsConfiguration,
-            auxiliary: ModelConfigurationAuxiliaryPane<AnyView>(
+            auxiliary: ModelConfigurationAuxiliaryPane(
                 title: "Trace",
                 systemImage: "text.magnifyingglass"
             ) {
-                AnyView(traceInspector)
+                traceInspector
             }
         ) {
             ChatTranscriptView(
@@ -105,7 +105,7 @@ struct ChatView: View {
             TraceInspectorView(
                 source: .session(sessionID),
                 showsCallSidebar: false,
-                reloadToken: chat.activeRequestSessionID
+                reloadToken: chat.completedTurnCount
             )
         } else {
             ContentUnavailableView(

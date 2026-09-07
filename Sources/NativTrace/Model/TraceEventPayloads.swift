@@ -86,22 +86,6 @@ public struct RequestComposedPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
-/// The request body as it went over the wire, redacted. Emitted for calls Nativ
-/// did not compose, where no structured provenance exists.
-public struct RequestSentPayload: TracePayloadView, Codable, Hashable {
-    public static let kind = TraceEventKind.requestSent
-
-    public var body: TraceJSON
-    public var client: String?
-    public var endpoint: String?
-
-    public init(body: TraceJSON, client: String? = nil, endpoint: String? = nil) {
-        self.body = body
-        self.client = client
-        self.endpoint = endpoint
-    }
-}
-
 public struct ResponseDeltaPayload: TracePayloadView, Codable, Hashable {
     public static let kind = TraceEventKind.responseDelta
 
