@@ -42,35 +42,45 @@ format break, not a refactor.
 6. **The core imports Foundation, SQLite3, Compression, and CryptoKit.** No
    SwiftUI, no AppKit, no app types. That is what lets a test harness, a CLI, or
    a separate viewer read traces without linking the app, and it is why the
-   suite runs without building Nativ.
+   suite runs without building Nativ. `scripts/dump_trace.py` exercises the
+   property: it reads a live trace in another language with no app involved.
 
-7. **Provenance is recorded at composition time, never parsed back out.** Nativ
+7. **Vocabulary crossing the producer/reducer seam is typed, not stringly.**
+   `TraceEventKind` and the `*Origin` types are open because they name things a
+   future build may add. Payload *values* — a turn's status, a consent decision
+   — are closed enums, because both sides must agree on them and a `String`
+   there drifted immediately: the reducer once handled decisions no producer
+   emitted, and gated a state transition on one of them.
+
+8. **Provenance is recorded at composition time, never parsed back out.** Nativ
    assembles the system prompt itself, so `PromptSection` carries a real origin
    from the code that appended it. Recovering structure by string-matching a
    flattened prompt is the failure mode this design exists to avoid.
 
-8. **Bodies are referenced, not repeated.** A tool loop re-sends the whole
+9. **Bodies are referenced, not repeated.** A tool loop re-sends the whole
    conversation every round; storing it each time makes a turn quadratic in its
    own length. `TraceMessageRef` names the message and hashes its content;
    `TraceExposureIndex` resolves it against events already in the trace, and
    `contentHash` is what lets a reader prove it resolved the right body after an
    edit or a branch.
 
-9. **Sequence allocation and the append that consumes it are one call.**
+10. **Sequence allocation and the append that consumes it are one call.**
    `TraceStore.record` does both. An API that hands out a sequence number and
    trusts the caller to use it invites two writers to interleave, and the gap is
    silent.
 
-10. **Order survives all the way to disk.** Producers serialise their own writes
+11. **Order survives all the way to disk.** Producers serialise their own writes
     and `TraceRecorder` awaits the store rather than spawning a task per event.
     Detached tasks reach an actor in scheduler order, which is how a tool result
-    ends up recorded before the call it answers.
+    ends up recorded before the call it answers. Payloads are encoded on the
+    consumer for the same reason the queue exists: every producer runs on the
+    main actor, and a tool output can be hundreds of kilobytes.
 
 ## Layout
 
 ```
 Model/       the format: events, kinds, payloads, exposure types
-Store/       SQLite persistence, schema, migrations, index, retention
+Store/       SQLite persistence, schema, index, retention
 Transcript/  the fold: events → items → display blocks
 Capture/     the writer producers talk to
 ```
@@ -92,8 +102,10 @@ test that says so.
 ## Conventions
 
 - One file per concept; split before a file reaches ~400 lines. `TraceStore`
-  delegates index maintenance to `TraceIndex` and pruning to
-  `TraceRetentionSweep` for that reason, not because either is reused elsewhere.
+  delegates index maintenance and retention to `TraceIndex` for that reason,
+  not because either is reused elsewhere — and they live together because they
+  are one three-table delete, which is what splitting them along the wrong seam
+  had obscured.
 - SQL runs through `SQLiteConnection.withStatement`, which resets the statement
   on entry and exit and refuses re-entrant use. Statements are cached, so the
   append path does not re-prepare its insert per event.
