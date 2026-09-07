@@ -151,41 +151,23 @@ final class NativExtensionHostBroker:
                 throw NativExtensionHostBrokerError.invalidRequest
             }
             let configuration = try configuration()
-            guard configuration.serverIsRunning else {
-                throw NativExtensionHostBrokerError.serverNotRunning
-            }
-            let modelID: String
-            if let requestedModelID = transcriptionRequest.modelID,
-               !requestedModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                modelID = requestedModelID
-            } else {
-                let models = try await LocalModelDiscovery.scan(
-                    searchPaths: LocalModelSearchPaths(
-                        primary: configuration.modelSearchPath,
-                        additional: configuration.additionalModelSearchPaths
+            let transcription: NativTranscription
+            do {
+                transcription = try await NativTranscriptionRunner(configuration: configuration)
+                    .transcribe(
+                        audioData: transcriptionRequest.audioData,
+                        fileName: transcriptionRequest.fileName,
+                        requestedModelID: transcriptionRequest.modelID
                     )
-                )
-                guard let resolvedModelID = LocalModelDiscovery.speechToTextModelID(
-                    in: models,
-                    selectedModelID: configuration.selectedModelID
-                ) else {
-                    throw NativExtensionHostBrokerError.speechModelUnavailable
-                }
-                modelID = resolvedModelID
+            } catch NativTranscriptionError.serverNotRunning {
+                throw NativExtensionHostBrokerError.serverNotRunning
+            } catch NativTranscriptionError.modelUnavailable {
+                throw NativExtensionHostBrokerError.speechModelUnavailable
             }
-            let result = try await NativAudioClient(
-                baseURL: configuration.serverBaseURL,
-                apiKey: configuration.serverAPIKey
-            )
-            .transcribe(
-                audioData: transcriptionRequest.audioData,
-                fileName: transcriptionRequest.fileName,
-                model: modelID
-            )
             return try JSONEncoder().encode(
                 NativExtensionTranscriptionResponse(
-                    text: result.text,
-                    modelID: modelID
+                    text: transcription.text,
+                    modelID: transcription.modelID
                 )
             )
         case .insertText:
