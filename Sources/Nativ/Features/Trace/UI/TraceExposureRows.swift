@@ -9,6 +9,13 @@ enum TracePalette {
     static let accent = Color(red: 71 / 255, green: 151 / 255, blue: 232 / 255)
 }
 
+enum TraceCallLabel {
+    static func title(round: Int?) -> String {
+        guard let round else { return "Model call" }
+        return "Call \(round + 1)"
+    }
+}
+
 enum TraceToolChange {
     case added
     case redefined
@@ -19,9 +26,21 @@ enum TraceToolChange {
 struct TraceDisclosureSection<Content: View>: View {
     let title: String
     let subtitle: String?
-    @ViewBuilder let content: Content
+    let content: Content
 
-    @State private var isExpanded = false
+    @State private var isExpanded: Bool
+
+    init(
+        title: String,
+        subtitle: String?,
+        startsExpanded: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+        _isExpanded = State(initialValue: startsExpanded)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

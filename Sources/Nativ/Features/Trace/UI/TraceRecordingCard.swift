@@ -92,9 +92,15 @@ struct TraceRecordingCard: View {
         }
     }
 
+    /// Sums the database and its write-ahead sidecars. Reporting only the main
+    /// file understates usage right after recording, when most of what was
+    /// written is still in the WAL.
     private func refreshSize() async {
-        let url = TraceStore.defaultURL()
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64)
-        storedBytes = size ?? 0
+        let base = TraceStore.defaultURL()
+        let paths = [base.path, base.path + "-wal", base.path + "-shm"]
+        storedBytes = paths.reduce(into: Int64(0)) { total, path in
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+            total += (attributes?[.size] as? NSNumber)?.int64Value ?? 0
+        }
     }
 }

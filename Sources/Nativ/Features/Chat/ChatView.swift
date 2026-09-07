@@ -91,7 +91,11 @@ struct ChatView: View {
     @ViewBuilder
     private var traceInspector: some View {
         if let sessionID = chat.currentSessionID {
-            TraceInspectorView(source: .session(sessionID), showsCallSidebar: false)
+            TraceInspectorView(
+                source: .session(sessionID),
+                showsCallSidebar: false,
+                reloadToken: chat.activeRequestSessionID
+            )
         } else {
             ContentUnavailableView(
                 "No chat selected",

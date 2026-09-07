@@ -44,7 +44,7 @@ struct TraceExposureCard: View {
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
 
-                Text(round.map { "Call \($0 + 1)" } ?? "Model call")
+                Text(TraceCallLabel.title(round: round))
                     .font(.callout.weight(.semibold))
 
                 Text("\(exposure.systemSections.count) prompt \(exposure.systemSections.count == 1 ? "section" : "sections") · \(toolSummary)")
@@ -80,7 +80,8 @@ struct TraceExposureCard: View {
     private var systemPrompt: some View {
         TraceDisclosureSection(
             title: "System prompt",
-            subtitle: "\(exposure.systemSections.count) sections"
+            subtitle: "\(exposure.systemSections.count) sections",
+            startsExpanded: true
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(exposure.systemSections.enumerated()), id: \.offset) { _, section in
@@ -93,7 +94,8 @@ struct TraceExposureCard: View {
     private var tools: some View {
         TraceDisclosureSection(
             title: "Tools exposed",
-            subtitle: exposure.advertisesTools ? "\(exposure.tools.count)" : "withheld this round"
+            subtitle: exposure.advertisesTools ? "\(exposure.tools.count)" : "withheld this round",
+            startsExpanded: true
         ) {
             if exposure.tools.isEmpty {
                 Text("No tools were advertised on this call.")

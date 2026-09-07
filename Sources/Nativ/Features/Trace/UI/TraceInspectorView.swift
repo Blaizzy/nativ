@@ -18,8 +18,17 @@ struct TraceInspectorView: View {
         case request(String)
     }
 
+    private struct Reload: Hashable {
+        let source: Source
+        let token: AnyHashable?
+    }
+
     let source: Source
     var showsCallSidebar = true
+    /// Changes when the producer may have written more events — the end of a
+    /// turn, not every token. Reloading per token would re-read the database
+    /// hundreds of times for one answer.
+    var reloadToken: AnyHashable?
 
     @StateObject private var model = TraceInspectorViewModel()
 
@@ -29,7 +38,7 @@ struct TraceInspectorView: View {
             Divider()
             content
         }
-        .task(id: source) { await load() }
+        .task(id: Reload(source: source, token: reloadToken)) { await load() }
     }
 
     @ViewBuilder
@@ -128,7 +137,6 @@ struct TraceCallSidebar: View {
                 }
             }
             .padding(.vertical, 3)
-            .tag(call.id)
         }
         .listStyle(.sidebar)
     }

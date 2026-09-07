@@ -12,10 +12,7 @@ struct TraceCallSummary: Identifiable, Hashable {
     let advertisesTools: Bool
     let diff: TraceExposureDiff
 
-    var title: String {
-        guard let round else { return "Call" }
-        return "Call \(round + 1)"
-    }
+    var title: String { TraceCallLabel.title(round: round) }
 }
 
 /// Loads a trace and folds it into something renderable.
@@ -120,7 +117,8 @@ final class TraceInspectorViewModel: ObservableObject {
         diffsByItemID = diffs
         calls = summaries
         blocks = TraceGrouping.blocks(for: items)
-        if selectedCallID == nil || exposures[selectedCallID ?? ""] == nil {
+        let selectionSurvived = selectedCallID.map { exposures[$0] != nil } ?? false
+        if !selectionSurvived {
             selectedCallID = summaries.last?.id
         }
     }

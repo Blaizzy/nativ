@@ -61,6 +61,9 @@ struct TraceTranscriptView: View {
             TraceMessageRow(message: message, timestamp: item.timestamp)
                 .id(item.id)
         case .exposure:
+            // Falling through to nothing here would drop a row from the
+            // transcript, which is the one thing the fold guarantees never
+            // happens. Resolution failing is a bug worth seeing, not hiding.
             if let exposure = model.exposure(for: item.id) {
                 TraceExposureCard(
                     exposure: exposure,
@@ -68,6 +71,16 @@ struct TraceTranscriptView: View {
                     round: item.scope.roundIndex,
                     modelID: item.scope.modelID,
                     isHighlighted: model.selectedCallID == item.id
+                )
+                .id(item.id)
+            } else {
+                TraceLifecycleRow(
+                    lifecycle: TraceLifecycleBody(
+                        kind: .failure,
+                        title: TraceCallLabel.title(round: item.scope.roundIndex),
+                        detail: "exposure could not be resolved"
+                    ),
+                    timestamp: item.timestamp
                 )
                 .id(item.id)
             }
@@ -105,7 +118,7 @@ struct TraceMessageRow: View {
                     .padding(.vertical, 9)
                     .background {
                         if message.role == .user {
-                            Capsule(style: .continuous)
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .stroke(TracePalette.stroke, lineWidth: 0.5)
                         }
                     }
