@@ -2,8 +2,10 @@ import NativTrace
 import SwiftUI
 
 extension Notification.Name {
-    /// Posted by the View menu to show or hide the trace inspector in chat.
-    static let toggleTraceInspector = Notification.Name("ToggleTraceInspector")
+    /// Asks the chat page's existing right-hand panel to reveal its trace pane.
+    /// The trace has no surface of its own: it lives behind the sidebar.right
+    /// button that is already there.
+    static let showModelTrace = Notification.Name("ShowModelTrace")
 }
 
 /// What the model was shown, for one chat session or one request.
@@ -79,6 +81,18 @@ struct TraceInspectorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
+            // A chat has one trace per model that served it, so which model is
+            // being read has to be an explicit choice rather than an accident
+            // of ordering.
+            if model.instances.count > 1 {
+                Picker("Model", selection: $model.selectedInstanceID) {
+                    ForEach(model.instances) { instance in
+                        Text(instance.modelLabel).tag(Optional(instance.id))
+                    }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 240)
+            }
             Button {
                 Task { await load() }
             } label: {
@@ -93,7 +107,13 @@ struct TraceInspectorView: View {
 
     private var subtitle: String {
         let calls = model.calls.count
-        return "\(model.eventCount) events · \(calls) \(calls == 1 ? "model call" : "model calls")"
+        var parts = ["\(model.eventCount) events", "\(calls) \(calls == 1 ? "model call" : "model calls")"]
+        if model.instances.count > 1 {
+            parts.append("\(model.instances.count) models in this chat")
+        } else if let label = model.selectedInstance?.modelLabel {
+            parts.insert(label, at: 0)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func unavailable(

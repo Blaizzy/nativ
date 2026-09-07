@@ -18,13 +18,18 @@ struct ChatView: View {
     let onFindDraftModels: (String) -> Void
     @State private var isDropTargeted = false
     @State private var previewedAttachment: ChatImageAttachment?
-    @State private var showsTraceInspector = false
 
     var body: some View {
         let project = chat.currentProjectID.flatMap { projects.project(withID: $0) }
         ModelConfigurationLayout(
             model: model,
-            isConfigurationVisible: $showsConfiguration
+            isConfigurationVisible: $showsConfiguration,
+            auxiliary: ModelConfigurationAuxiliaryPane<AnyView>(
+                title: "Trace",
+                systemImage: "text.magnifyingglass"
+            ) {
+                AnyView(traceInspector)
+            }
         ) {
             ChatTranscriptView(
                 model: model,
@@ -71,13 +76,6 @@ struct ChatView: View {
         }
         .onChange(of: model.settings.mcpServers) { _, servers in
             mcpHost.reload(servers: servers)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .toggleTraceInspector)) { _ in
-            showsTraceInspector.toggle()
-        }
-        .inspector(isPresented: $showsTraceInspector) {
-            traceInspector
-                .inspectorColumnWidth(min: 420, ideal: 560, max: 900)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()

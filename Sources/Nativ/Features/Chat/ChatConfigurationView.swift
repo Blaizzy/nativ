@@ -13,18 +13,41 @@ private enum ModelConfigurationLayoutMetrics {
     static let headerTrailingControlClearance: CGFloat = 52
 }
 
-struct ModelConfigurationLayout<Content: View>: View {
+/// An extra pane the right-hand panel can show instead of model configuration.
+///
+/// Surfaces that have somewhere else to put should reuse this panel rather than
+/// add chrome to the page: the toggle already exists, and a second button beside
+/// it would make the chat header a row of icons.
+struct ModelConfigurationAuxiliaryPane<Content: View> {
+    let title: String
+    let systemImage: String
+    let content: Content
+
+    init(title: String, systemImage: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.systemImage = systemImage
+        self.content = content()
+    }
+}
+
+struct ModelConfigurationLayout<Content: View, Auxiliary: View>: View {
     @Bindable var model: NativModel
     @Binding var isConfigurationVisible: Bool
+    private let auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>?
     private let content: Content
 
+    /// One initialiser taking an optional pane. Two overloads sharing these
+    /// argument labels — one optional, one not — leave `Auxiliary` unbound at
+    /// every call site and blow up type inference in unrelated views.
     init(
         model: NativModel,
         isConfigurationVisible: Binding<Bool>,
+        auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>?,
         @ViewBuilder content: () -> Content
     ) {
         self.model = model
         _isConfigurationVisible = isConfigurationVisible
+        self.auxiliary = auxiliary
         self.content = content()
     }
 
@@ -33,14 +56,30 @@ struct ModelConfigurationLayout<Content: View>: View {
             settings: $model.settings,
             settingsRequireRestart: model.settingsRequireRestart,
             isConfigurationVisible: $isConfigurationVisible,
-            onReset: model.resetSettings
+            onReset: model.resetSettings,
+            auxiliary: auxiliary
         ) {
             content
         }
     }
 }
 
-struct ModelConfigurationLayoutContent<Content: View>: View {
+extension ModelConfigurationLayout where Auxiliary == EmptyView {
+    init(
+        model: NativModel,
+        isConfigurationVisible: Binding<Bool>,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            model: model,
+            isConfigurationVisible: isConfigurationVisible,
+            auxiliary: nil,
+            content: content
+        )
+    }
+}
+
+struct ModelConfigurationLayoutContent<Content: View, Auxiliary: View>: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.controlPanelIsFullScreen) private var isFullScreen
     @Environment(\.displayScale) private var displayScale
@@ -48,21 +87,25 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
     let settingsRequireRestart: Bool
     @Binding var isConfigurationVisible: Bool
     let onReset: () -> Void
+    private let auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>?
     private let content: Content
     @State private var configurationWidth = ModelConfigurationLayoutMetrics.idealWidth
     @State private var configurationDragStartWidth: CGFloat?
+    @State private var showsAuxiliary = false
 
     init(
         settings: Binding<NativSettings>,
         settingsRequireRestart: Bool,
         isConfigurationVisible: Binding<Bool>,
         onReset: @escaping () -> Void,
+        auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>?,
         @ViewBuilder content: () -> Content
     ) {
         _settings = settings
         self.settingsRequireRestart = settingsRequireRestart
         _isConfigurationVisible = isConfigurationVisible
         self.onReset = onReset
+        self.auxiliary = auxiliary
         self.content = content()
     }
 
@@ -101,18 +144,49 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
                     edges: [.top, .bottom, .trailing]
                 )
 
-            ModelConfigurationView(
-                settings: $settings,
-                settingsRequireRestart: settingsRequireRestart,
-                onReset: onReset
-            )
+            VStack(spacing: 0) {
+                if let auxiliary {
+                    paneSelector(auxiliary: auxiliary)
+                }
+
+                if showsAuxiliary, let auxiliary {
+                    auxiliary.content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ModelConfigurationView(
+                        settings: $settings,
+                        settingsRequireRestart: settingsRequireRestart,
+                        onReset: onReset
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
             .padding(.top, isFullScreen ? ModelConfigurationLayoutMetrics.topInset : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showModelTrace)) { _ in
+            guard auxiliary != nil else { return }
+            showsAuxiliary = true
+            isConfigurationVisible = true
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .leading) {
             configurationResizeHandle
         }
+    }
+
+    private func paneSelector(
+        auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>
+    ) -> some View {
+        Picker("", selection: $showsAuxiliary) {
+            Label("Model", systemImage: "slider.horizontal.3").tag(false)
+            Label(auxiliary.title, systemImage: auxiliary.systemImage).tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 
     private var configurationResizeHandle: some View {
@@ -147,6 +221,25 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
                     configurationDragStartWidth = nil
                     NSCursor.arrow.set()
                 }
+        )
+    }
+}
+
+extension ModelConfigurationLayoutContent where Auxiliary == EmptyView {
+    init(
+        settings: Binding<NativSettings>,
+        settingsRequireRestart: Bool,
+        isConfigurationVisible: Binding<Bool>,
+        onReset: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.init(
+            settings: settings,
+            settingsRequireRestart: settingsRequireRestart,
+            isConfigurationVisible: isConfigurationVisible,
+            onReset: onReset,
+            auxiliary: nil,
+            content: content
         )
     }
 }

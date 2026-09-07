@@ -44,7 +44,7 @@ struct NativApplicationCommands: Commands {
             Divider()
 
             Button("Show Model Trace") {
-                NotificationCenter.default.post(name: .toggleTraceInspector, object: nil)
+                NotificationCenter.default.post(name: .showModelTrace, object: nil)
             }
             .keyboardShortcut("t", modifiers: [.command, .option])
         }

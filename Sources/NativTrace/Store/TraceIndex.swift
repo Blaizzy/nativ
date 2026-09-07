@@ -11,6 +11,24 @@ public struct TraceSummary: Sendable, Hashable, Identifiable {
     public let modelIDs: [String]
 
     public var id: String { traceID }
+
+    public init(
+        traceID: String,
+        sessionID: String?,
+        startedAt: Date,
+        lastEventAt: Date,
+        eventCount: Int,
+        lastSeq: Int64,
+        modelIDs: [String]
+    ) {
+        self.traceID = traceID
+        self.sessionID = sessionID
+        self.startedAt = startedAt
+        self.lastEventAt = lastEventAt
+        self.eventCount = eventCount
+        self.lastSeq = lastSeq
+        self.modelIDs = modelIDs
+    }
 }
 
 /// Maintains `trace_index` and `trace_models`.
@@ -63,15 +81,43 @@ enum TraceIndex {
     }
 
     static func summaries(limit: Int, on connection: SQLiteConnection) throws -> [TraceSummary] {
-        try connection.withStatement(
+        try read(
             """
             SELECT trace_id, session_id, started_at, last_event_at, event_count, last_seq
             FROM trace_index
             ORDER BY last_event_at DESC
             LIMIT ?;
+            """,
+            on: connection
+        ) { $0.bind(Int64(limit)) }
+    }
+
+    /// Traces belonging to one chat, oldest first.
+    ///
+    /// A chat has one trace per model that served it, so reading a chat means
+    /// reading a list rather than a single trace.
+    static func summaries(
+        forSession sessionID: String,
+        on connection: SQLiteConnection
+    ) throws -> [TraceSummary] {
+        try read(
             """
-        ) { statement in
-            statement.bind(Int64(limit))
+            SELECT trace_id, session_id, started_at, last_event_at, event_count, last_seq
+            FROM trace_index
+            WHERE session_id = ?
+            ORDER BY started_at ASC;
+            """,
+            on: connection
+        ) { $0.bind(sessionID) }
+    }
+
+    private static func read(
+        _ sql: String,
+        on connection: SQLiteConnection,
+        bind: (SQLiteStatement) -> Void
+    ) throws -> [TraceSummary] {
+        try connection.withStatement(sql) { statement in
+            bind(statement)
             let partial = try statement.rows {
                 (
                     traceID: $0.string(0) ?? "",

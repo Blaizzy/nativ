@@ -9,7 +9,22 @@ import NativTrace
 /// concurrency logic of its own to get wrong.
 @MainActor
 final class ChatTraceProducer {
+    /// The trace a chat is currently writing to, and the model it belongs to.
+    private struct OpenTrace {
+        let traceID: String
+        let modelID: String?
+    }
+
+    /// Enough of the current turn to replay into a trace that opens mid-turn.
+    private struct TurnContext {
+        let turn: ChatTraceTurn
+        let messageID: UUID
+        let text: String
+    }
+
     private let queue: TraceEventQueue
+    private var openTraceBySession: [UUID: OpenTrace] = [:]
+    private var turnContextBySession: [UUID: TurnContext] = [:]
 
     init(recorder: TraceRecorder) {
         queue = TraceEventQueue(recorder: recorder)
@@ -20,7 +35,7 @@ final class ChatTraceProducer {
     func sessionStarted(sessionID: UUID, title: String?, modelID: String?) {
         queue.record(
             SessionStartedPayload(title: title, modelID: modelID),
-            traceID: Self.traceID(for: sessionID),
+            traceID: openTrace(session: sessionID, modelID: modelID),
             scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
         )
     }
@@ -32,6 +47,9 @@ final class ChatTraceProducer {
         attachmentSummaries: [String] = [],
         modelID: String?
     ) {
+        turnContextBySession[turn.sessionID] = TurnContext(
+            turn: turn, messageID: messageID, text: text
+        )
         record(
             TurnStartedPayload(
                 messageID: messageID.uuidString,
@@ -45,6 +63,7 @@ final class ChatTraceProducer {
 
     func turnEnded(_ turn: ChatTraceTurn, status: String, roundCount: Int) {
         record(TurnEndedPayload(status: status, roundCount: roundCount), turn: turn)
+        turnContextBySession[turn.sessionID] = nil
     }
 
     func modelSwitched(_ turn: ChatTraceTurn, from: String?, to: String) {
@@ -54,14 +73,19 @@ final class ChatTraceProducer {
     // MARK: - Calls
 
     func requestComposed(_ exposure: RequestComposedPayload, in call: ChatTraceCall) {
-        record(exposure, call: call)
+        queue.record(
+            exposure,
+            traceID: openTrace(session: call.sessionID, modelID: call.modelID),
+            scope: call.scope()
+        )
     }
 
     func delta(content: String?, reasoning: String?, in call: ChatTraceCall) {
+        guard let traceID = currentTraceID(session: call.sessionID) else { return }
         queue.delta(
             content: content,
             reasoning: reasoning,
-            traceID: Self.traceID(for: call.sessionID),
+            traceID: traceID,
             scope: call.scope()
         )
     }
@@ -74,7 +98,9 @@ final class ChatTraceProducer {
         finishReason: String?,
         in call: ChatTraceCall
     ) {
-        queue.discardPartial(traceID: Self.traceID(for: call.sessionID), scope: call.scope())
+        if let traceID = currentTraceID(session: call.sessionID) {
+            queue.discardPartial(traceID: traceID, scope: call.scope())
+        }
         record(
             ResponseCompletedPayload(
                 messageID: messageID.uuidString,
@@ -135,17 +161,55 @@ final class ChatTraceProducer {
 
     // MARK: - Internals
 
-    /// One trace per chat session. Derived rather than allocated so a session
-    /// reopened in a later launch keeps appending to the trace it already has.
-    private static func traceID(for sessionID: UUID) -> String {
-        sessionID.uuidString
+    /// The trace a chat's events belong to, opening a new one when the model
+    /// changes.
+    ///
+    /// A chat is not one trace. Every model the server loads to serve a chat
+    /// gets its own trace instance, because two models shown two different
+    /// system prompts and two different tool sets are two different things to
+    /// reason about — folding them into one transcript with a divider in the
+    /// middle asks the reader to do the separating.
+    ///
+    /// Session id stays a column on every event, so a chat can still list all of
+    /// its traces in order.
+    private func openTrace(session sessionID: UUID, modelID: String?) -> String {
+        if let open = openTraceBySession[sessionID], open.modelID == modelID {
+            return open.traceID
+        }
+
+        let traceID = "\(sessionID.uuidString)/\(UUID().uuidString.prefix(8))"
+        openTraceBySession[sessionID] = OpenTrace(traceID: traceID, modelID: modelID)
+
+        // A trace that opens part way through a turn would otherwise start with
+        // an answer and no question. Replaying the prompt keeps each trace
+        // readable on its own, which is the point of splitting them.
+        if let context = turnContextBySession[sessionID] {
+            queue.record(
+                TurnStartedPayload(messageID: context.messageID.uuidString, text: context.text),
+                traceID: traceID,
+                scope: context.turn.scope(modelID: modelID)
+            )
+        }
+        return traceID
+    }
+
+    /// The trace a chat is already writing to.
+    ///
+    /// Only `sessionStarted`, `turnStarted`, and `requestComposed` may open a
+    /// trace. Everything else — deltas, tool rows, completions — belongs to a
+    /// call that has already been composed, so a mismatch here means a
+    /// straggler, and opening a trace for it would produce a one-event trace
+    /// with a replayed prompt and a spurious entry in the model picker.
+    private func currentTraceID(session sessionID: UUID) -> String? {
+        openTraceBySession[sessionID]?.traceID
     }
 
     private func record<Payload: TracePayloadView & Encodable>(
         _ payload: Payload,
         call: ChatTraceCall
     ) {
-        queue.record(payload, traceID: Self.traceID(for: call.sessionID), scope: call.scope())
+        guard let traceID = currentTraceID(session: call.sessionID) else { return }
+        queue.record(payload, traceID: traceID, scope: call.scope())
     }
 
     private func record<Payload: TracePayloadView & Encodable>(
@@ -153,10 +217,12 @@ final class ChatTraceProducer {
         turn: ChatTraceTurn,
         modelID: String? = nil
     ) {
-        queue.record(
-            payload,
-            traceID: Self.traceID(for: turn.sessionID),
-            scope: turn.scope(modelID: modelID)
-        )
+        // turnStarted supplies a model and may open a trace; turnEnded does
+        // not and joins whatever is open.
+        guard let traceID = modelID == nil
+            ? currentTraceID(session: turn.sessionID)
+            : openTrace(session: turn.sessionID, modelID: modelID)
+        else { return }
+        queue.record(payload, traceID: traceID, scope: turn.scope(modelID: modelID))
     }
 }

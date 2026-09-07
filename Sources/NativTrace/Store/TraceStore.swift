@@ -156,6 +156,11 @@ public actor TraceStore {
         try TraceIndex.summaries(limit: limit, on: connection)
     }
 
+    /// Traces belonging to one chat, oldest first — one per model that served it.
+    public func traces(forSession sessionID: String) throws -> [TraceSummary] {
+        try TraceIndex.summaries(forSession: sessionID, on: connection)
+    }
+
     // MARK: - Maintenance
 
     /// Removes whole traces that fall outside `window`. Returns how many went.
