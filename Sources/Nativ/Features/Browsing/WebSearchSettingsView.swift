@@ -334,7 +334,7 @@ struct WebBrowsingSettingsView: View {
     private var providerPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Providers")
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
 
             ForEach(viewModel.availableProviders) { provider in
                 providerRow(provider)
@@ -436,7 +436,7 @@ struct WebBrowsingSettingsView: View {
     private var providerSetup: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(viewModel.selectedProvider.metadata.displayName)
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
 
             routingActions
 
@@ -478,12 +478,12 @@ struct WebBrowsingSettingsView: View {
             if viewModel.selectedCapability == .read,
                let status = viewModel.pageReaderStatus {
                 Label(status, systemImage: "exclamationmark.triangle.fill")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
 
             Text(configurationPrivacyNote)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -506,7 +506,7 @@ struct WebBrowsingSettingsView: View {
             case .search:
                 if viewModel.searchProvider == viewModel.selectedProvider {
                     Label("Search", systemImage: "checkmark")
-                        .nativTextStyle(.actionLabel)
+                        .legacyTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
                     Button("Use for Search") {
@@ -518,7 +518,7 @@ struct WebBrowsingSettingsView: View {
             case .read:
                 if viewModel.resolvedPageReaderProvider == viewModel.selectedProvider {
                     Label("Page reading", systemImage: "checkmark")
-                        .nativTextStyle(.actionLabel)
+                        .legacyTextStyle(.actionLabel)
                         .foregroundStyle(.secondary)
                 } else {
                     Button("Use for Page Reading") {
@@ -594,11 +594,11 @@ struct WebBrowsingSettingsView: View {
             switch status {
             case .connected(let message):
                 Label(message, systemImage: "checkmark.circle.fill")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .failure(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.red)
             }
         } else {
@@ -607,11 +607,11 @@ struct WebBrowsingSettingsView: View {
                 EmptyView()
             case .connected:
                 Label("Connected", systemImage: "checkmark.circle.fill")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.green)
             case .issue(let issue):
                 Label(issue.message, systemImage: "exclamationmark.triangle.fill")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.orange)
             }
         }

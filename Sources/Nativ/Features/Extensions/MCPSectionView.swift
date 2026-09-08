@@ -41,7 +41,7 @@ struct MCPSectionView: View {
                     serverGroup(title: "Custom") {
                         if customServers.isEmpty {
                             Text("No custom servers have been added.")
-                                .nativTextStyle(.supporting)
+                                .legacyTextStyle(.supporting)
                                 .foregroundStyle(.secondary)
                                 .padding(.vertical, 11)
                         } else {
@@ -96,7 +96,7 @@ struct MCPSectionView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title)
-                .nativTextStyle(.subsectionTitle)
+                .legacyTextStyle(.subsectionTitle)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             content()
@@ -196,9 +196,9 @@ private struct MCPServerRow: View {
                 NativStatusDot(tone: statusTone, pulsing: isConnecting)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name.isEmpty ? "Untitled server" : server.name)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                     Text(statusText)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
@@ -245,7 +245,7 @@ private struct MCPServerRow: View {
                 ) {
                     HStack(spacing: 6) {
                         Text(code)
-                            .nativTextStyle(.codeEmphasized)
+                            .legacyTextStyle(.codeEmphasized)
                             .textSelection(.enabled)
                             .padding(.horizontal, 10)
                             .frame(height: 26)
@@ -381,10 +381,10 @@ private struct GitHubSetupCallout<Accessory: View>: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .nativTextStyle(.sectionTitle)
+                    .legacyTextStyle(.sectionTitle)
 
                 Text(message)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -506,7 +506,7 @@ private struct MCPServerEditor: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text(server.name.isEmpty ? "New MCP Server" : "Edit MCP Server")
-                    .nativTextStyle(.sheetTitle)
+                    .legacyTextStyle(.sheetTitle)
                 Spacer()
                 Toggle("Edit as JSON", isOn: $editingJSON)
                     .toggleStyle(.switch)
@@ -518,7 +518,7 @@ private struct MCPServerEditor: View {
 
             if editingJSON {
                 TextEditor(text: $jsonText)
-                    .nativTextStyle(.code)
+                    .legacyTextStyle(.code)
                     .frame(minHeight: 220)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
@@ -529,7 +529,7 @@ private struct MCPServerEditor: View {
                     }
                 if let jsonError {
                     Text(jsonError)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.red)
                 }
             } else {
@@ -542,21 +542,21 @@ private struct MCPServerEditor: View {
                         "/Applications/Humla.app/Contents/MacOS/humla-mcp",
                         text: $launchCommandText
                     )
-                        .nativTextStyle(.code)
+                        .legacyTextStyle(.code)
                         .textFieldStyle(.roundedBorder)
                     Text("Paste the executable and any arguments on one line. Nativ launches it directly over stdio without invoking a shell.")
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let launchCommandError {
                         Text(launchCommandError)
-                            .nativTextStyle(.supporting)
+                            .legacyTextStyle(.supporting)
                             .foregroundStyle(.red)
                     }
                 }
                 field("Environment (KEY=VALUE per line)") {
                     TextEditor(text: environmentText)
-                        .nativTextStyle(.code)
+                        .legacyTextStyle(.code)
                         .frame(height: 60)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
@@ -587,7 +587,7 @@ private struct MCPServerEditor: View {
     @ViewBuilder
     private func field<Content: View>(_ label: String, @ViewBuilder _ content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
+            Text(label).legacyTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
             content()
         }
     }

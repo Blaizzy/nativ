@@ -84,7 +84,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .nativTextStyle(.emptyStateTitle)
+                    .legacyTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -139,11 +139,11 @@ private struct ChatProjectContextBanner: View {
                 .foregroundStyle(rootIsAvailable ? Color.accentColor : Color.orange)
 
             Text(project.name)
-                .nativTextStyle(.rowTitleEmphasized)
+                .legacyTextStyle(.rowTitleEmphasized)
                 .lineLimit(1)
 
             Text(project.rootPath)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -152,11 +152,11 @@ private struct ChatProjectContextBanner: View {
 
             if !rootIsAvailable || !toolsEnabled {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
-                    .nativTextStyle(.badgeMuted)
+                    .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
             } else if !restrictedModes.isEmpty {
                 Text(toolStatus)
-                    .nativTextStyle(.badgeMuted)
+                    .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .help(toolStatusHelp)

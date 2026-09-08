@@ -1342,15 +1342,15 @@ struct ComposerModelPicker: View {
         }
         .fixedSize()
         .frame(height: 32)
-        .overlay(alignment: .top) {
-            if isPickerHovered && !isMenuOpen {
+        .background {
+            NativArrowlessPopoverPresenter(
+                isPresented: tooltipPresentation,
+                gap: 10
+            ) {
                 ComposerModelPickerTooltip(
                     title: pickerTooltip,
                     shortcutLabel: isDisabled ? nil : shortcutLabel
                 )
-                    .offset(y: -50)
-                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
-                    .allowsHitTesting(false)
             }
         }
         .contentShape(Capsule())
@@ -1377,6 +1377,13 @@ struct ComposerModelPicker: View {
 
     private var pickerTooltip: String {
         isDisabled ? helpText : "Choose Model"
+    }
+
+    private var tooltipPresentation: Binding<Bool> {
+        Binding(
+            get: { isPickerHovered && !isMenuOpen },
+            set: { isPickerHovered = $0 }
+        )
     }
 
     private var isPickerActive: Bool {
@@ -1818,7 +1825,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .nativTextStyle(.supportingEmphasized)
+        .legacyTextStyle(.supportingEmphasized)
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -1857,12 +1864,6 @@ private struct ComposerModelPickerTooltip: View {
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.8), lineWidth: 0.75)
-        }
-        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
         .fixedSize()
     }
 }
@@ -2159,7 +2160,7 @@ struct ChatComposerActionPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .nativTextStyle(.supportingEmphasized)
+                .legacyTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
 
@@ -2190,11 +2191,11 @@ private struct ChatComposerActionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                         .foregroundStyle(.primary)
 
                     Text(detail)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

@@ -146,13 +146,13 @@ struct ChatCapabilitiesSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Capabilities")
-                    .nativTextStyle(.sheetTitle)
+                    .legacyTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("Choose what agents can use and what stays out of regular prompts.")
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             ToolExposureModeExplanation()
@@ -167,7 +167,7 @@ struct ChatCapabilitiesSheet: View {
                             query.isEmpty
                                 ? "No capabilities are available." : "No matching capabilities."
                         )
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 44)
@@ -191,7 +191,7 @@ struct ChatCapabilitiesSheet: View {
         if !sectionItems.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 Text(kind.title.uppercased())
-                    .nativTextStyle(.badge)
+                    .legacyTextStyle(.badge)
                     .foregroundStyle(.secondary)
 
                 VStack(spacing: 0) {
@@ -231,12 +231,12 @@ struct ChatCapabilitiesSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title)
-                    .nativTextStyle(.rowTitleEmphasized)
+                    .legacyTextStyle(.rowTitleEmphasized)
                     .foregroundStyle(item.isAvailable ? Color.primary : Color.secondary)
 
                 if item.isAvailable {
                     Text(item.detail)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 } else if let setupSection = item.setupSection {
                     GlobalCapabilitySetupDetail(detail: item.detail) {
@@ -375,13 +375,13 @@ struct ChatKitsPickerSheet: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Kits")
-                    .nativTextStyle(.sheetTitle)
+                    .legacyTextStyle(.sheetTitle)
                 Spacer()
                 NativHoverCloseButton { dismiss() }
             }
 
             Text("Make a ready-made set of capabilities discoverable in every chat.")
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
             ScrollView {
@@ -443,17 +443,17 @@ struct ChatKitsPickerSheet: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(kit.name)
-                    .nativTextStyle(.rowTitle)
+                    .legacyTextStyle(.rowTitle)
                     .foregroundStyle(.primary)
                 Text(kit.summary)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Label(
                     actionTitle,
                     systemImage: state == .enabled ? "checkmark.circle.fill" : "plus.circle"
                 )
-                .nativTextStyle(.actionLabel)
+                .legacyTextStyle(.actionLabel)
                 .foregroundStyle(state == .enabled ? Color.green : Color.accentColor)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -478,7 +478,7 @@ private struct GlobalCapabilitySetupDetail: View {
                     .underline()
             }
         }
-        .nativTextStyle(.metadata)
+        .legacyTextStyle(.metadata)
         .multilineTextAlignment(.leading)
         .buttonStyle(.plain)
         .environment(

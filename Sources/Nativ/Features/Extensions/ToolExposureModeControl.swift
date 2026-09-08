@@ -77,7 +77,7 @@ enum ToolExposureModeCopy {
 struct ToolExposureModeExplanation: View {
     var body: some View {
         Text("Click the access button to cycle between Off, Auto, and On.")
-        .nativTextStyle(.metadata)
+        .legacyTextStyle(.metadata)
         .foregroundStyle(.secondary)
     }
 }
