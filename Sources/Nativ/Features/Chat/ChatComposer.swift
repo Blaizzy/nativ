@@ -286,7 +286,7 @@ struct ChatComposer: View {
                         isEnabled: canCompose,
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
-                        onRecallPrevious: { viewModel.recallPreviousPrompt() },
+                        onRecallPrevious: recallPreviousPrompt,
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
@@ -298,7 +298,7 @@ struct ChatComposer: View {
                     if viewModel.draft.isEmpty {
                         HStack(spacing: 8) {
                             Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            if viewModel.canRecallPreviousPrompt {
+                            if showsRecallHint {
                                 ChatRecallHint()
                             }
                         }
@@ -1129,6 +1129,21 @@ struct ChatComposer: View {
         return Color(nsColor: .tertiaryLabelColor)
     }
 
+    /// The hint is a first-run affordance: once the gesture has been used it has
+    /// taught what it was there to teach, and a permanent label in the
+    /// placeholder is just noise.
+    private var showsRecallHint: Bool {
+        viewModel.canRecallPreviousPrompt && !model.settings.hasUsedPromptRecall
+    }
+
+    private func recallPreviousPrompt() -> Bool {
+        guard viewModel.recallPreviousPrompt() else { return false }
+        if !model.settings.hasUsedPromptRecall {
+            model.settings.hasUsedPromptRecall = true
+        }
+        return true
+    }
+
     private var cancelPromptEditingAction: (() -> Void)? {
         guard viewModel.promptEditContext != nil else {
             return nil
@@ -1189,7 +1204,7 @@ private struct ChatRecallHint: View {
         HStack(spacing: 3) {
             Image(systemName: "arrow.up")
                 .imageScale(.small)
-            Text("edit last")
+            Text("to show last")
         }
         .font(.caption)
         .padding(.horizontal, 6)
