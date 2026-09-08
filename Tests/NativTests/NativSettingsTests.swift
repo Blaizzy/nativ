@@ -747,6 +747,28 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.sidebarSessionsCollapsed)
     }
 
+    func testEnablingDisabledProjectToolsPreservesOtherChoicesAndPermissions() throws {
+        var settings = NativSettings(projectToolsEnabled: false)
+        settings.setToolExposureMode(.off, toolNames: ["terminal", "read_file", "generate_image"])
+        settings.setToolExposureMode(.automatic, toolName: "write_file")
+        settings.setToolExposureMode(.on, toolName: "patch")
+        XCTAssertEqual(settings.disabledProjectToolNames, ["read_file", "terminal"])
+
+        settings.enableDisabledProjectTools()
+        settings.enableDisabledProjectTools()
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(settings))
+
+        XCTAssertTrue(decoded.disabledProjectToolNames.isEmpty)
+        XCTAssertEqual(decoded.toolExposureMode(for: "terminal"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "read_file"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "write_file"), .automatic)
+        XCTAssertEqual(decoded.toolExposureMode(for: "patch"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "generate_image"), .off)
+        XCTAssertFalse(decoded.projectToolsEnabled)
+        XCTAssertNil(decoded.fileReadRootPath)
+        XCTAssertNil(decoded.fileWriteRootPath)
+    }
+
     func testProjectToolsDefaultToEnabledAndRoundTripIndependently() throws {
         XCTAssertTrue(NativSettings().projectToolsEnabled)
 

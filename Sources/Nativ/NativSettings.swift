@@ -1158,6 +1158,14 @@ struct NativSettings: Codable, Equatable {
         defaultDirectToolNames.contains(toolName) ? .on : .automatic
     }
 
+    var disabledProjectToolNames: [String] {
+        ChatToolScope.projectToolNames.filter { toolExposureMode(for: $0) == .off }.sorted()
+    }
+
+    mutating func enableDisabledProjectTools() {
+        setToolExposureMode(.on, toolNames: disabledProjectToolNames)
+    }
+
     func toolExposureMode(
         for toolName: String,
         default defaultMode: ToolExposureMode? = nil

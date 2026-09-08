@@ -116,21 +116,12 @@ private struct ChatProjectContextBanner: View {
     let toolsEnabled: Bool
     let toolExposureModes: [String: ToolExposureMode]
 
-    private var restrictedModes: [ToolExposureMode] {
-        [.off, .automatic].filter { mode in toolExposureModes.values.contains(mode) }
-    }
-
-    private var toolStatus: String {
-        restrictedModes.map { mode in
-            "\(toolExposureModes.values.filter { $0 == mode }.count) \(mode.title)"
-        }.joined(separator: " · ")
+    private var disabledToolNames: [String] {
+        toolExposureModes.filter { $0.value == .off }.keys.sorted()
     }
 
     private var toolStatusHelp: String {
-        restrictedModes.map { mode in
-            let names = toolExposureModes.filter { $0.value == mode }.keys.sorted().joined(separator: ", ")
-            return "\(mode.title): \(names)."
-        }.joined(separator: " ") + " Off tools are unavailable; Auto tools require discovery. Manage access in Extensions → Tools."
+        "Turned off: \(disabledToolNames.joined(separator: ", ")). Enable them in Settings → Projects. Other project tools are included automatically."
     }
 
     var body: some View {
@@ -154,8 +145,8 @@ private struct ChatProjectContextBanner: View {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
                     .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
-            } else if !restrictedModes.isEmpty {
-                Text(toolStatus)
+            } else if !disabledToolNames.isEmpty {
+                Text("\(disabledToolNames.count) Off")
                     .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

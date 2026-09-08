@@ -45,14 +45,17 @@ final class ChatToolRuntimeTests: XCTestCase {
         let first = prepareProject(runtime)
         let names = Set(first.definitions.map(\.function.name))
         XCTAssertFalse(names.contains("terminal"))
-        XCTAssertFalse(names.contains("write_file"))
+        XCTAssertTrue(names.contains("write_file"))
         XCTAssertTrue(names.contains("read_file"))
+        XCTAssertEqual(settings.toolExposureMode(for: "write_file"), .automatic)
 
         let discovery = try await runtime.execute(
             call: call(name: "tool_search", arguments: #"{"query":"write_file"}"#),
             request: first, context: context()
         )
-        XCTAssertTrue(discovery.activatedToolNames.contains("write_file"))
+        XCTAssertTrue(discovery.activatedToolNames.isEmpty)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(discovery.content.utf8)) as? [String: Any])
+        XCTAssertTrue((payload["already_available"] as? [String])?.contains("write_file") == true)
         let next = prepareProject(runtime, activated: discovery.activatedToolNames)
         XCTAssertTrue(next.definitions.contains { $0.function.name == "write_file" })
         await assertUnavailable {
@@ -82,11 +85,90 @@ final class ChatToolRuntimeTests: XCTestCase {
         }
     }
 
+    func testAutomaticProjectEssentialsDoNotDependOnDiscoveryOrStandaloneSetup() throws {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolNames: Array(ChatToolScope.projectToolNames))
+        settings.setToolExposureMode(.off, toolName: ChatToolDiscoveryRegistry.toolName)
+        settings = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(settings))
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepareProject(runtime)
+
+        XCTAssertEqual(Set(request.definitions.map(\.function.name)), ChatToolScope.projectToolNames)
+        XCTAssertNil(settings.fileReadRootPath)
+        XCTAssertNil(settings.fileWriteRootPath)
+        for name in ChatToolScope.projectToolNames {
+            XCTAssertEqual(settings.toolExposureMode(for: name), .automatic)
+        }
+        XCTAssertTrue(prepare(runtime).definitions.isEmpty)
+    }
+
+    func testProjectPromotionDoesNotExposeUnrelatedAutoTools() {
+        let host = RuntimeMCPHost()
+        var settings = settings(host: host, mode: .automatic)
+        settings.setToolExposureMode(.automatic, toolNames: Array(ChatToolScope.projectToolNames))
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = runtime.prepareRequest(
+            scope: ChatToolScope(projectID: UUID(), projectName: "Test", rootPath: "/tmp", projectToolsEnabled: true),
+            canEditImage: false, selection: ChatToolSelection(), mcpHost: host
+        )
+        let expectedNames = ChatToolScope.projectToolNames.union([ChatToolDiscoveryRegistry.toolName])
+        XCTAssertEqual(Set(request.definitions.map(\.function.name)), expectedNames)
+    }
+
+    func testStandaloneAutoEssentialsStillRequireDiscovery() {
+        var settings = NativSettings(
+            fileReadRootPath: FileManager.default.temporaryDirectory.path,
+            fileWriteRootPath: FileManager.default.temporaryDirectory.path
+        )
+        settings.setToolExposureMode(.automatic, toolNames: Array(ChatToolScope.projectToolNames))
+        let runtime = ChatToolRuntime(settings: settings)
+        XCTAssertTrue(ChatToolScope.projectToolNames.isDisjoint(with: Set(prepare(runtime).definitions.map(\.function.name))))
+        let discovered = prepare(runtime, activated: ["write_file"])
+        XCTAssertTrue(discovered.definitions.contains { $0.function.name == "write_file" })
+        XCTAssertFalse(discovered.definitions.contains { $0.function.name == "terminal" })
+    }
+
+    func testOffProjectEssentialsStayUnavailable() async {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.off, toolNames: Array(ChatToolScope.projectToolNames))
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepareProject(runtime)
+        XCTAssertTrue(ChatToolScope.projectToolNames.isDisjoint(with: Set(request.definitions.map(\.function.name))))
+        for name in ChatToolScope.projectToolNames {
+            await assertUnavailable {
+                try await runtime.execute(
+                    call: self.call(name: name), request: request, context: self.context(),
+                    requestApproval: { XCTFail("Off project tool requested approval"); return true }
+                )
+            }
+        }
+    }
+
+    func testAutomaticProjectTerminalStillRequiresApproval() async throws {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolName: "terminal")
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepareProject(runtime)
+        var askedForApproval = false
+        do {
+            _ = try await runtime.execute(
+                call: call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: request, context: context(),
+                requestApproval: { askedForApproval = true; return false }
+            )
+            XCTFail("Unapproved command executed")
+        } catch ChatToolExecutionError.declined {}
+        XCTAssertTrue(askedForApproval)
+    }
+
     func testProjectWriteUsesItsRootWithoutStandaloneFileAccess() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let runtime = ChatToolRuntime()
+        var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolName: "write_file")
+        settings.setToolExposureMode(.off, toolName: ChatToolDiscoveryRegistry.toolName)
+        let runtime = ChatToolRuntime(settings: settings)
         let request = prepareProject(runtime, rootPath: root.path)
         let result = try await runtime.execute(
             call: call(name: "write_file", arguments: #"{"path":"index.html","content":"<html>Test</html>"}"#),
@@ -171,6 +253,7 @@ final class ChatToolRuntimeTests: XCTestCase {
 
     func testProjectSwitchRevokesPendingTerminalApproval() async {
         var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolName: "terminal")
         let runtime = ChatToolRuntime(settings: settings)
         let request = prepareProject(runtime)
         let gate = ChatToolConsentGate()
@@ -187,6 +270,34 @@ final class ChatToolRuntimeTests: XCTestCase {
         gate.confirm(id)
         await assertUnavailable { try await execution.value }
         XCTAssertEqual(gate.pendingCount, 0)
+    }
+
+    func testTurningAutoProjectToolOffRevokesPendingApprovalAndOldRequests() async {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.automatic, toolName: "terminal")
+        let runtime = ChatToolRuntime(settings: settings)
+        let request = prepareProject(runtime)
+        let gate = ChatToolConsentGate()
+        let id = UUID()
+        let execution = Task {
+            try await runtime.execute(
+                call: call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: request, context: context(), requestApproval: { await gate.awaitDecision(for: id) }
+            )
+        }
+        await waitUntil { gate.pendingCount == 1 }
+        settings.setToolExposureMode(.off, toolName: "terminal")
+        runtime.updateSettings(settings)
+        gate.confirm(id)
+        await assertUnavailable { try await execution.value }
+        XCTAssertEqual(gate.pendingCount, 0)
+        await assertUnavailable {
+            try await runtime.execute(
+                call: self.call(name: "terminal", arguments: #"{"command":"pwd"}"#),
+                request: request, context: self.context(),
+                requestApproval: { XCTFail("Old request asked for approval"); return true }
+            )
+        }
     }
 
     func testOldRequestCannotExecuteAfterToolIsOff() async throws {

@@ -8,7 +8,7 @@ final class ChatToolModelTests: XCTestCase {
         try await runProjectTask(mode: .on)
     }
 
-    func testProjectTaskWithDiscoveredTools() async throws {
+    func testProjectTaskWithAutomaticTools() async throws {
         try await runProjectTask(mode: .automatic)
     }
 

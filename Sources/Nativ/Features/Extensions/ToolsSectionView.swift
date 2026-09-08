@@ -13,7 +13,7 @@ struct ToolsSectionView: View {
     var body: some View {
         HubSectionScaffold(
             title: "Tools",
-            subtitle: "Choose which tools stay visible to agents and which remain discoverable."
+            subtitle: "Projects include enabled file and terminal tools automatically. Folder setup is only needed for standalone chats."
         ) {
             Button {
                 showsAddTool = true

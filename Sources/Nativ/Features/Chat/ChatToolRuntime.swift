@@ -21,6 +21,14 @@ struct ChatAvailableTool: Equatable {
     let source: Source
     let exposureMode: ToolExposureMode
 
+    func scoped(to scope: ChatToolScope) -> Self {
+        guard source == .builtIn, scope.projectToolsAreAvailable,
+            ChatToolScope.projectToolNames.contains(definition.function.name),
+            exposureMode == .automatic
+        else { return self }
+        return Self(definition: definition, title: title, source: source, exposureMode: .on)
+    }
+
     var discoveryCandidate: ChatToolDiscoveryCandidate {
         let sourceName: String = switch source {
         case .builtIn: "Built-in"
@@ -310,6 +318,7 @@ final class ChatToolRuntime {
         for name: String, request: ChatToolRequest, mcpHost: (any ChatToolMCPHost)?
     ) -> ChatToolAccessError {
         let candidates = catalog(canEditImage: request.canEditImage, mcpHost: mcpHost)
+            .map { $0.scoped(to: request.scope) }
             .filter { $0.definition.function.name == name }
         guard let tool = candidates.first else {
             return request.tools.contains { $0.definition.function.name == name }
@@ -336,7 +345,7 @@ final class ChatToolRuntime {
         let counts = Dictionary(grouping: tools, by: { $0.definition.function.name }).mapValues(\.count)
         return tools.filter {
             counts[$0.definition.function.name] == 1 && isAvailable($0, scope: scope)
-        }
+        }.map { $0.scoped(to: scope) }
     }
 
     private func catalog(canEditImage: Bool, mcpHost: (any ChatToolMCPHost)?) -> [ChatAvailableTool] {
