@@ -181,6 +181,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
+      - path: Tests/NativExtensionSDKTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
@@ -213,6 +214,11 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
+      - path: Sources/Nativ/Features/Models/NativTaskModelSelection.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceTranscriptInsertionTarget.swift
+      - path: Sources/Nativ/Features/Extensions/Declarative/NativWorkflowServices.swift
+      - path: Sources/Nativ/Features/Extensions/Declarative/NativWorkflowRunner.swift
+      - path: Sources/Nativ/Features/Extensions/NativExtensionCatalogClient.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
       - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
       - path: Sources/Nativ/Resources/MCPCatalog.json

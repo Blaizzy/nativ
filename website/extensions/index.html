@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Discover extensions that add new tools and workflows to Nativ."
+    />
+    <meta name="theme-color" content="#f7f7f5" />
+    <meta property="og:title" content="Nativ MarketPlace" />
+    <meta
+      property="og:description"
+      content="Discover extensions that add new tools and workflows to Nativ."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/app-icon.png" />
+    <link rel="apple-touch-icon" href="assets/app-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>Nativ MarketPlace</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-header>
+      <a class="brand" href="https://blaizzy.github.io/nativ/" aria-label="Nativ home">
+        <img src="assets/app-icon.png" alt="" />
+        <span>Nativ</span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#browse" aria-current="page">MarketPlace</a>
+        <a href="#developers">For developers</a>
+        <a href="https://github.com/Blaizzy/nativ">Documentation</a>
+      </nav>
+      <a class="open-nativ" href="https://github.com/Blaizzy/nativ/releases/latest">Open Nativ</a>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <p class="section-label">Nativ MarketPlace</p>
+        <h1>Extend what Nativ can do.</h1>
+        <p class="hero-copy">
+          Discover extensions that bring new tools, integrations, and workflows
+          to your local AI workspace.
+        </p>
+        <label class="search-box">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" /></svg>
+          <span class="visually-hidden">Search extensions</span>
+          <input type="search" placeholder="Search extensions" data-extension-search />
+          <kbd>⌘ K</kbd>
+        </label>
+      </section>
+
+      <section class="catalog" id="browse" aria-labelledby="catalog-title">
+        <div class="catalog-bar">
+          <div class="filters" role="group" aria-label="Browse extensions">
+            <button class="active" type="button" data-filter="featured">Featured</button>
+            <button type="button" data-filter="recent">Recently added</button>
+            <button type="button" data-filter="all">All extensions</button>
+          </div>
+          <a href="#developers">Publish an extension</a>
+        </div>
+
+        <div class="catalog-heading">
+          <div>
+            <h2 id="catalog-title">Extensions</h2>
+            <p>Explore reviewed packages made for Nativ.</p>
+          </div>
+          <span data-extension-count>0 extensions</span>
+        </div>
+
+        <div class="extension-list" data-extension-list aria-live="polite">
+          <p class="extension-message">Loading the MarketPlace…</p>
+        </div>
+      </section>
+
+      <section class="developers" id="developers">
+        <div>
+          <p class="section-label">Build for Nativ</p>
+          <h2>Bring your workflow to the MarketPlace.</h2>
+        </div>
+        <div class="developer-copy">
+          <p>
+            Package tools and workflows as a Nativ extension. Every listing uses
+            a versioned manifest so people can review its capabilities and permissions
+            before installing it.
+          </p>
+          <a href="https://github.com/Blaizzy/nativ/blob/main/Docs/extending/extensions.md">Read the extension documentation</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <a class="footer-brand" href="https://blaizzy.github.io/nativ/">Nativ MarketPlace</a>
+      <p>Extensions for a private, local AI workspace.</p>
+      <div>
+        <a href="https://github.com/Blaizzy/nativ">GitHub</a>
+        <a href="https://blaizzy.github.io/nativ/downloads.html">Download Nativ</a>
+      </div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>

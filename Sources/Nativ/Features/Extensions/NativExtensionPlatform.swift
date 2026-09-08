@@ -10,6 +10,15 @@ enum NativExtensionOrigin: Hashable, Sendable {
     case included
     case external(URL)
     case system
+
+    /// Extensions shipped inside Nativ sort ahead of ones that were installed,
+    /// so a package manifest cannot order itself above first-party navigation.
+    var precedence: Int {
+        switch self {
+        case .included: 0
+        case .external, .system: 1
+        }
+    }
 }
 
 struct NativExtensionRecord: Identifiable, Hashable, Sendable {
@@ -52,26 +61,33 @@ extension NativHostExtension {
     func performCommand(id: String) {}
 }
 
-enum NativExtensionPackageError: LocalizedError {
-    case packageMustBeDirectory
-    case missingManifest
-    case duplicateIdentifier(String)
-    case externalPackageClaimsIncluded
-    case runtimeUnavailable
-
-    var errorDescription: String? {
-        switch self {
-        case .packageMustBeDirectory:
-            "Choose a .nativextension package."
-        case .missingManifest:
-            "The extension package does not contain Manifest.json."
-        case .duplicateIdentifier(let identifier):
-            "An extension with the identifier “\(identifier)” is already included with Nativ."
-        case .externalPackageClaimsIncluded:
-            "Only extensions shipped inside Nativ can declare themselves as included."
-        case .runtimeUnavailable:
-            "The extension was installed, but its ExtensionFoundation runtime is not available yet."
-        }
+/// Ordering for extension-contributed sidebar items.
+///
+/// `order` comes from a package manifest, so an external extension could
+/// otherwise place itself above Nativ's own navigation. Included extensions are
+/// always ordered ahead of external ones regardless of the value they declare.
+enum NativExtensionSidebarOrdering {
+    static func contributions(
+        from records: [NativExtensionRecord]
+    ) -> [NativSidebarContribution] {
+        records
+            .filter { $0.isEnabled && $0.hasRuntime }
+            .flatMap { record in
+                record.manifest.contributions.sidebar.map {
+                    (precedence: record.origin.precedence, contribution: $0)
+                }
+            }
+            .sorted { lhs, rhs in
+                if lhs.precedence != rhs.precedence {
+                    return lhs.precedence < rhs.precedence
+                }
+                if lhs.contribution.order != rhs.contribution.order {
+                    return lhs.contribution.order < rhs.contribution.order
+                }
+                return lhs.contribution.title
+                    .localizedStandardCompare(rhs.contribution.title) == .orderedAscending
+            }
+            .map(\.contribution)
     }
 }
 
@@ -87,6 +103,7 @@ final class NativExtensionManager: ObservableObject {
     }
     @Published private(set) var systemExtensionCount = 0
     @Published private(set) var permissionRevision = 0
+    @Published private(set) var packageIssues: [NativExtensionPackageIssue] = []
     @Published var lastErrorMessage: String?
     var onRecordsChanged: (() -> Void)?
 
@@ -94,8 +111,14 @@ final class NativExtensionManager: ObservableObject {
     private let fileManager: FileManager
     private let extensionsDirectory: URL
     private let hostVersion: String
+    private let installer: NativExtensionPackageInstaller
     private let builtIns: [String: any NativHostExtension]
-    private var externalManifests: [String: (NativExtensionManifest, URL)] = [:]
+    private var externalManifests: [String: NativExtensionInstalledPackage] = [:]
+    /// Declarative packages run in process but are not built in, so they
+    /// cannot live in `builtIns` — that dictionary is also the reserved
+    /// identifier set, and anything in it is refused on install.
+    private var declarativeRuntimes: [String: NativDeclarativeExtension] = [:]
+    private let declarativeServices: (@MainActor () -> NativWorkflowServices)?
     private var activeExtensionIDs = Set<String>()
     private var hostContext: NativExtensionHostContext?
     private var systemMonitor: AppExtensionPoint.Monitor?
@@ -106,9 +129,10 @@ final class NativExtensionManager: ObservableObject {
     private var systemRuntimeStartTasks: [String: Task<Void, Never>] = [:]
     private var applicationActivationObserver: NSObjectProtocol?
     private let permissionDefaults: UserDefaults
-    private let permissionRequestKey = "nativ.extension-platform.requested-permissions.v1"
+    private static let permissionRequestKey =
+        "nativ.extension-platform.requested-permissions.v1"
     private var requestedPermissions: Set<String>
-    private var permissionSnapshot: [NativExtensionPermission: NativExtensionPermissionStatus] = [:]
+    private var grantedPermissionSnapshot: Set<NativExtensionPermission> = []
 
     init(
         builtInExtensions: [any NativHostExtension],
@@ -116,8 +140,10 @@ final class NativExtensionManager: ObservableObject {
         fileManager: FileManager = .default,
         extensionsDirectory: URL? = nil,
         hostVersion: String? = nil,
-        permissionDefaults: UserDefaults = .standard
+        permissionDefaults: UserDefaults = .standard,
+        declarativeServices: (@MainActor () -> NativWorkflowServices)? = nil
     ) {
+        self.declarativeServices = declarativeServices
         self.stateStore = stateStore
         self.fileManager = fileManager
         self.extensionsDirectory = extensionsDirectory
@@ -127,9 +153,12 @@ final class NativExtensionManager: ObservableObject {
             ?? "0.1.0"
         self.permissionDefaults = permissionDefaults
         requestedPermissions = Set(
-            permissionDefaults.stringArray(
-                forKey: "nativ.extension-platform.requested-permissions.v1"
-            ) ?? []
+            permissionDefaults.stringArray(forKey: Self.permissionRequestKey) ?? []
+        )
+        installer = NativExtensionPackageInstaller(
+            fileManager: fileManager,
+            extensionsDirectory: self.extensionsDirectory,
+            hostVersion: self.hostVersion
         )
         builtIns = Dictionary(uniqueKeysWithValues: builtInExtensions.map {
             ($0.manifest.id, $0)
@@ -137,16 +166,12 @@ final class NativExtensionManager: ObservableObject {
         reloadInstalledPackages()
     }
 
+    private func hostExtension(for extensionID: String) -> (any NativHostExtension)? {
+        builtIns[extensionID] ?? declarativeRuntimes[extensionID]
+    }
+
     var enabledSidebarContributions: [NativSidebarContribution] {
-        records
-            .filter { $0.isEnabled && $0.hasRuntime }
-            .flatMap(\.manifest.contributions.sidebar)
-            .sorted {
-                if $0.order == $1.order {
-                    return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-                }
-                return $0.order < $1.order
-            }
+        NativExtensionSidebarOrdering.contributions(from: records)
     }
 
     func isEnabled(extensionID: String) -> Bool {
@@ -157,7 +182,7 @@ final class NativExtensionManager: ObservableObject {
 
     func launch(context: NativExtensionHostContext) {
         hostContext = context
-        permissionSnapshot = currentPermissionSnapshot()
+        grantedPermissionSnapshot = currentGrantedPermissions()
         if applicationActivationObserver == nil {
             applicationActivationObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification,
@@ -177,7 +202,7 @@ final class NativExtensionManager: ObservableObject {
 
     func shutdown() {
         for extensionID in activeExtensionIDs {
-            builtIns[extensionID]?.deactivate()
+            hostExtension(for: extensionID)?.deactivate()
         }
         activeExtensionIDs.removeAll()
         hostContext = nil
@@ -229,11 +254,13 @@ final class NativExtensionManager: ObservableObject {
         }
 
         if case .external(let packageURL) = record.origin {
-            builtIns[extensionID]?.deactivate()
+            hostExtension(for: extensionID)?.deactivate()
+            stopSystemRuntime(extensionID: extensionID)
             activeExtensionIDs.remove(extensionID)
             do {
-                try fileManager.removeItem(at: packageURL)
+                try installer.removePackage(at: packageURL)
                 stateStore.clear(extensionID: extensionID)
+                    lastErrorMessage = nil
                 reloadInstalledPackages()
             } catch {
                 lastErrorMessage = error.localizedDescription
@@ -269,46 +296,29 @@ final class NativExtensionManager: ObservableObject {
         }
 
         do {
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue,
-                  sourceURL.pathExtension == "nativextension" else {
-                throw NativExtensionPackageError.packageMustBeDirectory
-            }
-            let manifest = try Self.loadManifest(
+            let result = try installer.install(
                 from: sourceURL,
-                hostVersion: hostVersion
+                reservedIdentifiers: Set(builtIns.keys)
             )
-            guard builtIns[manifest.id] == nil else {
-                throw NativExtensionPackageError.duplicateIdentifier(manifest.id)
-            }
-            guard !manifest.included else {
-                throw NativExtensionPackageError.externalPackageClaimsIncluded
-            }
-
-            try fileManager.createDirectory(
-                at: extensionsDirectory,
-                withIntermediateDirectories: true
-            )
-            let stagingURL = extensionsDirectory
-                .appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
-            let destinationURL = extensionsDirectory
-                .appendingPathComponent("\(manifest.id).nativextension", isDirectory: true)
-            try fileManager.copyItem(at: sourceURL, to: stagingURL)
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                _ = try fileManager.replaceItemAt(destinationURL, withItemAt: stagingURL)
-            } else {
-                try fileManager.moveItem(at: stagingURL, to: destinationURL)
-            }
             // Installing code and granting it permission to run are separate
-            // decisions. The user enables the extension after reviewing the
-            // manifest and permission badges in Extensions.
-            stateStore.set(.disabled, for: manifest.id)
+            // decisions. A first install, or an update that asks for more than
+            // the last one, returns to disabled so the user reviews it.
+            if result.requiresReconsent {
+                stateStore.set(.disabled, for: result.manifest.id)
+            }
+            setLastError(nil)
             reloadInstalledPackages()
             reconcileLifecycle()
         } catch {
-            lastErrorMessage = error.localizedDescription
+            setLastError(error.localizedDescription)
         }
+    }
+
+    private func setLastError(_ message: String?) {
+        guard lastErrorMessage != message else {
+            return
+        }
+        lastErrorMessage = message
     }
 
     func makePage(
@@ -320,7 +330,7 @@ final class NativExtensionManager: ObservableObject {
               record.hasRuntime else {
             return nil
         }
-        return builtIns[record.id]?.makePage(id: pageID, context: context)
+        return hostExtension(for: record.id)?.makePage(id: pageID, context: context)
     }
 
     func performCommand(id commandID: String) {
@@ -331,7 +341,7 @@ final class NativExtensionManager: ObservableObject {
         }) else {
             return
         }
-        builtIns[record.id]?.performCommand(id: commandID)
+        hostExtension(for: record.id)?.performCommand(id: commandID)
     }
 
     func record(containingPage pageID: String) -> NativExtensionRecord? {
@@ -340,36 +350,56 @@ final class NativExtensionManager: ObservableObject {
         }
     }
 
+    /// Whether the host itself holds the grant. System grants are process-wide,
+    /// so this is independent of which extension is asking.
+    private func isPermissionGranted(_ permission: NativExtensionPermission) -> Bool {
+        switch permission {
+        case .microphone:
+            NativSystemPermissionController.hasMicrophoneAccess()
+        case .systemAudioCapture:
+            NativSystemPermissionController.hasScreenCaptureAccess()
+        case .accessibilityInsertText:
+            NativSystemPermissionController.hasInsertTextAccess()
+        case .readSelection:
+            NativSystemPermissionController.hasAccessibilityAccess()
+        // Nothing outside Nativ gates these, so consent is the manifest
+        // declaration the user reviewed before enabling the extension.
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
+            true
+        case .screenCapture:
+            NativSystemPermissionController.hasScreenCaptureAccess()
+        case .notifications:
+            false
+        }
+    }
+
     func permissionStatus(
         _ permission: NativExtensionPermission
     ) -> NativExtensionPermissionStatus {
         switch permission {
         case .microphone:
-            switch AVCaptureDevice.authorizationStatus(for: .audio) {
-            case .authorized:
-                return .granted
-            case .denied, .restricted:
-                return .denied
-            case .notDetermined:
-                return .notRequested
-            @unknown default:
-                return .notRequested
-            }
-        case .systemAudioCapture:
-            if NativSystemPermissionController.hasScreenCaptureAccess() {
+            if isPermissionGranted(permission) {
                 return .granted
             }
+            return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
+                ? .notRequested
+                : .denied
+        case .systemAudioCapture, .accessibilityInsertText, .readSelection, .screenCapture:
+            if isPermissionGranted(permission) {
+                return .granted
+            }
+            // macOS gives no way to tell "declined" from "never asked", so the
+            // distinction comes from whether this extension has prompted before.
             return requestedPermissions.contains(permission.rawValue)
                 ? .denied
                 : .notRequested
-        case .accessibilityInsertText:
-            if NativSystemPermissionController.hasInsertTextAccess() {
-                return .granted
-            }
-            return requestedPermissions.contains(permission.rawValue)
-                ? .denied
-                : .notRequested
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
             return .granted
         case .notifications:
             return .notRequested
@@ -377,18 +407,20 @@ final class NativExtensionManager: ObservableObject {
     }
 
     func permissionActionTitle(
-        _ permission: NativExtensionPermission
+        _ permission: NativExtensionPermission,
+        status: NativExtensionPermissionStatus
     ) -> String? {
-        let status = permissionStatus(permission)
         guard status != .granted else {
             return nil
         }
         switch permission {
-        case .microphone, .systemAudioCapture, .accessibilityInsertText:
+        case .microphone, .systemAudioCapture, .accessibilityInsertText,
+             .readSelection, .screenCapture:
             return status == .denied ? "Open Settings" : "Request"
-        case .notifications:
-            return nil
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .notifications, .readClipboard, .writeClipboard, .saveFile, .overlay,
+             .namespacedStorage, .modelsLanguage, .modelsVision,
+             .modelsImageGeneration, .modelsImageEditing, .modelsSpeechToText,
+             .modelsTextToSpeech, .modelsEmbedding:
             return nil
         }
     }
@@ -419,29 +451,46 @@ final class NativExtensionManager: ObservableObject {
                 NativSystemPermissionController.openScreenCaptureSettings()
                 refreshPermissionStatuses()
             }
-        case .accessibilityInsertText:
+        case .accessibilityInsertText, .readSelection:
             markPermissionRequested(permission)
             _ = NativSystemPermissionController.requestInsertTextAccess()
             refreshPermissionStatuses()
             if !NativSystemPermissionController.hasInsertTextAccess() {
                 NativSystemPermissionController.openAccessibilitySettings()
             }
+        case .screenCapture:
+            markPermissionRequested(permission)
+            if !NativSystemPermissionController.requestScreenCaptureAccess() {
+                NativSystemPermissionController.openScreenCaptureSettings()
+            }
+            refreshPermissionStatuses()
         case .notifications:
             // No included extension currently requests notifications. Keep the
             // declaration visible without prompting for an unused capability.
             break
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
             break
         }
     }
 
     func refreshPermissionStatuses() {
         permissionRevision &+= 1
-        let nextSnapshot = currentPermissionSnapshot()
-        guard nextSnapshot != permissionSnapshot else {
+        let nextSnapshot = currentGrantedPermissions()
+        guard nextSnapshot != grantedPermissionSnapshot else {
             return
         }
-        permissionSnapshot = nextSnapshot
+        grantedPermissionSnapshot = nextSnapshot
+
+        // Out-of-process runtimes are restarted below so they cannot hold a
+        // stale grant. In-process ones are just handed the new set.
+        for (identifier, runtime) in declarativeRuntimes {
+            runtime.updateGrantedPermissions(
+                granted(for: externalManifests[identifier]?.manifest ?? runtime.manifest)
+            )
+        }
 
         // An extension runtime receives its granted permissions at activation.
         // Restart active runtimes when a system grant changes so their broker
@@ -457,22 +506,18 @@ final class NativExtensionManager: ObservableObject {
     }
 
     private func markPermissionRequested(_ permission: NativExtensionPermission) {
-        requestedPermissions.insert(permission.rawValue)
+        guard requestedPermissions.insert(permission.rawValue).inserted else {
+            return
+        }
         permissionDefaults.set(
             requestedPermissions.sorted(),
-            forKey: permissionRequestKey
+            forKey: Self.permissionRequestKey
         )
         permissionRevision &+= 1
     }
 
-    private func currentPermissionSnapshot()
-        -> [NativExtensionPermission: NativExtensionPermissionStatus]
-    {
-        Dictionary(
-            uniqueKeysWithValues: NativExtensionPermission.allCases.map {
-                ($0, permissionStatus($0))
-            }
-        )
+    private func currentGrantedPermissions() -> Set<NativExtensionPermission> {
+        Set(NativExtensionPermission.allCases.filter(isPermissionGranted))
     }
 
     private func reconcileLifecycle() {
@@ -486,46 +531,70 @@ final class NativExtensionManager: ObservableObject {
         )
 
         for extensionID in activeExtensionIDs.subtracting(shouldBeActive) {
-            builtIns[extensionID]?.deactivate()
+            hostExtension(for: extensionID)?.deactivate()
             stopSystemRuntime(extensionID: extensionID)
             activeExtensionIDs.remove(extensionID)
         }
         for extensionID in shouldBeActive.subtracting(activeExtensionIDs) {
-            if let hostExtension = builtIns[extensionID] {
-                hostExtension.activate(context: hostContext)
-            }
+            hostExtension(for: extensionID)?.activate(context: hostContext)
             activeExtensionIDs.insert(extensionID)
             startSystemRuntimeIfAvailable(extensionID: extensionID)
         }
     }
 
     private func reloadInstalledPackages() {
-        externalManifests.removeAll()
-        if let packageURLs = try? fileManager.contentsOfDirectory(
-            at: extensionsDirectory,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for packageURL in packageURLs where packageURL.pathExtension == "nativextension" {
-                do {
-                    let manifest = try Self.loadManifest(
-                        from: packageURL,
-                        hostVersion: hostVersion
-                    )
-                    guard builtIns[manifest.id] == nil else {
-                        continue
-                    }
-                    externalManifests[manifest.id] = (manifest, packageURL)
-                } catch {
-                    NSLog(
-                        "Nativ ignored extension package at %@: %@",
-                        packageURL.path,
-                        error.localizedDescription
-                    )
-                }
-            }
+        let result = installer.loadInstalledPackages(
+            reservedIdentifiers: Set(builtIns.keys)
+        )
+        externalManifests = result.manifests
+        if packageIssues != result.issues {
+            packageIssues = result.issues
         }
+        rebuildDeclarativeRuntimes()
         rebuildRecords()
+    }
+
+    /// Keeps a live runtime when its package is unchanged, so reloading after
+    /// an unrelated install does not tear down a workflow that is running.
+    private func rebuildDeclarativeRuntimes() {
+        guard let declarativeServices else {
+            declarativeRuntimes.removeAll()
+            return
+        }
+        var next: [String: NativDeclarativeExtension] = [:]
+        for (identifier, installed) in externalManifests {
+            guard installed.manifest.runtime == .declarative,
+                  let workflow = installed.workflow else {
+                continue
+            }
+            if let existing = declarativeRuntimes[identifier],
+               existing.manifest.version == installed.manifest.version,
+               existing.workflow == workflow {
+                next[identifier] = existing
+                continue
+            }
+            declarativeRuntimes[identifier]?.deactivate()
+            next[identifier] = NativDeclarativeExtension(
+                manifest: installed.manifest,
+                workflow: workflow,
+                grantedPermissions: granted(for: installed.manifest),
+                services: declarativeServices,
+                onFailure: { [weak self] message in
+                    self?.setLastError(message)
+                }
+            )
+        }
+        for (identifier, runtime) in declarativeRuntimes where next[identifier] == nil {
+            runtime.deactivate()
+            activeExtensionIDs.remove(identifier)
+        }
+        declarativeRuntimes = next
+    }
+
+    private func granted(
+        for manifest: NativExtensionManifest
+    ) -> Set<NativExtensionPermission> {
+        Set(manifest.permissions.filter(isPermissionGranted))
     }
 
     private func rebuildRecords() {
@@ -541,13 +610,29 @@ final class NativExtensionManager: ObservableObject {
             )
         }
 
-        nextRecords += externalManifests.values.map { manifest, packageURL in
+        nextRecords += externalManifests.values.map { installed in
+            let manifest = installed.manifest
+            // A declarative package runs inside Nativ, so its runtime is the
+            // workflow the installer already validated rather than an
+            // extension the operating system had to register.
+            guard manifest.runtime != .declarative else {
+                return NativExtensionRecord(
+                    manifest: manifest,
+                    origin: .external(installed.packageURL),
+                    state: stateStore.state(for: manifest),
+                    hasRuntime: installed.workflow != nil,
+                    runtimeBundleIdentifier: nil,
+                    errorMessage: installed.workflow == nil
+                        ? NativExtensionPackageError.missingWorkflowDocument.localizedDescription
+                        : nil
+                )
+            }
             let systemIdentity = manifest.runtimeBundleIdentifier.flatMap {
                 systemIdentities[$0]
             }
             return NativExtensionRecord(
                 manifest: manifest,
-                origin: .external(packageURL),
+                origin: .external(installed.packageURL),
                 state: stateStore.state(for: manifest),
                 hasRuntime: systemIdentity != nil,
                 runtimeBundleIdentifier:
@@ -592,8 +677,8 @@ final class NativExtensionManager: ObservableObject {
         }
 
         records = nextRecords.sorted {
-            if $0.isIncluded != $1.isIncluded {
-                return $0.isIncluded
+            if $0.origin.precedence != $1.origin.precedence {
+                return $0.origin.precedence < $1.origin.precedence
             }
             return $0.manifest.displayName.localizedStandardCompare(
                 $1.manifest.displayName
@@ -682,7 +767,7 @@ final class NativExtensionManager: ObservableObject {
                 )
                 let grantedPermissions = Set(
                     record.manifest.permissions.filter {
-                        self.permissionStatus($0) == .granted
+                        self.isPermissionGranted($0)
                     }
                 )
                 guard let hostContext = self.hostContext else {
@@ -750,25 +835,6 @@ final class NativExtensionManager: ObservableObject {
         }
         systemHostBrokers[extensionID] = nil
         systemProcesses.removeValue(forKey: extensionID)?.invalidate()
-    }
-
-    private static func loadManifest(
-        from packageURL: URL,
-        hostVersion: String
-    ) throws -> NativExtensionManifest {
-        let manifestURL = packageURL.appendingPathComponent("Manifest.json")
-        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
-            throw NativExtensionPackageError.missingManifest
-        }
-        let manifest = try JSONDecoder().decode(
-            NativExtensionManifest.self,
-            from: Data(contentsOf: manifestURL)
-        )
-        try NativExtensionManifestValidator.validate(
-            manifest,
-            hostVersion: hostVersion
-        )
-        return manifest
     }
 
     private static func defaultExtensionsDirectory(fileManager: FileManager) -> URL {
