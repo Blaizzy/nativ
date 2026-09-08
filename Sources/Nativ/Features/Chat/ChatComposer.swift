@@ -1218,44 +1218,40 @@ private struct ChatPromptEditBanner: View {
     @State private var isCancelHovered = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             Image(systemName: "pencil")
-                .foregroundStyle(Color.accentColor)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Editing prompt")
-                    .fontWeight(.medium)
-                Text("Sending will replace the latest response.")
-                    .foregroundStyle(.secondary)
-            }
+            Text("Replace the last response")
 
             Spacer(minLength: 12)
 
             Button(action: onCancel) {
                 Text("Cancel")
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(
-                        isCancelHovered ? Color.accentColor.opacity(0.12) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        isCancelHovered ? Color.primary.opacity(0.07) : .clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                     )
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
             .keyboardShortcut(.cancelAction)
             .onHover { isCancelHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isCancelHovered)
             .help("Cancel editing")
         }
         .font(.caption)
+        // Uniformly secondary and unaccented. This sits directly above the
+        // composer while you are typing into it, so it should read as a state
+        // the editor is in, not as something asking to be dealt with.
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
     }
 }
