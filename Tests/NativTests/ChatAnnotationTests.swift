@@ -45,6 +45,16 @@ final class ChatAnnotationTests: XCTestCase {
         XCTAssertTrue(annotation.after.contains("local storage"))
     }
 
+    func testTwentyPercentBoundaryScalesWithWindow() {
+        XCTAssertFalse(ChatAnnotation.needsContext(distance: 9_600, contextLimit: 48_000))
+        XCTAssertTrue(ChatAnnotation.needsContext(distance: 9_601, contextLimit: 48_000))
+        XCTAssertTrue(ChatAnnotation.needsContext(distance: 20_000, contextLimit: 48_000))
+        XCTAssertFalse(ChatAnnotation.needsContext(distance: 20_000, contextLimit: 256_000))
+        XCTAssertTrue(ChatAnnotation.needsContext(distance: nil, contextLimit: 48_000))
+        XCTAssertTrue(ChatAnnotation.needsContext(distance: 10, contextLimit: nil))
+        XCTAssertTrue(ChatAnnotation.needsContext(distance: 10, contextLimit: 0))
+    }
+
     func testRepeatedUnicodePassageUsesExactRange() throws {
         let message = ChatTranscriptMessage(role: .user, content: "🌙 first yes. Second yes. End.")
         let range = (message.content as NSString).range(of: "yes", options: .backwards)

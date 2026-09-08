@@ -106,6 +106,11 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
         )
     }
 
+    static func needsContext(distance: Int?, contextLimit: Int?) -> Bool {
+        guard let distance, let contextLimit, contextLimit > 0 else { return true }
+        return distance > contextLimit / 5
+    }
+
     func addingAdjacentContext(from history: [ChatTranscriptMessage]) -> Self {
         guard let index = history.firstIndex(where: { $0.id == sourceMessageID }) else { return self }
         var result = self

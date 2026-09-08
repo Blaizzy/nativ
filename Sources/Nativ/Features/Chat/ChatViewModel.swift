@@ -1546,6 +1546,18 @@ final class ChatViewModel: ObservableObject {
                 documentContext.result.omittedDocuments,
                 for: queuedRequest.sessionID
             )
+            let annotationContextExpanded = try await resolveAnnotations(
+                for: queuedRequest, before: assistantMessageID, settings: activeSettings,
+                client: client, documentContexts: documentContext.result.contexts
+            )
+            if annotationContextExpanded {
+                documentContext = try await fittedDocumentContext(
+                    documentContext, messages: documentMessages, for: queuedRequest,
+                    before: assistantMessageID, advertisesTools: advertisesTools,
+                    settings: activeSettings, effectiveContextLimit: effectiveContextLimit, client: client
+                )
+                setDocumentContextOmissions(documentContext.result.omittedDocuments, for: queuedRequest.sessionID)
+            }
             guard
                 let request = makeCompletionRequest(
                     for: queuedRequest,
@@ -2015,6 +2027,60 @@ final class ChatViewModel: ObservableObject {
                 throw NativChatError.invalidResponse
             }
         }
+    }
+
+    private func resolveAnnotations(
+        for queued: QueuedChatRequest, before assistantMessageID: UUID,
+        settings: NativSettings, client: NativChatClient, documentContexts: [UUID: String]
+    ) async throws -> Bool {
+        guard let history = sessionMessages(for: queued.sessionID),
+              let userIndex = history.firstIndex(where: { $0.id == queued.userMessageID }),
+              !history[userIndex].annotations.isEmpty,
+              let assistantIndex = history.firstIndex(where: { $0.id == assistantMessageID }),
+              var request = makeCompletionRequest(
+                  for: queued, before: assistantMessageID, advertisesTools: false,
+                  settings: settings, documentContexts: documentContexts
+              ) else { return false }
+        var distanceHistory = Array(history[..<assistantIndex])
+        distanceHistory[userIndex].annotations = []
+        let systemMessages = request.messages.filter { $0.role == "system" }
+        request.messages = systemMessages + distanceHistory.compactMap {
+            $0.apiMessage(documentContext: documentContexts[$0.id], includesImages: queued.languageModelSupportsVision)
+        }
+        let fullCount = try? await client.countPromptTokens(for: request).inputTokens
+        let metrics = try? await NativMetricsClient(baseURL: settings.serverBaseURL)
+            .fetchMetrics(apiKey: settings.serverAPIKey)
+        let contextLimit = metrics?.server.loadedModel == settings.languageModelID
+            ? metrics?.server.effectiveContextLimit : nil
+        var annotations = history[userIndex].annotations
+        for index in annotations.indices {
+            try Task.checkCancellation()
+            let annotation = annotations[index]
+            var distance: Int?
+            if let fullCount, let prefix = annotation.historyPrefix(in: distanceHistory) {
+                request.messages = systemMessages + prefix.compactMap {
+                    $0.apiMessage(
+                        documentContext: $0.id == annotation.sourceMessageID ? nil : documentContexts[$0.id],
+                        includesImages: queued.languageModelSupportsVision
+                    )
+                }
+                if let prefixCount = try? await client.countPromptTokens(for: request).inputTokens {
+                    distance = max(0, fullCount - prefixCount)
+                }
+            }
+            annotations[index].includesContext = ChatAnnotation.needsContext(
+                distance: distance, contextLimit: contextLimit
+            )
+        }
+        try Task.checkCancellation()
+        let expanded = zip(history[userIndex].annotations, annotations).contains {
+            !$0.0.includesContext && $0.1.includesContext
+        }
+        if annotations != history[userIndex].annotations {
+            updateMessage(queued.userMessageID, in: queued.sessionID) { $0.annotations = annotations }
+            persistSession(queued.sessionID, updateTimestamp: false)
+        }
+        return expanded
     }
 
     private func fittedDocumentContext(
