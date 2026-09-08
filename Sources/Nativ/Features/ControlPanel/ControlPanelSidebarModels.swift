@@ -14,8 +14,6 @@ struct SidebarRecentsSnapshot: Equatable {
     let ungroupedSessions: [ControlPanelRecentSession]
     let projects: [ChatProject]
     let folders: [ChatFolder]
-    let pinnedFolders: [ChatFolder]
-    let unpinnedFolders: [ChatFolder]
     private let sessionsByFolder: [UUID: [ControlPanelRecentSession]]
     private let sessionsByProject: [UUID: [ControlPanelRecentSession]]
     private let chatSessionIDs: Set<UUID>
@@ -55,8 +53,6 @@ struct SidebarRecentsSnapshot: Equatable {
             return !folderIDs.contains(folderID)
         }
         self.folders = folders
-        pinnedFolders = folders.filter(\.isPinned)
-        unpinnedFolders = folders.filter { !$0.isPinned }
         var sessionsByFolder: [UUID: [ControlPanelRecentSession]] = [:]
         for recent in unpinnedSessions {
             guard let folderID = recent.folderID else { continue }

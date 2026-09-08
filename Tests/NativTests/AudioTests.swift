@@ -104,6 +104,84 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records.first?.applicationName, "Notes")
     }
 
+    func testAggregatesTranscriptionUsageByModel() throws {
+        let localModelID = "mlx-community/parakeet"
+        let appleModelID = "apple-speech (on-device)"
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let thirdDate = secondDate.addingTimeInterval(60)
+
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("dictation.wav"),
+            transcript: "one two three four",
+            durationSeconds: 10,
+            modelID: localModelID,
+            applicationName: "Notes",
+            recordedAt: firstDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("meeting.wav"),
+            transcript: "five six seven",
+            durationSeconds: 20,
+            modelID: localModelID,
+            applicationName: nil,
+            kind: .meeting,
+            recordedAt: secondDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("apple.wav"),
+            transcript: "eight nine",
+            durationSeconds: nil,
+            modelID: appleModelID,
+            applicationName: nil,
+            recordedAt: thirdDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("legacy.wav"),
+            transcript: "legacy transcript",
+            durationSeconds: nil,
+            modelID: nil,
+            applicationName: nil,
+            recordedAt: firstDate
+        )
+        store.addCapture(
+            recordingURL: temporaryDirectory.appendingPathComponent("untranscribed.wav"),
+            kind: .voiceNote,
+            title: "Untranscribed",
+            durationSeconds: 30
+        )
+
+        let usages = store.modelUsage()
+
+        XCTAssertEqual(usages.map(\.modelID), [localModelID, appleModelID, nil])
+        let localUsage = try XCTUnwrap(usages.first)
+        XCTAssertEqual(localUsage.transcriptions, 2)
+        XCTAssertEqual(localUsage.dictations, 1)
+        XCTAssertEqual(localUsage.recordings, 1)
+        XCTAssertEqual(localUsage.words, 7)
+        XCTAssertEqual(localUsage.durationSeconds, 30, accuracy: 0.001)
+        XCTAssertEqual(localUsage.timedTranscriptions, 2)
+        XCTAssertEqual(localUsage.lastUsedAt, secondDate)
+
+        let appleUsage = try XCTUnwrap(usages.first { $0.modelID == appleModelID })
+        XCTAssertEqual(appleUsage.transcriptions, 1)
+        XCTAssertEqual(appleUsage.dictations, 1)
+        XCTAssertEqual(appleUsage.recordings, 0)
+        XCTAssertEqual(appleUsage.words, 2)
+        XCTAssertEqual(appleUsage.timedTranscriptions, 0)
+
+        let unknownUsage = try XCTUnwrap(usages.first { $0.modelID == nil })
+        XCTAssertEqual(unknownUsage.transcriptions, 1)
+        XCTAssertEqual(unknownUsage.words, 2)
+
+        let recentUsages = store.modelUsage(since: secondDate)
+        XCTAssertEqual(recentUsages.map(\.modelID), [localModelID, appleModelID])
+        XCTAssertEqual(recentUsages[0].transcriptions, 1)
+        XCTAssertEqual(recentUsages[0].dictations, 0)
+        XCTAssertEqual(recentUsages[0].recordings, 1)
+        XCTAssertEqual(recentUsages[0].words, 3)
+    }
+
     func testRetryPreservesOriginalDurationAndRecordedDate() {
         let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
         let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -129,6 +207,32 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records[0].durationSeconds, 4)
         XCTAssertEqual(store.records[0].applicationName, "Notes")
         XCTAssertEqual(store.records[0].modelID, "second-model")
+    }
+
+    func testRegeneratedTranscriptCanInvalidateExistingSummary() {
+        let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
+
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "first transcript",
+            durationSeconds: 4,
+            modelID: "first-model",
+            applicationName: nil,
+            summary: "Summary of the first transcript"
+        )
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "replacement transcript",
+            durationSeconds: 4,
+            modelID: "second-model",
+            applicationName: nil,
+            preserveExistingSummary: false
+        )
+
+        XCTAssertEqual(store.records.count, 1)
+        XCTAssertEqual(store.records[0].transcript, "replacement transcript")
+        XCTAssertEqual(store.records[0].modelID, "second-model")
+        XCTAssertNil(store.records[0].summary)
     }
 
     func testImportsExistingTranscriptWithoutAudio() throws {
@@ -356,6 +460,84 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(components.hour, 2)
         XCTAssertEqual(components.minute, 18)
         XCTAssertEqual(components.second, 18)
+    }
+}
+
+@MainActor
+final class FnControlShortcutMonitorTests: XCTestCase {
+    func testPollingDeliversPressAndReleaseThenStops() async throws {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = [.function, .control]
+        var samples = 0
+        var changes: [Bool] = []
+        let released = expectation(description: "Polling observes modifier release")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return modifiers
+        }
+        monitor.onChange = { held in
+            XCTAssertTrue(Thread.isMainThread)
+            changes.append(held)
+            if !held { released.fulfill() }
+        }
+        monitor.start()
+        defer { monitor.stop() }
+
+        // The first sample is synchronous, before the polling task starts.
+        XCTAssertEqual(changes, [true])
+        modifiers = []
+        await fulfillment(of: [released], timeout: 2)
+        XCTAssertEqual(changes, [true, false])
+
+        monitor.stop()
+        let samplesAtStop = samples
+        modifiers = [.function, .control]
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+        XCTAssertEqual(changes, [true, false])
+    }
+
+    func testImmediateStopAndRestartDoNotLeaveOldPollersRunning() async throws {
+        let preferences = makePreferences()
+        var samples = 0
+        var retryEnabled = false
+        let polled = expectation(description: "Restarted monitor polls")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return retryEnabled && samples > 21 ? [.option] : []
+        }
+
+        for _ in 0 ..< 20 {
+            monitor.start()
+            monitor.stop()
+        }
+        XCTAssertEqual(samples, 20)
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, 20)
+
+        monitor.onRetry = { polled.fulfill() }
+        retryEnabled = true
+        monitor.start()
+        defer { monitor.stop() }
+        await fulfillment(of: [polled], timeout: 2)
+        monitor.stop()
+        let samplesAtStop = samples
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+    }
+
+    private func makePreferences() -> VoiceShortcutPreferences {
+        let suiteName = "FnControlShortcutMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = VoiceShortcutPreferences(defaults: defaults)
+        preferences.isHandsFreeEnabled = false
+        preferences.retryShortcut = VoiceShortcut(
+            keyCode: nil,
+            keyDisplay: nil,
+            modifiers: [.option]
+        )
+        return preferences
     }
 }
 

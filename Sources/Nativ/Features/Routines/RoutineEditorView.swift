@@ -190,7 +190,7 @@ struct RoutineEditor: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("No capabilities selected")
-                            .nativTextStyle(.rowTitle)
+                            .legacyTextStyle(.rowTitle)
                     }
                 }
             } else {
@@ -204,15 +204,15 @@ struct RoutineEditor: View {
                                 .frame(width: 22)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(option.title)
-                                    .nativTextStyle(.supportingEmphasized)
+                                    .legacyTextStyle(.supportingEmphasized)
                                 Text(option.summaryLine)
-                                    .nativTextStyle(.metadata)
+                                    .legacyTextStyle(.metadata)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 8)
                             Text(option.section.singularTitle)
-                                .nativTextStyle(.badge)
+                                .legacyTextStyle(.badge)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
@@ -598,9 +598,9 @@ private struct ScheduledCapabilityPicker: View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Capabilities")
-                    .nativTextStyle(.sheetTitle)
+                    .legacyTextStyle(.sheetTitle)
                 Text("Choose the capabilities this scheduled task can use.")
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -629,11 +629,11 @@ private struct ScheduledCapabilityPicker: View {
                         let count = count(for: item)
                         if count > 0 {
                             Text("\(count)")
-                                .nativTextStyle(.badgeMuted)
+                                .legacyTextStyle(.badgeMuted)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .nativTextStyle(.supportingEmphasized)
+                    .legacyTextStyle(.supportingEmphasized)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
                     .foregroundStyle(section == item ? Color.accentColor : Color.primary)
@@ -726,16 +726,16 @@ private struct ScheduledCapabilityPicker: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 7) {
                         Text(option.title)
-                            .nativTextStyle(.rowTitle)
+                            .legacyTextStyle(.rowTitle)
                         Text(option.section.singularTitle)
-                            .nativTextStyle(.badge)
+                            .legacyTextStyle(.badge)
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
                     Text(option.summaryLine)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -768,7 +768,7 @@ private struct ScheduledCapabilityPicker: View {
                     ? "No capabilities selected"
                     : "\(draftSelection.count) capabilities selected"
             )
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
             Spacer()
             Button("Done") {

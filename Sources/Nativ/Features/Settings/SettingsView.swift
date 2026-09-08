@@ -228,7 +228,7 @@ struct SettingsView: View {
     private var projectSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Projects")
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
 
             VStack(spacing: 0) {
                 settingsRow(
