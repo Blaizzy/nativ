@@ -12,9 +12,6 @@ final class ChatAnnotationTests: XCTestCase {
             renderedMarkdown: true))
         let annotation = try XCTUnwrap(ChatAnnotation.capture(message: source, range: range, displayedText: text))
         XCTAssertEqual(annotation.quote, text)
-        XCTAssertTrue(annotation.before.hasPrefix("Before. Read"))
-        XCTAssertTrue(annotation.after.hasSuffix("After."))
-        XCTAssertEqual(annotation.historyPrefix(in: [source])?.last?.content, annotation.before)
     }
 
     func testRenderedRangeDisambiguatesRepeatedBoldText() throws {
@@ -34,35 +31,13 @@ final class ChatAnnotationTests: XCTestCase {
             elementRange: NSRange(location: NSNotFound, length: 0)))
     }
 
-    func testWholeMessageQuoteCapturesAdjacentConversation() throws {
-        let previous = ChatTranscriptMessage(role: .assistant, content: "Which option?")
-        let source = ChatTranscriptMessage(role: .user, content: "The second one.")
-        let next = ChatTranscriptMessage(role: .assistant, content: "That means local storage.")
-        let annotation = try XCTUnwrap(ChatAnnotation.capture(message: source,
-            range: NSRange(location: 0, length: (source.content as NSString).length)))
-            .addingAdjacentContext(from: [previous, source, next])
-        XCTAssertTrue(annotation.before.contains("Which option?"))
-        XCTAssertTrue(annotation.after.contains("local storage"))
-    }
-
-    func testTwentyPercentBoundaryScalesWithWindow() {
-        XCTAssertFalse(ChatAnnotation.needsContext(distance: 9_600, contextLimit: 48_000))
-        XCTAssertTrue(ChatAnnotation.needsContext(distance: 9_601, contextLimit: 48_000))
-        XCTAssertTrue(ChatAnnotation.needsContext(distance: 20_000, contextLimit: 48_000))
-        XCTAssertFalse(ChatAnnotation.needsContext(distance: 20_000, contextLimit: 256_000))
-        XCTAssertTrue(ChatAnnotation.needsContext(distance: nil, contextLimit: 48_000))
-        XCTAssertTrue(ChatAnnotation.needsContext(distance: 10, contextLimit: nil))
-        XCTAssertTrue(ChatAnnotation.needsContext(distance: 10, contextLimit: 0))
-    }
-
     func testRepeatedUnicodePassageUsesExactRange() throws {
         let message = ChatTranscriptMessage(role: .user, content: "🌙 first yes. Second yes. End.")
         let range = (message.content as NSString).range(of: "yes", options: .backwards)
         let annotation = try XCTUnwrap(ChatAnnotation.capture(message: message, range: range))
         XCTAssertEqual(annotation.quote, "yes")
-        XCTAssertEqual(annotation.before, "🌙 first yes. Second ")
-        XCTAssertEqual(annotation.after, ". End.")
-        XCTAssertEqual(annotation.historyPrefix(in: [message])?.last?.content, annotation.before)
+        XCTAssertEqual(annotation.selectionLocation, range.location)
+        XCTAssertEqual(annotation.selectionLength, range.length)
     }
 
     func testInvalidSelectionsAndStreamingAreRejected() {
@@ -74,36 +49,54 @@ final class ChatAnnotationTests: XCTestCase {
         XCTAssertNil(ChatAnnotation.capture(message: message, range: NSRange(location: 3, length: 5)))
     }
 
-    func testContextIsBoundedWithoutTruncatingQuote() throws {
-        let text = String(repeating: "a", count: 1_000) + "SELECTED" + String(repeating: "b", count: 1_000)
-        let message = ChatTranscriptMessage(role: .assistant, content: text)
-        let annotation = try XCTUnwrap(ChatAnnotation.capture(
-            message: message, range: (text as NSString).range(of: "SELECTED")
-        ))
-        XCTAssertEqual(annotation.quote, "SELECTED")
-        XCTAssertEqual(annotation.before.count, 600)
-        XCTAssertEqual(annotation.after.count, 600)
+    func testPromptIncludesOnlySelectedPassagesAndPreservesRequest() throws {
+        let sources = [
+            ChatTranscriptMessage(role: .user, content: "Before user. Selected user. After user."),
+            ChatTranscriptMessage(role: .assistant, content: "Before assistant. Selected\nassistant. After assistant.")
+        ]
+        let selections = ["Selected user.", "Selected\nassistant."]
+        var message = ChatTranscriptMessage(role: .user, content: "Explain this.")
+        message.annotations = try zip(sources, selections).map { source, selection in
+            try XCTUnwrap(ChatAnnotation.capture(
+                message: source, range: (source.content as NSString).range(of: selection)
+            ))
+        }
+        let prompt = try XCTUnwrap(message.apiMessage?.content?.textValue)
+        XCTAssertTrue(prompt.contains("Reference 1 from an earlier user message:\nSelected passage:\n> Selected user."))
+        XCTAssertTrue(prompt.contains("Reference 2 from an earlier assistant message:\nSelected passage:\n> Selected\n> assistant."))
+        XCTAssertFalse(prompt.contains("Before"))
+        XCTAssertFalse(prompt.contains("After"))
+        XCTAssertTrue(prompt.hasSuffix("Current user request:\nExplain this."))
+        XCTAssertEqual(message.content, "Explain this.")
     }
 
-    func testPromptIncludesContextOnlyWhenRequiredAndPreservesRequest() throws {
-        let source = ChatTranscriptMessage(role: .assistant, content: "Before. Selected. After.")
-        var annotation = try XCTUnwrap(ChatAnnotation.capture(
-            message: source, range: (source.content as NSString).range(of: "Selected.")
-        ))
-        var message = ChatTranscriptMessage(role: .user, content: "Explain this.")
-        annotation.includesContext = false
-        message.annotations = [annotation]
-        let recent = try XCTUnwrap(message.apiMessage?.content?.textValue)
-        XCTAssertTrue(recent.contains("> Selected."))
-        XCTAssertFalse(recent.contains("Before."))
-        XCTAssertFalse(recent.contains("After."))
-        XCTAssertTrue(recent.hasSuffix("Current user request:\nExplain this."))
-        annotation.includesContext = true
-        message.annotations = [annotation]
-        let old = try XCTUnwrap(message.apiMessage?.content?.textValue)
-        XCTAssertTrue(old.contains("Before."))
-        XCTAssertTrue(old.contains("After."))
-        XCTAssertEqual(message.content, "Explain this.")
+    func testPreviouslySavedContextIsIgnoredAndRemovedOnSave() throws {
+        let data = Data("""
+        {
+            "role": "user", "content": "Explain this.",
+            "annotations": [{
+                "id": "11111111-1111-1111-1111-111111111111",
+                "sourceMessageID": "22222222-2222-2222-2222-222222222222",
+                "sourceRole": "assistant", "sourceDigest": "old-digest",
+                "selectionLocation": 8, "selectionLength": 9,
+                "quote": "Selected.", "before": "Before. ", "after": " After.",
+                "includesContext": true
+            }]
+        }
+        """.utf8)
+        let message = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
+        let prompt = try XCTUnwrap(message.apiMessage?.content?.textValue)
+        XCTAssertTrue(prompt.contains("> Selected."))
+        XCTAssertFalse(prompt.contains("Before."))
+        XCTAssertFalse(prompt.contains("After."))
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any])
+        let annotations = try XCTUnwrap(saved["annotations"] as? [[String: Any]])
+        let annotation = try XCTUnwrap(annotations.first)
+        XCTAssertNil(annotation["before"])
+        XCTAssertNil(annotation["after"])
+        XCTAssertNil(annotation["includesContext"])
+        XCTAssertNil(annotation["sourceDigest"])
+        XCTAssertEqual(annotation["quote"] as? String, "Selected.")
     }
 
     func testSnapshotSurvivesSourceEditsAndPersistence() throws {
@@ -112,7 +105,6 @@ final class ChatAnnotationTests: XCTestCase {
         var message = ChatTranscriptMessage(role: .user, content: "Question")
         message.annotations = [annotation]
         source.content = "Edited passage"
-        XCTAssertNil(annotation.historyPrefix(in: [source]))
         let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: JSONEncoder().encode(message))
         XCTAssertEqual(decoded.annotations, [annotation])
         XCTAssertEqual(decoded.annotations.first?.quote, "Original")
@@ -134,5 +126,18 @@ final class ChatAnnotationTests: XCTestCase {
         let imported = try ChatArchiveCodec.importedSession(from: archive)
         XCTAssertEqual(imported.messages[1].annotations.first?.sourceMessageID, imported.messages[0].id)
         XCTAssertNotEqual(imported.messages[0].id, source.id)
+    }
+
+    func testArchiveRejectsDuplicateMessageIDs() throws {
+        let source = ChatTranscriptMessage(role: .assistant, content: "Original")
+        let session = ChatSession(id: UUID(), title: "Test", createdAt: .now, updatedAt: .now, messages: [source, source])
+        let archive = ChatArchive(chat: session, modelRepositoryID: "test/model", systemPrompt: "")
+        let data = try ChatArchiveCodec.encode(archive)
+        XCTAssertThrowsError(try ChatArchiveCodec.decode(data)) { error in
+            XCTAssertEqual(error as? ChatArchiveError, .duplicateMessageIDs)
+        }
+        XCTAssertThrowsError(try ChatArchiveCodec.importedSession(from: archive)) { error in
+            XCTAssertEqual(error as? ChatArchiveError, .duplicateMessageIDs)
+        }
     }
 }
