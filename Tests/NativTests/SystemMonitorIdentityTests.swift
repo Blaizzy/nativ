@@ -1,5 +1,4 @@
 import XCTest
-@testable import Nativ
 
 final class SystemMonitorIdentityTests: XCTestCase {
     func testDeviceModelCodeIncludesEnclosureColor() {
