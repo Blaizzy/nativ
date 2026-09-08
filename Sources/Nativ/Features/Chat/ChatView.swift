@@ -23,7 +23,13 @@ struct ChatView: View {
         let project = chat.currentProjectID.flatMap { projects.project(withID: $0) }
         ModelConfigurationLayout(
             model: model,
-            isConfigurationVisible: $showsConfiguration
+            isConfigurationVisible: $showsConfiguration,
+            auxiliary: ModelConfigurationAuxiliaryPane(
+                title: "Trace",
+                systemImage: "text.magnifyingglass"
+            ) {
+                traceInspector
+            }
         ) {
             ChatTranscriptView(
                 model: model,
@@ -62,11 +68,18 @@ struct ChatView: View {
         }
         .onAppear {
             chat.mcpHost = mcpHost
+            syncTraceRecording()
             mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
         }
         .onChange(of: model.settings.mcpServers) { _, servers in
             mcpHost.reload(servers: servers)
+        }
+        .onChange(of: model.settings.traceRecordingEnabled) { _, _ in
+            syncTraceRecording()
+        }
+        .onChange(of: model.settings.traceRetentionWindow) { _, window in
+            TraceServices.shared.applyRetention(window)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -75,6 +88,32 @@ struct ChatView: View {
             chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
+    }
+
+    /// Attaches or detaches recording to match the setting, and applies the
+    /// configured retention window.
+    private func syncTraceRecording() {
+        chat.traceProducer = TraceServices.shared.producer(
+            enabled: model.settings.traceRecordingEnabled
+        )
+        TraceServices.shared.applyRetention(model.settings.traceRetentionWindow)
+    }
+
+    @ViewBuilder
+    private var traceInspector: some View {
+        if let sessionID = chat.currentSessionID {
+            TraceInspectorView(
+                source: .session(sessionID),
+                showsCallSidebar: false,
+                reloadToken: chat.completedTurnCount
+            )
+        } else {
+            ContentUnavailableView(
+                "No chat selected",
+                systemImage: "text.magnifyingglass",
+                description: Text("Open a chat to see what its model calls were shown.")
+            )
+        }
     }
 
     private var dropOverlay: some View {

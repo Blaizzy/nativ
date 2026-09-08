@@ -1,9 +1,15 @@
 // Shared development signing defaults. Add machine-specific overrides to
 // Signing.local.xcconfig; that file is optional and ignored by Git.
 
+// Build-product name. Override in Signing.local.xcconfig (or on the
+// xcodebuild command line) so parallel worktrees produce distinguishable
+// app bundles instead of all writing Nativ.app.
+NATIV_PRODUCT_NAME = Nativ
+
 NATIV_BUNDLE_IDENTIFIER = dev.local.Nativ
 NATIV_SERVER_KIT_BUNDLE_IDENTIFIER = dev.local.NativServerKit
 NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER = dev.local.NativExtensionSDK
+NATIV_TRACE_BUNDLE_IDENTIFIER = dev.local.NativTrace
 NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER = $(NATIV_BUNDLE_IDENTIFIER).VoiceDictationExtension
 NATIV_SPARKLE_PUBLIC_KEY = A8x4wdNekd1aoWpU8bVdsNdOFzuua8nC1mfLCwGDSPk=
 // Client ID for Nativ's GitHub App. Device flow must be enabled for the app.

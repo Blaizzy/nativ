@@ -1,5 +1,5 @@
 import Foundation
-import SQLite3
+import NativTrace
 
 enum NativAnalyticsRange: CaseIterable {
     case last24Hours
@@ -143,6 +143,10 @@ struct NativAnalyticsRequestEvent: Identifiable, Sendable {
     let toolCalls: Bool
     let finishReason: String?
     let backend: String?
+    /// Id the calling app assigned before sending, when it supplied one. Joins
+    /// to `TraceScope.requestID` so a metrics row can be paired with the trace
+    /// of the same call.
+    let clientRequestID: String?
 
     var id: String { requestID }
 
@@ -215,7 +219,19 @@ final class NativAnalyticsStore {
     init(databaseURL: URL = NativAnalyticsStore.defaultDatabaseURL()) {
         let standardizedURL = databaseURL.standardizedFileURL
         self.databaseURL = standardizedURL
-        self.connection = try? SQLiteConnection(url: standardizedURL)
+        self.connection = try? Self.openConnection(at: standardizedURL)
+    }
+
+    /// Opens the analytics database for reading.
+    ///
+    /// The server is the only writer, so it owns the schema. This side used to
+    /// declare a byte-identical copy and re-apply an ALTER on every open,
+    /// which meant a column addition had to land in two places and the two had
+    /// already drifted on indexes. Read-only removes the question: before the
+    /// server has ever run there is no file, and every fetch already answers
+    /// with an empty summary when the connection is absent.
+    private static func openConnection(at url: URL) throws -> SQLiteConnection {
+        try SQLiteConnection(url: url, readOnly: true)
     }
 
     static func defaultDatabaseURL() -> URL {
@@ -588,7 +604,8 @@ final class NativAnalyticsStore {
                 thinking_enabled,
                 tool_calls,
                 finish_reason,
-                backend
+                backend,
+                client_request_id
             FROM request_events
             WHERE 1 = 1
             \(range.rangeStartUnix == nil ? "" : "AND completed_at >= ?")
@@ -639,7 +656,8 @@ final class NativAnalyticsStore {
                     thinkingEnabled: statement.int64(at: 18) != 0,
                     toolCalls: statement.int64(at: 19) != 0,
                     finishReason: statement.string(at: 20),
-                    backend: statement.string(at: 21)
+                    backend: statement.string(at: 21),
+                    clientRequestID: statement.string(at: 22)
                 )
             )
         }
@@ -773,188 +791,3 @@ final class NativAnalyticsStore {
         return trimmed == "All" ? nil : trimmed
     }
 }
-
-private final class SQLiteConnection {
-    private let handle: OpaquePointer
-
-    init(url: URL) throws {
-        try FileManager.default.createDirectory(
-            at: url.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-
-        var database: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(url.path, &database, flags, nil) == SQLITE_OK, let database else {
-            let message = database.flatMap { sqlite3_errmsg($0) }.map(String.init(cString:)) ?? "Unable to open database"
-            sqlite3_close(database)
-            throw SQLiteConnectionError.openFailed(message)
-        }
-
-        handle = database
-        try execute("PRAGMA journal_mode = WAL;")
-        try execute("PRAGMA synchronous = NORMAL;")
-        try execute("PRAGMA busy_timeout = 3000;")
-        try execute(schemaSQL)
-    }
-
-    deinit {
-        sqlite3_close(handle)
-    }
-
-    func prepare(_ sql: String) throws -> SQLiteStatement {
-        try SQLiteStatement(handle: handle, sql: sql)
-    }
-
-    func execute(_ sql: String) throws {
-        guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
-            throw SQLiteConnectionError.executionFailed(message)
-        }
-    }
-
-    private var message: String {
-        guard let rawMessage = sqlite3_errmsg(handle) else {
-            return "Unknown SQLite error"
-        }
-        return String(cString: rawMessage)
-    }
-}
-
-private final class SQLiteStatement {
-    private let handle: OpaquePointer
-
-    init(handle: OpaquePointer, sql: String) throws {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            let message = sqlite3_errmsg(handle).map(String.init(cString:)) ?? "Unable to prepare SQLite statement"
-            throw SQLiteConnectionError.prepareFailed(message)
-        }
-        self.handle = statement
-    }
-
-    deinit {
-        sqlite3_finalize(handle)
-    }
-
-    func bind(text: String, at index: Int32) {
-        sqlite3_bind_text(handle, index, text, -1, sqliteTransientDestructor)
-    }
-
-    func bind(double: Double, at index: Int32) {
-        sqlite3_bind_double(handle, index, double)
-    }
-
-    func bind(int64: Int64, at index: Int32) {
-        sqlite3_bind_int64(handle, index, int64)
-    }
-
-    func step() throws -> Bool {
-        switch sqlite3_step(handle) {
-        case SQLITE_ROW:
-            return true
-        case SQLITE_DONE:
-            return false
-        default:
-            throw SQLiteConnectionError.stepFailed
-        }
-    }
-
-    func int64(at index: Int32) -> Int64 {
-        sqlite3_column_int64(handle, index)
-    }
-
-    func double(at index: Int32) -> Double {
-        sqlite3_column_double(handle, index)
-    }
-
-    func string(at index: Int32) -> String? {
-        guard let rawValue = sqlite3_column_text(handle, index) else {
-            return nil
-        }
-        return String(cString: rawValue)
-    }
-
-    func isNull(at index: Int32) -> Bool {
-        sqlite3_column_type(handle, index) == SQLITE_NULL
-    }
-}
-
-private enum SQLiteConnectionError: Error {
-    case openFailed(String)
-    case executionFailed(String)
-    case prepareFailed(String)
-    case stepFailed
-}
-
-private let sqliteTransientDestructor = unsafeBitCast(
-    -1,
-    to: sqlite3_destructor_type.self
-)
-
-private let schemaSQL = """
-    CREATE TABLE IF NOT EXISTS request_events (
-        request_id TEXT PRIMARY KEY,
-        started_at REAL NOT NULL,
-        completed_at REAL NOT NULL,
-        model_id TEXT NOT NULL,
-        endpoint TEXT NOT NULL,
-        status TEXT NOT NULL,
-        streaming INTEGER NOT NULL,
-        prompt_tokens INTEGER NOT NULL,
-        completion_tokens INTEGER NOT NULL,
-        generated_tokens INTEGER NOT NULL,
-        request_elapsed_ms INTEGER,
-        decode_elapsed_ms INTEGER,
-        ttft_ms INTEGER,
-        peak_memory_bytes INTEGER,
-        prefill_tokens_per_second REAL,
-        decode_tokens_per_second REAL,
-        image_count INTEGER NOT NULL,
-        audio_count INTEGER NOT NULL,
-        structured_output INTEGER NOT NULL,
-        thinking_enabled INTEGER NOT NULL,
-        tool_calls INTEGER NOT NULL,
-        finish_reason TEXT,
-        backend TEXT,
-        created_at REAL NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS analytics_buckets (
-        granularity TEXT NOT NULL,
-        bucket_start REAL NOT NULL,
-        model_id TEXT NOT NULL,
-        requests_started INTEGER NOT NULL,
-        requests_completed INTEGER NOT NULL,
-        requests_failed INTEGER NOT NULL,
-        streaming_requests INTEGER NOT NULL,
-        prompt_tokens_total INTEGER NOT NULL,
-        completion_tokens_total INTEGER NOT NULL,
-        generated_tokens_total INTEGER NOT NULL,
-        request_elapsed_ms_total INTEGER NOT NULL,
-        decode_elapsed_ms_total INTEGER NOT NULL,
-        peak_memory_bytes_max INTEGER,
-        updated_at REAL NOT NULL,
-        PRIMARY KEY (granularity, bucket_start, model_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS server_sessions (
-        session_id TEXT PRIMARY KEY,
-        started_at REAL NOT NULL,
-        ended_at REAL,
-        last_seen_at REAL NOT NULL,
-        backend TEXT,
-        loaded_model TEXT,
-        loaded_adapter TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_request_events_completed_at
-        ON request_events (completed_at);
-    CREATE INDEX IF NOT EXISTS idx_request_events_model_completed_at
-        ON request_events (model_id, completed_at);
-    CREATE INDEX IF NOT EXISTS idx_request_events_status_completed_at
-        ON request_events (status, completed_at);
-    CREATE INDEX IF NOT EXISTS idx_analytics_buckets_granularity_bucket_start
-        ON analytics_buckets (granularity, bucket_start);
-    CREATE INDEX IF NOT EXISTS idx_analytics_buckets_granularity_model_bucket_start
-        ON analytics_buckets (granularity, model_id, bucket_start);
-"""

@@ -40,6 +40,18 @@ final class MCPHostManager: ObservableObject {
         }
     }
 
+    /// Maps each advertised tool name to the server that supplied it, so a
+    /// trace can say where a tool came from rather than just what it was called.
+    func toolServerNames() -> [String: String] {
+        var names: [String: String] = [:]
+        for connection in connections.values {
+            for tool in connection.tools {
+                names[Self.toolName(slug: connection.slug, tool: tool.name)] = connection.config.name
+            }
+        }
+        return names
+    }
+
     func toolDefinitions(forServer id: UUID) -> [MLXChatToolDefinition] {
         guard let connection = connections[id] else { return [] }
         return Self.toolDefinitions(for: connection)

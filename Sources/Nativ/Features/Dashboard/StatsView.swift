@@ -1,5 +1,6 @@
 import Charts
 import NativServerKit
+import NativTrace
 import SwiftUI
 
 struct StatsView: View {
@@ -4196,10 +4197,53 @@ private struct DashboardRecentRequestRow: View {
 }
 
 private struct RequestDetailView: View {
+    private enum Tab: String, CaseIterable, Identifiable {
+        case metrics = "Metrics"
+        case trace = "Trace"
+
+        var id: String { rawValue }
+    }
+
     let request: NativAnalyticsRequestEvent
     @Environment(\.dismiss) private var dismiss
+    @State private var tab: Tab = .metrics
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("", selection: $tab) {
+                ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 24)
+            .padding(.top, 18)
+
+            switch tab {
+            case .metrics:
+                metrics
+            case .trace:
+                // The trace is keyed by the id the app assigned, which the
+                // server records alongside its own. Without one this row came
+                // from a client that does not record traces.
+                if let clientRequestID = request.clientRequestID {
+                    TraceInspectorView(source: .request(clientRequestID))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ContentUnavailableView(
+                        "No trace for this request",
+                        systemImage: "text.magnifyingglass",
+                        description: Text(
+                            "This call came from a client that does not record traces, so only its metrics were kept."
+                        )
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        .frame(width: 720, height: 560)
+    }
+
+    private var metrics: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 5) {
@@ -4251,9 +4295,11 @@ private struct RequestDetailView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
+
+            Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 620)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

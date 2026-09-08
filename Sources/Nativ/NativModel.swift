@@ -804,6 +804,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func applicationWillTerminate() {
+        // Before the server goes down, so a call cut short by quitting still
+        // leaves the output it had produced.
+        TraceServices.shared.shutDownBeforeTermination()
         stopObservingExternalModelCacheVolume()
         allTimeStatsLoadTask?.cancel()
         allTimeStatsLoadTask = nil

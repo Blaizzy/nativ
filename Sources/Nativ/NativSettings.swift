@@ -465,6 +465,9 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    var traceRecordingEnabled: Bool
+    var traceRetentionDays: Int
+    var traceMaximumTraces: Int
     var chatFontScale: Double
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
@@ -522,6 +525,9 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
+        traceRecordingEnabled: Bool = true,
+        traceRetentionDays: Int = 30,
+        traceMaximumTraces: Int = 500,
         chatFontScale: Double = Self.defaultChatFontScale,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
@@ -578,6 +584,9 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.traceRecordingEnabled = traceRecordingEnabled
+        self.traceRetentionDays = traceRetentionDays
+        self.traceMaximumTraces = traceMaximumTraces
         self.chatFontScale = chatFontScale
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
@@ -637,6 +646,9 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case traceRecordingEnabled
+        case traceRetentionDays
+        case traceMaximumTraces
         case chatFontScale
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
@@ -782,6 +794,15 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize =
             try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize)
             ?? defaults.prefixCacheBlockSize
+        traceRecordingEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .traceRecordingEnabled)
+            ?? defaults.traceRecordingEnabled
+        traceRetentionDays =
+            try container.decodeIfPresent(Int.self, forKey: .traceRetentionDays)
+            ?? defaults.traceRetentionDays
+        traceMaximumTraces =
+            try container.decodeIfPresent(Int.self, forKey: .traceMaximumTraces)
+            ?? defaults.traceMaximumTraces
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
@@ -851,6 +872,9 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(traceRecordingEnabled, forKey: .traceRecordingEnabled)
+        try container.encode(traceRetentionDays, forKey: .traceRetentionDays)
+        try container.encode(traceMaximumTraces, forKey: .traceMaximumTraces)
         try container.encode(chatFontScale, forKey: .chatFontScale)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
@@ -1057,6 +1081,8 @@ struct NativSettings: Codable, Equatable {
             settings.structuredOutputName, fallback: "Response")
         settings.prefixCacheBlocks = min(max(settings.prefixCacheBlocks, 1), 1_048_576)
         settings.prefixCacheBlockSize = min(max(settings.prefixCacheBlockSize, 1), 4096)
+        settings.traceRetentionDays = min(max(settings.traceRetentionDays, 0), 3650)
+        settings.traceMaximumTraces = min(max(settings.traceMaximumTraces, 0), 100_000)
         settings.chatFontScale = min(
             max(settings.chatFontScale, Self.minChatFontScale), Self.maxChatFontScale)
         return settings

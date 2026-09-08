@@ -31,6 +31,15 @@ packages:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
 schemes:
+  NativTrace:
+    build:
+      targets:
+        NativTrace: all
+        NativTraceTests: [test]
+    test:
+      config: Debug
+      targets:
+        - NativTraceTests
   Nativ:
     build:
       targets:
@@ -64,6 +73,35 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
+  NativTrace:
+    type: framework
+    platform: macOS
+    configFiles:
+      Debug: Configuration/Signing.xcconfig
+      Release: Configuration/Signing.xcconfig
+    sources:
+      - path: Sources/NativTrace
+    settings:
+      base:
+        ARCHS: arm64
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        CODE_SIGN_IDENTITY: ""
+        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_TRACE_BUNDLE_IDENTIFIER)
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+  NativTraceTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/NativTraceTests
+    dependencies:
+      - target: NativTrace
+    settings:
+      base:
+        ARCHS: arm64
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTraceTests
+        GENERATE_INFOPLIST_FILE: YES
   NativServerKit:
     type: framework
     platform: macOS
@@ -118,6 +156,7 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
+      - target: NativTrace
       - target: VoiceDictationExtensionRuntime
         embed: true
       - package: Sparkle
@@ -143,6 +182,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
+        PRODUCT_NAME: $(NATIV_PRODUCT_NAME)
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
         CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
         GENERATE_INFOPLIST_FILE: NO
@@ -221,6 +261,10 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
+      - path: Sources/Nativ/Features/Chat/ChatTraceProducer.swift
+      - path: Sources/Nativ/Features/Chat/ChatTraceScope.swift
+      - path: Sources/Nativ/Features/Chat/ComposedChatRequest.swift
+      - path: Sources/Nativ/Features/Trace/TraceServices.swift
       - path: Sources/Nativ/Features/Chat/ChatStreamEventRelay.swift
       - path: Sources/Nativ/Features/Chat/ChatFontScale.swift
       - path: Sources/Nativ/Features/Chat/Rendering
@@ -300,6 +344,7 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
+      - target: NativTrace
       - package: ZIPFoundation
         product: ZIPFoundation
       - package: MarkdownUI
