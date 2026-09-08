@@ -262,6 +262,9 @@ private struct ChatTranscriptView: View {
                 latestUserMessageID: latestUserMessageID,
                 forkableAssistantResponseIDs: forkableAssistantResponseIDs
             )
+            .environment(\.chatAnnotationAction, chat.addAnnotation)
+            .environment(\.navigateToChatAnnotation, { chat.scrollTargetMessageID = $0 })
+            .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
             .id(item.id)
         case .agentTurn(let turn):
             ChatAgentTurnRow(
@@ -278,6 +281,9 @@ private struct ChatTranscriptView: View {
                 onExploreImageModels: onExploreImageModels,
                 onPreviewAttachment: onPreviewAttachment
             )
+            .environment(\.chatAnnotationAction, chat.addAnnotation)
+            .environment(\.navigateToChatAnnotation, { chat.scrollTargetMessageID = $0 })
+            .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
             .id(item.id)
         }
     }
@@ -628,6 +634,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     var displaysModelTitle = true
     var displaysThinking = true
+    @Environment(\.navigateToChatAnnotation) private var navigateToAnnotation
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -682,6 +689,9 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
+                if !message.annotations.isEmpty {
+                    ChatAnnotationCards(annotations: message.annotations, onNavigate: navigateToAnnotation)
+                }
                 if showsTextContent {
                     textBubble
                 }
@@ -770,6 +780,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .modifier(ChatSelectionReplyModifier(message: message))
         .font(.body)
         .padding(.horizontal, message.role == .assistant ? 0 : 12)
         .padding(.vertical, message.role == .assistant ? 3 : 9)
@@ -1019,6 +1030,7 @@ private struct ChatAgentTurnRow: View {
                     displaysThinking: false
                 )
                 .equatable()
+                .id(finalAssistantMessage.id)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

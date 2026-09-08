@@ -56,6 +56,7 @@ final class ChatViewModel: ObservableObject {
     private struct ComposerSnapshot {
         let draft: String
         let attachments: [ChatImageAttachment]
+        let annotations: [ChatAnnotation]
     }
 
     private struct ImageModelPreparationContext {
@@ -86,6 +87,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
+    @Published private(set) var pendingAnnotations: [ChatAnnotation] = []
     @Published var draft = ""
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
@@ -326,11 +328,13 @@ final class ChatViewModel: ObservableObject {
         cancelPromptEditing()
         composerSnapshot = ComposerSnapshot(
             draft: draft,
-            attachments: pendingImageAttachments
+            attachments: pendingImageAttachments,
+            annotations: pendingAnnotations
         )
         promptEditContext = ChatPromptEditContext(messageID: messageID)
         draft = message.content
         pendingImageAttachments = message.imageAttachments
+        pendingAnnotations = message.annotations
         composerFocusToken += 1
     }
 
@@ -341,6 +345,7 @@ final class ChatViewModel: ObservableObject {
         if let composerSnapshot {
             draft = composerSnapshot.draft
             pendingImageAttachments = composerSnapshot.attachments
+            pendingAnnotations = composerSnapshot.annotations
         }
         promptEditContext = nil
         composerSnapshot = nil
@@ -404,6 +409,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         applyCurrentSession(session)
     }
 
@@ -445,6 +451,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         applyCurrentSession(session)
         return session.id
     }
@@ -525,6 +532,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingAnnotations.removeAll()
             applyCurrentSession(session)
             return
         }
@@ -535,6 +543,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingAnnotations.removeAll()
             applyCurrentSession(session)
         }
     }
@@ -732,6 +741,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
 
         if let nextSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(nextSession)
@@ -866,6 +876,22 @@ final class ChatViewModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    func addAnnotation(_ annotation: ChatAnnotation) {
+        guard pendingAnnotations.count < ChatAnnotation.maximumCount,
+              messages.contains(where: { $0.id == annotation.sourceMessageID }),
+              !pendingAnnotations.contains(where: {
+                  $0.sourceMessageID == annotation.sourceMessageID
+                      && $0.selectionLocation == annotation.selectionLocation
+                      && $0.selectionLength == annotation.selectionLength
+              }) else { return }
+        pendingAnnotations.append(annotation.addingAdjacentContext(from: messages))
+        composerFocusToken += 1
+    }
+
+    func removeAnnotation(_ id: UUID) {
+        pendingAnnotations.removeAll { $0.id == id }
+    }
+
     func send(
         using appModel: NativModel,
         languageModelSupportsTools: Bool,
@@ -886,6 +912,7 @@ final class ChatViewModel: ObservableObject {
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+        let annotations = pendingAnnotations
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
@@ -902,8 +929,12 @@ final class ChatViewModel: ObservableObject {
 
             let editedMessageID = promptEditContext.messageID
             messages = revision.messages
+            if let index = messages.firstIndex(where: { $0.id == editedMessageID }) {
+                messages[index].annotations = annotations
+            }
             draft = composerSnapshot?.draft ?? ""
             pendingImageAttachments = composerSnapshot?.attachments ?? []
+            pendingAnnotations = composerSnapshot?.annotations ?? []
             discardPromptEditing()
             persistCurrentSession(updateTimestamp: true)
             enqueueGeneration(
@@ -919,13 +950,15 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
 
-        let userMessage = ChatTranscriptMessage(
+        var userMessage = ChatTranscriptMessage(
             role: .user,
             content: prompt,
             modelID: modelID,
             imageAttachments: imageAttachments
         )
+        userMessage.annotations = annotations
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
         enqueueGeneration(
@@ -1356,6 +1389,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
@@ -2626,6 +2660,7 @@ final class ChatViewModel: ObservableObject {
                 !session.messages.isEmpty
                     || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !pendingImageAttachments.isEmpty
+                    || !pendingAnnotations.isEmpty
                     || activeRequestID != nil
             } == true
 
@@ -2709,6 +2744,7 @@ final class ChatViewModel: ObservableObject {
 
         draft = composer?.draft ?? ""
         pendingImageAttachments = composer?.attachments ?? []
+        pendingAnnotations = composer?.annotations ?? []
         discardPromptEditing()
         upsertStoredSession(branch)
         saveSession(branch)
@@ -2758,6 +2794,7 @@ final class ChatViewModel: ObservableObject {
                 discardPromptEditing()
                 draft = ""
                 pendingImageAttachments.removeAll()
+                pendingAnnotations.removeAll()
                 if let replacement = storedSessions.sorted(by: ChatSession.recencySort).first {
                     applyCurrentSession(replacement)
                 } else {
@@ -2842,6 +2879,7 @@ final class ChatViewModel: ObservableObject {
             && messages.isEmpty
             && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
+            && pendingAnnotations.isEmpty
     }
 
     private func pruneRedundantEmptySessions(keeping sessionID: UUID? = nil) {
