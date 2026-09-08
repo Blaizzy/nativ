@@ -1221,7 +1221,7 @@ private struct ChatPromptEditBanner: View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "pencil")
 
-            Text("Replace the last response")
+            Text("Edit last message")
 
             Spacer(minLength: 12)
 
