@@ -56,6 +56,7 @@ final class ChatViewModel: ObservableObject {
     private struct ComposerSnapshot {
         let draft: String
         let attachments: [ChatImageAttachment]
+        let folderAttachments: [ChatFolderAttachment]
     }
 
     private struct ImageModelPreparationContext {
@@ -83,6 +84,7 @@ final class ChatViewModel: ObservableObject {
             synchronizeAttachmentValidations()
         }
     }
+    @Published private(set) var pendingFolderAttachments: [ChatFolderAttachment] = []
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
@@ -253,7 +255,9 @@ final class ChatViewModel: ObservableObject {
             && selectedModelID?.isEmpty == false
             && !hasBlockingAttachmentValidation
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !pendingImageAttachments.isEmpty)
+                || !pendingImageAttachments.isEmpty
+                || !pendingFolderAttachments.isEmpty
+            )
     }
 
     var hasPendingImageAttachments: Bool {
@@ -326,11 +330,13 @@ final class ChatViewModel: ObservableObject {
         cancelPromptEditing()
         composerSnapshot = ComposerSnapshot(
             draft: draft,
-            attachments: pendingImageAttachments
+            attachments: pendingImageAttachments,
+            folderAttachments: pendingFolderAttachments
         )
         promptEditContext = ChatPromptEditContext(messageID: messageID)
         draft = message.content
         pendingImageAttachments = message.imageAttachments
+        pendingFolderAttachments = message.folderAttachments
         composerFocusToken += 1
     }
 
@@ -341,6 +347,7 @@ final class ChatViewModel: ObservableObject {
         if let composerSnapshot {
             draft = composerSnapshot.draft
             pendingImageAttachments = composerSnapshot.attachments
+            pendingFolderAttachments = composerSnapshot.folderAttachments
         }
         promptEditContext = nil
         composerSnapshot = nil
@@ -404,6 +411,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
         applyCurrentSession(session)
     }
 
@@ -525,6 +533,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingFolderAttachments.removeAll()
             applyCurrentSession(session)
             return
         }
@@ -535,6 +544,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingFolderAttachments.removeAll()
             applyCurrentSession(session)
         }
     }
@@ -732,6 +742,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
 
         if let nextSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(nextSession)
@@ -886,6 +897,7 @@ final class ChatViewModel: ObservableObject {
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+        let folderAttachments = pendingFolderAttachments
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
@@ -893,6 +905,7 @@ final class ChatViewModel: ObservableObject {
                     messageID: promptEditContext.messageID,
                     content: prompt,
                     attachments: imageAttachments,
+                    folderAttachments: folderAttachments,
                     modelID: modelID,
                     in: messages
                 )
@@ -919,12 +932,14 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
 
         let userMessage = ChatTranscriptMessage(
             role: .user,
             content: prompt,
             modelID: modelID,
-            imageAttachments: imageAttachments
+            imageAttachments: imageAttachments,
+            folderAttachments: folderAttachments
         )
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
@@ -1200,6 +1215,28 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(contentsOf: attachments)
     }
 
+    func chooseFolderAttachment(contextLimit: Int?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Upload"
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        guard let attachment = Self.folderAttachment(at: url, contextLimit: contextLimit) else {
+            attachmentImportError = "No readable text files were found in “\(url.lastPathComponent)”."
+            return
+        }
+        attachmentImportError = nil
+        pendingFolderAttachments.append(attachment)
+    }
+
+    func removePendingFolderAttachment(_ id: UUID) {
+        pendingFolderAttachments.removeAll { $0.id == id }
+    }
+
     var canPasteImage: Bool {
         ChatImageAttachment.canReadImages(from: .general)
     }
@@ -1289,6 +1326,93 @@ final class ChatViewModel: ObservableObject {
         return attachments
     }
 
+    private static let folderSkipDirectories: Set<String> = [
+        ".git", "node_modules", ".build", "DerivedData", ".venv", "venv",
+        "dist", "build", ".next", "target", "Pods", ".idea", "__pycache__"
+    ]
+
+    private static let folderTextExtensions: Set<String> = [
+        "swift", "py", "js", "jsx", "ts", "tsx", "md", "markdown", "txt", "json",
+        "yaml", "yml", "toml", "sh", "bash", "zsh", "rb", "go", "rs", "java", "kt",
+        "c", "h", "cpp", "hpp", "cc", "cs", "php", "html", "css", "scss", "xml",
+        "sql", "gradle", "cmake", "ini", "cfg", "conf", "lua", "r", "pl", "scala"
+    ]
+
+    private static func folderAttachment(at root: URL, contextLimit: Int?) -> ChatFolderAttachment? {
+        let tokenBudget = max(1_024, (contextLimit ?? 8_192) / 2)
+        let characterBudget = tokenBudget * 4
+        let perFileMaximumBytes = 64 * 1_024
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .fileSizeKey]
+        let options: FileManager.DirectoryEnumerationOptions = [.skipsHiddenFiles]
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: Array(keys),
+            options: options
+        ) else {
+            return nil
+        }
+
+        var files: [URL] = []
+        for case let fileURL as URL in enumerator {
+            let values = try? fileURL.resourceValues(forKeys: keys)
+            if values?.isDirectory == true {
+                if folderSkipDirectories.contains(fileURL.lastPathComponent) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            guard values?.isRegularFile == true,
+                  let size = values?.fileSize,
+                  size <= perFileMaximumBytes,
+                  isEligibleFolderFile(fileURL)
+            else {
+                continue
+            }
+            files.append(fileURL)
+        }
+        files.sort { $0.path < $1.path }
+
+        let rootPrefix = root.path + "/"
+        var body = ""
+        var includedFileCount = 0
+        for fileURL in files where body.count < characterBudget {
+            guard let contents = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                continue
+            }
+            let relativePath = fileURL.path.hasPrefix(rootPrefix)
+                ? String(fileURL.path.dropFirst(rootPrefix.count))
+                : fileURL.lastPathComponent
+            let remaining = characterBudget - body.count
+            body += "--- \(relativePath) ---\n\(contents.prefix(remaining))\n\n"
+            includedFileCount += 1
+        }
+
+        guard includedFileCount > 0 else { return nil }
+        let text = "<folder name=\"\(root.lastPathComponent)\">\n\(body)</folder>"
+        return ChatFolderAttachment(
+            folderName: root.lastPathComponent,
+            includedFileCount: includedFileCount,
+            totalFileCount: files.count,
+            approxTokens: text.count / 4,
+            text: text
+        )
+    }
+
+    private static func isEligibleFolderFile(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        guard !name.hasPrefix(".env"),
+              ![".npmrc", ".netrc", ".pgpass", ".git-credentials", "credentials", "credentials.json", "secrets", "secrets.json", "secrets.yaml", "secrets.yml"].contains(name),
+              ![".pem", ".key", ".p12", ".pfx", ".keystore", ".crt", ".cer"].contains(where: name.hasSuffix),
+              !["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json", "cargo.lock", "poetry.lock", "gemfile.lock", "composer.lock", "podfile.lock", "package.resolved"].contains(name),
+              ![".min.js", ".min.css", ".map"].contains(where: name.hasSuffix)
+        else {
+            return false
+        }
+        return folderTextExtensions.contains(url.pathExtension.lowercased())
+            || ["readme", "makefile", "dockerfile"].contains(name)
+    }
+
     private var hasBlockingAttachmentValidation: Bool {
         pendingImageAttachments.contains { attachment in
             attachmentValidations[attachment.id]?.preventsSending ?? true
@@ -1356,6 +1480,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingFolderAttachments.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
