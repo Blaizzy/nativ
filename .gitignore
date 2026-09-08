@@ -4,6 +4,7 @@ build/
 dist/
 DerivedData/
 *.xcodeproj/xcuserdata/
+*.xcodeproj/xcshareddata/xcschemes/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.egg-info/
 __pycache__/
