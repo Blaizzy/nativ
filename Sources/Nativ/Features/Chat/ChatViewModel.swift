@@ -36,6 +36,12 @@ final class ChatTranscriptRevision {
 }
 
 @MainActor
+@Observable
+private final class ChatComposerDraft {
+    var text = ""
+}
+
+@MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
@@ -86,12 +92,19 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
-    @Published var draft = ""
+    // Only views that read draft text should update on a keystroke. Publishing it
+    // on the chat model also rebuilds the lazy transcript and its scroll layout.
+    private let composerDraft = ChatComposerDraft()
+    var draft: String {
+        get { composerDraft.text }
+        set { composerDraft.text = newValue }
+    }
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     let transcriptRevision = ChatTranscriptRevision()
+    @Published private(set) var transcriptSubmissionID: UUID?
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
     @Published private(set) var imageModelSelectionRequests:
@@ -192,6 +205,21 @@ final class ChatViewModel: ObservableObject {
             return false
         }
         return activeRequestSessionID == currentSessionID
+    }
+
+    var currentSessionLiveResponseMetrics: ChatResponseMetrics? {
+        guard isCurrentSessionSending,
+            let activeAssistantMessageID,
+            let message = messages.last(where: { $0.id == activeAssistantMessageID }),
+            message.role == .assistant,
+            message.isStreaming,
+            let metrics = message.responseMetrics,
+            metrics.generatedTokens.map({ $0 > 0 }) == true
+                || metrics.decodeTokensPerSecond.map({ $0 > 0 && $0.isFinite }) == true
+        else {
+            return nil
+        }
+        return metrics
     }
 
     var hasPendingRequests: Bool {
@@ -978,6 +1006,9 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsVision: Bool,
         appModel: NativModel
     ) {
+        // A send (including prompt regeneration) releases previously attached
+        // history. Streaming revisions must not repeatedly reset the reader.
+        transcriptSubmissionID = UUID()
         if let modelID = settings.languageModelID {
             appModel.clearModelLoadFailure(for: modelID)
         }

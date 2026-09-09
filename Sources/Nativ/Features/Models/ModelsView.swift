@@ -1732,20 +1732,20 @@ private struct ModelReadmePanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let markdown = store.markdown {
             ScrollView {
-                NativMarkdownRenderer(
-                    content: MathPreprocessor.preprocess(
-                        HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
-                            markdown,
-                            modelTitle: modelName(selection.repoID)
-                        )
-                    ),
-                    baseURL: readmeAssetBaseURL,
-                    font: .system(size: 15),
-                    fontSize: 15,
-                    imagePolicy: .document,
-                    fitsTablesToWidth: true
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 0) {
+                    MarkdownRenderer(
+                        content: MathPreprocessor.preprocess(
+                            HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
+                                markdown,
+                                modelTitle: modelName(selection.repoID)
+                            )
+                        ),
+                        baseURL: readmeAssetBaseURL,
+                        fontSize: 15,
+                        imagePolicy: .document
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 .padding(18)
             }
         } else {
