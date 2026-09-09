@@ -36,6 +36,12 @@ final class ChatTranscriptRevision {
 }
 
 @MainActor
+@Observable
+private final class ChatComposerDraft {
+    var text = ""
+}
+
+@MainActor
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
@@ -89,12 +95,19 @@ final class ChatViewModel: ObservableObject {
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
     @Published private(set) var pendingAnnotations: [ChatAnnotation] = []
     private(set) lazy var annotationActions = ChatAnnotationActions(chat: self)
-    @Published var draft = ""
+    // Only views that read draft text should update on a keystroke. Publishing it
+    // on the chat model also rebuilds the lazy transcript and its scroll layout.
+    private let composerDraft = ChatComposerDraft()
+    var draft: String {
+        get { composerDraft.text }
+        set { composerDraft.text = newValue }
+    }
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     let transcriptRevision = ChatTranscriptRevision()
+    @Published private(set) var transcriptSubmissionID: UUID?
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
     @Published private(set) var imageModelSelectionRequests:
@@ -195,6 +208,21 @@ final class ChatViewModel: ObservableObject {
             return false
         }
         return activeRequestSessionID == currentSessionID
+    }
+
+    var currentSessionLiveResponseMetrics: ChatResponseMetrics? {
+        guard isCurrentSessionSending,
+            let activeAssistantMessageID,
+            let message = messages.last(where: { $0.id == activeAssistantMessageID }),
+            message.role == .assistant,
+            message.isStreaming,
+            let metrics = message.responseMetrics,
+            metrics.generatedTokens.map({ $0 > 0 }) == true
+                || metrics.decodeTokensPerSecond.map({ $0 > 0 && $0.isFinite }) == true
+        else {
+            return nil
+        }
+        return metrics
     }
 
     var hasPendingRequests: Bool {
@@ -337,6 +365,38 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments = message.imageAttachments
         pendingAnnotations = message.annotations
         composerFocusToken += 1
+    }
+
+    /// Whether Up would recall a prompt right now, for the composer's hint.
+    var canRecallPreviousPrompt: Bool {
+        guard promptEditContext == nil,
+            draft.isEmpty,
+            pendingImageAttachments.isEmpty,
+            let messageID = latestUserMessageID
+        else {
+            return false
+        }
+        return canEditUserMessage(messageID)
+    }
+
+    /// Loads the most recent prompt back into the composer for editing, the way
+    /// a shell recalls the last command.
+    ///
+    /// Only from an empty composer. Recalling over a half-written message would
+    /// destroy work to save a click, and the snapshot that `beginEditingUserMessage`
+    /// takes is meant for restoring a draft, not for rescuing one this gesture
+    /// threw away.
+    ///
+    /// Returns whether it recalled, so the key handler knows whether to consume
+    /// the event or let the caret move.
+    @discardableResult
+    func recallPreviousPrompt() -> Bool {
+        guard canRecallPreviousPrompt, let messageID = latestUserMessageID else {
+            return false
+        }
+
+        beginEditingUserMessage(messageID)
+        return true
     }
 
     func cancelPromptEditing() {
@@ -980,6 +1040,9 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsVision: Bool,
         appModel: NativModel
     ) {
+        // A send (including prompt regeneration) releases previously attached
+        // history. Streaming revisions must not repeatedly reset the reader.
+        transcriptSubmissionID = UUID()
         if let modelID = settings.languageModelID {
             appModel.clearModelLoadFailure(for: modelID)
         }
