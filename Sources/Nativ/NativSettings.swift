@@ -466,6 +466,8 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    /// Set once the Up-arrow recall has been used, which retires its hint.
+    var hasUsedPromptRecall: Bool
     var chatFontScale: Double
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
@@ -524,6 +526,7 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
+        hasUsedPromptRecall: Bool = false,
         chatFontScale: Double = Self.defaultChatFontScale,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
@@ -581,6 +584,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.hasUsedPromptRecall = hasUsedPromptRecall
         self.chatFontScale = chatFontScale
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
@@ -641,6 +645,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case hasUsedPromptRecall
         case chatFontScale
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
@@ -789,6 +794,9 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize =
             try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize)
             ?? defaults.prefixCacheBlockSize
+        hasUsedPromptRecall =
+            try container.decodeIfPresent(Bool.self, forKey: .hasUsedPromptRecall)
+            ?? defaults.hasUsedPromptRecall
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
@@ -859,6 +867,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(hasUsedPromptRecall, forKey: .hasUsedPromptRecall)
         try container.encode(chatFontScale, forKey: .chatFontScale)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
