@@ -2,6 +2,7 @@ import AppKit
 import NativExtensionSDK
 import NativServerKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
@@ -289,8 +290,10 @@ private struct ExtensionsSectionView: View {
 
     private func installFromFolder() {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [UTType(exportedAs: "com.nativ.extension-package", conformingTo: .package)]
         panel.allowsMultipleSelection = false
         panel.prompt = "Install"
         panel.message = "Choose a .nativextension package."
