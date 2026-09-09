@@ -83,8 +83,6 @@ final class SystemAudioMeetingRecorder: NSObject {
         configuration.captureMicrophone = true
         configuration.microphoneCaptureDeviceID = microphoneDeviceID
         configuration.excludesCurrentProcessAudio = true
-        configuration.sampleRate = 48_000
-        configuration.channelCount = 2
 
         let stream = SCStream(
             filter: filter,
@@ -226,6 +224,7 @@ final class SystemAudioMeetingRecorder: NSObject {
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = parameters
 
+        // The offline mix converts the captured tracks to a shared WAV format.
         let outputSettings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: 48_000,
@@ -650,6 +649,7 @@ private final class MeetingAudioWriter: @unchecked Sendable {
         channels: Int,
         bitRate: Int
     ) -> [String: Any] {
+        // AVAssetWriter converts each capture stream to these AAC file settings.
         [
             AVFormatIDKey: kAudioFormatMPEG4AAC,
             AVSampleRateKey: 48_000,
