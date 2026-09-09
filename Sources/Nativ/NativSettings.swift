@@ -436,6 +436,7 @@ struct NativSettings: Codable, Equatable {
     var huggingFaceToken: String?
     var serverHost: String
     var serverPort: Int
+    var cachedModelDiscoveryEnabled: Bool
     var maxTokens: Int
     var maxKVSize: Int
     var systemPrompt: String
@@ -493,6 +494,7 @@ struct NativSettings: Codable, Equatable {
         huggingFaceToken: String? = nil,
         serverHost: String = Self.defaultServerHost,
         serverPort: Int = 8080,
+        cachedModelDiscoveryEnabled: Bool = false,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         systemPrompt: String = "",
@@ -549,6 +551,7 @@ struct NativSettings: Codable, Equatable {
         self.huggingFaceToken = huggingFaceToken
         self.serverHost = serverHost
         self.serverPort = serverPort
+        self.cachedModelDiscoveryEnabled = cachedModelDiscoveryEnabled
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.systemPrompt = systemPrompt
@@ -607,6 +610,7 @@ struct NativSettings: Codable, Equatable {
         case huggingFaceToken
         case serverHost
         case serverPort
+        case cachedModelDiscoveryEnabled
         case selectedModelID
         case maxTokens
         case maxKVSize
@@ -708,6 +712,9 @@ struct NativSettings: Codable, Equatable {
             try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
         serverPort =
             try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
+        cachedModelDiscoveryEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .cachedModelDiscoveryEnabled)
+            ?? defaults.cachedModelDiscoveryEnabled
         maxTokens =
             try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize =
@@ -822,6 +829,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
+        try container.encode(cachedModelDiscoveryEnabled, forKey: .cachedModelDiscoveryEnabled)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(systemPrompt, forKey: .systemPrompt)
@@ -1127,6 +1135,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.huggingFaceToken == rhs.huggingFaceToken
             && lhs.serverHost == rhs.serverHost
             && lhs.serverPort == rhs.serverPort
+            && lhs.cachedModelDiscoveryEnabled == rhs.cachedModelDiscoveryEnabled
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
             && lhs.kvQuantizationEnabled == rhs.kvQuantizationEnabled
@@ -1155,7 +1164,8 @@ struct NativSettings: Codable, Equatable {
     var launchEnvironment: [String: String] {
         let settings = normalized()
         var environment = [
-            "HF_HUB_CACHE": settings.expandedModelSearchPath
+            "HF_HUB_CACHE": settings.expandedModelSearchPath,
+            "MLX_VLM_MODEL_DISCOVERY": settings.cachedModelDiscoveryEnabled ? "hf-cache" : "served"
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
