@@ -19,7 +19,8 @@ final class IntegrationServicesTests: XCTestCase {
         .cursor,
         .jetbrains,
         .buzz,
-        .openInterpreter
+        .openInterpreter,
+        .dsh
     ]
 
     private var temporaryRoot: URL!
