@@ -283,8 +283,7 @@ struct ChatComposer: View {
                 if !viewModel.pendingAnnotations.isEmpty {
                     ChatAnnotationCards(
                         annotations: viewModel.pendingAnnotations,
-                        onRemove: viewModel.removeAnnotation,
-                        onNavigate: { viewModel.scrollTargetMessageID = $0 }
+                        allowsRemoval: true
                     )
                     .padding(12)
                 }

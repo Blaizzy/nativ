@@ -111,12 +111,8 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
-private struct ChatAnnotationActionKey: EnvironmentKey {
-    static let defaultValue: @MainActor (ChatAnnotation) -> Void = { _ in }
-}
-
-private struct ChatAnnotationNavigationKey: EnvironmentKey {
-    static let defaultValue: @MainActor (UUID) -> Void = { _ in }
+private struct ChatAnnotationActionsKey: EnvironmentKey {
+    static let defaultValue: ChatAnnotationActions? = nil
 }
 
 private struct ChatAnnotationCapacityKey: EnvironmentKey {
@@ -124,26 +120,21 @@ private struct ChatAnnotationCapacityKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
-    var navigateToChatAnnotation: @MainActor (UUID) -> Void {
-        get { self[ChatAnnotationNavigationKey.self] }
-        set { self[ChatAnnotationNavigationKey.self] = newValue }
+    var chatAnnotationActions: ChatAnnotationActions? {
+        get { self[ChatAnnotationActionsKey.self] }
+        set { self[ChatAnnotationActionsKey.self] = newValue }
     }
 
     var canAddChatAnnotation: Bool {
         get { self[ChatAnnotationCapacityKey.self] }
         set { self[ChatAnnotationCapacityKey.self] = newValue }
     }
-
-    var chatAnnotationAction: @MainActor (ChatAnnotation) -> Void {
-        get { self[ChatAnnotationActionKey.self] }
-        set { self[ChatAnnotationActionKey.self] = newValue }
-    }
 }
 
 struct ChatAnnotationCards: View {
     let annotations: [ChatAnnotation]
-    var onRemove: ((UUID) -> Void)? = nil
-    var onNavigate: ((UUID) -> Void)? = nil
+    var allowsRemoval = false
+    @Environment(\.chatAnnotationActions) private var actions
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -161,16 +152,16 @@ struct ChatAnnotationCards: View {
                             .lineLimit(3)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    if let onNavigate {
+                    if let actions {
                         Button("Go to original message", systemImage: "arrow.up.left") {
-                            onNavigate(annotation.sourceMessageID)
+                            actions.navigate(to: annotation.sourceMessageID)
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.plain)
                         .help("Go to original message")
                     }
-                    if let onRemove {
-                        Button("Remove quote", systemImage: "xmark") { onRemove(annotation.id) }
+                    if allowsRemoval, let actions {
+                        Button("Remove quote", systemImage: "xmark") { actions.remove(annotation.id) }
                             .labelStyle(.iconOnly)
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
@@ -188,12 +179,16 @@ struct ChatAnnotationCards: View {
 
 struct ChatSelectionReplyModifier: ViewModifier {
     let message: ChatTranscriptMessage
-    @Environment(\.chatAnnotationAction) private var onAdd
+    @Environment(\.chatAnnotationActions) private var actions
     @Environment(\.canAddChatAnnotation) private var canAdd
 
     func body(content: Content) -> some View {
         content.background {
-            ChatSelectionObserver(message: message, enabled: !message.isStreaming && canAdd, onAdd: onAdd)
+            ChatSelectionObserver(
+                message: message,
+                enabled: !message.isStreaming && canAdd && actions != nil,
+                actions: actions
+            )
         }
     }
 }
@@ -201,23 +196,24 @@ struct ChatSelectionReplyModifier: ViewModifier {
 private struct ChatSelectionObserver: NSViewRepresentable {
     let message: ChatTranscriptMessage
     let enabled: Bool
-    let onAdd: @MainActor (ChatAnnotation) -> Void
+    let actions: ChatAnnotationActions?
 
     func makeNSView(context: Context) -> Probe { Probe() }
     func updateNSView(_ view: Probe, context: Context) {
-        if view.message?.id != message.id || view.message?.content != message.content || !enabled {
+        if view.message?.id != message.id || view.message?.content != message.content
+            || view.actions != actions || !enabled {
             view.dismiss()
         }
         view.message = message
         view.enabled = enabled
-        view.onAdd = onAdd
+        view.actions = actions
     }
     static func dismantleNSView(_ view: Probe, coordinator: ()) { view.stop() }
 
     final class Probe: NSView {
         var message: ChatTranscriptMessage?
         var enabled = false
-        var onAdd: (@MainActor (ChatAnnotation) -> Void)?
+        var actions: ChatAnnotationActions?
         private var monitor: Any?
         private var panel: NSPanel?
         private var annotation: ChatAnnotation?
@@ -366,7 +362,7 @@ private struct ChatSelectionObserver: NSViewRepresentable {
             guard let annotation else { return }
             dismiss()
             selectionPoint = nil
-            onAdd?(annotation)
+            actions?.add(annotation)
         }
     }
 }

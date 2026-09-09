@@ -184,6 +184,8 @@ private struct ChatTranscriptView: View {
             }
         }
         .background(Color.nativMainContentBackground)
+        .environment(\.chatAnnotationActions, chat.annotationActions)
+        .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
     }
 
     private func transcript(
@@ -262,9 +264,6 @@ private struct ChatTranscriptView: View {
                 latestUserMessageID: latestUserMessageID,
                 forkableAssistantResponseIDs: forkableAssistantResponseIDs
             )
-            .environment(\.chatAnnotationAction, chat.addAnnotation)
-            .environment(\.navigateToChatAnnotation, { chat.scrollTargetMessageID = $0 })
-            .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
             .id(item.id)
         case .agentTurn(let turn):
             ChatAgentTurnRow(
@@ -281,9 +280,6 @@ private struct ChatTranscriptView: View {
                 onExploreImageModels: onExploreImageModels,
                 onPreviewAttachment: onPreviewAttachment
             )
-            .environment(\.chatAnnotationAction, chat.addAnnotation)
-            .environment(\.navigateToChatAnnotation, { chat.scrollTargetMessageID = $0 })
-            .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
             .id(item.id)
         }
     }
@@ -634,7 +630,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     var displaysModelTitle = true
     var displaysThinking = true
-    @Environment(\.navigateToChatAnnotation) private var navigateToAnnotation
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -690,7 +685,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 }
 
                 if !message.annotations.isEmpty {
-                    ChatAnnotationCards(annotations: message.annotations, onNavigate: navigateToAnnotation)
+                    ChatAnnotationCards(annotations: message.annotations)
                 }
                 if showsTextContent {
                     textBubble

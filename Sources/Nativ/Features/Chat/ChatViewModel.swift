@@ -88,6 +88,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
     @Published private(set) var pendingAnnotations: [ChatAnnotation] = []
+    private(set) lazy var annotationActions = ChatAnnotationActions(chat: self)
     @Published var draft = ""
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0

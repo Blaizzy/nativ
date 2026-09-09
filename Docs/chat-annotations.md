@@ -14,6 +14,8 @@ Quotes are snapshots that retain the text selected when they were added. Histori
 
 ## Verification
 
+Quote actions use one identity-comparable handler per chat, passed through the environment above the transcript and composer. The handler holds the chat weakly and does not subscribe message views to chat-wide updates. `ChatAnnotationActionsTests` checks ownership and renders an environment consumer to verify that unrelated chat updates leave it unchanged while capacity and owner changes reach it.
+
 `ChatAnnotationTests` covers native range disambiguation, rendered selections across bold text and links, repeated formatted passages, Unicode, quote-only prompt serialization, immutable snapshots, legacy decoding, discarding previously saved surrounding excerpts, archive ID remapping, and rejection of duplicate message IDs. Run with the existing archive, conversation-branch, and view-model test suites.
 
 `ChatTextSelectionReaderTests` exercises native text selection and guarded instance-level accessibility lookups, including unsupported objects, proxies without formal protocol conformance, empty windows, selection bounds, and message selection while an empty composer retains keyboard focus. It also verifies Services selection export without modifying the general clipboard. The selection bridge never calls accessibility selectors on the `NSApplication` class.
