@@ -31,6 +31,63 @@ final class ChatAnnotationTests: XCTestCase {
             elementRange: NSRange(location: NSNotFound, length: 0)))
     }
 
+    func testRenderedEntitiesAndEscapesMapToSourceAndKeepDisplayedQuote() throws {
+        let cases: [(source: String, displayed: String, text: String, rawSelection: String)] = [
+            ("Fish &amp; chips", "Fish & chips", "Fish & chips", "Fish &amp; chips"),
+            (#"Use \*literal\* stars"#, "Use *literal* stars", "*literal*", #"\*literal\*"#),
+            ("🌙 Fish &amp; chips", "🌙 Fish & chips", "chips", "chips"),
+            ("A &#x1F319; and &#127769; moon", "A 🌙 and 🌙 moon", "🌙 and 🌙", "&#x1F319; and &#127769;"),
+            ("**Fish &amp; chips** and [tea &lt; coffee](https://example.com)",
+             "Fish & chips and tea < coffee", "chips and tea <", "chips** and [tea &lt;"),
+            (#"Use \&amp; and &amp;amp;"#, "Use &amp; and &amp;", "&amp; and &amp;", #"\&amp; and &amp;amp;"#),
+            ("A &NotEqualTilde; B", "A ≂̸ B", "≂̸", "&NotEqualTilde;"),
+            ("A &Tab; B", "A \t B", "A \t B", "A &Tab; B"),
+            ("Keep &unknown; intact", "Keep &unknown; intact", "&unknown;", "&unknown;")
+        ]
+        for item in cases {
+            let message = ChatTranscriptMessage(role: .assistant, content: item.source)
+            let range = try XCTUnwrap(ChatAnnotation.selectionRange(
+                text: item.text, in: item.source, elementText: item.displayed,
+                elementRange: (item.displayed as NSString).range(of: item.text), renderedMarkdown: true
+            ), item.source)
+            XCTAssertEqual(range, (item.source as NSString).range(of: item.rawSelection), item.source)
+            let quote = try XCTUnwrap(ChatAnnotation.capture(message: message, range: range, displayedText: item.text))
+            XCTAssertEqual(quote.quote, item.text, item.source)
+        }
+    }
+
+    func testRenderedEntitiesDisambiguateRepeatedPassagesAndAdjacentBoundaries() throws {
+        let source = "First &amp; then &amp;&lt; end"
+        let displayed = "First & then &< end"
+        for text in ["&", "<", "&<", " end"] {
+            let range = try XCTUnwrap(ChatAnnotation.selectionRange(
+                text: text, in: source, elementText: displayed,
+                elementRange: (displayed as NSString).range(of: text, options: .backwards), renderedMarkdown: true
+            ))
+            let raw = text.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+            XCTAssertEqual(range, (source as NSString).range(of: raw, options: .backwards), text)
+        }
+        XCTAssertNil(ChatAnnotation.selectionRange(text: "&", in: source, elementText: nil,
+            elementRange: NSRange(location: NSNotFound, length: 0), renderedMarkdown: true))
+    }
+
+    func testCodeSelectionsKeepLiteralEntitiesAndEscapes() throws {
+        let text = #"&amp; and \*stars\*"#
+        for source in ["\(text) and `\(text)` here", "\(text)\n\n```text\n\(text)\n```", "\(text)\n\n    \(text)\n"] {
+            let range = try XCTUnwrap(ChatAnnotation.selectionRange(
+                text: text, in: source, elementText: text,
+                elementRange: NSRange(location: 0, length: (text as NSString).length), renderedMarkdown: true
+            ))
+            XCTAssertEqual(range, (source as NSString).range(of: text, options: .backwards), source)
+        }
+    }
+
+    func testOversizedSelectionsAreRejectedBeforeMapping() {
+        let text = String(repeating: "x", count: ChatAnnotation.maximumSelectionCharacters + 1)
+        XCTAssertNil(ChatAnnotation.selectionRange(text: text, in: text, elementText: text,
+            elementRange: NSRange(location: 0, length: text.utf16.count), renderedMarkdown: true))
+    }
+
     func testRepeatedUnicodePassageUsesExactRange() throws {
         let message = ChatTranscriptMessage(role: .user, content: "🌙 first yes. Second yes. End.")
         let range = (message.content as NSString).range(of: "yes", options: .backwards)
