@@ -252,22 +252,24 @@ struct ChatComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = context.date.timeIntervalSince(sendingStartedAt)
-                    Text(workingStatus(elapsed: elapsed))
+            Group {
+                if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
+                    ChatGenerationStatusRow(
+                        startedAt: sendingStartedAt,
+                        metrics: viewModel.currentSessionLiveResponseMetrics
+                    )
+                    .equatable()
+                    .padding(.horizontal, textInset.leading + 4)
+                    .transition(.opacity)
+                } else if let unavailableReason {
+                    Text(unavailableReason)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .padding(.leading, textInset.leading + 4)
                 }
-                .padding(.leading, textInset.leading + 4)
-            } else if let unavailableReason {
-                Text(unavailableReason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.leading, textInset.leading + 4)
             }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isCurrentSessionSending)
 
             if !viewModel.currentSessionQueuedPrompts.isEmpty {
                 ChatQueueTray(
@@ -1149,10 +1151,6 @@ struct ChatComposer: View {
         viewModel.isCurrentSessionSending && !canSend
     }
 
-    private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
-    }
-
     private func send() {
         guard effectiveCanSend else { return }
         onSend(
@@ -1174,6 +1172,92 @@ struct ChatComposer: View {
 
     private var editorHeight: CGFloat {
         min(max(editorContentHeight, editorMinimumHeight), editorMaximumHeight)
+    }
+}
+
+private struct ChatGenerationStatusRow: View, Equatable {
+    let startedAt: Date
+    let metrics: ChatResponseMetrics?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let metrics {
+                ChatLiveDecodeMetricsBadge(metrics: metrics)
+                    .equatable()
+                    .layoutPriority(1)
+                    .transition(.opacity)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let elapsed = context.date.timeIntervalSince(startedAt)
+                Text("Working for \(NativFormatting.elapsedDuration(elapsed))…")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 26)
+        // Animate presence changes, not the frequent token and speed updates.
+        .animation(.easeInOut(duration: 0.2), value: metrics != nil)
+    }
+}
+
+private struct ChatLiveDecodeMetricsBadge: View, Equatable {
+    let metrics: ChatResponseMetrics
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 6, height: 6)
+
+            Text("Decode")
+                .foregroundStyle(.secondary)
+
+            if let generatedTokens = metrics.generatedTokens {
+                Text("\(NativFormatting.integer(generatedTokens)) tokens")
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+
+            if metrics.generatedTokens != nil,
+                metrics.decodeTokensPerSecond != nil
+            {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let decodeTokensPerSecond = metrics.decodeTokensPerSecond {
+                Text(NativFormatting.rate(decodeTokensPerSecond))
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.1))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Decode metrics")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        [
+            metrics.generatedTokens.map { "\($0) generated tokens" },
+            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
     }
 }
 

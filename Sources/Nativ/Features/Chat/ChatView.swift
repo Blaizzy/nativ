@@ -193,36 +193,38 @@ private struct ChatTranscriptView: View {
     ) -> some View {
         ChatTranscriptScroller(
             currentSessionID: chat.currentSessionID,
-            isStreaming: chat.isCurrentSessionSending,
             revision: chat.transcriptRevision,
+            submissionID: chat.transcriptSubmissionID,
             scrollTargetMessageID: $chat.scrollTargetMessageID,
-            fingerprint: transcriptFingerprint(items),
-            project: project,
-            projectRootIsAvailable: projectRootIsAvailable,
-            projectToolsEnabled: model.settings.projectToolsEnabled
-        ) {
-            VStack(alignment: .leading, spacing: 12) {
-                if items.isEmpty {
-                    if chat.messages.isEmpty {
-                        ChatEmptyTranscriptView(
-                            isRunning: model.isRunning,
-                            selectedModelID: selectedModelID,
-                            modelLoadingProgress: model.isModelLoading
-                                ? model.modelLoadingProgress : nil
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 120)
-                    }
-                } else {
-                    ForEach(items) { item in
-                        transcriptItemRow(
-                            item,
-                            latestUserMessageID: latestUserMessageID,
-                            forkableAssistantResponseIDs: forkableAssistantResponseIDs
-                        )
-                    }
+            itemIDs: items.map(\.id),
+            topInset: {
+                if let project {
+                    ChatProjectContextBanner(
+                        project: project,
+                        rootIsAvailable: projectRootIsAvailable,
+                        toolsEnabled: model.settings.projectToolsEnabled
+                    )
                 }
-
+            }
+        ) { attachedRange in
+            ChatTranscriptStack(items: Array(items[attachedRange])) {
+                if chat.messages.isEmpty {
+                    ChatEmptyTranscriptView(
+                        isRunning: model.isRunning,
+                        selectedModelID: selectedModelID,
+                        modelLoadingProgress: model.isModelLoading
+                            ? model.modelLoadingProgress : nil
+                    )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 120)
+                }
+            } row: { item in
+                transcriptItemRow(
+                    item,
+                    latestUserMessageID: latestUserMessageID,
+                    forkableAssistantResponseIDs: forkableAssistantResponseIDs
+                )
+            } footer: {
                 // Keep the overlay clearance inside the scroll target so pinning lands
                 // above the composer rather than aligning hidden content behind it.
                 Color.clear
@@ -245,7 +247,6 @@ private struct ChatTranscriptView: View {
                     + ChatTranscriptLayout.messageHorizontalInset
             )
             .padding(.top, 18)
-            .animation(.easeOut(duration: 0.25), value: items.count)
         }
     }
 
@@ -362,15 +363,6 @@ private struct ChatTranscriptView: View {
         )
     }
 
-    private func transcriptFingerprint(
-        _ items: [ChatTranscriptItem]
-    ) -> ChatTranscriptFingerprint {
-        ChatTranscriptFingerprint(
-            messageCount: items.count,
-            lastMessageID: items.last?.id
-        )
-    }
-
     private func userPromptEditingUnavailableReason(
         for message: ChatTranscriptMessage
     ) -> String? {
@@ -393,139 +385,6 @@ private struct ChatTranscriptView: View {
             return validationError
         }
         return nil
-    }
-}
-
-private struct ChatTranscriptScroller<Content: View>: View {
-    let currentSessionID: UUID?
-    let isStreaming: Bool
-    let revision: ChatTranscriptRevision
-    @Binding var scrollTargetMessageID: UUID?
-    let fingerprint: ChatTranscriptFingerprint
-    let project: ChatProject?
-    let projectRootIsAvailable: Bool
-    let projectToolsEnabled: Bool
-    let content: Content
-    @State private var atBottom = true
-    @State private var userPausedAutoScroll = false
-    @State private var userIsScrolling = false
-
-    init(
-        currentSessionID: UUID?,
-        isStreaming: Bool,
-        revision: ChatTranscriptRevision,
-        scrollTargetMessageID: Binding<UUID?>,
-        fingerprint: ChatTranscriptFingerprint,
-        project: ChatProject?,
-        projectRootIsAvailable: Bool,
-        projectToolsEnabled: Bool,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.currentSessionID = currentSessionID
-        self.isStreaming = isStreaming
-        self.revision = revision
-        _scrollTargetMessageID = scrollTargetMessageID
-        self.fingerprint = fingerprint
-        self.project = project
-        self.projectRootIsAvailable = projectRootIsAvailable
-        self.projectToolsEnabled = projectToolsEnabled
-        self.content = content()
-    }
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                content
-            }
-            .defaultScrollAnchor(.bottom)
-            .id(currentSessionID)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if let project {
-                    ChatProjectContextBanner(
-                        project: project,
-                        rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: projectToolsEnabled
-                    )
-                }
-            }
-            .onScrollGeometryChange(for: ChatTranscriptPinState.self) { geometry in
-                ChatTranscriptPinState(
-                    atBottom: isNearTranscriptBottom(geometry),
-                    contentHeight: geometry.contentSize.height
-                )
-            } action: { oldState, newState in
-                atBottom = newState.atBottom
-                if newState.atBottom {
-                    userPausedAutoScroll = false
-                } else if userIsScrolling {
-                    userPausedAutoScroll = true
-                }
-
-                if oldState.contentHeight != newState.contentHeight,
-                    oldState.atBottom || newState.atBottom
-                        || (isStreaming && !userPausedAutoScroll)
-                {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
-            }
-            .onScrollPhaseChange { _, newPhase, context in
-                let isUserPhase =
-                    newPhase == .tracking
-                    || newPhase == .interacting
-                    || newPhase == .decelerating
-                if isUserPhase {
-                    userIsScrolling = true
-                    if !isNearTranscriptBottom(context.geometry) {
-                        userPausedAutoScroll = true
-                    }
-                } else if newPhase == .idle {
-                    if userIsScrolling {
-                        userPausedAutoScroll = !isNearTranscriptBottom(context.geometry)
-                    }
-                    userIsScrolling = false
-                }
-            }
-            .onAppear {
-                atBottom = true
-                userPausedAutoScroll = false
-                proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-            }
-            .onChange(of: fingerprint) { _, _ in
-                if atBottom || (isStreaming && !userPausedAutoScroll) {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
-            }
-            .onChange(of: scrollTargetMessageID) { _, target in
-                guard let target else {
-                    return
-                }
-                userPausedAutoScroll = true
-                Task { @MainActor in
-                    await Task.yield()
-                    proxy.scrollTo(target, anchor: .center)
-                    scrollTargetMessageID = nil
-                }
-            }
-            .background {
-                ChatTranscriptScrollPinner(
-                    revision: revision,
-                    proxy: proxy,
-                    atBottom: atBottom,
-                    userPausedAutoScroll: userPausedAutoScroll,
-                    isStreaming: isStreaming
-                )
-            }
-        }
-        .onChange(of: currentSessionID) { _, _ in
-            atBottom = true
-            userPausedAutoScroll = false
-            userIsScrolling = false
-        }
-    }
-
-    private func isNearTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
-        geometry.contentOffset.y + geometry.containerSize.height
-            >= geometry.contentSize.height - 60
     }
 }
 
@@ -573,38 +432,6 @@ private struct ChatComposerContainer: View {
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
-    }
-}
-
-private enum ChatTranscriptScrollTarget {
-    static let bottom = "chat-transcript-bottom"
-}
-
-private struct ChatTranscriptFingerprint: Equatable {
-    let messageCount: Int
-    let lastMessageID: UUID?
-}
-
-private struct ChatTranscriptPinState: Equatable {
-    let atBottom: Bool
-    let contentHeight: CGFloat
-}
-
-private struct ChatTranscriptScrollPinner: View {
-    let revision: ChatTranscriptRevision
-    let proxy: ScrollViewProxy
-    let atBottom: Bool
-    let userPausedAutoScroll: Bool
-    let isStreaming: Bool
-
-    var body: some View {
-        Color.clear
-            .accessibilityHidden(true)
-            .onChange(of: revision.value) { _, _ in
-                if atBottom || (isStreaming && !userPausedAutoScroll) {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
-            }
     }
 }
 
@@ -687,10 +514,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 }
             }
 
-            if let liveResponseMetrics {
-                ChatLiveDecodeMetricsBadge(metrics: liveResponseMetrics)
-                    .equatable()
-            } else if let responseMetrics {
+            if let responseMetrics {
                 ChatResponseMetricsRow(metrics: responseMetrics)
             }
 
@@ -733,6 +557,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                 }
+                // Align the visible icons with the response text, keeping their full hit areas.
+                .padding(.leading, message.role == .assistant ? -10 : 0)
                 .opacity(isHoveringMessage || didCopyMessage || isEditingUserMessage ? 1 : 0)
                 .accessibilityHidden(!isHoveringMessage && !didCopyMessage && !isEditingUserMessage)
             }
@@ -888,21 +714,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             !message.isStreaming,
             let responseMetrics = message.responseMetrics,
             responseMetrics.hasVisibleValues
-        else {
-            return nil
-        }
-
-        return responseMetrics
-    }
-
-    private var liveResponseMetrics: ChatResponseMetrics? {
-        guard message.role == .assistant,
-            message.isStreaming,
-            let responseMetrics = message.responseMetrics,
-            responseMetrics.generatedTokens.map({ $0 > 0 }) == true
-                || responseMetrics.decodeTokensPerSecond.map({
-                    $0 > 0 && $0.isFinite
-                }) == true
         else {
             return nil
         }
@@ -1650,63 +1461,6 @@ private struct ChatImageModelOptionRow: View {
     }
 }
 
-private struct ChatLiveDecodeMetricsBadge: View, Equatable {
-    let metrics: ChatResponseMetrics
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
-
-            Text("Decode")
-                .foregroundStyle(.secondary)
-
-            if let generatedTokens = metrics.generatedTokens {
-                Text("\(NativFormatting.integer(generatedTokens)) tokens")
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-            }
-
-            if metrics.generatedTokens != nil,
-                metrics.decodeTokensPerSecond != nil
-            {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-            }
-
-            if let decodeTokensPerSecond = metrics.decodeTokensPerSecond {
-                Text(NativFormatting.rate(decodeTokensPerSecond))
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-            }
-        }
-        .font(.caption)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.accentColor.opacity(0.1))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Decode metrics")
-        .accessibilityValue(accessibilityValue)
-    }
-
-    private var accessibilityValue: String {
-        [
-            metrics.generatedTokens.map { "\($0) generated tokens" },
-            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
-        ]
-        .compactMap { $0 }
-        .joined(separator: ", ")
-    }
-}
-
 private struct ChatCopyMessageButton: View {
     let didCopy: Bool
     let messageKind: String
@@ -1952,6 +1706,8 @@ private struct ChatResponseMetricsRow: View {
             }
         }
         .padding(.top, 2)
+        // Align the labels with the response text; the card border hangs into the margin.
+        .padding(.leading, -ChatResponseMetricPill.horizontalPadding)
     }
 
     @ViewBuilder
@@ -1979,6 +1735,8 @@ private struct ChatResponseMetricsRow: View {
 }
 
 private struct ChatResponseMetricPill: View {
+    static let horizontalPadding: CGFloat = 9
+
     let label: String
     let value: String
 
@@ -1992,7 +1750,7 @@ private struct ChatResponseMetricPill: View {
                 .monospacedDigit()
         }
         .font(.caption)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, Self.horizontalPadding)
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)

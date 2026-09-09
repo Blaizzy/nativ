@@ -15,9 +15,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
-  MarkdownUI:
-    url: https://github.com/gonzalezreal/swift-markdown-ui
-    exactVersion: 2.4.1
+  SwiftCMark:
+    url: https://github.com/swiftlang/swift-cmark
+    exactVersion: 0.8.0
   Highlightr:
     url: https://github.com/raspu/Highlightr
     exactVersion: 2.3.0
@@ -122,8 +122,10 @@ targets:
         embed: true
       - package: Sparkle
         product: Sparkle
-      - package: MarkdownUI
-        product: MarkdownUI
+      - package: SwiftCMark
+        product: cmark-gfm
+      - package: SwiftCMark
+        product: cmark-gfm-extensions
       - package: Highlightr
         product: Highlightr
       - package: SwaTex
@@ -302,8 +304,10 @@ targets:
       - target: NativExtensionSDK
       - package: ZIPFoundation
         product: ZIPFoundation
-      - package: MarkdownUI
-        product: MarkdownUI
+      - package: SwiftCMark
+        product: cmark-gfm
+      - package: SwiftCMark
+        product: cmark-gfm-extensions
       - package: Highlightr
         product: Highlightr
       - package: SwaTex

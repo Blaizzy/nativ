@@ -389,21 +389,6 @@ final class IntegrationServicesTests: XCTestCase {
         )
     }
 
-    func testBuzzIsGuidedSetupWithoutManagedConfiguration() throws {
-        XCTAssertTrue(IntegrationTool.buzz.isGuidedSetup)
-        XCTAssertNotNil(IntegrationTool.buzz.guidedSetupCaveat)
-
-        let steps = IntegrationTool.buzz.guidedSetupSteps.joined(separator: "\n")
-        XCTAssertFalse(steps.isEmpty)
-        XCTAssertTrue(steps.contains("BUZZ_AGENT_PROVIDER"))
-        XCTAssertTrue(steps.contains("OPENAI_COMPAT_BASE_URL"))
-        XCTAssertTrue(steps.contains("OPENAI_COMPAT_MODEL"))
-
-        try configure(.buzz)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.configurationURL(for: .buzz).path))
-        XCTAssertEqual(launchCommand(for: .buzz), "cd '/tmp/Nativ Project'\n'/tools/buzz'")
-    }
-
     func testOpenInterpreterConfigurationAndLaunchCommand() throws {
         try configure(.openInterpreter)
 

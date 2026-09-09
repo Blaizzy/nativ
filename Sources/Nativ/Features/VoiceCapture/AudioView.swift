@@ -3552,9 +3552,8 @@ private struct AudioCaptureRecordRow: View {
                     )
 
                     ScrollView {
-                        NativMarkdownRenderer(
+                        MarkdownRenderer(
                             content: MathPreprocessor.preprocess(summary),
-                            font: .callout,
                             fontSize: NSFont.preferredFont(forTextStyle: .callout).pointSize
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
