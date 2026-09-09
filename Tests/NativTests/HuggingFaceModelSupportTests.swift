@@ -16,17 +16,99 @@ final class HuggingFaceModelSupportTests: XCTestCase {
         }
     }
 
-    func testSpeculatorModelTypeCanEstablishSupport() throws {
+    func testSpeculatorModelTypeCanEstablishSupportWhenPrimaryTypeIsAbsentOrEmpty() throws {
+        let configurations: [[String: Any]] = [
+            ["speculators_model_type": "drafter-loader"],
+            ["model_type": "", "speculators_model_type": "drafter-loader"],
+            ["model_type": NSNull(), "speculators_model_type": "drafter-loader"],
+        ]
+
+        for payload in configurations {
+            let result = try makeClassifier().classify(
+                configuration: configuration(payload),
+                pipelineTag: "text-generation",
+                tags: ["draft-model"]
+            )
+
+            XCTAssertEqual(result, .supported)
+        }
+    }
+
+    func testUnsupportedPrimaryModelTypeTakesRuntimePrecedence() throws {
         let result = try makeClassifier().classify(
             configuration: configuration([
                 "model_type": "unrecognized-wrapper",
                 "speculators_model_type": "drafter-loader",
             ]),
             pipelineTag: "text-generation",
-            tags: ["draft-model"]
+            tags: []
+        )
+
+        XCTAssertEqual(result, .unsupported)
+    }
+
+    func testSupportedPrimaryModelTypeTakesRuntimePrecedence() throws {
+        let result = try makeClassifier().classify(
+            configuration: configuration([
+                "model_type": "language-loader",
+                "speculators_model_type": "unrecognized-drafter",
+            ]),
+            pipelineTag: "text-generation",
+            tags: []
         )
 
         XCTAssertEqual(result, .supported)
+    }
+
+    func testMalformedArchitecturesRemainUnknown() throws {
+        let result = try makeClassifier().classify(
+            configuration: configuration([
+                "model_type": "not-in-the-bundled-runtime",
+                "architectures": "BoundaryExtractor",
+            ]),
+            pipelineTag: "text-generation",
+            tags: []
+        )
+
+        XCTAssertEqual(result, .unknown)
+    }
+
+    func testMalformedLoaderMetadataDoesNotEstablishSupport() throws {
+        let configurations: [[String: Any]] = [
+            ["model_type": 42, "speculators_model_type": "drafter-loader"],
+            ["model_type": "language-loader", "architectures": ["BoundaryExtractor", 42]],
+            ["model_type": "language-loader", "architectures": ["name": "BoundaryExtractor"]],
+        ]
+
+        for payload in configurations {
+            XCTAssertEqual(
+                try makeClassifier().classify(
+                    configuration: configuration(payload),
+                    pipelineTag: "text-generation",
+                    tags: []
+                ),
+                .unknown
+            )
+        }
+    }
+
+    func testAbsentNullAndEmptyArchitecturesDoNotHideUnsupportedModelType() throws {
+        let configurations: [[String: Any]] = [
+            ["model_type": "unrecognized"],
+            ["model_type": "unrecognized", "architectures": NSNull()],
+            ["model_type": "unrecognized", "architectures": [String]()],
+        ]
+
+        for payload in configurations {
+            XCTAssertEqual(
+                try makeClassifier().classify(
+                    configuration: configuration(payload),
+                    pipelineTag: "text-generation",
+                    tags: []
+                ),
+                .unsupported
+            )
+        }
     }
 
     func testUnknownStandardModelWithExplicitTaskIsUnsupported() throws {

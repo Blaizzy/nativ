@@ -11,6 +11,7 @@ struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
     let modelType: String?
     let speculatorsModelType: String?
     let architectures: [String]
+    let hasMalformedMetadata: Bool
     let hasVisionConfig: Bool
     let hasAudioConfig: Bool
     let hasDFlashConfig: Bool
@@ -34,10 +35,20 @@ struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
             String.self,
             forKey: .speculatorsModelType
         )
-        architectures = (try? container.decode(
+        let decodedArchitectures = try? container.decode(
             [String].self,
             forKey: .architectures
-        )) ?? []
+        )
+        architectures = decodedArchitectures ?? []
+        // Missing or null fields are optional; invalid types are not evidence
+        // that the runtime does (or does not) support this model.
+        hasMalformedMetadata = try (
+            (container.hasNonNullValue(forKey: .modelType) && modelType == nil)
+                || (container.hasNonNullValue(forKey: .speculatorsModelType)
+                    && speculatorsModelType == nil)
+                || (container.hasNonNullValue(forKey: .architectures)
+                    && decodedArchitectures == nil)
+        )
         hasVisionConfig = try container.hasNonNullValue(forKey: .visionConfig)
         hasAudioConfig = try container.hasNonNullValue(forKey: .audioConfig)
         hasDFlashConfig = try container.hasNonNullValue(forKey: .dFlashConfig)
@@ -59,7 +70,7 @@ struct HuggingFaceModelSupportClassifier: Sendable {
         pipelineTag: String?,
         tags: [String]
     ) -> HuggingFaceModelSupport {
-        guard let configuration else {
+        guard let configuration, !configuration.hasMalformedMetadata else {
             return .unknown
         }
 
@@ -82,13 +93,15 @@ struct HuggingFaceModelSupportClassifier: Sendable {
             return .unknown
         }
 
-        let candidateTypes = [
-            configuration.modelType,
-            configuration.speculatorsModelType,
-        ].compactMap { $0 }
-        if candidateTypes.contains(where: {
-            !registry.capabilities(for: $0).isEmpty
-        }) {
+        // Match the runtime's primary type, using the speculator type only
+        // when model_type is absent or empty.
+        let modelType: String?
+        if let primaryType = configuration.modelType, !primaryType.isEmpty {
+            modelType = primaryType
+        } else {
+            modelType = configuration.speculatorsModelType
+        }
+        if let modelType, !registry.capabilities(for: modelType).isEmpty {
             return .supported
         }
 
@@ -99,7 +112,6 @@ struct HuggingFaceModelSupportClassifier: Sendable {
               configuration.modelType?.trimmingCharacters(
                   in: .whitespacesAndNewlines
               ).isEmpty == false,
-              configuration.speculatorsModelType == nil,
               !configuration.hasVisionConfig,
               !configuration.hasAudioConfig
         else {
