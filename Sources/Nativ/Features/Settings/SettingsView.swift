@@ -51,6 +51,7 @@ struct SettingsView: View {
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
     @ObservedObject private var notifications = NativNotificationService.shared
+    @State private var confirmsEnablingProjectTools = false
 
     var body: some View {
         ScrollView {
@@ -224,11 +225,26 @@ struct SettingsView: View {
                 settingsRow(
                     title: "Allow Tools",
                     description:
-                        "Allow projects to read and write files in their project folder and run terminal commands with approval.",
+                        "Automatically include file and terminal tools in project chats. File tools use the project folder; terminal commands still require approval.",
                     systemImage: "folder.badge.gearshape"
                 ) {
                     Toggle("", isOn: projectToolsEnabledBinding)
                         .labelsHidden()
+                        .accessibilityLabel("Allow tools in project chats")
+                }
+
+                if model.settings.projectToolsEnabled && !model.settings.disabledProjectToolNames.isEmpty {
+                    Divider().padding(.leading, 52)
+
+                    settingsRow(
+                        title: "Some Tools Are Turned Off",
+                        description: "These tools remain blocked: \(disabledProjectToolsSummary).",
+                        systemImage: "hand.raised"
+                    ) {
+                        Button("Enable…") { confirmsEnablingProjectTools = true }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Enable disabled project tools")
+                    }
                 }
             }
             .background(Color(nsColor: .controlBackgroundColor))
@@ -238,6 +254,18 @@ struct SettingsView: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
         }
+        .alert("Enable disabled project tools?", isPresented: $confirmsEnablingProjectTools) {
+            Button("Enable Tools") { model.settings.enableDisabledProjectTools() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(disabledProjectToolsSummary) will also become available in standalone chats. Folder restrictions and terminal approvals still apply. Other tool choices stay unchanged.")
+        }
+    }
+
+    private var disabledProjectToolsSummary: String {
+        model.settings.disabledProjectToolNames
+            .map { $0.replacingOccurrences(of: "_", with: " ").capitalized }
+            .formatted(.list(type: .and))
     }
 
     private var projectToolsEnabledBinding: Binding<Bool> {

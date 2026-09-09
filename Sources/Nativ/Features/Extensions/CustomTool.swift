@@ -544,8 +544,8 @@ private enum CustomToolScriptRunner {
             let scriptURL = directory.appendingPathComponent("tool.zsh")
             try tool.script.write(to: scriptURL, atomically: true, encoding: .utf8)
             return (
-                Command(executableURL: zshURL, arguments: ["-n", scriptURL.path], environment: environment, currentDirectoryURL: directory),
-                Command(executableURL: zshURL, arguments: [scriptURL.path], environment: environment, currentDirectoryURL: directory)
+                Command(executableURL: zshURL, arguments: ["-f", "-n", scriptURL.path], environment: environment, currentDirectoryURL: directory),
+                Command(executableURL: zshURL, arguments: ["-f", scriptURL.path], environment: environment, currentDirectoryURL: directory)
             )
         }
     }
@@ -574,15 +574,21 @@ private enum CustomToolScriptRunner {
     }
 
     private static func run(_ command: Command, input: Data, timeout: TimeInterval) async throws -> ProcessResult {
-        try await Task.detached(priority: .userInitiated) {
-            try runSynchronously(command, input: input, timeout: timeout)
-        }.value
+        let cancellation = ScriptProcessCancellation()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                try runSynchronously(command, input: input, timeout: timeout, cancellation: cancellation)
+            }.value
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     private static func runSynchronously(
         _ command: Command,
         input: Data,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        cancellation: ScriptProcessCancellation
     ) throws -> ProcessResult {
         let process = Process()
         let standardInput = Pipe()
@@ -607,25 +613,21 @@ private enum CustomToolScriptRunner {
         }
 
         do {
-            try process.run()
+            try cancellation.launch(process)
+            defer { cancellation.finish() }
             if !input.isEmpty {
                 try standardInput.fileHandleForWriting.write(contentsOf: input)
             }
             try standardInput.fileHandleForWriting.close()
 
-            let exited = DispatchSemaphore(value: 0)
-            DispatchQueue.global(qos: .userInitiated).async {
-                process.waitUntilExit()
-                exited.signal()
+            let deadline = Date().addingTimeInterval(timeout)
+            while process.isRunning {
+                try cancellation.check()
+                if Date() >= deadline { throw CustomToolError.scriptTimedOut }
+                Thread.sleep(forTimeInterval: 0.01)
             }
-            guard exited.wait(timeout: .now() + timeout) == .success else {
-                process.terminate()
-                if process.isRunning {
-                    kill(process.processIdentifier, SIGKILL)
-                }
-                process.waitUntilExit()
-                throw CustomToolError.scriptTimedOut
-            }
+            process.waitUntilExit()
+            try cancellation.check()
 
             standardOutput.fileHandleForReading.readabilityHandler = nil
             standardError.fileHandleForReading.readabilityHandler = nil
@@ -639,8 +641,43 @@ private enum CustomToolScriptRunner {
         } catch {
             standardOutput.fileHandleForReading.readabilityHandler = nil
             standardError.fileHandleForReading.readabilityHandler = nil
-            if process.isRunning { process.terminate() }
+            if process.isRunning {
+                process.terminate()
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
+            }
             throw error
         }
+    }
+}
+
+private final class ScriptProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func launch(_ process: Process) throws {
+        try lock.withLock {
+            if cancelled { throw CancellationError() }
+            try process.run()
+            self.process = process
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            if let process, process.isRunning { process.terminate() }
+        }
+    }
+
+    func check() throws {
+        try lock.withLock {
+            if cancelled { throw CancellationError() }
+        }
+    }
+
+    func finish() {
+        lock.withLock { process = nil }
     }
 }

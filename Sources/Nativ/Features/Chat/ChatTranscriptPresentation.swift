@@ -235,6 +235,7 @@ struct ChatToolUsageGroup: Identifiable, Equatable {
 }
 
 enum ChatToolUsageKind: Hashable {
+    case toolDiscovery
     case imageGeneration
     case imageEdit
     case systemStats
@@ -252,6 +253,8 @@ enum ChatToolUsageKind: Hashable {
 
     init(toolName: String?) {
         switch toolName {
+        case ChatToolDiscoveryRegistry.toolName:
+            self = .toolDiscovery
         case ChatImageToolRegistry.generateToolName:
             self = .imageGeneration
         case ChatImageToolRegistry.editToolName:
@@ -304,6 +307,8 @@ enum ChatToolUsageKind: Hashable {
 
     private func completedPhrase(count: Int) -> String {
         switch self {
+        case .toolDiscovery:
+            "found available tools"
         case .imageGeneration:
             count == 1 ? "generated an image" : "generated images"
         case .imageEdit:
@@ -337,6 +342,8 @@ enum ChatToolUsageKind: Hashable {
 
     private func activePhrase(count: Int) -> String {
         switch self {
+        case .toolDiscovery:
+            "finding available tools…"
         case .imageGeneration:
             count == 1 ? "generating an image…" : "generating images…"
         case .imageEdit:
@@ -370,6 +377,8 @@ enum ChatToolUsageKind: Hashable {
 
     private func waitingPhrase(count: Int) -> String {
         switch self {
+        case .toolDiscovery:
+            "waiting to find available tools"
         case .imageGeneration:
             "waiting to generate an image"
         case .imageEdit:
@@ -389,6 +398,8 @@ enum ChatToolUsageKind: Hashable {
 
     private func activityName(count: Int) -> String {
         switch self {
+        case .toolDiscovery:
+            "tool search"
         case .imageGeneration:
             count == 1 ? "image generation" : "image generations"
         case .imageEdit:

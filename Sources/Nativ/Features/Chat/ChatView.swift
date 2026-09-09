@@ -114,6 +114,15 @@ private struct ChatProjectContextBanner: View {
     let project: ChatProject
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
+    let toolExposureModes: [String: ToolExposureMode]
+
+    private var disabledToolNames: [String] {
+        toolExposureModes.filter { $0.value == .off }.keys.sorted()
+    }
+
+    private var toolStatusHelp: String {
+        "Turned off: \(disabledToolNames.joined(separator: ", ")). Enable them in Settings → Projects. Other project tools are included automatically."
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -136,6 +145,13 @@ private struct ChatProjectContextBanner: View {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
                     .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
+            } else if !disabledToolNames.isEmpty {
+                Text("\(disabledToolNames.count) Off")
+                    .legacyTextStyle(.badgeMuted)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(toolStatusHelp)
+                    .accessibilityLabel(toolStatusHelp)
             }
         }
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
@@ -199,7 +215,10 @@ private struct ChatTranscriptView: View {
             fingerprint: transcriptFingerprint(items),
             project: project,
             projectRootIsAvailable: projectRootIsAvailable,
-            projectToolsEnabled: model.settings.projectToolsEnabled
+            projectToolsEnabled: model.settings.projectToolsEnabled,
+            toolExposureModes: Dictionary(uniqueKeysWithValues: ChatToolScope.projectToolNames.map {
+                ($0, model.settings.toolExposureMode(for: $0))
+            })
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 if items.isEmpty {
@@ -405,6 +424,7 @@ private struct ChatTranscriptScroller<Content: View>: View {
     let project: ChatProject?
     let projectRootIsAvailable: Bool
     let projectToolsEnabled: Bool
+    let toolExposureModes: [String: ToolExposureMode]
     let content: Content
     @State private var atBottom = true
     @State private var userPausedAutoScroll = false
@@ -419,6 +439,7 @@ private struct ChatTranscriptScroller<Content: View>: View {
         project: ChatProject?,
         projectRootIsAvailable: Bool,
         projectToolsEnabled: Bool,
+        toolExposureModes: [String: ToolExposureMode],
         @ViewBuilder content: () -> Content
     ) {
         self.currentSessionID = currentSessionID
@@ -429,6 +450,7 @@ private struct ChatTranscriptScroller<Content: View>: View {
         self.project = project
         self.projectRootIsAvailable = projectRootIsAvailable
         self.projectToolsEnabled = projectToolsEnabled
+        self.toolExposureModes = toolExposureModes
         self.content = content()
     }
 
@@ -444,7 +466,8 @@ private struct ChatTranscriptScroller<Content: View>: View {
                     ChatProjectContextBanner(
                         project: project,
                         rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: projectToolsEnabled
+                        toolsEnabled: projectToolsEnabled,
+                        toolExposureModes: toolExposureModes
                     )
                 }
             }

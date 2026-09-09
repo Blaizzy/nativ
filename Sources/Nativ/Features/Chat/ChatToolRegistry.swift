@@ -32,6 +32,8 @@ struct ChatToolExecutionContext: Sendable {
     var terminalApprovalGranted = false
     var terminalDefaultWorkingDirectory: String? = nil
     var terminalToolDependencies = ChatTerminalToolDependencies.live
+    var discoverableTools: [ChatToolDiscoveryCandidate] = []
+    var availableTools: [ChatToolDiscoveryCandidate] = []
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
 }
@@ -39,6 +41,17 @@ struct ChatToolExecutionContext: Sendable {
 struct ChatToolExecutionOutcome: Sendable {
     let content: String
     let attachments: [ChatImageAttachment]
+    let activatedToolNames: Set<String>
+
+    init(
+        content: String,
+        attachments: [ChatImageAttachment],
+        activatedToolNames: Set<String> = []
+    ) {
+        self.content = content
+        self.attachments = attachments
+        self.activatedToolNames = activatedToolNames
+    }
 }
 
 enum ChatToolRoundGate {
@@ -116,6 +129,211 @@ struct ChatNativeToolDescriptor {
     let definition: MLXChatToolDefinition
     let displayDescription: String
     let configuration: ChatNativeToolConfiguration?
+
+    var exposureToolNames: [String] {
+        if let configuration {
+            return configuration.toolNames
+        }
+        if definition.function.name == ChatImageToolRegistry.generateToolName {
+            return [
+                ChatImageToolRegistry.generateToolName,
+                ChatImageToolRegistry.editToolName,
+            ]
+        }
+        return [definition.function.name]
+    }
+}
+
+struct ChatToolDiscoveryCandidate: Equatable, Sendable {
+    let name: String
+    let title: String
+    let description: String
+    let source: String
+    var parameters: MLXJSONValue = .object([:])
+}
+
+struct ChatToolExposureCandidate: Equatable, Sendable {
+    let definition: MLXChatToolDefinition
+    let exposureMode: ToolExposureMode
+}
+
+enum ChatToolExposurePolicy {
+    static func advertisedDefinitions(
+        from candidates: [ChatToolExposureCandidate],
+        activatedToolNames: Set<String>
+    ) -> [MLXChatToolDefinition] {
+        let discoveryCandidate = candidates.first {
+            $0.definition.function.name == ChatToolDiscoveryRegistry.toolName
+        }
+        let callableCandidates = candidates.filter {
+            $0.definition.function.name != ChatToolDiscoveryRegistry.toolName
+        }
+        var definitions = callableCandidates.compactMap { candidate in
+            let name = candidate.definition.function.name
+            return candidate.exposureMode == .on
+                || (candidate.exposureMode == .automatic && activatedToolNames.contains(name))
+                ? candidate.definition
+                : nil
+        }
+        if let discoveryCandidate {
+            let shouldAdvertise = switch discoveryCandidate.exposureMode {
+            case .off:
+                false
+            case .automatic:
+                callableCandidates.contains { $0.exposureMode == .automatic }
+            case .on:
+                true
+            }
+            if shouldAdvertise {
+                definitions.append(discoveryCandidate.definition)
+            }
+        }
+        return definitions
+    }
+}
+
+enum ChatToolDiscoveryRegistry {
+    static let toolName = "tool_search"
+    static let maximumResults = 3
+    static let maximumResultDescriptionCharacters = 240
+
+    static let definition = MLXChatToolDefinition(
+        function: MLXChatFunctionDefinition(
+            name: toolName,
+            description:
+                "Find tools by capability, service, tool name, or parameter when the provided tools do not cover the task. Already available matches can be used immediately. Up to three matching Auto tools become available in the next step, replacing the previous Auto selection. If nothing matches, rephrase the query.",
+            parameters: .object([
+                "type": .string("object"),
+                "additionalProperties": .bool(false),
+                "properties": .object([
+                    "query": .object([
+                        "type": .string("string"),
+                        "description": .string(
+                            "A short capability query, such as search Git history, query SQLite, or generate an image."
+                        ),
+                    ])
+                ]),
+                "required": .array([.string("query")]),
+            ])
+        )
+    )
+
+    static func search(
+        _ query: String,
+        candidates: [ChatToolDiscoveryCandidate],
+        limit: Int = maximumResults
+    ) -> [ChatToolDiscoveryCandidate] {
+        let normalizedQuery = normalized(query)
+        let queryTerms = terms(in: normalizedQuery)
+        guard !normalizedQuery.isEmpty, !queryTerms.isEmpty, limit > 0 else { return [] }
+
+        return candidates.compactMap { candidate -> (ChatToolDiscoveryCandidate, Int)? in
+            let fields = [
+                (terms(in: normalized(candidate.name)), 40),
+                (terms(in: normalized(candidate.title + " " + candidate.source)), 30),
+                (terms(in: normalized(candidate.description)), 20),
+                (terms(in: normalized(parameterText(candidate.parameters))), 10),
+            ]
+            var score = normalized(candidate.name) == normalizedQuery ? 200 : 0
+            var matchedTerms = 0
+            for term in queryTerms {
+                let weight = fields.map { words, weight in
+                    if words.contains(term) { return weight }
+                    if words.contains(where: {
+                        ($0.count >= 4 && term.hasPrefix($0))
+                            || (term.count >= 4 && $0.hasPrefix(term))
+                    }) { return weight / 2 }
+                    return 0
+                }.max() ?? 0
+                score += weight
+                if weight > 0 { matchedTerms += 1 }
+            }
+            let namesToolOrService = [candidate.name, candidate.title, candidate.source].contains {
+                let identity = terms(in: normalized($0))
+                return !identity.isEmpty && identity.isSubset(of: queryTerms)
+            }
+            guard matchedTerms >= min(2, queryTerms.count) || namesToolOrService else { return nil }
+            return (candidate, score)
+        }
+        .sorted {
+            if $0.1 == $1.1 {
+                return $0.0.name < $1.0.name
+            }
+            return $0.1 > $1.1
+        }
+        .prefix(max(1, min(limit, maximumResults)))
+        .map(\.0)
+    }
+
+    static func matches(
+        argumentsJSON: String?,
+        candidates: [ChatToolDiscoveryCandidate]
+    ) throws -> [ChatToolDiscoveryCandidate] {
+        guard let argumentsJSON,
+            let data = argumentsJSON.data(using: .utf8),
+            let request = try? JSONDecoder().decode(ChatToolDiscoveryRequest.self, from: data),
+            !request.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw ChatToolDiscoveryError.invalidArguments
+        }
+        return search(request.query, candidates: candidates)
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+    }
+
+    private static func parameterText(_ schema: MLXJSONValue) -> String {
+        switch schema {
+        case .object(let object):
+            return object.sorted(by: { $0.key < $1.key }).map { key, value in
+                switch key {
+                case "title", "description", "enum":
+                    return parameterText(value)
+                case "properties":
+                    guard case .object(let properties) = value else { return "" }
+                    return properties.sorted(by: { $0.key < $1.key }).map {
+                        $0.key + " " + parameterText($0.value)
+                    }.joined(separator: " ")
+                case "items", "anyOf", "oneOf", "allOf":
+                    return parameterText(value)
+                case "$defs", "definitions":
+                    guard case .object(let definitions) = value else { return "" }
+                    return definitions.values.map(parameterText).joined(separator: " ")
+                default:
+                    return ""
+                }
+            }.joined(separator: " ")
+        case .array(let values):
+            return values.map(parameterText).joined(separator: " ")
+        case .string(let value):
+            return value
+        default:
+            return ""
+        }
+    }
+
+    private static func terms(in value: String) -> Set<String> {
+        let ignored = Set([
+            "a", "an", "and", "can", "find", "for", "i", "me", "my", "need", "of", "or",
+            "the", "to", "tool", "tools", "use", "want", "with",
+        ])
+        return Set(
+            value.split { !$0.isLetter && !$0.isNumber }
+                .map(String.init)
+                .filter { !ignored.contains($0) }
+        )
+    }
+
+    static func resultDescription(_ description: String) -> String {
+        let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maximumResultDescriptionCharacters else { return trimmed }
+        return String(trimmed.prefix(maximumResultDescriptionCharacters)) + "…"
+    }
 }
 
 enum ChatToolRegistry {
@@ -214,6 +432,63 @@ enum ChatUnknownToolError: LocalizedError {
     }
 }
 
+enum ChatToolAccessError: LocalizedError, Equatable {
+    case unknown(String)
+    case disabled(String)
+    case notDiscovered(String)
+    case notAdvertised(String)
+    case unavailable(String)
+    case revoked(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unknown(let name):
+            "Unknown tool: \(name). Use an exact name from the provided tool schemas, not an invented alias."
+        case .disabled(let name):
+            "The tool \(name) is Off. Only the user can enable it; do not retry or try to bypass this choice."
+        case .notDiscovered(let name):
+            "The Auto tool \(name) has not been provided for this request. Use tool_search, then use its schema in the next step."
+        case .notAdvertised(let name):
+            "The tool \(name) was not provided for this request. Use only the provided tool schemas."
+        case .unavailable(let name):
+            "The tool \(name) is unavailable or its configuration changed. Ask the user to check its setup, connection, and project access before retrying."
+        case .revoked(let name):
+            "The call to \(name) was cancelled because its permissions or configuration changed. Use current tool schemas and obtain new approval where required."
+        }
+    }
+}
+
+private struct ChatToolDiscoveryRequest: Decodable {
+    let query: String
+}
+
+private struct ChatToolDiscoveryMatch: Encodable {
+    let name: String
+    let title: String
+    let description: String
+    let source: String
+}
+
+private struct ChatToolDiscoveryPayload: Encodable {
+    let ok: Bool
+    let matches: [ChatToolDiscoveryMatch]
+    var alreadyAvailable: [String] = []
+    let message: String
+
+    private enum CodingKeys: String, CodingKey {
+        case ok, matches, message
+        case alreadyAvailable = "already_available"
+    }
+}
+
+private enum ChatToolDiscoveryError: LocalizedError {
+    case invalidArguments
+
+    var errorDescription: String? {
+        "tool_search requires a non-empty query."
+    }
+}
+
 private struct ChatUnknownToolResultPayload: Encodable {
     let ok: Bool
     let error: String?
@@ -228,6 +503,9 @@ enum ChatToolDispatcher {
     private typealias FailureHandler = @Sendable (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
+        ChatToolDiscoveryRegistry.toolName: { call, context in
+            try await executeToolDiscovery(call: call, context: context)
+        },
         ChatImageToolRegistry.generateToolName: { call, context in
             try await executeImageTool(call: call, context: context)
         },
@@ -267,6 +545,9 @@ enum ChatToolDispatcher {
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
+        ChatToolDiscoveryRegistry.toolName: { _, error in
+            discoveryFailurePayload(error: error)
+        },
         ChatImageToolRegistry.generateToolName: { name, error in
             failurePayloadForImageTool(name: name, error: error)
         },
@@ -388,6 +669,53 @@ enum ChatToolDispatcher {
             content: result.content,
             attachments: result.attachments
         )
+    }
+
+    private static func executeToolDiscovery(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let matches = try ChatToolDiscoveryRegistry.matches(
+            argumentsJSON: call.function?.arguments,
+            candidates: context.discoverableTools + context.availableTools
+        )
+        let availableNames = Set(context.availableTools.map(\.name))
+        let alreadyAvailable = matches.filter { availableNames.contains($0.name) }.map(\.name)
+        let discovered = matches.filter { !availableNames.contains($0.name) }
+        let payload = ChatToolDiscoveryPayload(
+            ok: true,
+            matches: discovered.map {
+                ChatToolDiscoveryMatch(
+                    name: $0.name,
+                    title: $0.title,
+                    description: ChatToolDiscoveryRegistry.resultDescription($0.description),
+                    source: $0.source
+                )
+            },
+            alreadyAvailable: alreadyAvailable,
+            message: matches.isEmpty
+                ? "No matching available or Auto tools were found. Rephrase the query or ask the user to check tool access."
+                : "Use already_available tools with their provided schemas. Matches become available next step, replacing the previous Auto selection."
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return ChatToolExecutionOutcome(
+            content: String(decoding: try encoder.encode(payload), as: UTF8.self),
+            attachments: [],
+            activatedToolNames: Set(discovered.map(\.name))
+        )
+    }
+
+    private static func discoveryFailurePayload(error: Error) -> String {
+        let payload = ChatToolDiscoveryPayload(
+            ok: false,
+            matches: [],
+            message: error.localizedDescription
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? String(decoding: encoder.encode(payload), as: UTF8.self))
+            ?? #"{"matches":[],"message":"Tool search failed.","ok":false}"#
     }
 
     private static func executeSystemMonitorTool(
@@ -528,6 +856,8 @@ enum ChatToolConsentRouter {
 enum ChatToolPresentation {
     static func title(toolName: String?, status: ChatTranscriptMessage.ToolStatus?) -> String {
         switch toolName {
+        case ChatToolDiscoveryRegistry.toolName:
+            return toolDiscoveryTitle(status: status)
         case ChatImageToolRegistry.generateToolName:
             return imageTitle(isEdit: false, status: status)
         case ChatImageToolRegistry.editToolName:
@@ -573,6 +903,8 @@ enum ChatToolPresentation {
             return "questionmark.circle"
         case .succeeded, .running, nil:
             switch toolName {
+            case ChatToolDiscoveryRegistry.toolName:
+                return "magnifyingglass"
             case ChatImageToolRegistry.generateToolName,
                 ChatImageToolRegistry.editToolName:
                 return "photo"
@@ -600,6 +932,19 @@ enum ChatToolPresentation {
             default:
                 return "wrench.and.screwdriver"
             }
+        }
+    }
+
+    private static func toolDiscoveryTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Finding available tools…"
+        case .succeeded:
+            return "Found available tools"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Tool search"
+        case nil:
+            return "Tool search"
         }
     }
 

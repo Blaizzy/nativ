@@ -98,9 +98,11 @@ final class NativModel: ChatModelSwitchingSurface {
     private(set) var serverRestartCountdown: Int?
     var settings = NativSettings.load() {
         didSet {
+            tools.updateSettings(settings)
             settings.save()
         }
     }
+    let tools = ChatToolRuntime()
 
     var menuIsOpen = false
     var onMenuStateChanged: (() -> Void)?
@@ -131,6 +133,7 @@ final class NativModel: ChatModelSwitchingSurface {
 
     init(kitLibrary: NativKitLibrary? = nil) {
         self.kitLibrary = kitLibrary ?? NativKitLibrary()
+        tools.updateSettings(settings)
         NativAllTimeStats.removeLegacyStorage()
         configureServerCallbacks()
         observeExternalModelCacheVolume()

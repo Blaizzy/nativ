@@ -73,6 +73,8 @@ final class NativSettingsTests: XCTestCase {
         var settings = NativSettings()
 
         XCTAssertTrue(settings.isToolEnabled("get_system_stats"))
+        XCTAssertEqual(settings.toolExposureMode(for: "get_system_stats"), .automatic)
+        XCTAssertEqual(settings.toolExposureMode(for: "terminal"), .on)
 
         settings.setToolEnabled(false, toolName: "get_system_stats")
         XCTAssertFalse(settings.isToolEnabled("get_system_stats"))
@@ -86,7 +88,66 @@ final class NativSettingsTests: XCTestCase {
 
         settings.setToolEnabled(true, toolName: "get_system_stats")
         XCTAssertTrue(settings.isToolEnabled("get_system_stats"))
+        XCTAssertEqual(settings.toolExposureMode(for: "get_system_stats"), .on)
         XCTAssertTrue(settings.disabledToolNames.isEmpty)
+    }
+
+    func testToolExposureModesRoundTrip() throws {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.on, toolName: "generate_image")
+        settings.setToolExposureMode(.automatic, toolName: "terminal")
+        settings.setToolExposureMode(.off, toolName: "get_server_stats")
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+
+        XCTAssertEqual(decoded.toolExposureMode(for: "generate_image"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "terminal"), .automatic)
+        XCTAssertEqual(decoded.toolExposureMode(for: "get_server_stats"), .off)
+    }
+
+    func testToolExposureModeCyclesThroughAllThreeStates() {
+        XCTAssertEqual(ToolExposureMode.off.next, .automatic)
+        XCTAssertEqual(ToolExposureMode.off.next.next, .on)
+        XCTAssertEqual(ToolExposureMode.off.next.next.next, .off)
+    }
+
+    func testToolSearchDefaultsToOn() {
+        XCTAssertEqual(
+            NativSettings().toolExposureMode(for: ChatToolDiscoveryRegistry.toolName),
+            .on
+        )
+    }
+
+    func testMCPServerExposureModeControlsConnectionAndPromptExposure() {
+        let server = MCPServerConfig(name: "Git", command: "git-mcp")
+        var settings = NativSettings(mcpServers: [server])
+
+        XCTAssertEqual(settings.mcpServerExposureMode(for: server), .automatic)
+
+        settings.setMCPServerExposureMode(.on, serverID: server.id)
+        XCTAssertTrue(settings.mcpServers[0].isEnabled)
+        XCTAssertEqual(settings.mcpServerExposureMode(for: settings.mcpServers[0]), .on)
+
+        settings.setMCPServerExposureMode(.off, serverID: server.id)
+        XCTAssertFalse(settings.mcpServers[0].isEnabled)
+        XCTAssertEqual(settings.mcpServerExposureMode(for: settings.mcpServers[0]), .off)
+
+        settings.setMCPServerExposureMode(.automatic, serverID: server.id)
+        XCTAssertTrue(settings.mcpServers[0].isEnabled)
+        XCTAssertEqual(settings.mcpServerExposureMode(for: settings.mcpServers[0]), .automatic)
+    }
+
+    func testCapabilityModesDoNotRequireInferenceServerRestart() {
+        let server = MCPServerConfig(name: "Git", command: "git-mcp")
+        let original = NativSettings(mcpServers: [server])
+        var changed = original
+
+        changed.setToolExposureMode(.on, toolName: "get_system_stats")
+        changed.setMCPServerExposureMode(.off, serverID: server.id)
+        changed.skills.append(NativSkill(name: "Test", instructions: "Use tools"))
+
+        XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
     }
 
     func testDisablingAToolDoesNotCreateDuplicatePreferences() {
@@ -735,6 +796,28 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(decoded.sidebarProjectsCollapsed)
         XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertFalse(decoded.sidebarSessionsCollapsed)
+    }
+
+    func testEnablingDisabledProjectToolsPreservesOtherChoicesAndPermissions() throws {
+        var settings = NativSettings(projectToolsEnabled: false)
+        settings.setToolExposureMode(.off, toolNames: ["terminal", "read_file", "generate_image"])
+        settings.setToolExposureMode(.automatic, toolName: "write_file")
+        settings.setToolExposureMode(.on, toolName: "patch")
+        XCTAssertEqual(settings.disabledProjectToolNames, ["read_file", "terminal"])
+
+        settings.enableDisabledProjectTools()
+        settings.enableDisabledProjectTools()
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(settings))
+
+        XCTAssertTrue(decoded.disabledProjectToolNames.isEmpty)
+        XCTAssertEqual(decoded.toolExposureMode(for: "terminal"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "read_file"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "write_file"), .automatic)
+        XCTAssertEqual(decoded.toolExposureMode(for: "patch"), .on)
+        XCTAssertEqual(decoded.toolExposureMode(for: "generate_image"), .off)
+        XCTAssertFalse(decoded.projectToolsEnabled)
+        XCTAssertNil(decoded.fileReadRootPath)
+        XCTAssertNil(decoded.fileWriteRootPath)
     }
 
     func testProjectToolsDefaultToEnabledAndRoundTripIndependently() throws {
