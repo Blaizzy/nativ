@@ -1,3 +1,4 @@
+import AppKit
 import MarkdownUI
 import SwiftUI
 import XCTest
@@ -99,6 +100,79 @@ final class ChatMarkdownRendererTests: XCTestCase {
   }
 
   @MainActor
+  func testDocumentRendererWrapsTableCellsToFitAvailableWidth() throws {
+    let content = """
+      | Model | Context | Quantization | Architecture | Notes |
+      | --- | ---: | --- | --- | --- |
+      | Example | 131072 | 4-bit | Mixture of experts | A deliberately long table value that should wrap when the table is narrow |
+      """
+    let narrowHeight = try renderedDocumentHeight(content: content, width: 260)
+    let wideHeight = try renderedDocumentHeight(content: content, width: 900)
+
+    XCTAssertGreaterThan(narrowHeight, wideHeight)
+  }
+
+  @MainActor
+  private func renderedDocumentHeight(content: String, width: CGFloat) throws -> CGFloat {
+    let renderer = ImageRenderer(
+      content: NativMarkdownRenderer(
+        content: content,
+        font: .system(size: 15),
+        fontSize: 15,
+        imagePolicy: .document,
+        fitsTablesToWidth: true
+      )
+      .frame(width: width)
+      .fixedSize(horizontal: false, vertical: true)
+    )
+    renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+
+    return try XCTUnwrap(renderer.nsImage).size.height
+  }
+
+  func testDocumentImageProviderLoadsLocalInlineImage() async throws {
+    let pngData = try XCTUnwrap(
+      Data(
+        base64Encoded:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      )
+    )
+    let imageURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("png")
+    try pngData.write(to: imageURL, options: .atomic)
+    defer { try? FileManager.default.removeItem(at: imageURL) }
+
+    let provider = NativMarkdownInlineImageProvider(
+      fontSize: 15,
+      color: .labelColor,
+      policy: .document
+    )
+
+    _ = try await provider.image(with: imageURL, label: "Local image")
+  }
+
+  func testMathOnlyImageProviderRejectsDocumentImages() async {
+    let provider = NativMarkdownInlineImageProvider(
+      fontSize: 15,
+      color: .labelColor,
+      policy: .mathOnly
+    )
+
+    do {
+      _ = try await provider.image(
+        with: URL(string: "https://example.com/image.png")!,
+        label: "Remote image"
+      )
+      XCTFail("The math-only provider should not fetch document images")
+    } catch is NativMarkdownInlineImageProvider.UnsupportedURL {
+      // Expected.
+    } catch {
+      XCTFail("Unexpected error: \(error)")
+    }
+  }
+
+  @MainActor
   private func renderedHeight(content: String, fontScale: Double) throws -> CGFloat {
     let renderer = ImageRenderer(
       content: ChatMarkdownRenderer(
@@ -117,44 +191,11 @@ final class ChatMarkdownRendererTests: XCTestCase {
 }
 
 final class ChatStreamingRenderPolicyTests: XCTestCase {
-  func testAdaptiveIntervalsUseNativSmoothCadence() {
+  func testStreamingUsesSmoothTwentyHertzCadence() {
+    XCTAssertEqual(ChatStreamingRenderPolicy.updatesPerSecond, 20)
     XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 0),
-      10
+      ChatStreamingRenderPolicy.flushInterval,
+      .seconds(1.0 / 20.0)
     )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 1_999),
-      10
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 2_000),
-      9
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 8_000),
-      8.5
-    )
-    XCTAssertEqual(
-      ChatStreamingRenderPolicy.updatesPerSecond(characterCount: 20_000),
-      8
-    )
-  }
-
-  func testCadenceNeverDropsBelowEightUpdatesPerSecond() {
-    for characterCount in [0, 2_000, 8_000, 20_000, 100_000, 1_000_000] {
-      XCTAssertGreaterThanOrEqual(
-        ChatStreamingRenderPolicy.updatesPerSecond(characterCount: characterCount),
-        8
-      )
-    }
-  }
-
-  func testCadenceNeverAcceleratesAsContentGrows() {
-    let counts = [0, 1_999, 2_000, 7_999, 8_000, 19_999, 20_000, 100_000]
-    let intervals = counts.map {
-      ChatStreamingRenderPolicy.flushIntervalSeconds(characterCount: $0)
-    }
-
-    XCTAssertEqual(intervals, intervals.sorted())
   }
 }

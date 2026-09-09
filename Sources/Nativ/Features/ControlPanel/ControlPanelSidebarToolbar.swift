@@ -6,124 +6,49 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    var sidebarActionBar: some View {
-        HStack(spacing: 8) {
-            Spacer(minLength: 0)
-
-            Button("Import Chat", systemImage: "square.and.arrow.down", action: importChat)
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .frame(width: 26, height: 28)
-                .foregroundStyle(Color.secondary.opacity(0.7))
-                .help("Import chat")
-
-            Button {
-                withAnimation(.snappy(duration: 0.2)) {
-                    enterSelectMode()
+    var bulkSelectionBar: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(bulkSelectionTitle)
+                    .legacyTextStyle(.supporting)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Done") {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        exitSelectMode()
+                    }
                 }
-            } label: {
-                Image(systemName: "checklist")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 26, height: 28)
-                    .foregroundStyle(Color.secondary.opacity(0.7))
+                .legacyTextStyle(.supportingEmphasized)
             }
-            .buttonStyle(.plain)
-            .disabled(
-                pinnedSessions.isEmpty
-                    && unpinnedSessions.isEmpty
-                    && sidebarState.recents.folders.isEmpty
-            )
-            .help("Select multiple")
-
-            Menu {
-                if selectedTab == .chat, chatWorkspaceMode == .images {
-                    Button {
-                        createRecentSession()
-                    } label: {
-                        Label("New Image", systemImage: "photo.badge.plus")
-                    }
-                    Divider()
-                } else if let projectID = activeProjectContextID,
-                    let project = projects.project(withID: projectID)
-                {
-                    Button {
-                        createChatSession(projectID: project.id)
-                    } label: {
-                        Label("New Chat in \(project.name)", systemImage: "square.and.pencil")
-                    }
-                    Divider()
+            HStack(spacing: 6) {
+                Button {
+                    bulkTogglePinSelected()
+                } label: {
+                    Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
+                        .frame(width: 24, height: 22)
                 }
+                .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
+                .disabled(!hasSelectedPinnable)
 
                 Button {
-                    createChatSession()
+                    bulkExportSelected()
                 } label: {
-                    Label("New Standalone Chat", systemImage: "bubble.left")
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 24, height: 22)
                 }
+                .help("Export selected")
+                .disabled(!hasSelectedChats)
 
-                Button(action: createProject) {
-                    Label("New Project…", systemImage: "folder.badge.plus")
+                Button(role: .destructive) {
+                    isConfirmingBulkDelete = true
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 24, height: 22)
                 }
-            } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(
-                        isNewChatHovering ? Color.primary : Color.secondary.opacity(0.7))
+                .help("Delete selected")
+                .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
+                Spacer(minLength: 0)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(
-                selectedTab == .chat
-                    && chatWorkspaceMode == .images
-                    && sidebarState.isGeneratingImage
-            )
-            .help(newRecentHelp)
-            .onHover { isNewChatHovering = $0 }
-        }
-    }
-
-    var bulkSelectionBar: some View {
-        HStack(spacing: 6) {
-            Text(bulkSelectionTitle)
-                .nativTextStyle(.supporting)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 0)
-
-            Button {
-                bulkTogglePinSelected()
-            } label: {
-                Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
-                    .frame(width: 24, height: 22)
-            }
-            .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
-            .disabled(!hasSelectedPinnable)
-
-            Button {
-                bulkExportSelected()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Export selected")
-            .disabled(!hasSelectedChats)
-
-            Button(role: .destructive) {
-                isConfirmingBulkDelete = true
-            } label: {
-                Image(systemName: "trash")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Delete selected")
-            .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
-
-            Button("Done") {
-                withAnimation(.snappy(duration: 0.2)) {
-                    exitSelectMode()
-                }
-            }
-            .nativTextStyle(.supportingEmphasized)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

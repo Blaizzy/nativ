@@ -141,6 +141,7 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var computerName = Host.current().localizedName ?? "This Mac"
     var modelIdentifier = NativFormatting.missingValue
     var modelNumber: String?
+    var enclosureColorCode: String?
     var productionYear: Int?
     var serialNumber = NativFormatting.missingValue
     var chipName = "Apple silicon"
@@ -157,6 +158,22 @@ struct SystemMonitorIdentity: Equatable, Sendable {
     var displayResolution = NativFormatting.missingValue
     var displayRefreshRate: Double?
     var disk = SystemDiskIdentity()
+
+    var deviceModelCode: String {
+        guard let enclosureColorCode,
+              !enclosureColorCode.isEmpty else {
+            return modelIdentifier
+        }
+        return "\(modelIdentifier)@ECOLOR=\(enclosureColorCode)"
+    }
+
+    var deviceModelCodeCandidates: [String] {
+        let colorSpecificCode = deviceModelCode
+        guard colorSpecificCode != modelIdentifier else {
+            return [modelIdentifier]
+        }
+        return [colorSpecificCode, modelIdentifier]
+    }
 }
 
 struct SystemMonitorSnapshot: Equatable, Sendable {
@@ -544,6 +561,9 @@ private actor SystemMetricsCollector {
         identity.efficiencyCoreCount = sysctlInteger("hw.perflevel1.physicalcpu") ?? 0
         identity.nominalCPUFrequencyHz = sysctlInteger("hw.cpufrequency_max").map(UInt64.init)
         identity.serialNumber = platformSerialNumber() ?? identity.serialNumber
+        identity.enclosureColorCode = mobileGestaltString(
+            for: "DeviceEnclosureColor"
+        )
 
         if let profile = hardwareProfile() {
             identity.computerName = profile["machine_name"] as? String
@@ -975,6 +995,39 @@ private actor SystemMetricsCollector {
             return nil
         }
         return value
+    }
+
+    private static func mobileGestaltString(for key: String) -> String? {
+        typealias CopyAnswer = @convention(c) (CFString) -> Unmanaged<CFTypeRef>?
+
+        guard let handle = dlopen("/usr/lib/libMobileGestalt.dylib", RTLD_LAZY) else {
+            return nil
+        }
+        defer { dlclose(handle) }
+
+        guard let symbol = dlsym(handle, "MGCopyAnswer") else { return nil }
+        let copyAnswer = unsafeBitCast(symbol, to: CopyAnswer.self)
+        guard let answer = copyAnswer(key as CFString)?.takeRetainedValue() else {
+            return nil
+        }
+
+        let value: String?
+        switch CFGetTypeID(answer) {
+        case CFStringGetTypeID():
+            value = answer as? String
+        case CFNumberGetTypeID():
+            value = (answer as? NSNumber)?.stringValue
+        default:
+            value = nil
+        }
+
+        guard let value else { return nil }
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedValue.isEmpty,
+              trimmedValue.localizedCaseInsensitiveCompare("unknown") != .orderedSame else {
+            return nil
+        }
+        return trimmedValue
     }
 
     private static func sysctlString(_ name: String) -> String? {

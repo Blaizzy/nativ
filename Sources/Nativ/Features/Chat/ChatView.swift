@@ -84,7 +84,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .nativTextStyle(.emptyStateTitle)
+                    .legacyTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -121,11 +121,11 @@ private struct ChatProjectContextBanner: View {
                 .foregroundStyle(rootIsAvailable ? Color.accentColor : Color.orange)
 
             Text(project.name)
-                .nativTextStyle(.rowTitleEmphasized)
+                .legacyTextStyle(.rowTitleEmphasized)
                 .lineLimit(1)
 
             Text(project.rootPath)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -134,7 +134,7 @@ private struct ChatProjectContextBanner: View {
 
             if !rootIsAvailable || !toolsEnabled {
                 Text(rootIsAvailable ? "Tools Off" : "Unavailable")
-                    .nativTextStyle(.badgeMuted)
+                    .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
             }
         }
@@ -150,7 +150,6 @@ private struct ChatProjectContextBanner: View {
 }
 
 private struct ChatTranscriptView: View {
-
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
@@ -161,11 +160,8 @@ private struct ChatTranscriptView: View {
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
-    @State private var transcriptScrollPosition = ScrollPosition(edge: .bottom)
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
-    @State private var followsLatestMessage = true
-    @State private var isUserScrollingTranscript = false
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -174,10 +170,39 @@ private struct ChatTranscriptView: View {
     var body: some View {
         let forkableAssistantResponseIDs = chat.forkableAssistantResponseIDs
         let latestUserMessageID = chat.latestUserMessageID
+        let visibleItems = chat.visibleTranscriptItems
 
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                if chat.visibleTranscriptItems.isEmpty {
+        transcript(
+            items: visibleItems,
+            forkableAssistantResponseIDs: forkableAssistantResponseIDs,
+            latestUserMessageID: latestUserMessageID
+        )
+        .overlay(alignment: .bottom) {
+            ZStack(alignment: .bottom) {
+                composerBackdrop
+                composerSurface
+            }
+        }
+        .background(Color.nativMainContentBackground)
+    }
+
+    private func transcript(
+        items: [ChatTranscriptItem],
+        forkableAssistantResponseIDs: Set<UUID>,
+        latestUserMessageID: UUID?
+    ) -> some View {
+        ChatTranscriptScroller(
+            currentSessionID: chat.currentSessionID,
+            isStreaming: chat.isCurrentSessionSending,
+            revision: chat.transcriptRevision,
+            scrollTargetMessageID: $chat.scrollTargetMessageID,
+            fingerprint: transcriptFingerprint(items),
+            project: project,
+            projectRootIsAvailable: projectRootIsAvailable,
+            projectToolsEnabled: model.settings.projectToolsEnabled
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if items.isEmpty {
                     if chat.messages.isEmpty {
                         ChatEmptyTranscriptView(
                             isRunning: model.isRunning,
@@ -189,59 +214,25 @@ private struct ChatTranscriptView: View {
                         .padding(.top, 120)
                     }
                 } else {
-                    ForEach(chat.visibleTranscriptItems) { item in
-                        switch item {
-                        case .message(let message):
-                            let showsEditUserMessage = message.id == latestUserMessageID
-                            let editUnavailableReason =
-                                showsEditUserMessage
-                                ? userPromptEditingUnavailableReason(for: message)
-                                : nil
-                            ChatMessageRow(
-                                message: message,
-                                imageModelSelectionRequest: chat.imageModelSelectionRequest(
-                                    for: message.id
-                                ),
-                                showsEditUserMessage: showsEditUserMessage,
-                                canEditUserMessage: editUnavailableReason == nil,
-                                editUserMessageUnavailableReason: editUnavailableReason,
-                                isEditingUserMessage: chat.promptEditContext?.messageID
-                                    == message.id,
-                                canForkAssistantResponse: forkableAssistantResponseIDs.contains(
-                                    message.id
-                                ),
-                                onEditUserMessage: chat.beginEditingUserMessage,
-                                onForkAssistantResponse: chat.forkAssistantResponse,
-                                onConfirmToolConsent: chat.confirmToolConsent,
-                                onDenyToolConsent: chat.denyToolConsent,
-                                onSelectImageModel: chat.selectImageModel,
-                                onCancelImageModelSelection: chat.cancelImageModelSelection,
-                                onExploreImageModels: onExploreImageModels,
-                                onPreviewAttachment: onPreviewAttachment
-                            )
-                            .equatable()
-                            .id(item.id)
-                        case .agentTurn(let turn):
-                            ChatAgentTurnRow(
-                                turn: turn,
-                                imageModelSelectionRequests: imageModelSelectionRequests(
-                                    for: turn
-                                ),
-                                canForkAssistantResponse: turn.finalAssistantMessage.map {
-                                    forkableAssistantResponseIDs.contains($0.id)
-                                } ?? false,
-                                onForkAssistantResponse: chat.forkAssistantResponse,
-                                onConfirmToolConsent: chat.confirmToolConsent,
-                                onDenyToolConsent: chat.denyToolConsent,
-                                onSelectImageModel: chat.selectImageModel,
-                                onCancelImageModelSelection: chat.cancelImageModelSelection,
-                                onExploreImageModels: onExploreImageModels,
-                                onPreviewAttachment: onPreviewAttachment
-                            )
-                            .id(item.id)
-                        }
+                    ForEach(items) { item in
+                        transcriptItemRow(
+                            item,
+                            latestUserMessageID: latestUserMessageID,
+                            forkableAssistantResponseIDs: forkableAssistantResponseIDs
+                        )
                     }
                 }
+
+                // Keep the overlay clearance inside the scroll target so pinning lands
+                // above the composer rather than aligning hidden content behind it.
+                Color.clear
+                    .frame(
+                        height: max(
+                            18,
+                            composerHeight + ChatTranscriptLayout.composerClearance
+                        )
+                    )
+                    .id(ChatTranscriptScrollTarget.bottom)
             }
             .frame(
                 maxWidth: ChatTranscriptLayout.conversationMaxWidth
@@ -254,100 +245,90 @@ private struct ChatTranscriptView: View {
                     + ChatTranscriptLayout.messageHorizontalInset
             )
             .padding(.top, 18)
-            .padding(
-                .bottom,
-                max(18, composerHeight + ChatTranscriptLayout.composerClearance)
+            .animation(.easeOut(duration: 0.25), value: items.count)
+        }
+    }
+
+    @ViewBuilder
+    private func transcriptItemRow(
+        _ item: ChatTranscriptItem,
+        latestUserMessageID: UUID?,
+        forkableAssistantResponseIDs: Set<UUID>
+    ) -> some View {
+        switch item {
+        case .message(let message):
+            messageRow(
+                message,
+                latestUserMessageID: latestUserMessageID,
+                forkableAssistantResponseIDs: forkableAssistantResponseIDs
             )
-        }
-        .scrollPosition($transcriptScrollPosition)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if let project {
-                ChatProjectContextBanner(
-                    project: project,
-                    rootIsAvailable: projectRootIsAvailable,
-                    toolsEnabled: model.settings.projectToolsEnabled
-                )
-            }
-        }
-        .overlay(alignment: .bottom) {
-            ZStack(alignment: .bottom) {
-                composerBackdrop
-
-                ChatComposerContainer(
-                    model: model,
-                    chat: chat,
-                    extensionManager: extensionManager,
-                    workspaceMode: workspaceMode,
-                    onSelectWorkspaceMode: onSelectWorkspaceMode,
-                    onFindDraftModels: onFindDraftModels,
-                    onHeightChange: { height in
-                        let isInitialMeasurement = composerHeight == 0
-                        composerHeight = height
-                        if isInitialMeasurement {
-                            Task { @MainActor in
-                                try? await Task.sleep(for: .milliseconds(50))
-                                transcriptScrollPosition.scrollTo(edge: .bottom)
-                            }
-                        }
-                    },
-                    onBackdropHeightChange: { height in
-                        composerBackdropHeight = height
-                    }
-                )
-            }
-        }
-        .onScrollPhaseChange { _, newPhase, context in
-            switch newPhase {
-            case .tracking, .interacting:
-                isUserScrollingTranscript = true
-                followsLatestMessage = false
-            case .decelerating:
-                if isUserScrollingTranscript {
-                    followsLatestMessage = false
-                }
-            case .idle:
-                guard isUserScrollingTranscript else { return }
-                isUserScrollingTranscript = false
-                followsLatestMessage = isAtTranscriptBottom(context.geometry)
-            case .animating:
-                break
-            }
-        }
-        .onChange(of: chat.scrollToken) { _, _ in
-            if followsLatestMessage {
-                transcriptScrollPosition.scrollTo(edge: .bottom)
-            }
-        }
-        .onChange(of: chat.currentSessionID) { _, _ in
-            followsLatestMessage = true
-            transcriptScrollPosition.scrollTo(edge: .bottom)
-        }
-        .onChange(of: chat.scrollTargetMessageID) { _, target in
-            guard let target else { return }
-            followsLatestMessage = false
-            DispatchQueue.main.async {
-                transcriptScrollPosition.scrollTo(id: target, anchor: .center)
-                chat.scrollTargetMessageID = nil
-            }
-        }
-        .onAppear {
-            followsLatestMessage = true
-            transcriptScrollPosition.scrollTo(edge: .bottom)
+            .id(item.id)
+        case .agentTurn(let turn):
+            ChatAgentTurnRow(
+                turn: turn,
+                imageModelSelectionRequests: imageModelSelectionRequests(for: turn),
+                canForkAssistantResponse: turn.finalAssistantMessage.map {
+                    forkableAssistantResponseIDs.contains($0.id)
+                } ?? false,
+                onForkAssistantResponse: chat.forkAssistantResponse,
+                onConfirmToolConsent: chat.confirmToolConsent,
+                onDenyToolConsent: chat.denyToolConsent,
+                onSelectImageModel: chat.selectImageModel,
+                onCancelImageModelSelection: chat.cancelImageModelSelection,
+                onExploreImageModels: onExploreImageModels,
+                onPreviewAttachment: onPreviewAttachment
+            )
+            .id(item.id)
         }
     }
 
-    private func isAtTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
-        geometry.visibleRect.maxY >= geometry.contentSize.height - 8
-    }
+    private func messageRow(
+        _ message: ChatTranscriptMessage,
+        latestUserMessageID: UUID?,
+        forkableAssistantResponseIDs: Set<UUID>
+    ) -> some View {
+        let showsEditUserMessage = message.id == latestUserMessageID
+        let editUnavailableReason = showsEditUserMessage
+            ? userPromptEditingUnavailableReason(for: message)
+            : nil
 
-    private func imageModelSelectionRequests(
-        for turn: ChatAgentTurnPresentation
-    ) -> [UUID: ChatImageModelSelectionRequest] {
-        Dictionary(
-            uniqueKeysWithValues: turn.toolMessages.compactMap { message in
-                chat.imageModelSelectionRequest(for: message.id).map { (message.id, $0) }
-            }
+        return ChatMessageRow(
+            message: message,
+            imageModelSelectionRequest: chat.imageModelSelectionRequest(for: message.id),
+            showsEditUserMessage: showsEditUserMessage,
+            canEditUserMessage: editUnavailableReason == nil,
+            editUserMessageUnavailableReason: editUnavailableReason,
+            isEditingUserMessage: chat.promptEditContext?.messageID == message.id,
+            canForkAssistantResponse: forkableAssistantResponseIDs.contains(message.id),
+            onEditUserMessage: chat.beginEditingUserMessage,
+            onForkAssistantResponse: chat.forkAssistantResponse,
+            onConfirmToolConsent: chat.confirmToolConsent,
+            onDenyToolConsent: chat.denyToolConsent,
+            onSelectImageModel: chat.selectImageModel,
+            onCancelImageModelSelection: chat.cancelImageModelSelection,
+            onExploreImageModels: onExploreImageModels,
+            onPreviewAttachment: onPreviewAttachment
         )
+        .equatable()
+        .id(message.id)
+    }
+
+    private var composerSurface: some View {
+        ChatComposerContainer(
+            model: model,
+            chat: chat,
+            extensionManager: extensionManager,
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onFindDraftModels: onFindDraftModels,
+            onBackdropHeightChange: { composerBackdropHeight = $0 }
+        )
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.height
+        } action: { height in
+            composerHeight = height
+        }
+        .zIndex(1)
     }
 
     private var composerBackdrop: some View {
@@ -369,6 +350,25 @@ private struct ChatTranscriptView: View {
         .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    private func imageModelSelectionRequests(
+        for turn: ChatAgentTurnPresentation
+    ) -> [UUID: ChatImageModelSelectionRequest] {
+        Dictionary(
+            uniqueKeysWithValues: turn.toolMessages.compactMap { message in
+                chat.imageModelSelectionRequest(for: message.id).map { (message.id, $0) }
+            }
+        )
+    }
+
+    private func transcriptFingerprint(
+        _ items: [ChatTranscriptItem]
+    ) -> ChatTranscriptFingerprint {
+        ChatTranscriptFingerprint(
+            messageCount: items.count,
+            lastMessageID: items.last?.id
+        )
     }
 
     private func userPromptEditingUnavailableReason(
@@ -396,6 +396,139 @@ private struct ChatTranscriptView: View {
     }
 }
 
+private struct ChatTranscriptScroller<Content: View>: View {
+    let currentSessionID: UUID?
+    let isStreaming: Bool
+    let revision: ChatTranscriptRevision
+    @Binding var scrollTargetMessageID: UUID?
+    let fingerprint: ChatTranscriptFingerprint
+    let project: ChatProject?
+    let projectRootIsAvailable: Bool
+    let projectToolsEnabled: Bool
+    let content: Content
+    @State private var atBottom = true
+    @State private var userPausedAutoScroll = false
+    @State private var userIsScrolling = false
+
+    init(
+        currentSessionID: UUID?,
+        isStreaming: Bool,
+        revision: ChatTranscriptRevision,
+        scrollTargetMessageID: Binding<UUID?>,
+        fingerprint: ChatTranscriptFingerprint,
+        project: ChatProject?,
+        projectRootIsAvailable: Bool,
+        projectToolsEnabled: Bool,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.currentSessionID = currentSessionID
+        self.isStreaming = isStreaming
+        self.revision = revision
+        _scrollTargetMessageID = scrollTargetMessageID
+        self.fingerprint = fingerprint
+        self.project = project
+        self.projectRootIsAvailable = projectRootIsAvailable
+        self.projectToolsEnabled = projectToolsEnabled
+        self.content = content()
+    }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                content
+            }
+            .defaultScrollAnchor(.bottom)
+            .id(currentSessionID)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let project {
+                    ChatProjectContextBanner(
+                        project: project,
+                        rootIsAvailable: projectRootIsAvailable,
+                        toolsEnabled: projectToolsEnabled
+                    )
+                }
+            }
+            .onScrollGeometryChange(for: ChatTranscriptPinState.self) { geometry in
+                ChatTranscriptPinState(
+                    atBottom: isNearTranscriptBottom(geometry),
+                    contentHeight: geometry.contentSize.height
+                )
+            } action: { oldState, newState in
+                atBottom = newState.atBottom
+                if newState.atBottom {
+                    userPausedAutoScroll = false
+                } else if userIsScrolling {
+                    userPausedAutoScroll = true
+                }
+
+                if oldState.contentHeight != newState.contentHeight,
+                    oldState.atBottom || newState.atBottom
+                        || (isStreaming && !userPausedAutoScroll)
+                {
+                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
+                }
+            }
+            .onScrollPhaseChange { _, newPhase, context in
+                let isUserPhase =
+                    newPhase == .tracking
+                    || newPhase == .interacting
+                    || newPhase == .decelerating
+                if isUserPhase {
+                    userIsScrolling = true
+                    if !isNearTranscriptBottom(context.geometry) {
+                        userPausedAutoScroll = true
+                    }
+                } else if newPhase == .idle {
+                    if userIsScrolling {
+                        userPausedAutoScroll = !isNearTranscriptBottom(context.geometry)
+                    }
+                    userIsScrolling = false
+                }
+            }
+            .onAppear {
+                atBottom = true
+                userPausedAutoScroll = false
+                proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
+            }
+            .onChange(of: fingerprint) { _, _ in
+                if atBottom || (isStreaming && !userPausedAutoScroll) {
+                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
+                }
+            }
+            .onChange(of: scrollTargetMessageID) { _, target in
+                guard let target else {
+                    return
+                }
+                userPausedAutoScroll = true
+                Task { @MainActor in
+                    await Task.yield()
+                    proxy.scrollTo(target, anchor: .center)
+                    scrollTargetMessageID = nil
+                }
+            }
+            .background {
+                ChatTranscriptScrollPinner(
+                    revision: revision,
+                    proxy: proxy,
+                    atBottom: atBottom,
+                    userPausedAutoScroll: userPausedAutoScroll,
+                    isStreaming: isStreaming
+                )
+            }
+        }
+        .onChange(of: currentSessionID) { _, _ in
+            atBottom = true
+            userPausedAutoScroll = false
+            userIsScrolling = false
+        }
+    }
+
+    private func isNearTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
+        geometry.contentOffset.y + geometry.containerSize.height
+            >= geometry.contentSize.height - 60
+    }
+}
+
 private struct ChatComposerContainer: View {
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
@@ -403,7 +536,6 @@ private struct ChatComposerContainer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
-    let onHeightChange: (CGFloat) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
@@ -441,11 +573,38 @@ private struct ChatComposerContainer: View {
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            proxy.size.height
-        } action: { height in
-            onHeightChange(height)
-        }
+    }
+}
+
+private enum ChatTranscriptScrollTarget {
+    static let bottom = "chat-transcript-bottom"
+}
+
+private struct ChatTranscriptFingerprint: Equatable {
+    let messageCount: Int
+    let lastMessageID: UUID?
+}
+
+private struct ChatTranscriptPinState: Equatable {
+    let atBottom: Bool
+    let contentHeight: CGFloat
+}
+
+private struct ChatTranscriptScrollPinner: View {
+    let revision: ChatTranscriptRevision
+    let proxy: ScrollViewProxy
+    let atBottom: Bool
+    let userPausedAutoScroll: Bool
+    let isStreaming: Bool
+
+    var body: some View {
+        Color.clear
+            .accessibilityHidden(true)
+            .onChange(of: revision.value) { _, _ in
+                if atBottom || (isStreaming && !userPausedAutoScroll) {
+                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
+                }
+            }
     }
 }
 
@@ -1689,7 +1848,7 @@ private struct ChatThinkingBubble: View {
                             .padding(14)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

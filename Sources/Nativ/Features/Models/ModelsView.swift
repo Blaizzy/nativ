@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import Textual
 
 private enum ModelsPageSection: String, CaseIterable, Identifiable {
     case installed = "Installed"
@@ -79,6 +78,7 @@ private final class ModelsNativState: ObservableObject {
         var modelLoadFailure: ModelLoadFailure?
         var systemHuggingFaceCredential: HuggingFaceCredential?
         var loadedModelID: String?
+        var externalModelCacheState: ExternalModelCacheReference.State
     }
 
     @Published private var snapshot: Snapshot
@@ -96,7 +96,8 @@ private final class ModelsNativState: ObservableObject {
             metricsLoading: model.metricsLoading,
             modelLoadFailure: model.modelLoadFailure,
             systemHuggingFaceCredential: model.systemHuggingFaceCredential,
-            loadedModelID: model.metrics?.server.loadedModel
+            loadedModelID: model.metrics?.server.loadedModel,
+            externalModelCacheState: model.externalModelCacheState
         )
 
         observeModel()
@@ -122,6 +123,7 @@ private final class ModelsNativState: ObservableObject {
             $0.modelLoadFailure = model.modelLoadFailure
             $0.systemHuggingFaceCredential = model.systemHuggingFaceCredential
             $0.loadedModelID = model.metrics?.server.loadedModel
+            $0.externalModelCacheState = model.externalModelCacheState
         }
     }
 
@@ -144,6 +146,9 @@ private final class ModelsNativState: ObservableObject {
         snapshot.systemHuggingFaceCredential
     }
     var loadedModelID: String? { snapshot.loadedModelID }
+    var externalModelCacheState: ExternalModelCacheReference.State {
+        snapshot.externalModelCacheState
+    }
 
     var effectiveHuggingFaceToken: String? {
         HuggingFaceAuthentication.effectiveToken(
@@ -251,6 +256,8 @@ struct ModelsView: View {
     @State private var isConfirmingInstalledModelDeletion = false
     @State private var activeDownloadIDs = Set<String>()
     @State private var recentlyCompletedModelIDs = Set<String>()
+    @State private var modelCacheErrorMessage = ""
+    @State private var showsModelCacheError = false
 
     init(
         model: NativModel,
@@ -288,6 +295,7 @@ struct ModelsView: View {
                 pageHeader
                 activeDownloadBanner
                 modelLoadFailureBanner
+                externalModelCacheBanner
 
                 modelsPage
             }
@@ -315,6 +323,7 @@ struct ModelsView: View {
             rescanLocalModels()
         }
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            model.refreshExternalModelCacheState()
             rescanLocalModels()
         }
         .onReceive(downloadManager.rowUpdates) { updatedModelID in
@@ -326,6 +335,7 @@ struct ModelsView: View {
         }
         .onAppear {
             synchronizeActiveDownloads()
+            model.refreshExternalModelCacheState()
             openSpeechModelDiscoveryIfRequested()
             openImageModelDiscoveryIfRequested()
             openModelDiscoveryIfRequested()
@@ -400,6 +410,10 @@ struct ModelsView: View {
             localLibrary.cancel()
             hubLibrary.cancel()
             lastStartedHubSearchTaskID = nil
+        }
+        .alert("Couldn’t Change Model Storage", isPresented: $showsModelCacheError) {
+        } message: {
+            Text(modelCacheErrorMessage)
         }
     }
 
@@ -482,6 +496,21 @@ struct ModelsView: View {
         ActiveDownloadBannerView()
     }
 
+    @ViewBuilder
+    private var externalModelCacheBanner: some View {
+        if case .unavailable(_, let reason) = modelState.externalModelCacheState {
+            ModelsNotice(
+                title: "External model storage is unavailable",
+                message: reason.localizedDescription,
+                systemImage: "externaldrive.badge.exclamationmark",
+                color: .orange
+            )
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            Divider()
+        }
+    }
+
     private var pageHeader: some View {
         HStack(alignment: .center, spacing: 16) {
             pageTitle
@@ -510,12 +539,8 @@ struct ModelsView: View {
         // whole scroller here made a card click wait for the visible rows to
         // be rebuilt before SwiftUI could present the README loading state.
         VStack(spacing: 0) {
-            switch renderedSection {
-            case .installed:
+            if renderedSection == .installed {
                 installedResultsHeader
-                    .modelsListRow(top: 0)
-            case .discover:
-                discoverResultsHeader
                     .modelsListRow(top: 0)
             }
 
@@ -561,6 +586,9 @@ struct ModelsView: View {
             switch renderedSection {
             case .installed:
                 installedFilterBar
+                    .onChange(of: eligibleVisibleModelIDs) { _, visibleIDs in
+                        installedModelSelection.retain(visibleIDs)
+                    }
                 if installedModelSelection.isActive {
                     installedSelectionBar(for: filteredLocalModels)
                 }
@@ -593,7 +621,7 @@ struct ModelsView: View {
                     }
                 }
             case .discover:
-                discoverScroller(showsResultsHeader: showsResultsHeader)
+                discoverScroller()
             }
         }
     }
@@ -604,6 +632,8 @@ struct ModelsView: View {
             !activeDownloadIDs.contains($0.repoID)
         }
         let normalizedSettings = modelState.settings.normalized()
+        let pinnedIDs = Set(normalizedSettings.pinnedModelIDs)
+            .intersection(visibleModels.lazy.map(\.repoID))
 
         if !activeDownloadIDs.isEmpty {
             InstalledActiveDownloadRows(
@@ -653,7 +683,15 @@ struct ModelsView: View {
                     .modelsListRow(top: 0)
             }
 
-            ForEach(visibleModels) { localModel in
+            ForEach(Array(visibleModels.enumerated()), id: \.element.id) { index, localModel in
+                if shouldShowPinnedHeading(at: index, in: visibleModels, pinnedIDs: pinnedIDs) {
+                    ModelsPinnedSectionHeader(title: "Pinned", systemImage: "pin.fill")
+                        .modelsListRow(top: 8, bottom: 2)
+                }
+                if shouldShowOtherModelsHeading(at: index, in: visibleModels, pinnedIDs: pinnedIDs) {
+                    ModelsPinnedSectionHeader(title: "All models", systemImage: "square.stack.3d.up")
+                        .modelsListRow(top: 12, bottom: 2)
+                }
                 let preloadSlots = preloadSlots(for: localModel)
                 let selectedSlots = Set(
                     ModelPreloadSlot.allCases.filter {
@@ -680,6 +718,7 @@ struct ModelsView: View {
                         && !isModelInUse(localModel.repoID),
                     isSelecting: installedModelSelection.isActive,
                     isSelectedForDeletion: installedModelSelection.contains(localModel.repoID),
+                    isPinned: pinnedIDs.contains(localModel.repoID),
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
                             model.requestPreloadedModelSwitch(
@@ -699,6 +738,7 @@ struct ModelsView: View {
                         )
                     },
                     onToggleSelection: { toggleInstalledModelSelection(localModel) },
+                    onTogglePin: { togglePin(for: localModel.repoID) },
                     onDelete: { deleteInstalledModel(localModel) }
                 )
                 .equatable()
@@ -790,7 +830,7 @@ struct ModelsView: View {
     }
 
     @ViewBuilder
-    private func discoverScroller(showsResultsHeader: Bool) -> some View {
+    private func discoverScroller() -> some View {
         if let error = hubLibrary.error {
             ScrollView {
                 ModelsNotice(
@@ -839,11 +879,6 @@ struct ModelsView: View {
             // every scroll pass is noticeably more expensive than Installed.
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if showsResultsHeader {
-                        discoverResultsHeader
-                            .modelsListRow(top: 0)
-                    }
-
                     ForEach(models) { hubModel in
                         HubModelRowContainer(
                             model: hubModel,
@@ -1058,15 +1093,20 @@ struct ModelsView: View {
             if settings.speechToTextModelID == localModel.repoID {
                 settings.speechToTextModelID = nil
             }
+            settings.pinnedModelIDs.removeAll { $0 == localModel.repoID }
             model.settings = settings
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
         }
     }
 
     private var selectedInstalledModels: [LocalModel] {
-        localLibrary.models.filter {
+        filteredLocalModels.filter {
             installedModelSelection.contains($0.repoID) && canSelectForDeletion($0)
         }
+    }
+
+    private var eligibleVisibleModelIDs: Set<String> {
+        Set(filteredLocalModels.filter(canSelectForDeletion).map(\.repoID))
     }
 
     private func canSelectForDeletion(_ localModel: LocalModel) -> Bool {
@@ -1085,6 +1125,34 @@ struct ModelsView: View {
         installedModelSelection.finish()
     }
 
+    private func togglePin(for modelID: String) {
+        var settings = model.settings
+        if settings.pinnedModelIDs.contains(modelID) {
+            settings.pinnedModelIDs.removeAll { $0 == modelID }
+        } else {
+            settings.pinnedModelIDs.insert(modelID, at: 0)
+        }
+        model.settings = settings.normalized()
+    }
+
+    private func shouldShowPinnedHeading(
+        at index: Int,
+        in models: [LocalModel],
+        pinnedIDs: Set<String>
+    ) -> Bool {
+        index == 0 && pinnedIDs.contains(models[index].repoID)
+    }
+
+    private func shouldShowOtherModelsHeading(
+        at index: Int,
+        in models: [LocalModel],
+        pinnedIDs: Set<String>
+    ) -> Bool {
+        !pinnedIDs.isEmpty
+            && !pinnedIDs.contains(models[index].repoID)
+            && (index == 0 || pinnedIDs.contains(models[index - 1].repoID))
+    }
+
     private var filteredLocalModels: [LocalModel] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         var models =
@@ -1099,11 +1167,22 @@ struct ModelsView: View {
         models = models.filter { typeFilter.matches($0.capabilities) }
 
         let settings = modelState.settings.normalized()
+        let pinOrder = Dictionary(
+            uniqueKeysWithValues: settings.pinnedModelIDs.enumerated().map { ($1, $0) }
+        )
         let selectedModelIDs = Set(
             ModelPreloadSlot.allCases.compactMap {
                 settings.modelID(for: $0)
             })
         return models.enumerated().sorted { lhs, rhs in
+            let lhsPinIndex = pinOrder[lhs.element.repoID]
+            let rhsPinIndex = pinOrder[rhs.element.repoID]
+            if lhsPinIndex != nil || rhsPinIndex != nil {
+                if let lhsPinIndex, let rhsPinIndex {
+                    return lhsPinIndex < rhsPinIndex
+                }
+                return lhsPinIndex != nil
+            }
             let lhsIsNew = recentlyCompletedModelIDs.contains(lhs.element.repoID)
             let rhsIsNew = recentlyCompletedModelIDs.contains(rhs.element.repoID)
             if lhsIsNew != rhsIsNew {
@@ -1281,21 +1360,6 @@ struct ModelsView: View {
             .fixedSize()
     }
 
-    private var discoverResultsHeader: some View {
-        HStack(spacing: 12) {
-            Spacer(minLength: 8)
-            openHubLink
-        }
-    }
-
-    private var openHubLink: some View {
-        Link(destination: hubModelsURL) {
-            Label("Open Hub", systemImage: "arrow.up.right")
-                .font(.caption)
-        }
-        .fixedSize()
-    }
-
     private var hubVisibilityPredicate: (HuggingFaceModel) -> Bool {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
@@ -1337,6 +1401,19 @@ struct ModelsView: View {
         Menu {
             Section("Hugging Face Cache") {
                 Text(abbreviatedPath(modelState.settings.normalized().modelSearchPath))
+                externalModelCacheStatus
+                Button(
+                    "Choose External Location…",
+                    systemImage: "externaldrive",
+                    action: chooseExternalModelCache
+                )
+                if modelState.settings.externalModelCache != nil {
+                    Button(
+                        "Restore System Default",
+                        systemImage: "arrow.counterclockwise",
+                        action: restoreSystemModelCache
+                    )
+                }
             }
             Section("Model Folders") {
                 ForEach(modelState.settings.normalized().additionalModelSearchPaths, id: \.self) {
@@ -1357,7 +1434,25 @@ struct ModelsView: View {
             Label("Sources", systemImage: "folder")
         }
         .fixedSize()
-        .help("Folders scanned for MLX models in addition to the Hugging Face cache")
+        .help("Manage model storage and additional model folders")
+    }
+
+    @ViewBuilder
+    private var externalModelCacheStatus: some View {
+        switch modelState.externalModelCacheState {
+        case .systemDefault:
+            Label("System Default", systemImage: "internaldrive")
+        case .available(_, let availableCapacity):
+            Label("External Drive Connected", systemImage: "externaldrive.fill.badge.checkmark")
+            if let availableCapacity {
+                Text("\(availableCapacity.formatted(.byteCount(style: .file))) available")
+            }
+        case .unavailable:
+            Label(
+                "External Drive Unavailable",
+                systemImage: "externaldrive.badge.exclamationmark"
+            )
+        }
     }
 
     private func rescanLocalModels() {
@@ -1387,6 +1482,37 @@ struct ModelsView: View {
         )
     }
 
+    private func chooseExternalModelCache() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(filePath: "/Volumes", directoryHint: .isDirectory)
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder on an external APFS drive. Nativ will unload selected models and restart the server."
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return }
+
+        do {
+            try model.selectExternalModelCache(at: selectedURL)
+        } catch {
+            showModelCacheError(error)
+        }
+    }
+
+    private func restoreSystemModelCache() {
+        do {
+            try model.restoreDefaultModelCache()
+        } catch {
+            showModelCacheError(error)
+        }
+    }
+
+    private func showModelCacheError(_ error: Error) {
+        modelCacheErrorMessage = error.localizedDescription
+        showsModelCacheError = true
+    }
+
     private func removeModelSourceFolder(_ path: String) {
         model.settings.additionalModelSearchPaths.removeAll { $0 == path }
     }
@@ -1405,37 +1531,6 @@ struct ModelsView: View {
             access: hubAccessFilter,
             authenticationToken: modelState.effectiveHuggingFaceToken
         )
-    }
-
-    private var hubModelsURL: URL {
-        var components = URLComponents(string: "https://huggingface.co/models")!
-        var queryItems = [
-            URLQueryItem(name: "library", value: "safetensors"),
-            URLQueryItem(name: "sort", value: hubSort.hubWebValue),
-            URLQueryItem(name: "p", value: String(hubLibrary.pageNumber - 1)),
-        ]
-
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            queryItems.append(URLQueryItem(name: "search", value: query))
-        }
-        queryItems.append(
-            contentsOf:
-                hubCapabilityFilters
-            .sorted { $0.rawValue < $1.rawValue }
-            .map(\.hubQueryItem))
-
-        switch hubAccessFilter {
-        case .all:
-            break
-        case .open:
-            queryItems.append(URLQueryItem(name: "gated", value: "false"))
-        case .gated:
-            queryItems.append(URLQueryItem(name: "gated", value: "true"))
-        }
-
-        components.queryItems = queryItems
-        return components.url!
     }
 
 }
@@ -1562,6 +1657,7 @@ private struct ModelReadmePanel: View {
     let selection: ModelReadmeSelection
     @ObservedObject var store: HuggingFaceModelReadmeStore
     let onClose: () -> Void
+    @State private var isModelLinkHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1579,9 +1675,31 @@ private struct ModelReadmePanel: View {
             ModelProviderBadge(provider: selection.provider)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(modelName(selection.repoID))
-                    .font(.headline)
-                    .lineLimit(1)
+                if let hubURL {
+                    Link(destination: hubURL) {
+                        HStack(spacing: 4) {
+                            Text(modelName(selection.repoID))
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .underline(isModelLinkHovered)
+                                .lineLimit(1)
+                            Image(systemName: "arrow.up.right")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.blue)
+                                .opacity(isModelLinkHovered ? 1 : 0)
+                                .accessibilityHidden(true)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { isModelLinkHovered = $0 }
+                    .help("Open \(selection.repoID) on Hugging Face Hub")
+                    .accessibilityLabel("Open \(selection.repoID) on Hugging Face Hub")
+                } else {
+                    Text(modelName(selection.repoID))
+                        .font(.headline)
+                        .lineLimit(1)
+                }
                 Text(selection.repoID)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1614,22 +1732,19 @@ private struct ModelReadmePanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let markdown = store.markdown {
             ScrollView {
-                StructuredText(
-                    markdown: NativMarkdownFormatting.normalizedMathDelimiters(
-                        in: HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
+                NativMarkdownRenderer(
+                    content: MathPreprocessor.preprocess(
+                        HuggingFaceModelReadmeFormatting.removingDuplicateLeadingTitle(
                             markdown,
                             modelTitle: modelName(selection.repoID)
                         )
                     ),
                     baseURL: readmeAssetBaseURL,
-                    syntaxExtensions: [.math]
+                    font: .system(size: 15),
+                    fontSize: 15,
+                    imagePolicy: .document,
+                    fitsTablesToWidth: true
                 )
-                .textual.structuredTextStyle(.gitHub)
-                .textual.tableStyle(.overflow(relativeWidth: 4))
-                .textual.imageAttachmentLoader(.image(relativeTo: readmeAssetBaseURL))
-                .textual.overflowMode(.scroll)
-                .textual.textSelection(.enabled)
-                .font(.system(size: 15))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(18)
             }
@@ -1680,9 +1795,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let canDelete: Bool
     let isSelecting: Bool
     let isSelectedForDeletion: Bool
+    let isPinned: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
     let onToggleSelection: () -> Void
+    let onTogglePin: () -> Void
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
@@ -1702,6 +1819,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             && lhs.canDelete == rhs.canDelete
             && lhs.isSelecting == rhs.isSelecting
             && lhs.isSelectedForDeletion == rhs.isSelectedForDeletion
+            && lhs.isPinned == rhs.isPinned
     }
 
     private var isSelected: Bool {
@@ -1735,6 +1853,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                             Text(modelName(localModel.displayName))
                                 .font(.body.weight(.semibold))
                                 .lineLimit(1)
+                            if isPinned {
+                                ModelPill(
+                                    title: "Pinned",
+                                    systemImage: "pin.fill",
+                                    color: .accentColor
+                                )
+                            }
                             if let sourceLabel = localModel.source.badgeLabel {
                                 ModelPill(
                                     title: sourceLabel,
@@ -1833,6 +1958,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
             if !isSelecting {
                 loadButton
+                pinButton
                 modelActionsMenu
             }
         }
@@ -1846,6 +1972,13 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             accessibilityLabel: "Select \(localModel.repoID)",
             action: onToggleSelection
         )
+        .contextMenu {
+            Button(
+                isPinned ? "Unpin Model" : "Pin Model",
+                systemImage: isPinned ? "pin.slash" : "pin",
+                action: onTogglePin
+            )
+        }
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
@@ -1872,6 +2005,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 .help("Deleting model")
         } else {
             Menu {
+                Button(
+                    isPinned ? "Unpin Model" : "Pin Model",
+                    systemImage: isPinned ? "pin.slash" : "pin",
+                    action: onTogglePin
+                )
+
+                Divider()
+
                 if let snapshotURL = localModel.snapshotURL {
                     Button {
                         NSWorkspace.shared.activateFileViewerSelecting([snapshotURL])
@@ -1904,6 +2045,21 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             )
             .accessibilityLabel("Actions for \(localModel.repoID)")
         }
+    }
+
+    private var pinButton: some View {
+        Button(
+            isPinned ? "Unpin Model" : "Pin Model",
+            systemImage: isPinned ? "pin.fill" : "pin",
+            action: onTogglePin
+        )
+        .labelStyle(.iconOnly)
+        .buttonStyle(.borderless)
+        .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+        .frame(width: 30, height: 30)
+        .contentShape(Rectangle())
+        .help(isPinned ? "Unpin from the top of the model list" : "Pin to the top of the model list")
+        .accessibilityValue(isPinned ? "Pinned" : "Not pinned")
     }
 
     @ViewBuilder
@@ -2086,6 +2242,20 @@ private struct InstalledActiveDownloadRow: View {
             download.modelID.split(separator: "/").last.map(String.init) ?? download.modelID,
             maxLength: 44
         )
+    }
+}
+
+private struct ModelsPinnedSectionHeader: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

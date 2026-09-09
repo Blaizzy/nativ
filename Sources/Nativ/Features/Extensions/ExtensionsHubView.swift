@@ -58,7 +58,7 @@ struct ExtensionsHubView: View {
                         Image(systemName: item.systemImage)
                             .frame(width: 18)
                         Text(item.rawValue)
-                            .nativTextStyle(.sidebarItem)
+                            .legacyTextStyle(.sidebarItem)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10)
@@ -126,9 +126,9 @@ struct HubSectionScaffold<Content: View, Action: View>: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .nativTextStyle(.pageTitle)
+                            .legacyTextStyle(.pageTitle)
                         Text(subtitle)
-                            .nativTextStyle(.supporting)
+                            .legacyTextStyle(.supporting)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 12)
@@ -156,7 +156,7 @@ struct HubEmptyHint: View {
                 .font(.system(size: 26))
                 .foregroundStyle(.tertiary)
             Text(text)
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 320)
@@ -208,15 +208,15 @@ private struct ExtensionRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
                         Text(record.manifest.displayName)
-                            .nativTextStyle(.compactCardTitle)
+                            .legacyTextStyle(.compactCardTitle)
                         if record.isIncluded { includedBadge }
                     }
                     Text(record.manifest.summary)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("Version \(record.manifest.version)")
-                        .nativTextStyle(.metadata)
+                        .legacyTextStyle(.metadata)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 1)
                 }
@@ -491,16 +491,16 @@ private struct SkillRow: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(skill.name.isEmpty ? "Untitled skill" : skill.name)
-                    .nativTextStyle(.rowTitle)
+                    .legacyTextStyle(.rowTitle)
                 Text(skill.instructions)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 12)
             if isBuiltIn {
                 Text("Built-in")
-                    .nativTextStyle(.badgeMuted)
+                    .legacyTextStyle(.badgeMuted)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
@@ -539,16 +539,16 @@ private struct SkillEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(skill.name.isEmpty ? "New Skill" : "Edit Skill")
-                .nativTextStyle(.sheetTitle)
+                .legacyTextStyle(.sheetTitle)
             VStack(alignment: .leading, spacing: 6) {
-                Text("Name").nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
+                Text("Name").legacyTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
                 TextField("e.g. Concise replies", text: $skill.name)
                     .textFieldStyle(.roundedBorder)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("Instructions").nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
+                Text("Instructions").legacyTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
                 TextEditor(text: $skill.instructions)
-                    .nativTextStyle(.code)
+                    .legacyTextStyle(.code)
                     .frame(minHeight: 160)
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)

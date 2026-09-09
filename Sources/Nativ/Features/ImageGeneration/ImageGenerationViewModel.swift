@@ -1068,6 +1068,7 @@ struct ImageGenerationSessionSummary: Identifiable, Equatable {
 }
 
 struct ImageGenerationSessionStore {
+    private static let migrationLock = NSLock()
     private let fileManager: FileManager
     private let imageDirectory: URL
     private let legacyImageDirectory: URL?
@@ -1194,19 +1195,38 @@ struct ImageGenerationSessionStore {
     }
 
     private func migrateLegacyStoreIfNeeded() {
+        Self.migrationLock.lock()
+        defer { Self.migrationLock.unlock() }
+
+        let completionURL = imageDirectory.appendingPathComponent(".legacy-cache-migration-complete")
         guard let legacyImageDirectory,
               legacyImageDirectory.standardizedFileURL != imageDirectory.standardizedFileURL,
               fileManager.fileExists(atPath: legacyImageDirectory.path)
         else { return }
         do {
             let legacySessions = legacyImageDirectory.appendingPathComponent("Sessions", isDirectory: true)
-            guard fileManager.fileExists(atPath: legacySessions.path) else { return }
-            try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
-            for source in try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
-                where source.pathExtension == "json" {
-                let destination = sessionsDirectory.appendingPathComponent(source.lastPathComponent)
-                if !fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.copyItem(at: source, to: destination)
+            let files = fileManager.fileExists(atPath: legacySessions.path)
+                ? try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension == "json" }
+                : []
+            if !fileManager.fileExists(atPath: completionURL.path) {
+                try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
+                for source in files {
+                    let destination = sessionsDirectory.appendingPathComponent(source.lastPathComponent)
+                    if !fileManager.fileExists(atPath: destination.path) {
+                        try fileManager.copyItem(at: source, to: destination)
+                    }
+                    _ = try decoder().decode(ImageGenerationSession.self, from: Data(contentsOf: destination))
+                }
+                // Commit before removing originals so interrupted cleanup cannot reimport deleted sessions.
+                try Data().write(to: completionURL, options: .atomic)
+            }
+            for source in files {
+                try fileManager.removeItem(at: source)
+            }
+            for directory in [legacySessions, legacyImageDirectory] where fileManager.fileExists(atPath: directory.path) {
+                if try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty {
+                    try fileManager.removeItem(at: directory)
                 }
             }
         } catch {

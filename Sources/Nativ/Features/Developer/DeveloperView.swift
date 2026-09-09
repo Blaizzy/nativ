@@ -259,8 +259,11 @@ struct DeveloperView: View {
                     serverHostField
 
                     serverPortField
+
+                    Spacer(minLength: 0)
+
+                    modelDiscoveryControl
                 }
-                .frame(width: 850, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 9) {
                     endpointPanelTitle
@@ -273,7 +276,9 @@ struct DeveloperView: View {
 
                         serverPortField
 
-                        Spacer()
+                        Spacer(minLength: 0)
+
+                        modelDiscoveryControl
                     }
                 }
 
@@ -284,9 +289,22 @@ struct DeveloperView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     HStack(spacing: 10) {
-                        serverHostField
-                        serverPortField
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                serverHostField
+                                serverPortField
+                            }
+                            .fixedSize()
+
+                            VStack(alignment: .leading, spacing: 9) {
+                                serverHostField
+                                serverPortField
+                            }
+                        }
+
                         Spacer(minLength: 0)
+
+                        modelDiscoveryControl
                     }
                 }
             }
@@ -334,6 +352,16 @@ struct DeveloperView: View {
         }
     }
 
+    private var modelDiscoveryControl: some View {
+        Toggle("Show cached models through API", isOn: $model.settings.cachedModelDiscoveryEnabled)
+            .font(.caption.weight(.medium))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .fixedSize()
+            .help("Include unloaded models from your Hugging Face cache in the API model list. Applies on the next server start.")
+            .accessibilityHint("Include unloaded models from your Hugging Face cache. Applies on the next server start.")
+    }
+
     @ViewBuilder
     private var serverRestartIndicator: some View {
         if let countdown = model.serverRestartCountdown {
@@ -351,6 +379,12 @@ struct DeveloperView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
             .accessibilityElement(children: .combine)
+        } else if model.settingsRequireRestart {
+            Button("Restart to Apply", systemImage: "arrow.clockwise", action: model.restartServer)
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
         }
     }
 
@@ -1648,12 +1682,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.displayTitle)
-                    .nativTextStyle(.codeEmphasized)
+                    .legacyTextStyle(.codeEmphasized)
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .nativTextStyle(.code)
+                    .legacyTextStyle(.code)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)

@@ -19,7 +19,8 @@ final class IntegrationServicesTests: XCTestCase {
         .cursor,
         .jetbrains,
         .buzz,
-        .openInterpreter
+        .openInterpreter,
+        .dsh
     ]
 
     private var temporaryRoot: URL!
@@ -31,6 +32,7 @@ final class IntegrationServicesTests: XCTestCase {
     private let selectedModel = IntegrationModelDescriptor(
         id: "org/local-model",
         displayName: "Local Model",
+        provider: .qwen,
         contextWindow: 32_768,
         supportsVision: true,
         supportsReasoning: true,
@@ -39,6 +41,7 @@ final class IntegrationServicesTests: XCTestCase {
     private let basicModel = IntegrationModelDescriptor(
         id: "org/basic-model",
         displayName: "Basic Model",
+        provider: nil,
         contextWindow: nil,
         supportsVision: false,
         supportsReasoning: false,

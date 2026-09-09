@@ -201,7 +201,7 @@ enum HuggingFaceModelReadmeFormatting {
     }
 
     /// Hugging Face model cards frequently use small HTML fragments for centered banners,
-    /// navigation links, and inline emphasis. Textual intentionally renders Markdown rather
+    /// navigation links, and inline emphasis. The app intentionally renders Markdown rather
     /// than arbitrary HTML, so translate the safe presentation subset instead of exposing tags.
     private static func normalizeHTMLOutsideCodeFences(_ markdown: String) -> String {
         var result = ""

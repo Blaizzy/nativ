@@ -4,6 +4,38 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testPinnedModelsRoundTripInOrder() throws {
+        let settings = NativSettings(
+            pinnedModelIDs: ["org/most-used", "org/second"]
+        )
+
+        let data = try PropertyListEncoder().encode(settings)
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+
+        XCTAssertEqual(decoded.pinnedModelIDs, ["org/most-used", "org/second"])
+    }
+
+    func testPinnedModelsNormalizeWhitespaceAndDuplicates() {
+        let settings = NativSettings(
+            pinnedModelIDs: [" org/model ", "", "org/model", "org/other"]
+        ).normalized()
+
+        XCTAssertEqual(settings.pinnedModelIDs, ["org/model", "org/other"])
+    }
+
+    func testMissingPinnedModelsDecodeAsEmptyForBackwardCompatibility() throws {
+        let settings = try PropertyListDecoder().decode(
+            NativSettings.self,
+            from: PropertyListSerialization.data(
+                fromPropertyList: ["modelSearchPath": NativSettings.defaultModelSearchPath],
+                format: .xml,
+                options: 0
+            )
+        )
+
+        XCTAssertTrue(settings.pinnedModelIDs.isEmpty)
+    }
+
     func testDisablingLegacyReadFileAlsoDisablesGroupedSearchTool() {
         let settings = NativSettings(disabledToolNames: ["read_file"]).normalized()
 
@@ -186,6 +218,57 @@ final class NativSettingsTests: XCTestCase {
         changed.serverHost = "0.0.0.0"
 
         XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
+    }
+
+    func testCachedModelDiscoveryDefaultsToServedForNewAndLegacySettings() throws {
+        let legacyData = try PropertyListSerialization.data(
+            fromPropertyList: ["serverPort": 8080],
+            format: .xml,
+            options: 0
+        )
+        let legacy = try PropertyListDecoder().decode(NativSettings.self, from: legacyData)
+
+        for settings in [NativSettings(), legacy] {
+            XCTAssertFalse(settings.cachedModelDiscoveryEnabled)
+            XCTAssertEqual(settings.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"], "served")
+        }
+    }
+
+    func testCachedModelDiscoveryRoundTripsAndUsesConfiguredCache() throws {
+        for enabled in [false, true] {
+            let settings = NativSettings(
+                modelSearchPath: "~/custom-hf-cache",
+                cachedModelDiscoveryEnabled: enabled
+            )
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self,
+                from: PropertyListEncoder().encode(settings)
+            )
+
+            XCTAssertEqual(decoded.cachedModelDiscoveryEnabled, enabled)
+            XCTAssertEqual(
+                decoded.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"],
+                enabled ? "hf-cache" : "served"
+            )
+            XCTAssertEqual(
+                decoded.launchEnvironment["HF_HUB_CACHE"],
+                NSString(string: "~/custom-hf-cache").expandingTildeInPath
+            )
+            XCTAssertFalse(decoded.launchArguments.contains("--model"))
+        }
+    }
+
+    func testCachedModelDiscoveryRequiresRestartInBothDirectionsAndCanBeReverted() {
+        for enabled in [false, true] {
+            let original = NativSettings(cachedModelDiscoveryEnabled: enabled)
+            var changed = original
+            changed.cachedModelDiscoveryEnabled.toggle()
+
+            XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
+
+            changed.cachedModelDiscoveryEnabled = enabled
+            XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
+        }
     }
 
     func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {

@@ -38,6 +38,13 @@ switch to the original model when it is installed and links to Models when it is
 Users can instead continue with any downloaded language model. A chat remains read-only when
 its recorded token count exceeds the selected model's context window.
 
+## Multiple windows
+
+Choose **File > New Window** or press Command + Shift + N to open another workspace.
+Each window keeps its own navigation, chat, draft, and generation state while sharing the
+inference server, loaded models, and settings. A chat can generate in only one window at a
+time, and model selection is unavailable while any window is generating.
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is

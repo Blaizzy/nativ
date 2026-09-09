@@ -181,6 +181,7 @@ extension ControlPanelView {
     }
 
     func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
+        sidebarRenameCommitRequests.send()
         switch selection {
         case .tab(let tab):
             if tab == .extensions {
