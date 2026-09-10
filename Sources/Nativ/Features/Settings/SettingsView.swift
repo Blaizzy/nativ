@@ -46,7 +46,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     var model: NativModel
-    let softwareUpdater: SoftwareUpdater
+    @ObservedObject var softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
@@ -107,6 +107,27 @@ struct SettingsView: View {
                 ) {
                     CheckForUpdatesCommand(updater: softwareUpdater.updater)
                         .buttonStyle(.bordered)
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
+                    title: "Update Channel",
+                    description: softwareUpdater.channelDescription,
+                    systemImage: "arrow.triangle.branch"
+                ) {
+                    Picker("Update Channel", selection: Binding(
+                        get: { softwareUpdater.channel },
+                        set: { softwareUpdater.setChannel($0) }
+                    )) {
+                        ForEach(SoftwareUpdateChannel.allCases) { channel in
+                            Text(channel.title).tag(channel)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                    .disabled(!softwareUpdater.canChangeChannel)
                 }
 
                 Divider()
@@ -371,9 +392,7 @@ struct SettingsView: View {
 
     private var appVersionLabel: String {
         let info = Bundle.main.infoDictionary
-        let version =
-            info?["CFBundleShortVersionString"] as? String
-            ?? NativFormatting.missingValue
+        let version = ReleaseVersion.displayString(in: info)
         let build = info?["CFBundleVersion"] as? String
         if let build, !build.isEmpty {
             return "Version \(version) (\(build))"

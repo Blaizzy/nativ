@@ -95,6 +95,12 @@ brew install --cask nativ
 ```
 Nativ uses Sparkle for subsequent in-app updates.
 
+Updates default to stable releases. To try release candidates, choose **Settings →
+General → Update Channel → Release Candidates**. Switching back to Stable stops
+future candidate offers and waits for the next applicable stable release; it does
+not downgrade the installed app. See [release publishing](Docs/development/releases.md)
+for maintainer instructions.
+
 On first launch:
 
 1. Choose an installed language model, download a recommended one, or continue with load-on-demand.
