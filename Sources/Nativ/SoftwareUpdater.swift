@@ -41,14 +41,12 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
 
     var channelDescription: String {
         if !canChangeChannel {
-            return "Finish or skip the pending update in Check for Updates before changing channels."
+            return "Finish checking for updates before changing this setting."
         }
         if ReleaseVersion(installedVersion)?.candidate != nil && channel == .stable {
-            return "You’ll stay on this release candidate until a newer stable release is available."
+            return "You’ll stay on this beta release until a new release is available."
         }
-        return channel == .stable
-            ? "Receive stable releases only."
-            : "Receive stable releases and early release candidates, which may contain bugs."
+        return "Try new features early to provide feedback. Beta releases may have known issues."
     }
 
     var updater: SPUUpdater {

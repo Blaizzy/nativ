@@ -59,6 +59,7 @@ struct SettingsView: View {
                 generalSettings
                 projectSettings
                 permissionSettings
+                advancedSettings
             }
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -107,27 +108,6 @@ struct SettingsView: View {
                 ) {
                     CheckForUpdatesCommand(updater: softwareUpdater.updater)
                         .buttonStyle(.bordered)
-                }
-
-                Divider()
-                    .padding(.leading, 52)
-
-                settingsRow(
-                    title: "Update Channel",
-                    description: softwareUpdater.channelDescription,
-                    systemImage: "arrow.triangle.branch"
-                ) {
-                    Picker("Update Channel", selection: Binding(
-                        get: { softwareUpdater.channel },
-                        set: { softwareUpdater.setChannel($0) }
-                    )) {
-                        ForEach(SoftwareUpdateChannel.allCases) { channel in
-                            Text(channel.title).tag(channel)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 190)
-                    .disabled(!softwareUpdater.canChangeChannel)
                 }
 
                 Divider()
@@ -233,6 +213,35 @@ struct SettingsView: View {
         ) { _ in
             permissions.refresh()
             notifications.refreshAuthorizationStatus()
+        }
+    }
+
+    private var advancedSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Advanced")
+                .font(.headline)
+
+            VStack(spacing: 0) {
+                settingsRow(
+                    title: "Beta Updates",
+                    description: softwareUpdater.channelDescription,
+                    systemImage: "sun.horizon"
+                ) {
+                    Toggle("Allow Beta Updates", isOn: Binding(
+                        get: { softwareUpdater.channel == .releaseCandidates },
+                        set: { softwareUpdater.setChannel($0 ? .releaseCandidates : .stable) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(!softwareUpdater.canChangeChannel)
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
         }
     }
 
@@ -367,9 +376,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body.weight(.medium))
-                Text(description)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                
+                if !description.isEmpty {
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 20)
