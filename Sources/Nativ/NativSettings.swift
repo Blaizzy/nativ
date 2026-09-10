@@ -448,6 +448,7 @@ struct NativSettings: Codable, Equatable {
     var disabledToolNames: [String]
     var toolExposureModes: [String: ToolExposureMode]
     var mcpServerExposureModes: [String: ToolExposureMode]
+    var toolExposureModesMigrated: Bool
     var fileReadRootPath: String?
     var fileWriteRootPath: String?
     var projectToolsEnabled: Bool
@@ -507,6 +508,7 @@ struct NativSettings: Codable, Equatable {
         disabledToolNames: [String] = [],
         toolExposureModes: [String: ToolExposureMode] = [:],
         mcpServerExposureModes: [String: ToolExposureMode] = [:],
+        toolExposureModesMigrated: Bool = true,
         fileReadRootPath: String? = nil,
         fileWriteRootPath: String? = nil,
         projectToolsEnabled: Bool = true,
@@ -565,6 +567,7 @@ struct NativSettings: Codable, Equatable {
         self.disabledToolNames = disabledToolNames
         self.toolExposureModes = toolExposureModes
         self.mcpServerExposureModes = mcpServerExposureModes
+        self.toolExposureModesMigrated = toolExposureModesMigrated
         self.fileReadRootPath = fileReadRootPath
         self.fileWriteRootPath = fileWriteRootPath
         self.projectToolsEnabled = projectToolsEnabled
@@ -625,6 +628,7 @@ struct NativSettings: Codable, Equatable {
         case disabledToolNames
         case toolExposureModes
         case mcpServerExposureModes
+        case toolExposureModesMigrated
         case fileReadRootPath
         case fileWriteRootPath
         case projectToolsEnabled
@@ -715,6 +719,9 @@ struct NativSettings: Codable, Equatable {
                 [String: ToolExposureMode].self,
                 forKey: .mcpServerExposureModes
             ) ?? defaults.mcpServerExposureModes
+        toolExposureModesMigrated =
+            try container.decodeIfPresent(Bool.self, forKey: .toolExposureModesMigrated)
+            ?? container.contains(.toolExposureModes)
         fileReadRootPath =
             try container.decodeIfPresent(String.self, forKey: .fileReadRootPath)
             ?? defaults.fileReadRootPath
@@ -854,6 +861,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
         try container.encode(toolExposureModes, forKey: .toolExposureModes)
         try container.encode(mcpServerExposureModes, forKey: .mcpServerExposureModes)
+        try container.encode(toolExposureModesMigrated, forKey: .toolExposureModesMigrated)
         try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
         try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
         try container.encode(projectToolsEnabled, forKey: .projectToolsEnabled)
@@ -1173,9 +1181,14 @@ struct NativSettings: Codable, Equatable {
         if disabledToolNames.contains(toolName) {
             return .off
         }
-        return toolExposureModes[toolName]
-            ?? defaultMode
-            ?? Self.defaultToolExposureMode(for: toolName)
+        if let explicit = toolExposureModes[toolName] {
+            return explicit
+        }
+        if let defaultMode {
+            return defaultMode
+        }
+        guard toolExposureModesMigrated else { return .on }
+        return Self.defaultToolExposureMode(for: toolName)
     }
 
     mutating func setToolExposureMode(
@@ -1206,7 +1219,10 @@ struct NativSettings: Codable, Equatable {
 
     func mcpServerExposureMode(for server: MCPServerConfig) -> ToolExposureMode {
         guard server.isEnabled else { return .off }
-        return mcpServerExposureModes[server.id.uuidString] ?? .automatic
+        if let explicit = mcpServerExposureModes[server.id.uuidString] {
+            return explicit
+        }
+        return toolExposureModesMigrated ? .automatic : .on
     }
 
     mutating func setMCPServerExposureMode(
