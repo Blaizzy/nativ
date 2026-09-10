@@ -1478,9 +1478,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: context.cachePath,
             token: normalizedToken,
             revision: context.revision,
-            reservedBytes: downloads.filter { $0.modelID != repoID }.reduce(Int64(0)) {
-                $0 + ($1.metrics.remainingBytes ?? 0)
-            },
             progress: { [weak self] progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
@@ -1920,12 +1917,16 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
 }
 
 enum HuggingFaceDownloadOutput: Equatable {
+    case reservation(Int64)
     case progress(ModelDownloadProgress)
     case transferredBytes(Int64)
     case phase(HuggingFaceDownloadManager.DownloadPhase)
 
     init?(line: String) {
-        if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
+        if let payload = Self.payload(in: line, after: "__NATIV_RESERVE__:"),
+           let bytes = Int64(payload) {
+            self = .reservation(bytes)
+        } else if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
            let separator = payload.firstIndex(of: ":"),
            let completedBytes = Int64(payload[..<separator]),
            let totalBytes = Int64(payload[payload.index(after: separator)...]),
@@ -1985,8 +1986,7 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
-private final class HuggingFaceDownloadOperation: @unchecked Sendable {
-    private static let stallTimeout: TimeInterval = 60
+final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let finalizationStallTimeout: TimeInterval = 10 * 60
     private static let monitorInterval: TimeInterval = 0.5
     private static let maximumAttempts = 3
@@ -1995,6 +1995,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let executableURL: URL
     private let arguments: [String]
     private let environment: [String: String]
+    private let cachePath: String
+    private let capacity: HuggingFaceDownloadCapacity
+    private let stallTimeout: TimeInterval
     private let progress: @Sendable (ModelDownloadProgress) -> Void
     private let transferSpeed: @Sendable (Double?) -> Void
     private let phase: @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -2004,12 +2007,11 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private var wasCancelled = false
     private var isPaused = false
 
-    init(
+    convenience init(
         repoID: String,
         cachePath: String,
         token: String?,
         revision: String?,
-        reservedBytes: Int64,
         progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
         transferSpeed: @escaping @Sendable (Double?) -> Void,
         phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -2125,17 +2127,37 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
 
-        self.executableURL = pythonURL
-        self.arguments = [
+        let arguments = [
             "-c",
             script,
             repoID,
             cachePath,
             String(ProcessInfo.processInfo.processIdentifier),
-            revision ?? "main",
-            String(reservedBytes)
+            revision ?? "main"
         ]
+        self.init(executableURL: pythonURL, arguments: arguments, environment: environment,
+                  cachePath: cachePath, capacity: .shared,
+                  progress: progress, transferSpeed: transferSpeed, phase: phase)
+    }
+
+    /// Also allows subprocess tests to exercise admission and cleanup without Hub access.
+    init(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        cachePath: String,
+        capacity: HuggingFaceDownloadCapacity,
+        stallTimeout: TimeInterval = 60,
+        progress: @escaping @Sendable (ModelDownloadProgress) -> Void = { _ in },
+        transferSpeed: @escaping @Sendable (Double?) -> Void = { _ in },
+        phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void = { _ in }
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
         self.environment = environment
+        self.cachePath = cachePath
+        self.capacity = capacity
+        self.stallTimeout = stallTimeout
         self.progress = progress
         self.transferSpeed = transferSpeed
         self.phase = phase
@@ -2161,6 +2183,12 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     }
 
     private func runAttempt() throws {
+        let reservationID = UUID()
+        // Keep the full uncached-byte reservation until the subprocess and its
+        // output reader exit, including while paused or being cancelled. UI
+        // progress can be interpolated and is not proof that bytes are on disk.
+        // Retries release the old attempt and reserve again after a fresh dry run.
+        defer { capacity.release(reservationID) }
         activity.beginAttempt()
         let process = Process()
         process.executableURL = executableURL
@@ -2168,8 +2196,19 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         process.environment = environment
 
         let pipe = Pipe()
+        let approvalPipe = Pipe()
+        process.standardInput = approvalPipe
         process.standardOutput = pipe
         process.standardError = pipe
+        defer {
+            try? approvalPipe.fileHandleForWriting.close()
+            try? approvalPipe.fileHandleForReading.close()
+        }
+        // Cancellation may close the child's stdin before its approval is sent.
+        // Treat that as a failed write, never a signal that terminates the app.
+        guard fcntl(approvalPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
 
         let outputGroup = DispatchGroup()
         let output = HuggingFaceCapturedOutput(
@@ -2177,7 +2216,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         )
         outputGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            [activity, phase, progress] in
+            [self, activity, phase, progress] in
             var lineBuffer = ""
             while true {
                 let data = pipe.fileHandleForReading.availableData
@@ -2192,6 +2231,23 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 for line in lines.dropLast() {
                     guard let output = HuggingFaceDownloadOutput(line: line) else { continue }
                     switch output {
+                    case .reservation(let bytes):
+                        let response: [String: Any]
+                        do {
+                            guard !isCancelled else { throw CancellationError() }
+                            try capacity.reserve(reservationID, bytes: bytes, atPath: cachePath)
+                            response = ["approved": true]
+                        } catch {
+                            response = ["error": error.localizedDescription]
+                        }
+                        do {
+                            var data = try JSONSerialization.data(withJSONObject: response)
+                            data.append(0x0a)
+                            try approvalPipe.fileHandleForWriting.write(contentsOf: data)
+                        } catch {
+                            // EOF also denies admission if the reply cannot be delivered.
+                        }
+                        try? approvalPipe.fileHandleForWriting.close()
                     case .progress(let reportedProgress):
                         if let updatedProgress = activity.recordProgress(reportedProgress) {
                             progress(updatedProgress)
@@ -2220,6 +2276,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
         do {
             try process.run()
+            try? approvalPipe.fileHandleForReading.close()
         } catch {
             try? pipe.fileHandleForWriting.close()
             clearProcess(process)
@@ -2245,7 +2302,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 transferSpeed(activity.bytesPerSecond)
                 let timeout = activity.isFinishing
                     ? Self.finalizationStallTimeout
-                    : Self.stallTimeout
+                    : stallTimeout
                 if activity.isStalled(timeout: timeout, isPaused: false) {
                     stalled = true
                     stopProcess(process)

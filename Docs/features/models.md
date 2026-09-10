@@ -68,6 +68,13 @@ transfer, Nativ verifies the file list and checks the additional space needed af
 cached files and reservations for other downloads. If that verification fails, the download
 reports an error instead of proceeding with an unknown total.
 
+After resolving its exact uncached size, each downloader waits for the app to approve a disk
+reservation. A shared lock makes the fresh capacity check and reservation atomic across
+downloads on the same filesystem. Reservations remain held while paused and until the
+subprocess exits, including on cancellation or failure. Retries resolve and reserve again.
+The full reservation is retained during each attempt because displayed progress can be
+interpolated; this conservatively leaves less space available for additional downloads.
+
 ## Roles and preloading
 
 Separate models can be assigned per role and loaded concurrently, memory permitting:

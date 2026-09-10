@@ -3,7 +3,7 @@ import Foundation
 /// Shared with the subprocess tests so capacity checks run before any transfer.
 enum HuggingFaceDownloadPreflight {
     static let script = """
-    import shutil
+    import json
     print("__NATIV_STAGE__:preparing", flush=True)
     revision = sys.argv[4]
     files = snapshot_download(
@@ -23,12 +23,13 @@ enum HuggingFaceDownloadPreflight {
     cached_bytes = sum(item.file_size for item in files if not item.will_download)
     remaining_bytes = total_bytes - cached_bytes
     os.makedirs(sys.argv[2], exist_ok=True)
-    available_bytes = max(shutil.disk_usage(sys.argv[2]).free - int(sys.argv[5]), 0)
-    if remaining_bytes > available_bytes:
-        raise RuntimeError(
-            f"Model needs {remaining_bytes / 1e9:.2f} GB of additional space, "
-            f"but only {available_bytes / 1e9:.2f} GB is available after reserving other downloads."
-        )
+    print(f"__NATIV_RESERVE__:{remaining_bytes}", flush=True)
+    approval_line = sys.stdin.readline()
+    if not approval_line:
+        raise RuntimeError("Download stopped before disk space was reserved.")
+    approval = json.loads(approval_line)
+    if approval.get("approved") is not True:
+        raise RuntimeError(approval.get("error", "Disk space reservation was denied."))
     print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
     """
 }

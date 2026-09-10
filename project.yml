@@ -201,6 +201,7 @@ targets:
       - path: Sources/Nativ/Features/Models/ExternalModelCacheReference.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceDownloadPreflight.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceDownloadCapacity.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
