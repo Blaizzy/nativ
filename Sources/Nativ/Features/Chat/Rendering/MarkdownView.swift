@@ -26,6 +26,8 @@ struct MarkdownView: NSViewRepresentable {
 
 @MainActor
 final class MarkdownSurface: NSView {
+    private(set) lazy var selection = MarkdownSelection(surface: self)
+    var visibleTextViews: [MarkdownSelectableTextView] { mounted.values.flatMap { $0.content.textViews } }
     private var content: String?
     private var style = MarkdownStyle()
     private var mounted: [String: MarkdownBlockView] = [:]
@@ -36,6 +38,32 @@ final class MarkdownSurface: NSView {
     private var isRefreshing = false
     private var refreshedVisibleRect: CGRect?
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) { selection.track(event) }
+    override func keyDown(with event: NSEvent) { interpretKeyEvents([event]) }
+    override func doCommand(by selector: Selector) {
+        if !selection.command(selector) { super.doCommand(by: selector) }
+    }
+    override func resignFirstResponder() -> Bool {
+        selection.clear()
+        return super.resignFirstResponder()
+    }
+    @objc func copy(_ sender: Any?) { selection.copy(to: .general) }
+    override func selectAll(_ sender: Any?) { _ = selection.command(#selector(selectAll(_:))) }
+
+    func updateSelectionHighlights() {
+        for view in visibleTextViews { view.documentSelection = selection.localRange(for: view.fragmentID) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu()
+        let copy = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        copy.target = self
+        copy.isEnabled = selection.range.length > 0
+        menu.autoenablesItems = false
+        return menu
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -47,6 +75,7 @@ final class MarkdownSurface: NSView {
 
     func configure(content: String, style: MarkdownStyle) {
         guard self.content != content || self.style != style else { return }
+        selection.invalidate(contentChanged: self.content != content)
         self.content = content
         self.style = style
         measuredWidth = -1
@@ -65,6 +94,7 @@ final class MarkdownSurface: NSView {
 
     private func setSnapshot(_ snapshot: MarkdownLayout) {
         self.snapshot = snapshot
+        selection.invalidate(contentChanged: false)
         refreshedVisibleRect = nil
         var end: CGFloat = 0
         maximumBlockEnds = snapshot.blocks.map {
@@ -132,7 +162,7 @@ final class MarkdownSurface: NSView {
                 addSubview(view)
             }
             view.frame = block.frame
-            view.update(block)
+            view.update(block, selection: selection)
         }
         for id in Array(mounted.keys) where !needed.contains(id) {
             guard let view = mounted[id] else { continue }
@@ -179,7 +209,7 @@ private final class MarkdownBlockView: NSView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("Not a serialized view") }
 
-    func update(_ block: MarkdownBlock) {
+    func update(_ block: MarkdownBlock, selection: MarkdownSelection) {
         if block.scrollsHorizontally {
             if scroller == nil {
                 content.removeFromSuperview()
@@ -204,7 +234,7 @@ private final class MarkdownBlockView: NSView {
             }
             content.frame = bounds
         }
-        content.update(block)
+        content.update(block, selection: selection)
     }
 }
 
@@ -212,10 +242,11 @@ private final class MarkdownBlockView: NSView {
 private final class MarkdownBlockContentView: NSView {
     private var block: MarkdownBlock?
     private var texts: [String: MarkdownSelectableTextView] = [:]
+    var textViews: [MarkdownSelectableTextView] { Array(texts.values) }
     override var isFlipped: Bool { true }
     var containsSelection: Bool { texts.values.contains(where: \.hasActiveSelection) }
 
-    func update(_ block: MarkdownBlock) {
+    func update(_ block: MarkdownBlock, selection: MarkdownSelection) {
         self.block = block
         // The parent already restricts mounting to the viewport. Cells in large tables are restricted too.
         let region = visibleRect.insetBy(dx: -100, dy: -350)
@@ -241,6 +272,9 @@ private final class MarkdownBlockContentView: NSView {
                 addSubview(view)
             }
             view.frame = fragment.frame
+            view.fragmentID = block.id + "/" + fragment.id
+            view.document = selection
+            view.documentSelection = selection.localRange(for: view.fragmentID)
         }
         for id in Array(texts.keys) where !needed.contains(id) {
             guard let view = texts[id], !view.hasActiveSelection else { continue }
@@ -264,6 +298,11 @@ private final class MarkdownBlockContentView: NSView {
 
 @MainActor
 final class MarkdownSelectableTextView: NSTextView {
+    weak var document: MarkdownSelection?
+    var fragmentID = ""
+    var documentSelection: NSRange? {
+        didSet { if oldValue != documentSelection { needsDisplay = true } }
+    }
     let system: MarkdownTextSystem
     private let original: NSAttributedString
     private let measuredWidth: CGFloat
@@ -294,7 +333,65 @@ final class MarkdownSelectableTextView: NSTextView {
         measuredWidth == fragment.frame.width && original.isEqual(to: fragment.text)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        guard let document else { super.mouseDown(with: event); return }
+        let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
+        let link = index < original.length ? original.attribute(.link, at: index, effectiveRange: nil) : nil
+        document.track(event)
+        if document.range.length == 0, event.clickCount == 1, !event.modifierFlags.contains(.shift), let link {
+            clicked(onLink: link, at: index)
+        }
+    }
+
+    override func accessibilitySelectedText() -> String? {
+        documentSelection.map { Self.plainText(original.attributedSubstring(from: $0)) }
+            ?? super.accessibilitySelectedText()
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        documentSelection ?? super.accessibilitySelectedTextRange()
+    }
+
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        if let document { document.select(in: fragmentID, range: range) }
+        else { super.setAccessibilitySelectedTextRange(range) }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        if document?.range.length ?? 0 > 0 {
+            let menu = NSMenu()
+            let item = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+            item.target = self
+            menu.autoenablesItems = false
+            return menu
+        }
+        return super.menu(for: event)
+    }
+
+    func selectionRects(for range: NSRange) -> [CGRect] {
+        guard let start = system.storage.location(system.storage.documentRange.location, offsetBy: range.location),
+              let end = system.storage.location(start, offsetBy: range.length),
+              let textRange = NSTextRange(location: start, end: end) else { return [] }
+        var rects: [CGRect] = []
+        system.manager.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, rect, _, _ in
+            rects.append(rect)
+            return true
+        }
+        return rects
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        if let documentSelection {
+            (window?.isKeyWindow == true ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor).setFill()
+            for rect in selectionRects(for: documentSelection) where rect.intersects(dirtyRect) {
+                NSBezierPath(rect: rect).fill()
+            }
+        }
+        super.draw(dirtyRect)
+    }
+
     override func copy(_ sender: Any?) {
+        if let document, document.range.length > 0 { document.copy(to: .general); return }
         let range = selectedRange()
         guard range.length > 0 else { return }
         let value = Self.plainText(original.attributedSubstring(from: range))

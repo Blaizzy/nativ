@@ -2,7 +2,9 @@
 
 Select text directly in a completed user or assistant message. A **Quote reply** badge appears above the selection; clicking it attaches the passage to the composer. Add a question and send normally. Clicking elsewhere, scrolling, or pressing Escape dismisses the badge.
 
-Selection follows the existing Markdown renderer and is limited to a single rendered block. A selection cannot span separate paragraphs or headings.
+The custom Markdown renderer supports continuous selection across paragraphs, headings, lists, code, and table cells within one response. Drag in either direction, Shift-click to extend, or use keyboard selection and Select All. Copy and Quote reply use the same document selection.
+
+Selection is independent of the viewport's text views. Only mounted fragments draw highlights; selecting offscreen content does not mount or retain its views. The Markdown parser, layout cache, and viewport mounting policy are unchanged. Changing the response text clears the selection; resizing preserves it.
 
 Up to five quotes can be staged. Each card can be removed or used to navigate to its source. A selection is limited to 8,000 characters, without silent truncation. Sent quotes remain separate from the user's editable question and survive session persistence, editing, branching, and archive import/export.
 
@@ -13,6 +15,8 @@ The selected passages are included with the user's request, each labeled with it
 Quotes are snapshots that retain the text selected when they were added. Historical quotes are sent again with their containing message. Existing chats without quotes load normally. Previously saved surrounding excerpts are ignored and omitted when the chat is saved again.
 
 ## Verification
+
+`MarkdownSelectionTests` covers native drags, backward selection, Shift-click, keyboard selection, copy, accessibility, source mapping, autoscrolling, and selection across a 500-paragraph document without retaining offscreen views or rebuilding layout.
 
 Quote actions use one identity-comparable handler per chat, passed through the environment above the transcript and composer. The handler holds the chat weakly and does not subscribe message views to chat-wide updates. `ChatAnnotationActionsTests` checks ownership and renders an environment consumer to verify that unrelated chat updates leave it unchanged while capacity and owner changes reach it.
 

@@ -16,12 +16,14 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
 
     static func selectionRange(
         text: String, in source: String, elementText: String?, elementRange: NSRange,
-        renderedMarkdown: Bool = false
+        renderedMarkdown: Bool = false,
+        markdownFragments: [MarkdownSelection.SelectedFragment]? = nil
     ) -> NSRange? {
         guard !text.isEmpty, text.count <= maximumSelectionCharacters else { return nil }
         if renderedMarkdown,
            let range = markdownSelectionRange(text: text, in: source,
-                                             elementText: elementText, elementRange: elementRange) {
+                                             elementText: elementText, elementRange: elementRange,
+                                             fragments: markdownFragments) {
             return range
         }
         let raw = source as NSString
@@ -43,14 +45,16 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
     }
 
     private static func markdownSelectionRange(
-        text: String, in source: String, elementText: String?, elementRange: NSRange
+        text: String, in source: String, elementText: String?, elementRange: NSRange,
+        fragments: [MarkdownSelection.SelectedFragment]?
     ) -> NSRange? {
         guard let parsed = try? AttributedString(markdown: source, options: .init(
             appliesSourcePositionAttributes: true
         )) else { return nil }
         let plain = String(parsed.characters)
-        guard let selected = selectionRange(text: text, in: plain,
-                                           elementText: elementText, elementRange: elementRange)
+        let selectedRange = fragments.map { fragmentSelectionRange($0, in: plain) }
+            ?? selectionRange(text: text, in: plain, elementText: elementText, elementRange: elementRange)
+        guard let selected = selectedRange
         else { return nil }
         let raw = source as NSString
         var start: Int?
@@ -92,6 +96,32 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
                                          (visibleText as NSString).length), isUpperBound: true
                 )
             }
+        }
+        guard let start, let end, end > start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private static func fragmentSelectionRange(
+        _ fragments: [MarkdownSelection.SelectedFragment], in plain: String
+    ) -> NSRange? {
+        let document = plain as NSString
+        var cursor = 0
+        var start: Int?
+        var end: Int?
+        for fragment in fragments {
+            let match = document.range(of: fragment.text, range: NSRange(
+                location: cursor, length: document.length - cursor))
+            guard match.location != NSNotFound else {
+                // Unselected attachments/math can differ from Foundation's plain Markdown.
+                // They must not prevent a later text selection from being quoted.
+                if fragment.range == nil { continue }
+                return nil
+            }
+            if let selected = fragment.range {
+                if start == nil { start = match.location + selected.location }
+                end = match.location + NSMaxRange(selected)
+            }
+            cursor = NSMaxRange(match)
         }
         guard let start, let end, end > start else { return nil }
         return NSRange(location: start, length: end - start)
@@ -535,7 +565,8 @@ struct ChatSelectionObserver: NSViewRepresentable {
                   let range = ChatAnnotation.selectionRange(
                     text: selection.text, in: message.content,
                     elementText: selection.fullText, elementRange: selection.range,
-                    renderedMarkdown: message.role == .assistant
+                    renderedMarkdown: message.role == .assistant,
+                    markdownFragments: selection.markdownFragments
                   ),
                   let annotation = ChatAnnotation.capture(message: message, range: range,
                                                           displayedText: selection.text)
@@ -604,10 +635,20 @@ enum ChatTextSelectionReader {
         let fullText: String?
         let range: NSRange
         let frame: CGRect
+        var markdownFragments: [MarkdownSelection.SelectedFragment]? = nil
     }
 
     static func selection(in window: NSWindow, at screenPoint: NSPoint? = nil,
                           fallbackFrame: CGRect? = nil) -> Selection? {
+        if let surface = window.firstResponder as? MarkdownSurface {
+            let selection = surface.selection
+            guard selection.range.length > 0,
+                  selection.range.length <= ChatAnnotation.maximumSelectionCharacters * 4,
+                  let frame = selection.selectionFrame else { return nil }
+            return Selection(text: selection.text, fullText: nil,
+                             range: NSRange(location: NSNotFound, length: 0), frame: frame,
+                             markdownFragments: selection.selectedFragments)
+        }
         if let screenPoint, let hit = window.contentView?.accessibilityHitTest(screenPoint) as? NSObject,
            let result = selection(from: hit, fallbackFrame: fallbackFrame) {
             return result
