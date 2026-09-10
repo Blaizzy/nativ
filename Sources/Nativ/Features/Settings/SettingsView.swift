@@ -223,7 +223,7 @@ struct SettingsView: View {
 
             VStack(spacing: 0) {
                 settingsRow(
-                    title: "Beta Updates",
+                    title: "Allow Beta Updates",
                     description: softwareUpdater.channelDescription,
                     systemImage: "sun.horizon"
                 ) {

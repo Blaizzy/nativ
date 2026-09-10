@@ -44,9 +44,9 @@ final class SoftwareUpdater: NSObject, ObservableObject, SPUUpdaterDelegate {
             return "Finish checking for updates before changing this setting."
         }
         if ReleaseVersion(installedVersion)?.candidate != nil && channel == .stable {
-            return "You’ll stay on this beta release until a new release is available."
+            return "You’ll stay on this beta update until a new update is available."
         }
-        return "Try new features early to provide feedback. Beta releases may have known issues."
+        return "Try new features early to provide feedback. Beta update may have known issues."
     }
 
     var updater: SPUUpdater {

@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -308,6 +309,81 @@ class FakePreviewGitHub(FakeGitHub):
     def asset_bytes(self, name):
         asset = next(asset for asset in self.preview["assets"] if asset["name"] == name)
         return self.contents[asset["id"]]
+
+
+class BumpVersionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        for name in ["bump_version.sh", "macos_release.py"]:
+            shutil.copyfile(Path(__file__).parents[1] / name, scripts / name)
+        self.project = self.root / "project.yml"
+        self.project.write_text(textwrap.dedent("""\
+            name: Nativ
+            targets:
+              Nativ:
+                settings:
+                  MARKETING_VERSION: 0.3.7
+                  NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
+                  CURRENT_PROJECT_VERSION: 12
+              Extension:
+                settings:
+                  MARKETING_VERSION: 0.3.7
+                  CURRENT_PROJECT_VERSION: 12
+            """))
+        binaries = self.root / "bin"
+        binaries.mkdir()
+        xcodegen = binaries / "xcodegen"
+        xcodegen.write_text('#!/bin/sh\n[ "$1" = generate ] || exit 1\ncp project.yml generated-project.yml\n')
+        xcodegen.chmod(0o755)
+        self.environment = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"])
+
+    def bump(self, *arguments):
+        return subprocess.run(
+            ["bash", str(self.root / "scripts/bump_version.sh"), *arguments],
+            env=self.environment, capture_output=True, text=True,
+        )
+
+    def assert_versions(self, marketing, label, build):
+        text = self.project.read_text()
+        self.assertEqual(text.count(f"MARKETING_VERSION: {marketing}\n"), 2)
+        self.assertEqual(text.count(f"CURRENT_PROJECT_VERSION: {build}\n"), 2)
+        self.assertIn(f"NATIV_RELEASE_VERSION: {label}\n", text)
+        self.assertEqual((self.root / "generated-project.yml").read_text(), text)
+
+    def test_candidate_bumps_keep_all_bundle_versions_numeric(self):
+        for version, build in [("v0.4.0rc1", 13), ("0.4.0rc2", 14)]:
+            result = self.bump(version)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assert_versions("0.4.0", version.removeprefix("v"), build)
+
+    def test_stable_release_clears_candidate_label(self):
+        for version in ["v0.4.0rc1", "v0.4.0"]:
+            result = self.bump(version)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_versions("0.4.0", "$(MARKETING_VERSION)", 14)
+
+    def test_default_bump_selects_next_stable_patch(self):
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_versions("0.3.8", "$(MARKETING_VERSION)", 13)
+        result = self.bump("v0.4.0rc1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = self.bump()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_versions("0.4.1", "$(MARKETING_VERSION)", 15)
+
+    def test_invalid_versions_leave_project_untouched(self):
+        original = self.project.read_bytes()
+        for version in ["v0.4.0rc0", "v0.4.0rc01", "v0.4.0-rc1", "v0.4.0beta1", "v0.4", "v01.4.0"]:
+            with self.subTest(version=version):
+                result = self.bump(version)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.project.read_bytes(), original)
+                self.assertFalse((self.root / "generated-project.yml").exists())
 
 
 class PreviewPublishingTests(unittest.TestCase):
