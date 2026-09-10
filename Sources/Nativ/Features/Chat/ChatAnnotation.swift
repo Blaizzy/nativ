@@ -48,7 +48,9 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
         text: String, in source: String, elementText: String?, elementRange: NSRange,
         fragments: [MarkdownSelection.SelectedFragment]?
     ) -> NSRange? {
-        guard let parsed = try? AttributedString(markdown: source, options: .init(
+        let mathSource = MarkdownMathSelectionSource(source)
+        let markdown = mathSource.markdown
+        guard let parsed = try? AttributedString(markdown: markdown, options: .init(
             appliesSourcePositionAttributes: true
         )) else { return nil }
         let plain = String(parsed.characters)
@@ -56,15 +58,15 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
             ?? selectionRange(text: text, in: plain, elementText: elementText, elementRange: elementRange)
         guard let selected = selectedRange
         else { return nil }
-        let raw = source as NSString
+        let raw = markdown as NSString
         var start: Int?
         var end: Int?
         for run in parsed.runs {
             let visibleRange = NSRange(run.range, in: parsed)
             guard NSIntersectionRange(visibleRange, selected).length > 0,
                   let position = run.markdownSourcePosition,
-                  let sourceIndices = Range<String.Index>(position, in: source) else { continue }
-            let sourceRange = NSRange(sourceIndices, in: source)
+                  let sourceIndices = Range<String.Index>(position, in: markdown) else { continue }
+            let sourceRange = NSRange(sourceIndices, in: markdown)
             var visibleText = String(parsed[run.range].characters)
             let isCodeBlock = run.presentationIntent?.components.contains(where: {
                 if case .codeBlock = $0.kind { return true }
@@ -98,33 +100,50 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
             }
         }
         guard let start, let end, end > start else { return nil }
-        return NSRange(location: start, length: end - start)
+        let sourceStart = mathSource.sourceOffset(start, isUpperBound: false)
+        let sourceEnd = mathSource.sourceOffset(end, isUpperBound: true)
+        return NSRange(location: sourceStart, length: sourceEnd - sourceStart)
     }
 
     private static func fragmentSelectionRange(
         _ fragments: [MarkdownSelection.SelectedFragment], in plain: String
     ) -> NSRange? {
         let document = plain as NSString
-        var cursor = 0
-        var start: Int?
-        var end: Int?
-        for fragment in fragments {
-            let match = document.range(of: fragment.text, range: NSRange(
-                location: cursor, length: document.length - cursor))
-            guard match.location != NSNotFound else {
-                // Unselected attachments/math can differ from Foundation's plain Markdown.
-                // They must not prevent a later text selection from being quoted.
-                if fragment.range == nil { continue }
-                return nil
+        guard let first = fragments.firstIndex(where: { $0.range != nil }),
+              let last = fragments.lastIndex(where: { $0.range != nil }) else { return nil }
+
+        func locate(backwards: Bool) -> NSRange? {
+            let indices = backwards ? Array((first..<fragments.count).reversed()) : Array(0...last)
+            var cursor = backwards ? document.length : 0
+            var start: Int?
+            var end: Int?
+            for index in indices {
+                let fragment = fragments[index]
+                let search = backwards ? NSRange(location: 0, length: cursor)
+                    : NSRange(location: cursor, length: document.length - cursor)
+                let match = document.range(of: fragment.text, options: backwards ? .backwards : [], range: search)
+                // Never skip unknown content: it could contain the next repeated passage.
+                guard match.location != NSNotFound else { return nil }
+                if let selected = fragment.range {
+                    guard selected.location >= 0, selected.length > 0,
+                          selected.location <= match.length,
+                          selected.length <= match.length - selected.location else { return nil }
+                    start = min(start ?? document.length, match.location + selected.location)
+                    end = max(end ?? 0, match.location + NSMaxRange(selected))
+                }
+                cursor = backwards ? match.location : NSMaxRange(match)
             }
-            if let selected = fragment.range {
-                if start == nil { start = match.location + selected.location }
-                end = match.location + NSMaxRange(selected)
-            }
-            cursor = NSMaxRange(match)
+            guard let start, let end, end > start else { return nil }
+            return NSRange(location: start, length: end - start)
         }
-        guard let start, let end, end > start else { return nil }
-        return NSRange(location: start, length: end - start)
+
+        // Math/attachments may prevent alignment from one edge. The other edge
+        // still identifies the passage; conflicting alignments are ambiguous.
+        switch (locate(backwards: false), locate(backwards: true)) {
+        case let (forward?, backward?): return forward == backward ? forward : nil
+        case let (range?, nil), let (nil, range?): return range
+        case (nil, nil): return nil
+        }
     }
 
     static func capture(message: ChatTranscriptMessage, range: NSRange, displayedText: String? = nil) -> Self? {
@@ -156,6 +175,50 @@ struct ChatAnnotation: Identifiable, Equatable, Codable, Sendable {
 
     private static func blockquote(_ text: String) -> String {
         text.components(separatedBy: "\n").map { "> " + $0 }.joined(separator: "\n")
+    }
+}
+
+/// Present equations as literal Markdown while retaining their original spans.
+/// The normal Markdown mapper then handles lists, emphasis, entities and links.
+private struct MarkdownMathSelectionSource {
+    let markdown: String
+    private var replacements: [(rendered: NSRange, source: NSRange)] = []
+
+    init(_ source: String) {
+        let math = MathPreprocessor.selectionReplacements(in: source)
+        guard !math.isEmpty else { markdown = source; return }
+        let raw = source as NSString
+        let result = NSMutableString()
+        var cursor = 0
+        for replacement in math {
+            result.append(raw.substring(with: NSRange(location: cursor, length: replacement.range.location - cursor)))
+            var literal = ""
+            for scalar in replacement.text.unicodeScalars {
+                switch scalar.value {
+                case 10: literal += "&#10;"
+                case 13: literal += "&#13;"
+                case 33...47, 58...64, 91...96, 123...126: literal += "\\" + String(scalar)
+                default: literal += String(scalar)
+                }
+            }
+            replacements.append((NSRange(location: result.length, length: literal.utf16.count), replacement.range))
+            result.append(literal)
+            cursor = NSMaxRange(replacement.range)
+        }
+        result.append(raw.substring(from: cursor))
+        markdown = result as String
+    }
+
+    func sourceOffset(_ offset: Int, isUpperBound: Bool) -> Int {
+        var difference = 0
+        for replacement in replacements {
+            if offset <= replacement.rendered.location { break }
+            if offset < NSMaxRange(replacement.rendered) {
+                return isUpperBound ? NSMaxRange(replacement.source) : replacement.source.location
+            }
+            difference += replacement.source.length - replacement.rendered.length
+        }
+        return offset + difference
     }
 }
 

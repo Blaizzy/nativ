@@ -1,5 +1,5 @@
 {
-  "originHash" : "157f7c2929f0864db791c73e2d1ae5596b545da751081421286808bf8562587a",
+  "originHash" : "4fcfc3a60a9d1ad4f950c06f2cca4b41db2bc89ddcf1057d639ced64ef1afcb3",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -17,15 +17,6 @@
       "state" : {
         "revision" : "05e7fcc63b33925cd0c1faaa205cdd5681e7bbef",
         "version" : "2.3.0"
-      }
-    },
-    {
-      "identity" : "networkimage",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/NetworkImage",
-      "state" : {
-        "revision" : "2849f5323265386e200484b0d0f896e73c3411b9",
-        "version" : "6.0.1"
       }
     },
     {
@@ -78,17 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
-        "version" : "1.15.0"
-      }
-    },
-    {
-      "identity" : "swift-markdown-ui",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/swift-markdown-ui",
-      "state" : {
-        "revision" : "5f613358148239d0292c0cef674a3c2314737f9e",
-        "version" : "2.4.1"
+        "revision" : "9c6fb14227f55d8f711ce3847dc2f419fb0ecacb",
+        "version" : "1.15.1"
       }
     },
     {

@@ -116,10 +116,10 @@ final class MarkdownSelection {
         return result
     }
 
-    /// Include preceding fragments so repeated passages can be mapped in document order.
+    /// Include both sides so source mapping can align from either document edge.
     var selectedFragments: [SelectedFragment] {
         indexIfNeeded()
-        return fragments.prefix { $0.range.location < NSMaxRange(range) }.compactMap { fragment in
+        return fragments.compactMap { fragment in
             guard !fragment.id.contains(".marker.") else { return nil }
             let local = localRange(for: fragment.id)
             let plainRange = local.map { local in
@@ -137,7 +137,8 @@ final class MarkdownSelection {
         var result: CGRect?
         for view in surface.visibleTextViews {
             guard let local = localRange(for: view.fragmentID) else { continue }
-            for rect in view.selectionRects(for: local) {
+            let viewport = view.convert(surface.visibleRect, from: surface).intersection(view.visibleRect)
+            for rect in view.selectionRects(for: local, clippedTo: viewport) {
                 let visible = view.convert(rect, to: surface).intersection(surface.visibleRect)
                 if !visible.isEmpty && !visible.isNull { result = result.map { $0.union(visible) } ?? visible }
             }
@@ -277,9 +278,18 @@ final class MarkdownSelection {
         guard let surface, let fragment = fragments.first(where: {
             head >= $0.range.location && head <= NSMaxRange($0.range)
         }) else { return }
-        if !fragment.frame.intersects(surface.visibleRect) {
-            surface.scrollToVisible(fragment.frame)
+        if !surface.visibleTextViews.contains(where: { $0.fragmentID == fragment.id }) {
+            surface.scrollToVisible(CGRect(x: fragment.frame.minX, y: fragment.frame.minY,
+                                          width: 1, height: min(20, fragment.frame.height)))
             surface.refreshVisibleBlocks()
         }
+        guard let view = surface.visibleTextViews.first(where: { $0.fragmentID == fragment.id }),
+              let caret = view.selectionRects(for: NSRange(location: head - fragment.range.location, length: 0)).first
+        else { return }
+        let target = caret.insetBy(dx: -2, dy: -2)
+        // Code/table fragments can have a horizontal scroller inside the transcript.
+        view.scrollToVisible(target)
+        surface.scrollToVisible(view.convert(target, to: surface))
+        surface.refreshVisibleBlocks()
     }
 }

@@ -195,6 +195,159 @@ final class MarkdownSelectionTests: XCTestCase {
         }
     }
 
+    func testKeyboardEndRevealsCaretInLongCodeBlock() throws {
+        let source = "```text\n" + (0..<200).map { "Line \($0)" }.joined(separator: "\n") + "\n```"
+        let (window, scroll, surface) = fixture(source, height: 150)
+        defer { window.close() }
+        surface.selection.select(anchor: 0, head: 0)
+        XCTAssertTrue(surface.selection.command(NSSelectorFromString("moveToEndOfDocumentAndModifySelection:")))
+        XCTAssertEqual(surface.selection.head, surface.selection.length)
+        XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0, "Keyboard selection should reveal the caret at the bottom")
+        let view = try XCTUnwrap(surface.visibleTextViews.first)
+        let caret = try XCTUnwrap(view.selectionRects(for: NSRange(location: view.string.utf16.count, length: 0)).first)
+        XCTAssertTrue(view.convert(caret, to: surface).intersects(surface.visibleRect))
+    }
+
+    func testRepeatedTextAfterRenderedMathMapsToLaterOccurrence() throws {
+        let source = "Repeat $x$.\n\nRepeat"
+        let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 300)
+        defer { window.close() }
+        _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+        let last = try XCTUnwrap(surface.selection.fragments.last)
+        surface.selection.select(anchor: last.range.location, head: NSMaxRange(last.range))
+        let mapped = try XCTUnwrap(ChatAnnotation.selectionRange(
+            text: surface.selection.text, in: source, elementText: nil,
+            elementRange: NSRange(location: NSNotFound, length: 0), renderedMarkdown: true,
+            markdownFragments: surface.selection.selectedFragments))
+        XCTAssertEqual(mapped, (source as NSString).range(of: "Repeat", options: .backwards))
+    }
+
+    func testVisibleSelectionGeometryMatchesFullGeometryInLongBlocks() throws {
+        let code = "```text\n" + (0..<5000).map { "Line \($0)" }.joined(separator: "\n") + "\n```"
+        let wrapped = String(repeating: "🌙 hello مرحبا wrapped text. ", count: 500)
+        for source in [code, wrapped] {
+            let (window, _, surface) = fixture(source, height: 150)
+            defer { window.close() }
+            let view = try XCTUnwrap(surface.visibleTextViews.first)
+            let selection = NSRange(location: 2, length: view.string.utf16.count - 4)
+            // The reference must use actual layout rather than TextKit's estimated
+            // offscreen line heights, which change when those lines become visible.
+            view.system.manager.ensureLayout(for: view.system.storage.documentRange)
+            let all = view.selectionRects(for: selection)
+            XCTAssertGreaterThan(all.count, 100)
+            for y in [CGFloat.zero, view.bounds.height / 2, view.bounds.height - 150] {
+                let clip = CGRect(x: 0, y: y, width: view.bounds.width, height: 150)
+                let clipped = view.selectionRects(for: selection, clippedTo: clip)
+                XCTAssertEqual(clipped, all.filter { $0.intersects(clip) })
+                XCTAssertFalse(clipped.isEmpty)
+                XCTAssertLessThan(clipped.count, 40)
+            }
+            let clip = CGRect(x: 0, y: view.bounds.height / 2, width: view.bounds.width, height: 150)
+            let start = Date.timeIntervalSinceReferenceDate
+            for _ in 0..<5 { _ = view.selectionRects(for: selection, clippedTo: clip) }
+            print("Visible selection geometry: \((Date.timeIntervalSinceReferenceDate - start) * 1000 / 5) ms")
+        }
+    }
+
+    func testRepeatedTextBeforeRenderedMathUsesForwardAlignment() throws {
+        let source = "Repeat\n\nRepeat $x$."
+        let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 300)
+        defer { window.close() }
+        _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+        let first = try XCTUnwrap(surface.selection.fragments.first)
+        surface.selection.select(anchor: first.range.location, head: NSMaxRange(first.range))
+        XCTAssertEqual(ChatAnnotation.selectionRange(
+            text: surface.selection.text, in: source, elementText: nil,
+            elementRange: NSRange(location: NSNotFound, length: 0), renderedMarkdown: true,
+            markdownFragments: surface.selection.selectedFragments), NSRange(location: 0, length: 6))
+    }
+
+    func testEquationsOnBothSidesPreserveRepeatedSourceRange() throws {
+        let source = "Repeat $x$.\n\nRepeat\n\nRepeat $y$."
+        let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 400)
+        defer { window.close() }
+        _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+        let middle = surface.selection.fragments[1]
+        surface.selection.select(anchor: middle.range.location, head: NSMaxRange(middle.range))
+        XCTAssertEqual(ChatAnnotation.selectionRange(
+            text: surface.selection.text, in: source, elementText: nil,
+            elementRange: NSRange(location: NSNotFound, length: 0), renderedMarkdown: true,
+            markdownFragments: surface.selection.selectedFragments),
+            NSRange(location: (source as NSString).range(of: "Repeat\n").location, length: 6))
+    }
+
+    func testDraggingThroughEquationListCreatesQuote() throws {
+        let source = #"""
+        Where:
+
+        - $I(\lambda)$ is the scattered intensity at wavelength $\lambda$
+        - $\lambda$ is the wavelength of the incident light
+        - $\theta$ is the scattering angle
+        - The factor $(1 + \cos^2\theta)$ accounts for angular dependence
+        """#
+        let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 500)
+        defer { window.close() }
+        let first = try XCTUnwrap(surface.visibleTextViews.first { $0.string == "Where:" })
+        let last = try XCTUnwrap(surface.visibleTextViews.first { $0.string.contains("incident light") })
+        let end = (last.string as NSString).range(of: "incident").location + "incident".utf16.count
+        try drag(from: first, offset: 0, to: last, offset: end, window: window)
+        let selection = try XCTUnwrap(ChatTextSelectionReader.selection(in: window))
+        XCTAssertTrue(selection.text.contains(#"I(\lambda)"#))
+        XCTAssertTrue(selection.text.hasSuffix("incident"))
+        let range = try XCTUnwrap(ChatAnnotation.selectionRange(
+            text: selection.text, in: source, elementText: selection.fullText, elementRange: selection.range,
+            renderedMarkdown: true, markdownFragments: selection.markdownFragments))
+        XCTAssertEqual(range, NSRange(location: 0, length: (source as NSString).range(of: "incident").location + 8))
+        let annotation = try XCTUnwrap(ChatAnnotation.capture(
+            message: ChatTranscriptMessage(role: .assistant, content: source), range: range, displayedText: selection.text))
+        XCTAssertEqual(annotation.quote, selection.text)
+    }
+
+    func testMathNotationAndLiteralCodePreserveQuoteSourceRanges() throws {
+        let expressions = [#"$\lambda$"#, #"\(I(\lambda)\)"#, #"\[1 + \cos^2\theta\]"#,
+                           #"$$\frac{a}{b}$$"#, #"$x+y$"#, #"`$\lambda$`"#,
+                           "$$a +\nb$$", #"\boxed{\frac{a}{b}}"#]
+        for expression in expressions {
+            let source = "🌙 Before.\n\n- \(expression) is the value.\n- Last item."
+            let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 500)
+            defer { window.close() }
+            _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+            let selection = try XCTUnwrap(ChatTextSelectionReader.selection(in: window), expression)
+            let range = try XCTUnwrap(ChatAnnotation.selectionRange(
+                text: selection.text, in: source, elementText: nil, elementRange: selection.range,
+                renderedMarkdown: true, markdownFragments: selection.markdownFragments), expression)
+            XCTAssertEqual(range, NSRange(location: 0, length: source.utf16.count), expression)
+        }
+    }
+
+    func testPartialItalicMathSelectionKeepsDistinctSourceOffsets() throws {
+        let source = "Value $xyz$ ends."
+        let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 200)
+        defer { window.close() }
+        let view = try XCTUnwrap(surface.visibleTextViews.first)
+        surface.selection.select(in: view.fragmentID, range: (view.string as NSString).range(of: "𝑦"))
+        let selection = try XCTUnwrap(ChatTextSelectionReader.selection(in: window))
+        XCTAssertEqual(selection.text, "𝑦")
+        XCTAssertEqual(ChatAnnotation.selectionRange(
+            text: selection.text, in: source, elementText: nil, elementRange: selection.range,
+            renderedMarkdown: true, markdownFragments: selection.markdownFragments),
+            (source as NSString).range(of: "y"))
+    }
+
+    func testMathFencesAndOrdinaryCodeKeepTheirDifferentSemantics() throws {
+        for block in ["```math\n\\frac{a}{b}\n```", "```swift\nlet value = \"$\\lambda$\"\n```"] {
+            let source = "Before.\n\n\(block)\n\nAfter."
+            let (window, _, surface) = fixture(MathPreprocessor.preprocess(source), height: 400)
+            defer { window.close() }
+            _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+            XCTAssertEqual(ChatAnnotation.selectionRange(
+                text: surface.selection.text, in: source, elementText: nil,
+                elementRange: NSRange(location: NSNotFound, length: 0), renderedMarkdown: true,
+                markdownFragments: surface.selection.selectedFragments),
+                NSRange(location: 0, length: source.utf16.count))
+        }
+    }
+
     private func fixture(_ source: String, width: CGFloat = 600, height: CGFloat) -> (NSWindow, NSScrollView, MarkdownSurface) {
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: height),
                               styleMask: [.titled], backing: .buffered, defer: false)

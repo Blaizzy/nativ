@@ -6,6 +6,10 @@ The custom Markdown renderer supports continuous selection across paragraphs, he
 
 Selection is independent of the viewport's text views. Only mounted fragments draw highlights; selecting offscreen content does not mount or retain its views. The Markdown parser, layout cache, and viewport mounting policy are unchanged. Changing the response text clears the selection; resizing preserves it.
 
+Keyboard navigation scrolls the caret into view, including inside tall code blocks. Highlight geometry is limited to visible lines within each fragment. Quote source ranges are checked against fragments on both sides of the selection; if rendering differences leave a repeated passage ambiguous, no source range is guessed.
+
+Selections can include equations within list items or across sections. Equation attachments are quoted as their LaTeX text, with their original source spans retained; literal math notation inside ordinary code remains unchanged.
+
 Up to five quotes can be staged. Each card can be removed or used to navigate to its source. A selection is limited to 8,000 characters, without silent truncation. Sent quotes remain separate from the user's editable question and survive session persistence, editing, branching, and archive import/export.
 
 ## Sending quotes

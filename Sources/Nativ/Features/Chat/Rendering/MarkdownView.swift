@@ -368,22 +368,54 @@ final class MarkdownSelectableTextView: NSTextView {
         return super.menu(for: event)
     }
 
-    func selectionRects(for range: NSRange) -> [CGRect] {
+    func selectionRects(for range: NSRange, clippedTo clip: CGRect? = nil) -> [CGRect] {
+        var range = range
+        if let clip {
+            let visible = clip.intersection(bounds)
+            guard !visible.isNull, !visible.isEmpty else { return [] }
+            system.manager.ensureLayout(for: visible)
+            guard
+                  let lower = lineBoundary(at: visible.minY, upper: false),
+                  let upper = lineBoundary(at: visible.maxY.nextDown, upper: true), upper > lower else { return [] }
+            // Keep a character of context on either side so TextKit preserves
+            // full-line selection extents and leading at the viewport boundaries.
+            let string = original.string as NSString
+            let start = lower > 0 ? string.rangeOfComposedCharacterSequence(at: lower - 1).location : 0
+            let end = upper < string.length ? NSMaxRange(string.rangeOfComposedCharacterSequence(at: upper)) : string.length
+            range = NSIntersectionRange(range, NSRange(location: start, length: end - start))
+            guard range.length > 0 else { return [] }
+        }
         guard let start = system.storage.location(system.storage.documentRange.location, offsetBy: range.location),
               let end = system.storage.location(start, offsetBy: range.length),
               let textRange = NSTextRange(location: start, end: end) else { return [] }
         var rects: [CGRect] = []
         system.manager.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, rect, _, _ in
+            if let clip, !rect.intersects(clip) { return true }
             rects.append(rect)
             return true
         }
         return rects
     }
 
+    /// Find whole visible lines before enumerating selection geometry. Using line
+    /// boundaries also preserves RTL text and wrapped paragraphs when clipping.
+    private func lineBoundary(at y: CGFloat, upper: Bool) -> Int? {
+        guard original.length > 0 else { return nil }
+        let last = system.storage.location(system.storage.documentRange.location, offsetBy: original.length - 1)
+        guard let fragment = system.manager.textLayoutFragment(for: CGPoint(x: bounds.minX, y: y))
+                ?? (upper ? last.flatMap { system.manager.textLayoutFragment(for: $0) } : nil) else { return nil }
+        guard let line = fragment.textLineFragment(forVerticalOffset: y - fragment.layoutFragmentFrame.minY,
+                                                   requiresExactMatch: false)
+                ?? (upper ? fragment.textLineFragments.last : nil) else { return nil }
+        let start = system.storage.offset(from: system.storage.documentRange.location,
+                                          to: fragment.rangeInElement.location)
+        return min(original.length, start + (upper ? NSMaxRange(line.characterRange) : line.characterRange.location))
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         if let documentSelection {
             (window?.isKeyWindow == true ? NSColor.selectedTextBackgroundColor : NSColor.unemphasizedSelectedTextBackgroundColor).setFill()
-            for rect in selectionRects(for: documentSelection) where rect.intersects(dirtyRect) {
+            for rect in selectionRects(for: documentSelection, clippedTo: dirtyRect.intersection(visibleRect)) {
                 NSBezierPath(rect: rect).fill()
             }
         }
