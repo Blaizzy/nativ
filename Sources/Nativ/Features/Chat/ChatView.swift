@@ -184,6 +184,8 @@ private struct ChatTranscriptView: View {
             }
         }
         .background(Color.nativMainContentBackground)
+        .environment(\.chatAnnotationActions, chat.annotationActions)
+        .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
     }
 
     private func transcript(
@@ -509,6 +511,9 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
+                if !message.annotations.isEmpty {
+                    ChatAnnotationCards(annotations: message.annotations)
+                }
                 if showsTextContent {
                     textBubble
                 }
@@ -596,6 +601,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .modifier(ChatSelectionReplyModifier(message: message))
         .font(.body)
         .padding(.horizontal, message.role == .assistant ? 0 : 12)
         .padding(.vertical, message.role == .assistant ? 3 : 9)
@@ -830,6 +836,7 @@ private struct ChatAgentTurnRow: View {
                     displaysThinking: false
                 )
                 .equatable()
+                .id(finalAssistantMessage.id)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
