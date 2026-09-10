@@ -185,6 +185,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     // and memory estimation during every SwiftUI body pass while scrolling.
     let provider: LocalModelProvider?
     let sizeBytes: Int64?
+    let revision: String?
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
     let drafterKind: String?
@@ -201,6 +202,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case isPrivate = "private"
         case gated
         case safetensors
+        case revision = "sha"
         case modelConfiguration = "config"
     }
 
@@ -231,6 +233,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         }
 
         provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
+        revision = try container.decodeIfPresent(String.self, forKey: .revision)
         sizeBytes = safetensors?.sizeBytes
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
@@ -248,26 +251,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             sizeBytes: sizeBytes,
             capabilities: capabilities
         )
-    }
-
-    // The safetensors parameter summary only covers the diffusion transformer,
-    // so for image models it lands well under the real download. Scale it toward
-    // the components a modern image pipeline also ships (text encoder + VAE).
-    // The download manager validates available capacity again before enqueueing.
-    var estimatedDownloadBytes: Int64? {
-        guard let sizeBytes else {
-            return nil
-        }
-        let isImageModel = capabilities.contains(.imageGeneration)
-            || capabilities.contains(.imageEditing)
-        guard isImageModel else {
-            return sizeBytes
-        }
-        let scaled = Double(sizeBytes) * 2.5
-        guard scaled <= Double(Int64.max) else {
-            return sizeBytes
-        }
-        return Int64(scaled.rounded(.up))
     }
 
     private static func resolveMemoryEstimate(
@@ -698,7 +681,7 @@ private struct HuggingFaceHubClient: Sendable {
 
     private static let expandedFields = [
         "downloads", "likes", "trendingScore", "lastModified", "pipeline_tag",
-        "library_name", "tags", "private", "gated", "safetensors", "config",
+        "library_name", "tags", "private", "gated", "safetensors", "config", "sha",
     ]
 }
 
@@ -810,6 +793,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURLs: [URL] = []
+    private var resolvedDownloadSizes: [String: Int64] = [:]
     private let pageSize = 24
     private let maximumPageCount = 5
     private let maximumFillFetches = 8
@@ -831,6 +815,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
         models = []
         buffer = []
+        resolvedDownloadSizes = [:]
         nextPageURLs = []
         pageNumber = 1
         activeSort = sort
@@ -859,6 +844,24 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     self.nextPageURLs = []
                 }
                 try Task.checkCancellation()
+                if sort.sortsBySize {
+                    let candidates = self.buffer.filter(predicate)
+                    let sizes = await withTaskGroup(of: (String, Int64?).self) { group in
+                        for model in candidates {
+                            group.addTask {
+                                let bytes = await HubModelSizeResolver.shared.resolveSize(
+                                    for: model.id, revision: model.revision, token: token
+                                )
+                                return (model.id, bytes)
+                            }
+                        }
+                        var result: [String: Int64] = [:]
+                        for await (id, bytes) in group { result[id] = bytes }
+                        return result
+                    }
+                    try Task.checkCancellation()
+                    self.resolvedDownloadSizes = sizes
+                }
                 self.models = self.slice(forPage: 1)
                 self.error = nil
             } catch is CancellationError {
@@ -1015,8 +1018,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     }
                 }
             case .size:
-                if lhs.sizeBytes != rhs.sizeBytes {
-                    switch (lhs.sizeBytes, rhs.sizeBytes) {
+                if resolvedDownloadSizes[lhs.id] != resolvedDownloadSizes[rhs.id] {
+                    switch (resolvedDownloadSizes[lhs.id], resolvedDownloadSizes[rhs.id]) {
                     case (let lhsSize?, let rhsSize?):
                         return isAscending ? lhsSize < rhsSize : lhsSize > rhsSize
                     case (nil, _):
@@ -1164,6 +1167,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let cachePath: String
         let volumeIdentifier: String?
         let token: String?
+        let revision: String?
         var onCompletion: (() -> Void)?
         var operation: HuggingFaceDownloadOperation?
         var task: Task<Void, Never>?
@@ -1174,12 +1178,14 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: String,
             volumeIdentifier: String?,
             token: String?,
+            revision: String?,
             onCompletion: (() -> Void)?
         ) {
             self.modelID = modelID
             self.cachePath = cachePath
             self.volumeIdentifier = volumeIdentifier
             self.token = token
+            self.revision = revision
             self.onCompletion = onCompletion
         }
     }
@@ -1258,6 +1264,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func download(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1269,12 +1276,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 path: cachePath,
                 expectedVolumeIdentifier: volumeIdentifier
             )
-            if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-                throw HuggingFaceDownloadFailure.message(blocker)
-            }
             try enqueue(
                 repoID: repoID,
                 sizeBytes: sizeBytes,
+                revision: revision,
                 cachePath: cachePath,
                 volumeIdentifier: volumeIdentifier,
                 token: token,
@@ -1289,6 +1294,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func downloadIfNeeded(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?
@@ -1304,6 +1310,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 try enqueue(
                     repoID: repoID,
                     sizeBytes: sizeBytes,
+                    revision: revision,
                     cachePath: expandedCachePath,
                     volumeIdentifier: volumeIdentifier,
                     token: token,
@@ -1425,6 +1432,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private func enqueue(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1439,6 +1447,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: cacheURL.path,
             volumeIdentifier: volumeIdentifier,
             token: token,
+            revision: revision,
             onCompletion: onCompletion
         )
         contexts[repoID] = context
@@ -1468,6 +1477,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
             repoID: repoID,
             cachePath: context.cachePath,
             token: normalizedToken,
+            revision: context.revision,
+            reservedBytes: downloads.filter { $0.modelID != repoID }.reduce(Int64(0)) {
+                $0 + ($1.metrics.remainingBytes ?? 0)
+            },
             progress: { [weak self] progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
@@ -1995,6 +2008,8 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         repoID: String,
         cachePath: String,
         token: String?,
+        revision: String?,
+        reservedBytes: Int64,
         progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
         transferSpeed: @escaping @Sendable (Double?) -> Void,
         phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -2023,21 +2038,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
-        total_bytes = 0
-        cached_bytes = 0
-        print("__NATIV_STAGE__:preparing", flush=True)
-        try:
-            files = snapshot_download(
-                repo_id=sys.argv[1],
-                cache_dir=sys.argv[2],
-                dry_run=True,
-                ignore_patterns=ignored_patterns,
-            )
-            total_bytes = sum(item.file_size for item in files)
-            cached_bytes = sum(item.file_size for item in files if not item.will_download)
-        except Exception:
-            pass
-        print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
+        \(HuggingFaceDownloadPreflight.script)
 
         class NativProgress(tqdm):
             _lock = threading.Lock()
@@ -2104,6 +2105,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         print("__NATIV_STAGE__:downloading", flush=True)
         snapshot_download(
             repo_id=sys.argv[1],
+            revision=revision,
             cache_dir=sys.argv[2],
             ignore_patterns=ignored_patterns,
             tqdm_class=NativProgress,
@@ -2129,7 +2131,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             script,
             repoID,
             cachePath,
-            String(ProcessInfo.processInfo.processIdentifier)
+            String(ProcessInfo.processInfo.processIdentifier),
+            revision ?? "main",
+            String(reservedBytes)
         ]
         self.environment = environment
         self.progress = progress
