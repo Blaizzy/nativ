@@ -282,6 +282,13 @@ struct ChatComposer: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
+                if !viewModel.pendingAnnotations.isEmpty {
+                    ChatAnnotationCards(
+                        annotations: viewModel.pendingAnnotations,
+                        allowsRemoval: true
+                    )
+                    .padding(12)
+                }
                 ZStack(alignment: .topLeading) {
                     ChatComposerTextEditor(
                         text: $viewModel.draft,

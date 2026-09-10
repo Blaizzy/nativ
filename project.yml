@@ -275,6 +275,8 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatAnnotation.swift
+      - path: Sources/Nativ/Features/Chat/ChatAnnotationActions.swift
       - path: Sources/Nativ/Features/Chat/ChatArchive.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift

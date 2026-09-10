@@ -200,6 +200,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolName: String?
     var toolStatus: ToolStatus?
     var toolArguments: String?
+    var annotations: [ChatAnnotation] = []
 
     init(
         id: UUID = UUID(),
@@ -254,6 +255,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolName
         case toolStatus
         case toolArguments
+        case annotations
     }
 
     init(from decoder: Decoder) throws {
@@ -280,6 +282,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
+        annotations = try container.decodeIfPresent([ChatAnnotation].self, forKey: .annotations) ?? []
 
         if role == .error,
             content == NativChatError.missingAssistantContent.localizedDescription,
@@ -308,6 +311,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
         try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
+        if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
     }
 
     var apiMessage: MLXChatMessage? {
@@ -320,7 +324,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let requestContent = [content, documentContext ?? ""]
+            let requestContent = [ChatAnnotation.prompt(annotations, request: content), documentContext ?? ""]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
             let imageParts =
