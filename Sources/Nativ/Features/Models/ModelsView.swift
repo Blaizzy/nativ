@@ -637,6 +637,7 @@ struct ModelsView: View {
 
         if !activeDownloadIDs.isEmpty {
             InstalledActiveDownloadRows(
+                token: modelState.effectiveHuggingFaceToken,
                 hubModels: hubLibrary.models,
                 onShowReadme: { repoID, provider in
                     showReadme(
@@ -882,6 +883,7 @@ struct ModelsView: View {
                     ForEach(models) { hubModel in
                         HubModelRowContainer(
                             model: hubModel,
+                            token: modelState.effectiveHuggingFaceToken,
                             isInstalled: installedIDs.contains(hubModel.id),
                             isReadmeSelected: readmeSelection?.repoID == hubModel.id,
                             onShowReadme: {
@@ -895,6 +897,7 @@ struct ModelsView: View {
                                 downloadManager.download(
                                     repoID: hubModel.id,
                                     sizeBytes: downloadSizeBytes,
+                                    revision: hubModel.revision,
                                     cachePath: modelState.settings.modelSearchPath,
                                     volumeIdentifier: modelState.settings
                                         .externalModelCache?.volumeIdentifier,
@@ -2121,6 +2124,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 private struct InstalledActiveDownloadRows: View {
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
 
+    let token: String?
     let hubModels: [HuggingFaceModel]
     let onShowReadme: (String, LocalModelProvider?) -> Void
 
@@ -2129,6 +2133,7 @@ private struct InstalledActiveDownloadRows: View {
             if let hubModel = hubModels.first(where: { $0.id == download.modelID }) {
                 HubModelRowContainer(
                     model: hubModel,
+                    token: token,
                     isInstalled: false,
                     isReadmeSelected: false,
                     onShowReadme: {
@@ -2461,6 +2466,7 @@ private struct HubModelMemoryFitWarning: Equatable {
 private struct HubModelRow: View, @MainActor Equatable {
     let model: HuggingFaceModel
     let downloadSizeBytes: Int64?
+    let isResolvingSize: Bool
     let isInstalled: Bool
     let isReadmeSelected: Bool
     let isDownloading: Bool
@@ -2477,6 +2483,7 @@ private struct HubModelRow: View, @MainActor Equatable {
         // while closures are recreated whenever the parent view is rebuilt.
         lhs.model == rhs.model
             && lhs.downloadSizeBytes == rhs.downloadSizeBytes
+            && lhs.isResolvingSize == rhs.isResolvingSize
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isReadmeSelected == rhs.isReadmeSelected
             && lhs.isDownloading == rhs.isDownloading
@@ -2517,6 +2524,9 @@ private struct HubModelRow: View, @MainActor Equatable {
     }
 
     var body: some View {
+        let sizeLabel = downloadSizeBytes.map {
+            ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+        } ?? (isResolvingSize ? "Checking size…" : "Size unavailable")
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 14) {
                 Button(action: onShowReadme) {
@@ -2550,13 +2560,7 @@ private struct HubModelRow: View, @MainActor Equatable {
                                     title: NativFormatting.compactCount(model.likes).display,
                                     systemImage: "heart"
                                 )
-                                if let sizeBytes = downloadSizeBytes {
-                                    ModelPill(
-                                        title: ByteCountFormatter.string(
-                                            fromByteCount: sizeBytes, countStyle: .file),
-                                        systemImage: "internaldrive"
-                                    )
-                                }
+                                ModelPill(title: sizeLabel, systemImage: "internaldrive")
                                 if let memoryFitWarning {
                                     HubModelMemoryWarningBadge(warning: memoryFitWarning)
                                 }
@@ -2589,6 +2593,7 @@ private struct HubModelRow: View, @MainActor Equatable {
                 .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .help("Show README for \(model.id)")
                 .accessibilityLabel("Show details for \(model.id)")
+                .accessibilityValue(sizeLabel)
 
                 if isInstalled {
                     Label("Installed", systemImage: "checkmark.circle.fill")
@@ -2784,6 +2789,15 @@ private struct HubModelRowContainer: View, @MainActor Equatable {
     private let downloadManager = HuggingFaceDownloadManager.shared
     @State private var downloadSnapshot: HuggingFaceDownloadManager.RowSnapshot
 
+    @State private var resolvedSize: Int64?
+    @State private var resolvedRequest: HubModelSizeResolver.Request?
+    @State private var isResolvingSize = true
+
+    private var sizeRequest: HubModelSizeResolver.Request {
+        .init(repoID: model.id, revision: model.revision, token: token)
+    }
+
+    let token: String?
     let model: HuggingFaceModel
     let isInstalled: Bool
     let isReadmeSelected: Bool
@@ -2794,6 +2808,7 @@ private struct HubModelRowContainer: View, @MainActor Equatable {
 
     init(
         model: HuggingFaceModel,
+        token: String?,
         isInstalled: Bool,
         isReadmeSelected: Bool,
         onShowReadme: @escaping () -> Void,
@@ -2802,12 +2817,18 @@ private struct HubModelRowContainer: View, @MainActor Equatable {
         onRemoveDownload: @escaping () -> Void
     ) {
         self.model = model
+        self.token = token
         self.isInstalled = isInstalled
         self.isReadmeSelected = isReadmeSelected
         self.onShowReadme = onShowReadme
         self.onDownload = onDownload
         self.onPauseResume = onPauseResume
         self.onRemoveDownload = onRemoveDownload
+        let request = HubModelSizeResolver.Request(repoID: model.id, revision: model.revision, token: token)
+        let cached = HubModelSizeResolver.shared.cachedSize(for: request)
+        _resolvedSize = State(initialValue: cached)
+        _resolvedRequest = State(initialValue: cached == nil ? nil : request)
+        _isResolvingSize = State(initialValue: cached == nil)
         _downloadSnapshot = State(
             initialValue: HuggingFaceDownloadManager.shared.rowSnapshot(for: model.id)
         )
@@ -2815,15 +2836,17 @@ private struct HubModelRowContainer: View, @MainActor Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.model == rhs.model
+            && lhs.token == rhs.token
             && lhs.isInstalled == rhs.isInstalled
             && lhs.isReadmeSelected == rhs.isReadmeSelected
     }
 
     var body: some View {
-        let downloadSizeBytes = model.estimatedDownloadBytes
+        let downloadSizeBytes = resolvedRequest == sizeRequest ? resolvedSize : nil
         HubModelRow(
             model: model,
             downloadSizeBytes: downloadSizeBytes,
+            isResolvingSize: resolvedRequest != sizeRequest || isResolvingSize,
             isInstalled: isInstalled,
             isReadmeSelected: isReadmeSelected,
             isDownloading: downloadSnapshot.isDownloading,
@@ -2838,6 +2861,26 @@ private struct HubModelRowContainer: View, @MainActor Equatable {
             onRemoveDownload: onRemoveDownload
         )
         .equatable()
+        .task(id: sizeRequest) {
+            let request = sizeRequest
+            if let cached = HubModelSizeResolver.shared.cachedSize(for: request) {
+                if resolvedRequest != request || resolvedSize != cached || isResolvingSize {
+                    resolvedRequest = request
+                    resolvedSize = cached
+                    isResolvingSize = false
+                }
+                return
+            }
+            isResolvingSize = true
+            resolvedSize = nil
+            resolvedRequest = request
+            let bytes = await HubModelSizeResolver.shared.resolveSize(
+                for: request.repoID, revision: request.revision, token: request.token
+            )
+            guard !Task.isCancelled else { return }
+            resolvedSize = bytes
+            isResolvingSize = false
+        }
         .onReceive(downloadManager.rowUpdates) { updatedModelID in
             guard updatedModelID == nil || updatedModelID == model.id else { return }
             let snapshot = downloadManager.rowSnapshot(for: model.id)
