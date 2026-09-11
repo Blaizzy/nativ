@@ -1,16 +1,6 @@
 import AppKit
 import ApplicationServices
 
-struct VoiceTranscriptInsertionTarget: Equatable, Sendable {
-    let processIdentifier: pid_t
-    let applicationName: String?
-
-    init(processIdentifier: pid_t, applicationName: String? = nil) {
-        self.processIdentifier = processIdentifier
-        self.applicationName = applicationName
-    }
-}
-
 @MainActor
 enum VoiceTranscriptInserter {
     private static let pasteKeyCode = CGKeyCode(9)
