@@ -154,6 +154,7 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
         MARKETING_VERSION: 0.3.7
+        NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
         CURRENT_PROJECT_VERSION: 12
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
@@ -185,6 +186,8 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/ReleaseVersion.swift
+      - path: Sources/Nativ/SoftwareUpdater.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
       - path: Sources/Nativ/Features/Extensions/NativKitLibrary.swift
@@ -309,6 +312,8 @@ targets:
       - target: NativExtensionSDK
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: Sparkle
+        product: Sparkle
       - package: SwiftCMark
         product: cmark-gfm
       - package: SwiftCMark

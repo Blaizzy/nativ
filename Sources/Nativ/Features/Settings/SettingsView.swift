@@ -46,7 +46,7 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     var model: NativModel
-    let softwareUpdater: SoftwareUpdater
+    @ObservedObject var softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
@@ -59,6 +59,7 @@ struct SettingsView: View {
                 generalSettings
                 projectSettings
                 permissionSettings
+                advancedSettings
             }
             .frame(maxWidth: 760, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .center)
@@ -215,6 +216,35 @@ struct SettingsView: View {
         }
     }
 
+    private var advancedSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Advanced")
+                .font(.headline)
+
+            VStack(spacing: 0) {
+                settingsRow(
+                    title: "Allow Beta Updates",
+                    description: softwareUpdater.channelDescription,
+                    systemImage: "sun.horizon"
+                ) {
+                    Toggle("Allow Beta Updates", isOn: Binding(
+                        get: { softwareUpdater.channel == .releaseCandidates },
+                        set: { softwareUpdater.setChannel($0 ? .releaseCandidates : .stable) }
+                    ))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(!softwareUpdater.canChangeChannel)
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
+        }
+    }
+
     private var projectSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Projects")
@@ -346,9 +376,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body.weight(.medium))
-                Text(description)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                
+                if !description.isEmpty {
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer(minLength: 20)
@@ -371,9 +404,7 @@ struct SettingsView: View {
 
     private var appVersionLabel: String {
         let info = Bundle.main.infoDictionary
-        let version =
-            info?["CFBundleShortVersionString"] as? String
-            ?? NativFormatting.missingValue
+        let version = ReleaseVersion.displayString(in: info)
         let build = info?["CFBundleVersion"] as? String
         if let build, !build.isEmpty {
             return "Version \(version) (\(build))"
