@@ -1141,10 +1141,9 @@ private struct ChatAgentStepCell: View {
                 }
                 .buttonStyle(.bordered)
 
-                Button("Confirm") {
+                ChatToolConfirmationButton {
                     onConfirm(message.id)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
