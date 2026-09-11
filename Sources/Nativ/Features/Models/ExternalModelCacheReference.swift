@@ -4,6 +4,30 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
     struct Resolved: Equatable, Sendable {
         let url: URL
         let reference: ExternalModelCacheReference
+        let availableCapacity: Int64?
+    }
+
+    enum State: Equatable, Sendable {
+        case systemDefault
+        case available(path: String, availableCapacity: Int64?)
+        case unavailable(path: String, reason: ValidationError)
+    }
+
+    enum SwitchError: LocalizedError, Equatable, Sendable {
+        case downloadsInProgress
+        case modelSwitchInProgress
+        case serverCouldNotStop
+
+        var errorDescription: String? {
+            switch self {
+            case .downloadsInProgress:
+                "Finish or cancel active model downloads before changing model storage."
+            case .modelSwitchInProgress:
+                "Wait for the current model change to finish before changing model storage."
+            case .serverCouldNotStop:
+                "Nativ could not stop the model server. Try again after stopping it manually."
+            }
+        }
     }
 
     enum ValidationError: LocalizedError, Equatable, Sendable {
@@ -45,7 +69,7 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
     let volumeIdentifier: String
 
     init(url: URL) throws {
-        self = try Self.make(for: Self.validate(url))
+        self = try Self.resolve(url).reference
     }
 
     func resolve(lastKnownPath: String) throws -> Resolved {
@@ -59,6 +83,7 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
         let lastKnownURL = URL(filePath: lastKnownPath, directoryHint: .isDirectory)
 
         var lastError = ValidationError.unavailable
+        var foundDifferentVolume = false
         var seenPaths = Set<String>()
         for candidate in [bookmarkedURL, lastKnownURL].compactMap({ $0 }) {
             let path = candidate.standardizedFileURL.path
@@ -66,18 +91,28 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
 
             do {
                 let url = try Self.validate(candidate)
-                let reference = try Self.make(for: url)
-                guard reference.volumeIdentifier == volumeIdentifier else {
-                    throw ValidationError.differentVolume
-                }
-                return Resolved(url: url, reference: reference)
+                return try Self.makeResolved(
+                    for: url,
+                    expectedVolumeIdentifier: volumeIdentifier
+                )
             } catch let error as ValidationError {
-                lastError = error
+                if error == .differentVolume {
+                    foundDifferentVolume = true
+                } else {
+                    lastError = error
+                }
             } catch {
                 lastError = .unavailable
             }
         }
+        if foundDifferentVolume {
+            throw ValidationError.differentVolume
+        }
         throw lastError
+    }
+
+    static func resolve(_ selectedURL: URL) throws -> Resolved {
+        try makeResolved(for: validate(selectedURL))
     }
 
     static func validateForUse(
@@ -96,6 +131,13 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
             throw ValidationError.differentVolume
         }
         return validatedURL
+    }
+
+    static func path(_ path: String, isOnVolumeAt volumeURL: URL) -> Bool {
+        let cachePath = URL(filePath: path, directoryHint: .isDirectory)
+            .standardizedFileURL.path
+        let volumePath = volumeURL.standardizedFileURL.path
+        return cachePath == volumePath || cachePath.hasPrefix(volumePath + "/")
     }
 
     static func validate(_ selectedURL: URL) throws -> URL {
@@ -154,12 +196,21 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
         self.volumeIdentifier = volumeIdentifier
     }
 
-    private static func make(for url: URL) throws -> Self {
-        let volumeIdentifier = try url.resourceValues(
-            forKeys: [.volumeUUIDStringKey]
-        ).volumeUUIDString
-        guard let volumeIdentifier else {
+    private static func makeResolved(
+        for url: URL,
+        expectedVolumeIdentifier: String? = nil
+    ) throws -> Resolved {
+        let values = try url.resourceValues(forKeys: [
+            .volumeUUIDStringKey,
+            .volumeAvailableCapacityForImportantUsageKey,
+            .volumeAvailableCapacityKey,
+        ])
+        guard let volumeIdentifier = values.volumeUUIDString else {
             throw ValidationError.unavailable
+        }
+        guard expectedVolumeIdentifier == nil
+                || volumeIdentifier == expectedVolumeIdentifier else {
+            throw ValidationError.differentVolume
         }
 
         let bookmarkData = try url.bookmarkData(
@@ -167,9 +218,20 @@ struct ExternalModelCacheReference: Codable, Equatable, Sendable {
             includingResourceValuesForKeys: [.volumeUUIDStringKey],
             relativeTo: nil
         )
-        return Self(
+        let availableCapacity = [
+            values.volumeAvailableCapacityForImportantUsage,
+            values.volumeAvailableCapacity.map(Int64.init),
+        ]
+        .compactMap { $0 }
+        .max()
+        let reference = Self(
             bookmarkData: bookmarkData,
             volumeIdentifier: volumeIdentifier
+        )
+        return Resolved(
+            url: url,
+            reference: reference,
+            availableCapacity: availableCapacity
         )
     }
 }

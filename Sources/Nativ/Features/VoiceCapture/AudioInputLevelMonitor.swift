@@ -16,7 +16,7 @@ final class AudioInputLevelMonitor: ObservableObject {
     @Published private(set) var isMonitoring = false
     @Published private(set) var errorMessage: String?
 
-    private var audioEngine: AVAudioEngine?
+    private let inputSession = AudioInputEngineSession()
     private var realtimeMeter: RealtimeAudioMeter?
     private var meterPublisherTask: Task<Void, Never>?
 
@@ -30,33 +30,14 @@ final class AudioInputLevelMonitor: ObservableObject {
         }
 
         do {
-            let engine = AVAudioEngine()
-            let inputNode = engine.inputNode
-            if let deviceUniqueID {
-                guard let deviceID = AudioInputDeviceResolver.coreAudioDeviceID(
-                    for: deviceUniqueID
-                ) else {
-                    throw VoiceAudioRecorderError.inputDeviceUnavailable
-                }
-                try inputNode.auAudioUnit.setDeviceID(deviceID)
-            }
-
-            let format = inputNode.outputFormat(forBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else {
-                throw VoiceAudioRecorderError.couldNotStart
-            }
-
             let realtimeMeter = RealtimeAudioMeter(profile: .inputMonitor)
-            let tap = Self.makeTap(realtimeMeter: realtimeMeter)
-            inputNode.installTap(
-                onBus: 0,
-                bufferSize: 1_024,
-                format: format,
-                block: tap
-            )
-            engine.prepare()
-            try engine.start()
-            audioEngine = engine
+            try inputSession.start(
+                deviceUniqueID: deviceUniqueID,
+                tap: Self.makeTap(realtimeMeter: realtimeMeter)
+            ) { [weak self] error in
+                self?.errorMessage = error.localizedDescription
+                self?.stop(resetError: false)
+            }
             isMonitoring = true
             startMeterPublisher(realtimeMeter: realtimeMeter)
         } catch {
@@ -77,11 +58,7 @@ final class AudioInputLevelMonitor: ObservableObject {
     }
 
     private func stop(resetError: Bool) {
-        if let audioEngine {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            audioEngine.stop()
-        }
-        audioEngine = nil
+        inputSession.stop()
         isMonitoring = false
         stopMeterPublisher()
         meterState.update(0)
@@ -141,7 +118,7 @@ final class AudioInputLevelMonitor: ObservableObject {
         for channel in 0..<channelCount {
             let samples = channelData[channel]
             for frame in 0..<frameCount {
-                let sample = samples[frame]
+                let sample = samples[frame * buffer.stride]
                 sum += sample * sample
             }
         }
@@ -152,4 +129,158 @@ final class AudioInputLevelMonitor: ObservableObject {
     private static func hasMicrophoneAccess() -> Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
+}
+
+@MainActor
+protocol AudioInputEngineDriving: AnyObject {
+    var isRunning: Bool { get }
+    var onConfigurationChange: (() -> Void)? { get set }
+    func start(
+        deviceUniqueID: String?,
+        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
+    ) throws
+    func stop()
+}
+
+@MainActor
+final class AudioInputEngineSession {
+    private let makeEngine: () -> any AudioInputEngineDriving
+    private let retryDelays: [Duration]
+    private var engine: (any AudioInputEngineDriving)?
+    private var recoveryTask: Task<Void, Never>?
+    private var generation = UUID()
+
+    init(
+        retryDelays: [Duration] = [.milliseconds(100), .milliseconds(250), .milliseconds(500)],
+        makeEngine: @escaping () -> any AudioInputEngineDriving = { SystemAudioInputEngine() }
+    ) {
+        self.retryDelays = retryDelays
+        self.makeEngine = makeEngine
+    }
+
+    func start(
+        deviceUniqueID: String?,
+        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void,
+        onFailure: @escaping (Error) -> Void
+    ) throws {
+        stop()
+        try startEngine(deviceUniqueID: deviceUniqueID, tap: tap, onFailure: onFailure)
+    }
+
+    func stop() {
+        generation = UUID()
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        engine?.onConfigurationChange = nil
+        engine?.stop()
+        engine = nil
+    }
+
+    isolated deinit {
+        recoveryTask?.cancel()
+        engine?.stop()
+    }
+
+    private func startEngine(
+        deviceUniqueID: String?,
+        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void,
+        onFailure: @escaping (Error) -> Void
+    ) throws {
+        let nextEngine = makeEngine()
+        let expectedGeneration = generation
+        nextEngine.onConfigurationChange = { [weak self, weak nextEngine] in
+            guard let self, let nextEngine,
+                self.generation == expectedGeneration,
+                self.engine === nextEngine,
+                !nextEngine.isRunning,
+                self.recoveryTask == nil
+            else { return }
+            nextEngine.onConfigurationChange = nil
+            nextEngine.stop()
+            self.engine = nil
+            self.recoveryTask = Task { [weak self] in
+                var failure: Error = VoiceAudioRecorderError.couldNotStart
+                for delay in self?.retryDelays ?? [] {
+                    do { try await Task.sleep(for: delay) }
+                    catch { return }
+                    guard !Task.isCancelled, let self,
+                        self.generation == expectedGeneration
+                    else { return }
+                    do {
+                        try self.startEngine(
+                            deviceUniqueID: deviceUniqueID, tap: tap, onFailure: onFailure
+                        )
+                        self.recoveryTask = nil
+                        return
+                    } catch {
+                        failure = error
+                    }
+                }
+                guard let self, self.generation == expectedGeneration,
+                    !Task.isCancelled
+                else { return }
+                self.stop()
+                onFailure(failure)
+            }
+        }
+        engine = nextEngine
+        do {
+            try nextEngine.start(deviceUniqueID: deviceUniqueID, tap: tap)
+        } catch {
+            nextEngine.onConfigurationChange = nil
+            nextEngine.stop()
+            engine = nil
+            throw error
+        }
+    }
+}
+
+@MainActor
+private final class SystemAudioInputEngine: AudioInputEngineDriving {
+    var onConfigurationChange: (() -> Void)?
+    private let engine = AVAudioEngine()
+    private var observer: NSObjectProtocol?
+    private var hasTap = false
+
+    var isRunning: Bool { engine.isRunning }
+
+    func start(
+        deviceUniqueID: String?,
+        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
+    ) throws {
+        let input = engine.inputNode
+        // An unavailable selected device falls back to the current system default.
+        if let deviceUniqueID,
+            let deviceID = AudioInputDeviceResolver.coreAudioDeviceID(for: deviceUniqueID)
+        {
+            try input.auAudioUnit.setDeviceID(deviceID)
+        }
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw VoiceAudioRecorderError.couldNotStart
+        }
+        input.installTap(onBus: 0, bufferSize: 1_024, format: nil, block: tap)
+        hasTap = true
+        observer = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            // Engine teardown must happen outside AVFAudio's notification queue.
+            Task { @MainActor [weak self] in
+                guard let self, self.observer != nil else { return }
+                self.onConfigurationChange?()
+            }
+        }
+        engine.prepare()
+        try engine.start()
+    }
+
+    func stop() {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        if hasTap { engine.inputNode.removeTap(onBus: 0) }
+        hasTap = false
+        engine.stop()
+    }
+
+    isolated deinit { stop() }
 }

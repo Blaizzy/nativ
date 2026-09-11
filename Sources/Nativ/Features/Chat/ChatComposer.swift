@@ -16,9 +16,49 @@ private struct ChatContextWindowUsage: Equatable {
     }
 }
 
-private struct ChatContextWindowRing: View {
+@MainActor
+private enum ChatContextWindowFormatting {
+    static let percentageFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .percent
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static let tokenCountFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.numberStyle = .decimal
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    static func percentage(_ fraction: Double) -> String {
+        percentageFormatter.string(from: NSNumber(value: fraction))
+            ?? "\(Int((fraction * 100).rounded()))%"
+    }
+
+    static func tokenCount(_ value: Int) -> String {
+        tokenCountFormatter.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    static func compactTokenCount(_ value: Int) -> String {
+        guard value >= 1_000 else { return tokenCount(value) }
+        let thousands = (Double(value) / 1_000).formatted(
+            .number.precision(.fractionLength(0...1))
+        )
+        return "\(thousands)k"
+    }
+}
+
+private struct ChatContextWindowRing: View, Equatable {
     let usage: ChatContextWindowUsage
     @State private var showsDetails = false
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.usage == rhs.usage
+    }
 
     var body: some View {
         ZStack {
@@ -37,19 +77,36 @@ private struct ChatContextWindowRing: View {
         .contentShape(.circle)
         .onHover { showsDetails = $0 }
         .background {
-            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6) {
-                Text("Context window: \(usage.remainingPercentage)% remaining")
-                    .monospacedDigit()
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6, isInteractive: false) {
+                VStack(alignment: .center, spacing: 4) {
+                    Text(verbatim: "Context window:")
+                        .foregroundStyle(.secondary)
+                    Text(verbatim: "\(remainingPercentageText) remaining")
+                    Text(verbatim: "\(tokenUsageText) tokens used")
+                }
+                .monospacedDigit()
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Model context window")
-        .accessibilityValue(
-            "\(usage.remainingPercentage) percent remaining, "
-                + "\(usage.usedTokens.formatted()) of \(usage.capacityTokens.formatted()) tokens used"
-        )
+        .accessibilityValue(Text(verbatim: accessibilityValue))
+    }
+
+    private var remainingPercentageText: String {
+        ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
+    }
+
+    private var tokenUsageText: String {
+        "\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens)) / "
+            + ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)
+    }
+
+    private var accessibilityValue: String {
+        "\(usage.remainingPercentage) percent remaining, "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.usedTokens)) of "
+            + "\(ChatContextWindowFormatting.tokenCount(usage.capacityTokens)) tokens used"
     }
 
     private var ringColor: Color {
@@ -195,22 +252,24 @@ struct ChatComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = context.date.timeIntervalSince(sendingStartedAt)
-                    Text(workingStatus(elapsed: elapsed))
+            Group {
+                if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
+                    ChatGenerationStatusRow(
+                        startedAt: sendingStartedAt,
+                        metrics: viewModel.currentSessionLiveResponseMetrics
+                    )
+                    .equatable()
+                    .padding(.horizontal, textInset.leading + 4)
+                    .transition(.opacity)
+                } else if let unavailableReason {
+                    Text(unavailableReason)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .padding(.leading, textInset.leading + 4)
                 }
-                .padding(.leading, textInset.leading + 4)
-            } else if let unavailableReason {
-                Text(unavailableReason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.leading, textInset.leading + 4)
             }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isCurrentSessionSending)
 
             if !viewModel.currentSessionQueuedPrompts.isEmpty {
                 ChatQueueTray(
@@ -223,12 +282,20 @@ struct ChatComposer: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
+                if !viewModel.pendingAnnotations.isEmpty {
+                    ChatAnnotationCards(
+                        annotations: viewModel.pendingAnnotations,
+                        allowsRemoval: true
+                    )
+                    .padding(12)
+                }
                 ZStack(alignment: .topLeading) {
                     ChatComposerTextEditor(
                         text: $viewModel.draft,
                         isEnabled: canCompose,
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
+                        onRecallPrevious: recallPreviousPrompt,
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
@@ -238,12 +305,17 @@ struct ChatComposer: View {
                     )
 
                     if viewModel.draft.isEmpty {
-                        Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
-                            .foregroundStyle(.tertiary)
-                            .padding(textInset)
-                            .offset(x: 4)
-                            .allowsHitTesting(false)
+                        HStack(spacing: 8) {
+                            Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                            if showsRecallHint {
+                                ChatRecallHint()
+                            }
+                        }
+                        .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
+                        .foregroundStyle(.tertiary)
+                        .padding(textInset)
+                        .offset(x: 4)
+                        .allowsHitTesting(false)
                     }
                 }
                 .frame(height: editorHeight)
@@ -292,6 +364,7 @@ struct ChatComposer: View {
 
                     if let contextWindowUsage {
                         ChatContextWindowRing(usage: contextWindowUsage)
+                            .equatable()
                     }
 
                     modelPicker
@@ -1065,6 +1138,21 @@ struct ChatComposer: View {
         return Color(nsColor: .tertiaryLabelColor)
     }
 
+    /// The hint is a first-run affordance: once the gesture has been used it has
+    /// taught what it was there to teach, and a permanent label in the
+    /// placeholder is just noise.
+    private var showsRecallHint: Bool {
+        viewModel.canRecallPreviousPrompt && !model.settings.hasUsedPromptRecall
+    }
+
+    private func recallPreviousPrompt() -> Bool {
+        guard viewModel.recallPreviousPrompt() else { return false }
+        if !model.settings.hasUsedPromptRecall {
+            model.settings.hasUsedPromptRecall = true
+        }
+        return true
+    }
+
     private var cancelPromptEditingAction: (() -> Void)? {
         guard viewModel.promptEditContext != nil else {
             return nil
@@ -1082,17 +1170,13 @@ struct ChatComposer: View {
             return blockingNotice.message
         }
         if viewModel.promptEditContext != nil {
-            return "Fork and regenerate (Return)"
+            return "Save and regenerate (Return)"
         }
         return "Send (Return)"
     }
 
     private var showsStopButton: Bool {
         viewModel.isCurrentSessionSending && !canSend
-    }
-
-    private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
     }
 
     private func send() {
@@ -1119,49 +1203,146 @@ struct ChatComposer: View {
     }
 }
 
+private struct ChatGenerationStatusRow: View, Equatable {
+    let startedAt: Date
+    let metrics: ChatResponseMetrics?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let metrics {
+                ChatLiveDecodeMetricsBadge(metrics: metrics)
+                    .equatable()
+                    .layoutPriority(1)
+                    .transition(.opacity)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let elapsed = context.date.timeIntervalSince(startedAt)
+                Text("Working for \(NativFormatting.elapsedDuration(elapsed))…")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 26)
+        // Animate presence changes, not the frequent token and speed updates.
+        .animation(.easeInOut(duration: 0.2), value: metrics != nil)
+    }
+}
+
+private struct ChatLiveDecodeMetricsBadge: View, Equatable {
+    let metrics: ChatResponseMetrics
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 6, height: 6)
+
+            Text("Decode")
+                .foregroundStyle(.secondary)
+
+            if let generatedTokens = metrics.generatedTokens {
+                Text("\(NativFormatting.integer(generatedTokens)) tokens")
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+
+            if metrics.generatedTokens != nil,
+                metrics.decodeTokensPerSecond != nil
+            {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let decodeTokensPerSecond = metrics.decodeTokensPerSecond {
+                Text(NativFormatting.rate(decodeTokensPerSecond))
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.1))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Decode metrics")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        [
+            metrics.generatedTokens.map { "\($0) generated tokens" },
+            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+    }
+}
+
+/// Tells you the gesture exists, in the one place you would be about to use it.
+private struct ChatRecallHint: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.up")
+                .imageScale(.small)
+            Text("to show last")
+        }
+        .font(.caption)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.primary.opacity(0.05), in: Capsule())
+    }
+}
+
 private struct ChatPromptEditBanner: View {
     let onCancel: () -> Void
     @State private var isCancelHovered = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             Image(systemName: "pencil")
-                .foregroundStyle(Color.accentColor)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Editing prompt")
-                    .fontWeight(.medium)
-                Text("Sending will create a new chat branch.")
-                    .foregroundStyle(.secondary)
-            }
+            Text("Edit last message")
 
             Spacer(minLength: 12)
 
             Button(action: onCancel) {
                 Text("Cancel")
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(
-                        isCancelHovered ? Color.accentColor.opacity(0.12) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        isCancelHovered ? Color.primary.opacity(0.07) : .clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                     )
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
             .keyboardShortcut(.cancelAction)
             .onHover { isCancelHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isCancelHovered)
             .help("Cancel editing")
         }
         .font(.caption)
+        // Uniformly secondary and unaccented. This sits directly above the
+        // composer while you are typing into it, so it should read as a state
+        // the editor is in, not as something asking to be dealt with.
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
     }
 }
@@ -1283,15 +1464,15 @@ struct ComposerModelPicker: View {
         }
         .fixedSize()
         .frame(height: 32)
-        .overlay(alignment: .top) {
-            if isPickerHovered && !isMenuOpen {
+        .background {
+            NativArrowlessPopoverPresenter(
+                isPresented: tooltipPresentation,
+                gap: 10
+            ) {
                 ComposerModelPickerTooltip(
                     title: pickerTooltip,
                     shortcutLabel: isDisabled ? nil : shortcutLabel
                 )
-                    .offset(y: -50)
-                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottom)))
-                    .allowsHitTesting(false)
             }
         }
         .contentShape(Capsule())
@@ -1318,6 +1499,13 @@ struct ComposerModelPicker: View {
 
     private var pickerTooltip: String {
         isDisabled ? helpText : "Choose Model"
+    }
+
+    private var tooltipPresentation: Binding<Bool> {
+        Binding(
+            get: { isPickerHovered && !isMenuOpen },
+            set: { isPickerHovered = $0 }
+        )
     }
 
     private var isPickerActive: Bool {
@@ -1759,7 +1947,7 @@ private struct ComposerModelPickerLabel: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.secondary)
         }
-        .nativTextStyle(.supportingEmphasized)
+        .legacyTextStyle(.supportingEmphasized)
         .foregroundStyle(Color.primary)
         .padding(.leading, 10)
         .padding(.trailing, 8)
@@ -1798,12 +1986,6 @@ private struct ComposerModelPickerTooltip: View {
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.8), lineWidth: 0.75)
-        }
-        .shadow(color: .black.opacity(0.16), radius: 8, y: 3)
         .fixedSize()
     }
 }
@@ -2094,7 +2276,7 @@ struct ChatComposerActionPanel: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .nativTextStyle(.supportingEmphasized)
+                .legacyTextStyle(.supportingEmphasized)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
 
@@ -2125,11 +2307,11 @@ private struct ChatComposerActionRow: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                         .foregroundStyle(.primary)
 
                     Text(detail)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -2301,6 +2483,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let isEnabled: Bool
     let onSubmit: () -> Void
     var onCancel: (() -> Void)?
+    var onRecallPrevious: (() -> Bool)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
     var fontScale: Double = 1.0
@@ -2311,6 +2494,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             text: $text,
             onSubmit: onSubmit,
             onCancel: onCancel,
+            onRecallPrevious: onRecallPrevious,
             onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange,
             focusToken: focusToken
@@ -2322,6 +2506,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = context.coordinator.handleSubmit
         textView.onCancel = context.coordinator.handleCancel
+        textView.onRecallPrevious = context.coordinator.handleRecallPrevious
         textView.onPasteImage = context.coordinator.handlePasteImage
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
@@ -2379,6 +2564,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         @Binding private var text: String
         var onSubmit: () -> Void
         var onCancel: (() -> Void)?
+        var onRecallPrevious: (() -> Bool)?
         var onPasteImage: (NSPasteboard) -> Bool
         var onContentHeightChange: (CGFloat) -> Void
         weak var textView: NSTextView?
@@ -2389,6 +2575,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             text: Binding<String>,
             onSubmit: @escaping () -> Void,
             onCancel: (() -> Void)?,
+            onRecallPrevious: (() -> Bool)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void,
             focusToken: Int
@@ -2396,6 +2583,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             _text = text
             self.onSubmit = onSubmit
             self.onCancel = onCancel
+            self.onRecallPrevious = onRecallPrevious
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
             lastFocusToken = focusToken
@@ -2425,6 +2613,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         func handleCancel() {
             onCancel?()
+        }
+
+        func handleRecallPrevious() -> Bool {
+            onRecallPrevious?() ?? false
         }
 
         func requestFocus(ifNeeded focusToken: Int) {
@@ -2482,6 +2674,9 @@ private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    /// Returns whether the recall happened, so an Up key that recalls nothing
+    /// still moves the caret.
+    var onRecallPrevious: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese
@@ -2494,6 +2689,14 @@ private final class ChatComposerNSTextView: NSTextView {
 
         if event.keyCode == 53, onCancel != nil {
             onCancel?()
+            return
+        }
+
+        // Up in an empty composer recalls the last prompt. Guarded on empty
+        // rather than on caret position so that Up never stops being Up while
+        // there is text to move through.
+        if ComposerRecallGesture.isRecall(event, isEmpty: string.isEmpty),
+            onRecallPrevious?() == true {
             return
         }
 
@@ -2512,6 +2715,22 @@ private final class ChatComposerNSTextView: NSTextView {
             return
         }
         super.paste(sender)
+    }
+}
+
+/// Whether an Up key should recall the previous prompt.
+enum ComposerRecallGesture {
+    static func isRecall(_ event: NSEvent, isEmpty: Bool) -> Bool {
+        guard isEmpty, isUpArrow(event) else { return false }
+        // Any modifier means the user is asking for a selection or a jump, not
+        // for history.
+        return event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .isDisjoint(with: [.command, .option, .control, .shift])
+    }
+
+    private static func isUpArrow(_ event: NSEvent) -> Bool {
+        event.keyCode == 126
     }
 }
 

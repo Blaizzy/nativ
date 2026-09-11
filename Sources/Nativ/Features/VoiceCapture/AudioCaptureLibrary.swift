@@ -92,6 +92,7 @@ final class AudioCaptureLibrary: ObservableObject {
     let meterState = AudioInputLevelState()
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
+    @Published private(set) var transcribingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
     @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
@@ -114,7 +115,7 @@ final class AudioCaptureLibrary: ObservableObject {
     private let meetingJoinMonitor = MeetingJoinMonitor()
     private let meetingSuggestion = MeetingTranscriptionSuggestionController()
     private let analytics: AudioAnalyticsStore
-    private var elapsedTimer: Timer?
+    private var elapsedTask: Task<Void, Never>?
     private var captureStartedAt: Date?
     private var shouldSummarizeCurrentCapture = false
     private var activeBackend: ActiveAudioCaptureBackend?
@@ -164,6 +165,9 @@ final class AudioCaptureLibrary: ObservableObject {
                 return
             }
             self.publishMeter(level: level, elapsed: elapsed)
+        }
+        voiceRecorder.onRecordingFailure = { [weak self] error, savedURL in
+            self?.microphoneRecordingInterrupted(error, savedURL: savedURL)
         }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
             guard let self else {
@@ -269,7 +273,7 @@ final class AudioCaptureLibrary: ObservableObject {
             phase = .recording
             recordingOverlay.update(level: 0, elapsed: 0)
             recordingOverlay.didStartRecording()
-            startElapsedTimer()
+            startElapsedUpdates()
         } catch {
             if Self.isScreenCapturePermissionError(error) {
                 // ScreenCaptureKit presents the native permission dialog itself.
@@ -304,8 +308,8 @@ final class AudioCaptureLibrary: ObservableObject {
 
         phase = .processing
         recordingOverlay.waitForTranscription()
-        stopElapsedTimer()
-        let duration = max(
+        stopElapsedUpdates()
+        var duration = max(
             elapsed,
             captureStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         )
@@ -314,10 +318,16 @@ final class AudioCaptureLibrary: ObservableObject {
             let recordingURL: URL
             switch activeBackend {
             case .microphone:
-                guard let url = voiceRecorder.stop() else {
+                let savedURL = voiceRecorder.stop()
+                if let error = voiceRecorder.lastRecordingError {
+                    microphoneRecordingInterrupted(error, savedURL: savedURL)
+                    return
+                }
+                guard let savedURL else {
                     throw AudioCaptureLibraryError.recordingUnavailable
                 }
-                recordingURL = url
+                recordingURL = savedURL
+                duration = voiceRecorder.lastRecordingDuration ?? duration
             case .systemAndMicrophone:
                 recordingURL = try await meetingRecorder.stop()
             }
@@ -409,6 +419,7 @@ final class AudioCaptureLibrary: ObservableObject {
             }
             return
         }
+        clearLastError()
         processingRecordIDs.insert(record.id)
         Task { [weak self] in
             guard let self else {
@@ -419,7 +430,8 @@ final class AudioCaptureLibrary: ObservableObject {
                 kind: record.resolvedKind,
                 title: record.displayTitle,
                 duration: record.durationSeconds ?? 0,
-                automaticallySummarize: false
+                automaticallySummarize: record.summary?.isEmpty == false,
+                preserveExistingSummary: false
             )
         }
     }
@@ -579,7 +591,7 @@ final class AudioCaptureLibrary: ObservableObject {
         meetingSuggestion.dismiss()
         activeTask?.cancel()
         activeTask = nil
-        stopElapsedTimer()
+        stopElapsedUpdates()
         if let unfinishedVoiceNote = voiceRecorder.stop() {
             try? FileManager.default.removeItem(at: unfinishedVoiceNote)
         }
@@ -604,10 +616,13 @@ final class AudioCaptureLibrary: ObservableObject {
         kind: AudioRecordKind,
         title: String,
         duration: TimeInterval,
-        automaticallySummarize: Bool
+        automaticallySummarize: Bool,
+        preserveExistingSummary: Bool = true
     ) async {
         let recordID = recordingURL.deletingPathExtension().lastPathComponent
+        transcribingRecordIDs.insert(recordID)
         defer {
+            transcribingRecordIDs.remove(recordID)
             processingRecordIDs.remove(recordID)
         }
 
@@ -625,8 +640,14 @@ final class AudioCaptureLibrary: ObservableObject {
                 applicationName: nil,
                 kind: kind,
                 title: analytics.record(withID: recordID)?.title ?? title,
-                persistAudioReference: true
+                persistAudioReference: true,
+                preserveExistingSummary: preserveExistingSummary
             )
+            transcribingRecordIDs.remove(recordID)
+
+            if !preserveExistingSummary {
+                removeSummaryFile(recordID: recordID)
+            }
 
             if automaticallySummarize {
                 do {
@@ -768,6 +789,28 @@ final class AudioCaptureLibrary: ObservableObject {
         try summary.write(to: summaryURL, atomically: true, encoding: .utf8)
     }
 
+    private func removeSummaryFile(recordID: String) {
+        guard let directory = try? Self.recordingsDirectory else {
+            return
+        }
+        let summaryURL = directory
+            .appendingPathComponent(recordID)
+            .appendingPathExtension("summary.txt")
+        try? FileManager.default.removeItem(at: summaryURL)
+    }
+
+    private func microphoneRecordingInterrupted(_ error: Error, savedURL: URL?) {
+        if let savedURL, let kind = activeKind {
+            analytics.addCapture(
+                recordingURL: savedURL,
+                kind: kind,
+                title: Self.defaultTitle(for: kind, date: captureStartedAt ?? Date()),
+                durationSeconds: voiceRecorder.lastRecordingDuration ?? 0
+            )
+        }
+        fail(error)
+    }
+
     private func fail(_ error: Error) {
         lastErrorMessage = error.localizedDescription
         permissionRequiringSettings = nil
@@ -804,7 +847,7 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         phase = .preparing
-        stopElapsedTimer()
+        stopElapsedUpdates()
         switch activeBackend {
         case .microphone:
             if let recordingURL = voiceRecorder.stop() {
@@ -817,7 +860,7 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     private func resetCaptureState(hideOverlay: Bool = true) {
-        stopElapsedTimer()
+        stopElapsedUpdates()
         if hideOverlay {
             recordingOverlay.hide()
         }
@@ -833,13 +876,18 @@ final class AudioCaptureLibrary: ObservableObject {
         activeTask = nil
     }
 
-    private func startElapsedTimer() {
-        stopElapsedTimer()
-        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, let captureStartedAt = self.captureStartedAt else {
+    private func startElapsedUpdates() {
+        stopElapsedUpdates()
+        elapsedTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(250))
+                } catch {
                     return
                 }
+                guard !Task.isCancelled, let self,
+                    let captureStartedAt = self.captureStartedAt
+                else { return }
                 self.elapsed = Date().timeIntervalSince(captureStartedAt)
                 self.updateRecordingOverlay(
                     level: self.meterState.level,
@@ -847,13 +895,11 @@ final class AudioCaptureLibrary: ObservableObject {
                 )
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        elapsedTimer = timer
     }
 
-    private func stopElapsedTimer() {
-        elapsedTimer?.invalidate()
-        elapsedTimer = nil
+    private func stopElapsedUpdates() {
+        elapsedTask?.cancel()
+        elapsedTask = nil
     }
 
     private func updateRecordingOverlay(level: Float, elapsed: TimeInterval) {

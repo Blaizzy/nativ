@@ -187,6 +187,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     // and memory estimation during every SwiftUI body pass while scrolling.
     let provider: LocalModelProvider?
     let sizeBytes: Int64?
+    let revision: String?
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
     let drafterKind: String?
@@ -203,6 +204,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case isPrivate = "private"
         case gated
         case safetensors
+        case revision = "sha"
         case modelConfiguration = "config"
     }
 
@@ -250,6 +252,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             modelType: supportConfiguration?.modelType,
             architectures: supportConfiguration?.architectures ?? []
         )
+        revision = try container.decodeIfPresent(String.self, forKey: .revision)
         sizeBytes = safetensors?.sizeBytes
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
@@ -267,26 +270,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             sizeBytes: sizeBytes,
             capabilities: capabilities
         )
-    }
-
-    // The safetensors parameter summary only covers the diffusion transformer,
-    // so for image models it lands well under the real download. Scale it toward
-    // the components a modern image pipeline also ships (text encoder + VAE).
-    // The download manager validates available capacity again before enqueueing.
-    var estimatedDownloadBytes: Int64? {
-        guard let sizeBytes else {
-            return nil
-        }
-        let isImageModel = capabilities.contains(.imageGeneration)
-            || capabilities.contains(.imageEditing)
-        guard isImageModel else {
-            return sizeBytes
-        }
-        let scaled = Double(sizeBytes) * 2.5
-        guard scaled <= Double(Int64.max) else {
-            return sizeBytes
-        }
-        return Int64(scaled.rounded(.up))
     }
 
     private static func resolveMemoryEstimate(
@@ -717,7 +700,7 @@ private struct HuggingFaceHubClient: Sendable {
 
     private static let expandedFields = [
         "downloads", "likes", "trendingScore", "lastModified", "pipeline_tag",
-        "library_name", "tags", "private", "gated", "safetensors", "config",
+        "library_name", "tags", "private", "gated", "safetensors", "config", "sha",
     ]
 }
 
@@ -829,6 +812,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURLs: [URL] = []
+    private var resolvedDownloadSizes: [String: Int64] = [:]
     private let pageSize = 24
     private let maximumPageCount = 5
     private let maximumFillFetches = 8
@@ -850,6 +834,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
         models = []
         buffer = []
+        resolvedDownloadSizes = [:]
         nextPageURLs = []
         pageNumber = 1
         activeSort = sort
@@ -878,6 +863,24 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     self.nextPageURLs = []
                 }
                 try Task.checkCancellation()
+                if sort.sortsBySize {
+                    let candidates = self.buffer.filter(predicate)
+                    let sizes = await withTaskGroup(of: (String, Int64?).self) { group in
+                        for model in candidates {
+                            group.addTask {
+                                let bytes = await HubModelSizeResolver.shared.resolveSize(
+                                    for: model.id, revision: model.revision, token: token
+                                )
+                                return (model.id, bytes)
+                            }
+                        }
+                        var result: [String: Int64] = [:]
+                        for await (id, bytes) in group { result[id] = bytes }
+                        return result
+                    }
+                    try Task.checkCancellation()
+                    self.resolvedDownloadSizes = sizes
+                }
                 self.models = self.slice(forPage: 1)
                 self.error = nil
             } catch is CancellationError {
@@ -1034,8 +1037,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     }
                 }
             case .size:
-                if lhs.sizeBytes != rhs.sizeBytes {
-                    switch (lhs.sizeBytes, rhs.sizeBytes) {
+                if resolvedDownloadSizes[lhs.id] != resolvedDownloadSizes[rhs.id] {
+                    switch (resolvedDownloadSizes[lhs.id], resolvedDownloadSizes[rhs.id]) {
                     case (let lhsSize?, let rhsSize?):
                         return isAscending ? lhsSize < rhsSize : lhsSize > rhsSize
                     case (nil, _):
@@ -1183,6 +1186,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let cachePath: String
         let volumeIdentifier: String?
         let token: String?
+        let revision: String?
         var onCompletion: (() -> Void)?
         var operation: HuggingFaceDownloadOperation?
         var task: Task<Void, Never>?
@@ -1193,12 +1197,14 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: String,
             volumeIdentifier: String?,
             token: String?,
+            revision: String?,
             onCompletion: (() -> Void)?
         ) {
             self.modelID = modelID
             self.cachePath = cachePath
             self.volumeIdentifier = volumeIdentifier
             self.token = token
+            self.revision = revision
             self.onCompletion = onCompletion
         }
     }
@@ -1208,6 +1214,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
+    /// Emits only after a model download succeeds.
+    let completedDownloads = PassthroughSubject<String, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
     private let progressClock = ContinuousClock()
@@ -1275,6 +1283,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func download(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1286,12 +1295,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 path: cachePath,
                 expectedVolumeIdentifier: volumeIdentifier
             )
-            if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-                throw HuggingFaceDownloadFailure.message(blocker)
-            }
             try enqueue(
                 repoID: repoID,
                 sizeBytes: sizeBytes,
+                revision: revision,
                 cachePath: cachePath,
                 volumeIdentifier: volumeIdentifier,
                 token: token,
@@ -1306,6 +1313,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func downloadIfNeeded(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?
@@ -1321,6 +1329,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 try enqueue(
                     repoID: repoID,
                     sizeBytes: sizeBytes,
+                    revision: revision,
                     cachePath: expandedCachePath,
                     volumeIdentifier: volumeIdentifier,
                     token: token,
@@ -1395,6 +1404,22 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
+    func stopDownloads(
+        forVolumeIdentifier volumeIdentifier: String,
+        reason: ExternalModelCacheReference.ValidationError
+    ) {
+        let modelIDs = contexts.values.compactMap { context in
+            context.volumeIdentifier == volumeIdentifier ? context.modelID : nil
+        }
+        let failure = downloadFailure(for: reason)
+        for modelID in modelIDs {
+            guard let context = contexts[modelID] else { continue }
+            context.task?.cancel()
+            context.operation?.cancel()
+            finishDownload(repoID: modelID, error: failure)
+        }
+    }
+
     /// Stops downloader subprocesses before the app exits while preserving the
     /// Hugging Face cache, including resumable `.incomplete` files.
     func shutdownForTermination(timeout: Duration = .seconds(2)) async {
@@ -1426,6 +1451,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private func enqueue(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1440,6 +1466,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: cacheURL.path,
             volumeIdentifier: volumeIdentifier,
             token: token,
+            revision: revision,
             onCompletion: onCompletion
         )
         contexts[repoID] = context
@@ -1469,17 +1496,18 @@ final class HuggingFaceDownloadManager: ObservableObject {
             repoID: repoID,
             cachePath: context.cachePath,
             token: normalizedToken,
-            progress: { progress in
+            revision: context.revision,
+            progress: { [weak self] progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
                 }
             },
-            transferSpeed: { bytesPerSecond in
+            transferSpeed: { [weak self] bytesPerSecond in
                 Task { @MainActor [weak self] in
                     self?.updateTransferSpeed(repoID, bytesPerSecond)
                 }
             },
-            phase: { phase in
+            phase: { [weak self] phase in
                 Task { @MainActor [weak self] in
                     self?.updatePhase(repoID, phase)
                 }
@@ -1513,6 +1541,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         if let error {
             waiters.forEach { $0.resume(throwing: error) }
         } else {
+            completedDownloads.send(repoID)
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
             completion?()
             waiters.forEach { $0.resume() }
@@ -1907,12 +1936,16 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
 }
 
 enum HuggingFaceDownloadOutput: Equatable {
+    case reservation(Int64)
     case progress(ModelDownloadProgress)
     case transferredBytes(Int64)
     case phase(HuggingFaceDownloadManager.DownloadPhase)
 
     init?(line: String) {
-        if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
+        if let payload = Self.payload(in: line, after: "__NATIV_RESERVE__:"),
+           let bytes = Int64(payload) {
+            self = .reservation(bytes)
+        } else if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
            let separator = payload.firstIndex(of: ":"),
            let completedBytes = Int64(payload[..<separator]),
            let totalBytes = Int64(payload[payload.index(after: separator)...]),
@@ -1972,8 +2005,7 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
-private final class HuggingFaceDownloadOperation: @unchecked Sendable {
-    private static let stallTimeout: TimeInterval = 60
+final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let finalizationStallTimeout: TimeInterval = 10 * 60
     private static let monitorInterval: TimeInterval = 0.5
     private static let maximumAttempts = 3
@@ -1982,6 +2014,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let executableURL: URL
     private let arguments: [String]
     private let environment: [String: String]
+    private let cachePath: String
+    private let capacity: HuggingFaceDownloadCapacity
+    private let stallTimeout: TimeInterval
     private let progress: @Sendable (ModelDownloadProgress) -> Void
     private let transferSpeed: @Sendable (Double?) -> Void
     private let phase: @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -1991,10 +2026,11 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private var wasCancelled = false
     private var isPaused = false
 
-    init(
+    convenience init(
         repoID: String,
         cachePath: String,
         token: String?,
+        revision: String?,
         progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
         transferSpeed: @escaping @Sendable (Double?) -> Void,
         phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -2023,21 +2059,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
-        total_bytes = 0
-        cached_bytes = 0
-        print("__NATIV_STAGE__:preparing", flush=True)
-        try:
-            files = snapshot_download(
-                repo_id=sys.argv[1],
-                cache_dir=sys.argv[2],
-                dry_run=True,
-                ignore_patterns=ignored_patterns,
-            )
-            total_bytes = sum(item.file_size for item in files)
-            cached_bytes = sum(item.file_size for item in files if not item.will_download)
-        except Exception:
-            pass
-        print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
+        \(HuggingFaceDownloadPreflight.script)
 
         class NativProgress(tqdm):
             _lock = threading.Lock()
@@ -2104,6 +2126,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         print("__NATIV_STAGE__:downloading", flush=True)
         snapshot_download(
             repo_id=sys.argv[1],
+            revision=revision,
             cache_dir=sys.argv[2],
             ignore_patterns=ignored_patterns,
             tqdm_class=NativProgress,
@@ -2123,15 +2146,37 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
 
-        self.executableURL = pythonURL
-        self.arguments = [
+        let arguments = [
             "-c",
             script,
             repoID,
             cachePath,
-            String(ProcessInfo.processInfo.processIdentifier)
+            String(ProcessInfo.processInfo.processIdentifier),
+            revision ?? "main"
         ]
+        self.init(executableURL: pythonURL, arguments: arguments, environment: environment,
+                  cachePath: cachePath, capacity: .shared,
+                  progress: progress, transferSpeed: transferSpeed, phase: phase)
+    }
+
+    /// Also allows subprocess tests to exercise admission and cleanup without Hub access.
+    init(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        cachePath: String,
+        capacity: HuggingFaceDownloadCapacity,
+        stallTimeout: TimeInterval = 60,
+        progress: @escaping @Sendable (ModelDownloadProgress) -> Void = { _ in },
+        transferSpeed: @escaping @Sendable (Double?) -> Void = { _ in },
+        phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void = { _ in }
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
         self.environment = environment
+        self.cachePath = cachePath
+        self.capacity = capacity
+        self.stallTimeout = stallTimeout
         self.progress = progress
         self.transferSpeed = transferSpeed
         self.phase = phase
@@ -2157,6 +2202,12 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     }
 
     private func runAttempt() throws {
+        let reservationID = UUID()
+        // Keep the full uncached-byte reservation until the subprocess and its
+        // output reader exit, including while paused or being cancelled. UI
+        // progress can be interpolated and is not proof that bytes are on disk.
+        // Retries release the old attempt and reserve again after a fresh dry run.
+        defer { capacity.release(reservationID) }
         activity.beginAttempt()
         let process = Process()
         process.executableURL = executableURL
@@ -2164,8 +2215,19 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         process.environment = environment
 
         let pipe = Pipe()
+        let approvalPipe = Pipe()
+        process.standardInput = approvalPipe
         process.standardOutput = pipe
         process.standardError = pipe
+        defer {
+            try? approvalPipe.fileHandleForWriting.close()
+            try? approvalPipe.fileHandleForReading.close()
+        }
+        // Cancellation may close the child's stdin before its approval is sent.
+        // Treat that as a failed write, never a signal that terminates the app.
+        guard fcntl(approvalPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
 
         let outputGroup = DispatchGroup()
         let output = HuggingFaceCapturedOutput(
@@ -2173,7 +2235,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         )
         outputGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            [activity, phase, progress] in
+            [self, activity, phase, progress] in
             var lineBuffer = ""
             while true {
                 let data = pipe.fileHandleForReading.availableData
@@ -2188,6 +2250,23 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 for line in lines.dropLast() {
                     guard let output = HuggingFaceDownloadOutput(line: line) else { continue }
                     switch output {
+                    case .reservation(let bytes):
+                        let response: [String: Any]
+                        do {
+                            guard !isCancelled else { throw CancellationError() }
+                            try capacity.reserve(reservationID, bytes: bytes, atPath: cachePath)
+                            response = ["approved": true]
+                        } catch {
+                            response = ["error": error.localizedDescription]
+                        }
+                        do {
+                            var data = try JSONSerialization.data(withJSONObject: response)
+                            data.append(0x0a)
+                            try approvalPipe.fileHandleForWriting.write(contentsOf: data)
+                        } catch {
+                            // EOF also denies admission if the reply cannot be delivered.
+                        }
+                        try? approvalPipe.fileHandleForWriting.close()
                     case .progress(let reportedProgress):
                         if let updatedProgress = activity.recordProgress(reportedProgress) {
                             progress(updatedProgress)
@@ -2216,6 +2295,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
         do {
             try process.run()
+            try? approvalPipe.fileHandleForReading.close()
         } catch {
             try? pipe.fileHandleForWriting.close()
             clearProcess(process)
@@ -2241,7 +2321,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 transferSpeed(activity.bytesPerSecond)
                 let timeout = activity.isFinishing
                     ? Self.finalizationStallTimeout
-                    : Self.stallTimeout
+                    : stallTimeout
                 if activity.isStalled(timeout: timeout, isPaused: false) {
                     stalled = true
                     stopProcess(process)

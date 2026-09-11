@@ -21,26 +21,24 @@ private struct ChatSessionBootstrap {
 }
 
 enum ChatStreamingRenderPolicy {
-    static func updatesPerSecond(characterCount: Int) -> Double {
-        switch characterCount {
-        case ..<2_000:
-            10
-        case ..<8_000:
-            9
-        case ..<20_000:
-            8.5
-        default:
-            8
-        }
-    }
+    static let updatesPerSecond: Double = 20
+    static let flushInterval: Duration = .seconds(1 / updatesPerSecond)
+}
 
-    static func flushIntervalSeconds(characterCount: Int) -> TimeInterval {
-        1 / updatesPerSecond(characterCount: characterCount)
-    }
+@MainActor
+@Observable
+final class ChatTranscriptRevision {
+    private(set) var value = 0
 
-    static func flushInterval(characterCount: Int) -> Duration {
-        .seconds(flushIntervalSeconds(characterCount: characterCount))
+    func bump() {
+        value &+= 1
     }
+}
+
+@MainActor
+@Observable
+private final class ChatComposerDraft {
+    var text = ""
 }
 
 @MainActor
@@ -64,6 +62,7 @@ final class ChatViewModel: ObservableObject {
     private struct ComposerSnapshot {
         let draft: String
         let attachments: [ChatImageAttachment]
+        let annotations: [ChatAnnotation]
     }
 
     private struct ImageModelPreparationContext {
@@ -94,12 +93,21 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
-    @Published var draft = ""
+    @Published private(set) var pendingAnnotations: [ChatAnnotation] = []
+    private(set) lazy var annotationActions = ChatAnnotationActions(chat: self)
+    // Only views that read draft text should update on a keystroke. Publishing it
+    // on the chat model also rebuilds the lazy transcript and its scroll layout.
+    private let composerDraft = ChatComposerDraft()
+    var draft: String {
+        get { composerDraft.text }
+        set { composerDraft.text = newValue }
+    }
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
-    @Published private(set) var scrollToken = 0
+    let transcriptRevision = ChatTranscriptRevision()
+    @Published private(set) var transcriptSubmissionID: UUID?
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
     @Published private(set) var imageModelSelectionRequests:
@@ -119,11 +127,6 @@ final class ChatViewModel: ObservableObject {
     private var storedSessions: [ChatSession] = []
     private var currentSession: ChatSession?
     private var liveDecodeRateRefreshDates: [UUID: Date] = [:]
-    private var pendingStreamContent: [UUID: String] = [:]
-    private var pendingStreamReasoning: [UUID: String] = [:]
-    private var pendingStreamMetrics: [UUID: MLXChatStreamDelta] = [:]
-    private var streamFlushDates: [UUID: Date] = [:]
-    private var streamFlushTasks: [UUID: Task<Void, Never>] = [:]
     private weak var appModel: NativModel?
     private let projectStore: ChatProjectStore
     private let toolConsentGate = ChatToolConsentGate()
@@ -158,7 +161,7 @@ final class ChatViewModel: ObservableObject {
         applyCurrentSession(
             ChatSession(
                 id: UUID(),
-                title: ChatSession.timestampTitle(for: now),
+                title: ChatSession.newChatTitle,
                 createdAt: now,
                 updatedAt: now,
                 messages: []
@@ -205,6 +208,21 @@ final class ChatViewModel: ObservableObject {
             return false
         }
         return activeRequestSessionID == currentSessionID
+    }
+
+    var currentSessionLiveResponseMetrics: ChatResponseMetrics? {
+        guard isCurrentSessionSending,
+            let activeAssistantMessageID,
+            let message = messages.last(where: { $0.id == activeAssistantMessageID }),
+            message.role == .assistant,
+            message.isStreaming,
+            let metrics = message.responseMetrics,
+            metrics.generatedTokens.map({ $0 > 0 }) == true
+                || metrics.decodeTokensPerSecond.map({ $0 > 0 && $0.isFinite }) == true
+        else {
+            return nil
+        }
+        return metrics
     }
 
     var hasPendingRequests: Bool {
@@ -339,12 +357,46 @@ final class ChatViewModel: ObservableObject {
         cancelPromptEditing()
         composerSnapshot = ComposerSnapshot(
             draft: draft,
-            attachments: pendingImageAttachments
+            attachments: pendingImageAttachments,
+            annotations: pendingAnnotations
         )
         promptEditContext = ChatPromptEditContext(messageID: messageID)
         draft = message.content
         pendingImageAttachments = message.imageAttachments
+        pendingAnnotations = message.annotations
         composerFocusToken += 1
+    }
+
+    /// Whether Up would recall a prompt right now, for the composer's hint.
+    var canRecallPreviousPrompt: Bool {
+        guard promptEditContext == nil,
+            draft.isEmpty,
+            pendingImageAttachments.isEmpty,
+            let messageID = latestUserMessageID
+        else {
+            return false
+        }
+        return canEditUserMessage(messageID)
+    }
+
+    /// Loads the most recent prompt back into the composer for editing, the way
+    /// a shell recalls the last command.
+    ///
+    /// Only from an empty composer. Recalling over a half-written message would
+    /// destroy work to save a click, and the snapshot that `beginEditingUserMessage`
+    /// takes is meant for restoring a draft, not for rescuing one this gesture
+    /// threw away.
+    ///
+    /// Returns whether it recalled, so the key handler knows whether to consume
+    /// the event or let the caret move.
+    @discardableResult
+    func recallPreviousPrompt() -> Bool {
+        guard canRecallPreviousPrompt, let messageID = latestUserMessageID else {
+            return false
+        }
+
+        beginEditingUserMessage(messageID)
+        return true
     }
 
     func cancelPromptEditing() {
@@ -354,6 +406,7 @@ final class ChatViewModel: ObservableObject {
         if let composerSnapshot {
             draft = composerSnapshot.draft
             pendingImageAttachments = composerSnapshot.attachments
+            pendingAnnotations = composerSnapshot.annotations
         }
         promptEditContext = nil
         composerSnapshot = nil
@@ -403,7 +456,7 @@ final class ChatViewModel: ObservableObject {
         let createdAt = Date()
         let session = ChatSession(
             id: UUID(),
-            title: ChatSession.timestampTitle(for: createdAt),
+            title: ChatSession.newChatTitle,
             createdAt: createdAt,
             updatedAt: createdAt,
             messages: [],
@@ -412,11 +465,12 @@ final class ChatViewModel: ObservableObject {
 
         persistCurrentSession(updateTimestamp: false)
         storedSessions.append(session)
-        pruneRedundantEmptySessions()
+        pruneRedundantEmptySessions(keeping: session.id)
         saveSession(session)
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         applyCurrentSession(session)
     }
 
@@ -458,6 +512,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         applyCurrentSession(session)
         return session.id
     }
@@ -538,6 +593,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingAnnotations.removeAll()
             applyCurrentSession(session)
             return
         }
@@ -548,6 +604,7 @@ final class ChatViewModel: ObservableObject {
             discardPromptEditing()
             draft = ""
             pendingImageAttachments.removeAll()
+            pendingAnnotations.removeAll()
             applyCurrentSession(session)
         }
     }
@@ -745,6 +802,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
 
         if let nextSession = storedSessions.sorted(by: ChatSession.recencySort).first {
             applyCurrentSession(nextSession)
@@ -879,6 +937,22 @@ final class ChatViewModel: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    func addAnnotation(_ annotation: ChatAnnotation) {
+        guard pendingAnnotations.count < ChatAnnotation.maximumCount,
+              messages.contains(where: { $0.id == annotation.sourceMessageID }),
+              !pendingAnnotations.contains(where: {
+                  $0.sourceMessageID == annotation.sourceMessageID
+                      && $0.selectionLocation == annotation.selectionLocation
+                      && $0.selectionLength == annotation.selectionLength
+              }) else { return }
+        pendingAnnotations.append(annotation)
+        composerFocusToken += 1
+    }
+
+    func removeAnnotation(_ id: UUID) {
+        pendingAnnotations.removeAll { $0.id == id }
+    }
+
     func send(
         using appModel: NativModel,
         languageModelSupportsTools: Bool,
@@ -899,29 +973,34 @@ final class ChatViewModel: ObservableObject {
 
         let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let imageAttachments = pendingImageAttachments
+        let annotations = pendingAnnotations
 
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
-                let sourceSession = currentSessionSnapshot,
                 let revision = ChatPromptRevision.make(
                     messageID: promptEditContext.messageID,
                     content: prompt,
                     attachments: imageAttachments,
                     modelID: modelID,
-                    in: sourceSession.messages
+                    in: messages
                 )
             else {
                 return
             }
 
-            let branch = ChatConversationBranch.make(
-                from: sourceSession,
-                messages: revision.messages
-            )
-            activateBranch(branch, restoring: composerSnapshot)
+            let editedMessageID = promptEditContext.messageID
+            messages = revision.messages
+            if let index = messages.firstIndex(where: { $0.id == editedMessageID }) {
+                messages[index].annotations = annotations
+            }
+            draft = composerSnapshot?.draft ?? ""
+            pendingImageAttachments = composerSnapshot?.attachments ?? []
+            pendingAnnotations = composerSnapshot?.annotations ?? []
+            discardPromptEditing()
+            persistCurrentSession(updateTimestamp: true)
             enqueueGeneration(
-                for: promptEditContext.messageID,
-                in: branch.id,
+                for: editedMessageID,
+                in: currentSession.id,
                 settings: settings,
                 languageModelSupportsTools: languageModelSupportsTools,
                 languageModelSupportsVision: languageModelSupportsVision,
@@ -932,13 +1011,15 @@ final class ChatViewModel: ObservableObject {
 
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
 
-        let userMessage = ChatTranscriptMessage(
+        var userMessage = ChatTranscriptMessage(
             role: .user,
             content: prompt,
             modelID: modelID,
             imageAttachments: imageAttachments
         )
+        userMessage.annotations = annotations
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
         enqueueGeneration(
@@ -959,6 +1040,9 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsVision: Bool,
         appModel: NativModel
     ) {
+        // A send (including prompt regeneration) releases previously attached
+        // history. Streaming revisions must not repeatedly reset the reader.
+        transcriptSubmissionID = UUID()
         if let modelID = settings.languageModelID {
             appModel.clearModelLoadFailure(for: modelID)
         }
@@ -1369,6 +1453,7 @@ final class ChatViewModel: ObservableObject {
         discardPromptEditing()
         draft = ""
         pendingImageAttachments.removeAll()
+        pendingAnnotations.removeAll()
         messages.removeAll()
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
@@ -1547,11 +1632,19 @@ final class ChatViewModel: ObservableObject {
                     in: streamingSessionID
                 )
             }
-            let completion = try await client.streamChat(
-                request,
-                onEvent: { event in
-                    await appendEvent(event)
-                })
+            let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
+            let completion: MLXChatCompletion
+            do {
+                completion = try await client.streamChat(
+                    request,
+                    onEvent: { event in
+                        await eventRelay.submit(event)
+                    })
+                await eventRelay.finish()
+            } catch {
+                await eventRelay.cancel()
+                throw error
+            }
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
                 assistantMessageID,
@@ -2456,75 +2549,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
-        // Accumulate deltas into buffers and flush to the published message at a
-        // capped cadence. Applying every token synchronously starves the main
-        // run loop, which freezes the transcript, thinking bubble, and "Working"
-        // animation until an input event (issue #11).
-        if let reasoningContent = event.reasoningContent, !reasoningContent.isEmpty {
-            pendingStreamReasoning[id, default: ""] += reasoningContent
-        }
-        if let content = event.content, !content.isEmpty {
-            pendingStreamContent[id, default: ""] += content
-        }
-        if shouldRefreshLiveMetrics(event, for: id) {
-            pendingStreamMetrics[id] = event
-        }
-
-        guard hasPendingStreamUpdate(id) else {
-            return
-        }
-
-        let now = Date.now
-        let characterCount = streamingCharacterCount(id, in: sessionID)
-        let flushInterval = ChatStreamingRenderPolicy.flushIntervalSeconds(
-            characterCount: characterCount
-        )
-        if let lastFlush = streamFlushDates[id] {
-            let elapsed = now.timeIntervalSince(lastFlush)
-            if elapsed < flushInterval {
-                scheduleStreamFlush(
-                    id,
-                    in: sessionID,
-                    delay: flushInterval - elapsed
-                )
-                return
-            }
-        }
-        flushStream(id, in: sessionID)
-    }
-
-    private func hasPendingStreamUpdate(_ id: UUID) -> Bool {
-        pendingStreamContent[id]?.isEmpty == false
-            || pendingStreamReasoning[id]?.isEmpty == false
-            || pendingStreamMetrics[id] != nil
-    }
-
-    private func scheduleStreamFlush(
-        _ id: UUID,
-        in sessionID: UUID,
-        delay: TimeInterval
-    ) {
-        guard streamFlushTasks[id] == nil else {
-            return
-        }
-        streamFlushTasks[id] = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(delay))
-            guard let self, !Task.isCancelled else {
-                return
-            }
-            self.streamFlushTasks[id] = nil
-            self.flushStream(id, in: sessionID)
-        }
-    }
-
-    private func flushStream(_ id: UUID, in sessionID: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks[id] = nil
-
-        let content = pendingStreamContent.removeValue(forKey: id) ?? ""
-        let reasoning = pendingStreamReasoning.removeValue(forKey: id) ?? ""
-        let metrics = pendingStreamMetrics.removeValue(forKey: id)
-        guard !content.isEmpty || !reasoning.isEmpty || metrics != nil else {
+        let content = event.content ?? ""
+        let reasoning = event.reasoningContent ?? ""
+        let refreshMetrics = shouldRefreshLiveMetrics(event, for: id)
+        guard !content.isEmpty || !reasoning.isEmpty || refreshMetrics else {
             return
         }
 
@@ -2538,40 +2566,21 @@ final class ChatViewModel: ObservableObject {
                 }
                 message.content.append(content)
             }
-            if let metrics {
+            if refreshMetrics {
                 message.responseMetrics = ChatResponseMetrics(
                     totalTokens: message.responseMetrics?.totalTokens,
-                    generatedTokens: metrics.generatedTokens
+                    generatedTokens: event.generatedTokens
                         ?? message.responseMetrics?.generatedTokens,
-                    decodeTokensPerSecond: metrics.decodeTokensPerSecond
+                    decodeTokensPerSecond: event.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
                     specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
             }
         }
-        streamFlushDates[id] = .now
         if !content.isEmpty || !reasoning.isEmpty, currentSessionID == sessionID {
             bumpScroll()
         }
-    }
-
-    private func clearStreamBuffers(_ id: UUID) {
-        streamFlushTasks[id]?.cancel()
-        streamFlushTasks.removeValue(forKey: id)
-        pendingStreamContent.removeValue(forKey: id)
-        pendingStreamReasoning.removeValue(forKey: id)
-        pendingStreamMetrics.removeValue(forKey: id)
-        streamFlushDates.removeValue(forKey: id)
-    }
-
-    private func streamingCharacterCount(_ id: UUID, in sessionID: UUID) -> Int {
-        let message = message(id, in: sessionID)
-        let contentCount = (message?.content.count ?? 0)
-            + (pendingStreamContent[id]?.count ?? 0)
-        let reasoningCount = (message?.reasoningContent.count ?? 0)
-            + (pendingStreamReasoning[id]?.count ?? 0)
-        return max(contentCount, reasoningCount)
     }
 
     private func shouldRefreshLiveMetrics(
@@ -2607,8 +2616,6 @@ final class ChatViewModel: ObservableObject {
         toolCalls: [MLXChatToolCall] = [],
         isCancelled: Bool
     ) {
-        flushStream(id, in: sessionID)
-        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         updateMessage(id, in: sessionID) { message in
             message.isStreaming = false
@@ -2641,7 +2648,6 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func failAssistantMessage(_ id: UUID, in sessionID: UUID, error: Error) {
-        clearStreamBuffers(id)
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         guard
             updateMessage(
@@ -2689,7 +2695,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func bumpScroll() {
-        scrollToken += 1
+        transcriptRevision.bump()
     }
 
     private func applyCurrentSession(_ session: ChatSession) {
@@ -2718,6 +2724,7 @@ final class ChatViewModel: ObservableObject {
                 !session.messages.isEmpty
                     || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !pendingImageAttachments.isEmpty
+                    || !pendingAnnotations.isEmpty
                     || activeRequestID != nil
             } == true
 
@@ -2771,7 +2778,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         session.messages = messages
-        session.title = ChatSession.defaultTitle(for: messages, createdAt: session.createdAt)
+        session.title = ChatSession.defaultTitle(for: messages)
         if updateTimestamp {
             session.updatedAt = Date()
         }
@@ -2801,6 +2808,7 @@ final class ChatViewModel: ObservableObject {
 
         draft = composer?.draft ?? ""
         pendingImageAttachments = composer?.attachments ?? []
+        pendingAnnotations = composer?.annotations ?? []
         discardPromptEditing()
         upsertStoredSession(branch)
         saveSession(branch)
@@ -2821,8 +2829,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         storedSessions[index].title = ChatSession.defaultTitle(
-            for: storedSessions[index].messages,
-            createdAt: storedSessions[index].createdAt
+            for: storedSessions[index].messages
         )
         if updateTimestamp {
             storedSessions[index].updatedAt = Date()
@@ -2851,6 +2858,7 @@ final class ChatViewModel: ObservableObject {
                 discardPromptEditing()
                 draft = ""
                 pendingImageAttachments.removeAll()
+                pendingAnnotations.removeAll()
                 if let replacement = storedSessions.sorted(by: ChatSession.recencySort).first {
                     applyCurrentSession(replacement)
                 } else {
@@ -2932,13 +2940,14 @@ final class ChatViewModel: ObservableObject {
         }
 
         return currentSession.projectID == projectID
-            && currentSession.messages.isEmpty
+            && messages.isEmpty
             && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && pendingImageAttachments.isEmpty
+            && pendingAnnotations.isEmpty
     }
 
-    private func pruneRedundantEmptySessions() {
-        let selectedSessionID = currentSessionID
+    private func pruneRedundantEmptySessions(keeping sessionID: UUID? = nil) {
+        let selectedSessionID = sessionID ?? currentSessionID
         let sortedSessions = storedSessions.sorted { lhs, rhs in
             if lhs.id == selectedSessionID { return true }
             if rhs.id == selectedSessionID { return false }

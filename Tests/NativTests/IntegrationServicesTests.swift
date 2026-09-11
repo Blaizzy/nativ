@@ -19,7 +19,8 @@ final class IntegrationServicesTests: XCTestCase {
         .cursor,
         .jetbrains,
         .buzz,
-        .openInterpreter
+        .openInterpreter,
+        .dsh
     ]
 
     private var temporaryRoot: URL!
@@ -31,6 +32,7 @@ final class IntegrationServicesTests: XCTestCase {
     private let selectedModel = IntegrationModelDescriptor(
         id: "org/local-model",
         displayName: "Local Model",
+        provider: .qwen,
         contextWindow: 32_768,
         supportsVision: true,
         supportsReasoning: true,
@@ -39,6 +41,7 @@ final class IntegrationServicesTests: XCTestCase {
     private let basicModel = IntegrationModelDescriptor(
         id: "org/basic-model",
         displayName: "Basic Model",
+        provider: nil,
         contextWindow: nil,
         supportsVision: false,
         supportsReasoning: false,
@@ -385,21 +388,6 @@ final class IntegrationServicesTests: XCTestCase {
             launchCommand(for: .continueDev),
             "cd '/tmp/Nativ Project'\n'/tools/cn' '--config' '\(configurationURL.path)'"
         )
-    }
-
-    func testBuzzIsGuidedSetupWithoutManagedConfiguration() throws {
-        XCTAssertTrue(IntegrationTool.buzz.isGuidedSetup)
-        XCTAssertNotNil(IntegrationTool.buzz.guidedSetupCaveat)
-
-        let steps = IntegrationTool.buzz.guidedSetupSteps.joined(separator: "\n")
-        XCTAssertFalse(steps.isEmpty)
-        XCTAssertTrue(steps.contains("BUZZ_AGENT_PROVIDER"))
-        XCTAssertTrue(steps.contains("OPENAI_COMPAT_BASE_URL"))
-        XCTAssertTrue(steps.contains("OPENAI_COMPAT_MODEL"))
-
-        try configure(.buzz)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.configurationURL(for: .buzz).path))
-        XCTAssertEqual(launchCommand(for: .buzz), "cd '/tmp/Nativ Project'\n'/tools/buzz'")
     }
 
     func testOpenInterpreterConfigurationAndLaunchCommand() throws {

@@ -281,9 +281,10 @@ final class HuggingFaceModelSupportTests: XCTestCase {
         XCTAssertEqual(model.support, .unknown)
     }
 
-    func testHubConfigurationImprovesProviderDetection() throws {
+    func testHubConfigurationImprovesProviderDetectionAndPreservesRevision() throws {
         let payload: [String: Any] = [
             "id": "community/generic-model",
+            "sha": "test-revision",
             "pipeline_tag": "text-generation",
             "config": [
                 "model_type": "qwen3",
@@ -295,6 +296,7 @@ final class HuggingFaceModelSupportTests: XCTestCase {
 
         XCTAssertEqual(model.supportConfiguration?.modelType, "qwen3")
         XCTAssertEqual(model.provider, .qwen)
+        XCTAssertEqual(model.revision, "test-revision")
     }
 
     private func configuration(

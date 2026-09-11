@@ -419,6 +419,7 @@ struct NativSettings: Codable, Equatable {
     var modelSearchPath: String
     var externalModelCache: ExternalModelCacheReference?
     var additionalModelSearchPaths: [String]
+    var pinnedModelIDs: [String]
     var languageModelID: String?
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
@@ -435,6 +436,7 @@ struct NativSettings: Codable, Equatable {
     var huggingFaceToken: String?
     var serverHost: String
     var serverPort: Int
+    var cachedModelDiscoveryEnabled: Bool
     var maxTokens: Int
     var maxKVSize: Int
     var systemPrompt: String
@@ -464,6 +466,8 @@ struct NativSettings: Codable, Equatable {
     var prefixCachingEnabled: Bool
     var prefixCacheBlocks: Int
     var prefixCacheBlockSize: Int
+    /// Set once the Up-arrow recall has been used, which retires its hint.
+    var hasUsedPromptRecall: Bool
     var chatFontScale: Double
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
@@ -475,6 +479,7 @@ struct NativSettings: Codable, Equatable {
         modelSearchPath: String = Self.defaultModelSearchPath,
         externalModelCache: ExternalModelCacheReference? = nil,
         additionalModelSearchPaths: [String] = [],
+        pinnedModelIDs: [String] = [],
         languageModelID: String? = nil,
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
@@ -491,6 +496,7 @@ struct NativSettings: Codable, Equatable {
         huggingFaceToken: String? = nil,
         serverHost: String = Self.defaultServerHost,
         serverPort: Int = 8080,
+        cachedModelDiscoveryEnabled: Bool = false,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         systemPrompt: String = "",
@@ -520,6 +526,7 @@ struct NativSettings: Codable, Equatable {
         prefixCachingEnabled: Bool = false,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
+        hasUsedPromptRecall: Bool = false,
         chatFontScale: Double = Self.defaultChatFontScale,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
@@ -530,6 +537,7 @@ struct NativSettings: Codable, Equatable {
         self.modelSearchPath = modelSearchPath
         self.externalModelCache = externalModelCache
         self.additionalModelSearchPaths = additionalModelSearchPaths
+        self.pinnedModelIDs = pinnedModelIDs
         self.languageModelID = languageModelID
         self.mcpServers = mcpServers
         self.customTools = customTools
@@ -546,6 +554,7 @@ struct NativSettings: Codable, Equatable {
         self.huggingFaceToken = huggingFaceToken
         self.serverHost = serverHost
         self.serverPort = serverPort
+        self.cachedModelDiscoveryEnabled = cachedModelDiscoveryEnabled
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.systemPrompt = systemPrompt
@@ -575,6 +584,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCachingEnabled = prefixCachingEnabled
         self.prefixCacheBlocks = prefixCacheBlocks
         self.prefixCacheBlockSize = prefixCacheBlockSize
+        self.hasUsedPromptRecall = hasUsedPromptRecall
         self.chatFontScale = chatFontScale
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
@@ -587,6 +597,7 @@ struct NativSettings: Codable, Equatable {
         case modelSearchPath
         case externalModelCache
         case additionalModelSearchPaths
+        case pinnedModelIDs
         case languageModelID
         case mcpServers
         case customTools
@@ -603,6 +614,7 @@ struct NativSettings: Codable, Equatable {
         case huggingFaceToken
         case serverHost
         case serverPort
+        case cachedModelDiscoveryEnabled
         case selectedModelID
         case maxTokens
         case maxKVSize
@@ -633,6 +645,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCachingEnabled
         case prefixCacheBlocks
         case prefixCacheBlockSize
+        case hasUsedPromptRecall
         case chatFontScale
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
@@ -656,6 +669,9 @@ struct NativSettings: Codable, Equatable {
         additionalModelSearchPaths =
             try container.decodeIfPresent([String].self, forKey: .additionalModelSearchPaths)
             ?? defaults.additionalModelSearchPaths
+        pinnedModelIDs =
+            try container.decodeIfPresent([String].self, forKey: .pinnedModelIDs)
+            ?? defaults.pinnedModelIDs
         languageModelID =
             try container.decodeIfPresent(String.self, forKey: .languageModelID)
             ?? legacySelectedModelID ?? defaults.languageModelID
@@ -701,6 +717,9 @@ struct NativSettings: Codable, Equatable {
             try container.decodeIfPresent(String.self, forKey: .serverHost) ?? defaults.serverHost
         serverPort =
             try container.decodeIfPresent(Int.self, forKey: .serverPort) ?? defaults.serverPort
+        cachedModelDiscoveryEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .cachedModelDiscoveryEnabled)
+            ?? defaults.cachedModelDiscoveryEnabled
         maxTokens =
             try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize =
@@ -775,6 +794,9 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize =
             try container.decodeIfPresent(Int.self, forKey: .prefixCacheBlockSize)
             ?? defaults.prefixCacheBlockSize
+        hasUsedPromptRecall =
+            try container.decodeIfPresent(Bool.self, forKey: .hasUsedPromptRecall)
+            ?? defaults.hasUsedPromptRecall
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
@@ -800,6 +822,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(modelSearchPath, forKey: .modelSearchPath)
         try container.encodeIfPresent(externalModelCache, forKey: .externalModelCache)
         try container.encode(additionalModelSearchPaths, forKey: .additionalModelSearchPaths)
+        try container.encode(pinnedModelIDs, forKey: .pinnedModelIDs)
         try container.encodeIfPresent(languageModelID, forKey: .languageModelID)
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
@@ -814,6 +837,7 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
+        try container.encode(cachedModelDiscoveryEnabled, forKey: .cachedModelDiscoveryEnabled)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(systemPrompt, forKey: .systemPrompt)
@@ -843,6 +867,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCachingEnabled, forKey: .prefixCachingEnabled)
         try container.encode(prefixCacheBlocks, forKey: .prefixCacheBlocks)
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
+        try container.encode(hasUsedPromptRecall, forKey: .hasUsedPromptRecall)
         try container.encode(chatFontScale, forKey: .chatFontScale)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
@@ -985,6 +1010,10 @@ struct NativSettings: Codable, Equatable {
         settings.additionalModelSearchPaths = settings.additionalModelSearchPaths
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && seenAdditionalPaths.insert($0).inserted }
+        var seenPinnedModelIDs = Set<String>()
+        settings.pinnedModelIDs = settings.pinnedModelIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenPinnedModelIDs.insert($0).inserted }
         let trimmedFileReadRoot =
             settings.fileReadRootPath?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1115,6 +1144,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.huggingFaceToken == rhs.huggingFaceToken
             && lhs.serverHost == rhs.serverHost
             && lhs.serverPort == rhs.serverPort
+            && lhs.cachedModelDiscoveryEnabled == rhs.cachedModelDiscoveryEnabled
             && lhs.maxTokens == rhs.maxTokens
             && lhs.maxKVSize == rhs.maxKVSize
             && lhs.kvQuantizationEnabled == rhs.kvQuantizationEnabled
@@ -1143,7 +1173,8 @@ struct NativSettings: Codable, Equatable {
     var launchEnvironment: [String: String] {
         let settings = normalized()
         var environment = [
-            "HF_HUB_CACHE": settings.expandedModelSearchPath
+            "HF_HUB_CACHE": settings.expandedModelSearchPath,
+            "MLX_VLM_MODEL_DISCOVERY": settings.cachedModelDiscoveryEnabled ? "hf-cache" : "served"
         ]
 
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
@@ -1293,6 +1324,23 @@ struct NativSettings: Codable, Equatable {
 
     var expandedModelSearchPath: String {
         NSString(string: modelSearchPath).expandingTildeInPath
+    }
+
+    mutating func useExternalModelCache(_ resolved: ExternalModelCacheReference.Resolved) {
+        modelSearchPath = resolved.url.path
+        externalModelCache = resolved.reference
+    }
+
+    mutating func restoreDefaultModelCache(to path: String = Self.defaultModelSearchPath) {
+        modelSearchPath = path
+        externalModelCache = nil
+    }
+
+    mutating func clearModelSelections() {
+        for slot in ModelPreloadSlot.allCases {
+            setModelID(nil, for: slot)
+        }
+        draftModelID = ""
     }
 
     var localModelSearchPaths: LocalModelSearchPaths {

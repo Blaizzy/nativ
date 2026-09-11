@@ -142,7 +142,7 @@ struct ToolsSectionView: View {
     private func toolGroup(title: String, tools: [ToolItem]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased())
-                .nativTextStyle(.badge)
+                .legacyTextStyle(.badge)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 6)
             ForEach(Array(tools.enumerated()), id: \.element.id) { index, tool in
@@ -341,11 +341,11 @@ private struct ToolRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tool.title)
-                        .nativTextStyle(.technicalLabel)
+                        .legacyTextStyle(.technicalLabel)
                 }
                 if !tool.detail.isEmpty {
                     Text(tool.detail)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -398,13 +398,13 @@ private struct BrowsingToolConfigurationView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(toolName)
-                        .nativTextStyle(.technicalDisplayTitle)
+                        .legacyTextStyle(.technicalDisplayTitle)
                     Text(
                         capability == .search
                             ? "Choose the provider used for web search."
                             : "Choose the provider used to read source pages."
                     )
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 16)
@@ -443,10 +443,10 @@ private struct ToolInspectorView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(tool.title)
-                        .nativTextStyle(.technicalTitle)
+                        .legacyTextStyle(.technicalTitle)
                     if !tool.detail.isEmpty {
                         Text(tool.detail)
-                            .nativTextStyle(.supporting)
+                            .legacyTextStyle(.supporting)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -462,7 +462,7 @@ private struct ToolInspectorView: View {
             section("Input schema") {
                 ScrollView {
                     Text(schemaText)
-                        .nativTextStyle(.code)
+                        .legacyTextStyle(.code)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
@@ -474,7 +474,7 @@ private struct ToolInspectorView: View {
             if tool.isRunnable {
                 section("Try it — arguments (JSON)") {
                     TextEditor(text: $argumentsJSON)
-                        .nativTextStyle(.code)
+                        .legacyTextStyle(.code)
                         .frame(height: 70)
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
@@ -491,13 +491,13 @@ private struct ToolInspectorView: View {
                     Spacer()
                 }
                 if let errorText {
-                    Text(errorText).nativTextStyle(.supporting).foregroundStyle(.red)
+                    Text(errorText).legacyTextStyle(.supporting).foregroundStyle(.red)
                 }
                 if let result {
                     section("Result") {
                         ScrollView {
                             Text(result)
-                                .nativTextStyle(.code)
+                                .legacyTextStyle(.code)
                                 .textSelection(.enabled)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(8)
@@ -512,7 +512,7 @@ private struct ToolInspectorView: View {
                     tool.executionHint
                         ?? "Built-in tools run inside a chat when a tool-capable model calls them."
                 )
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             }
         }
@@ -525,7 +525,7 @@ private struct ToolInspectorView: View {
         -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
-            Text(label).nativTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
+            Text(label).legacyTextStyle(.supportingEmphasized).foregroundStyle(.secondary)
             content()
         }
     }
@@ -610,13 +610,13 @@ private struct CustomToolEditorSheet: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(tool == nil ? "Add Tool" : "Edit Tool")
-                    .nativTextStyle(.sheetTitle)
+                    .legacyTextStyle(.sheetTitle)
                 Text(
                     kind == .endpoint
                         ? "Send model-provided JSON to an HTTP endpoint."
                         : "Run a local script with model-provided JSON."
                 )
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             }
 
@@ -624,12 +624,12 @@ private struct CustomToolEditorSheet: View {
 
             if let validationError {
                 Text(validationError)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(.red)
             }
             if let testResult {
                 Text(testResult)
-                    .nativTextStyle(.supporting)
+                    .legacyTextStyle(.supporting)
                     .foregroundStyle(validationError == nil ? .green : .red)
                     .lineLimit(2)
             }
@@ -639,7 +639,7 @@ private struct CustomToolEditorSheet: View {
                 Spacer()
                 if kind == .script, isScriptVerified {
                     Label("Verified", systemImage: "checkmark.circle.fill")
-                        .nativTextStyle(.actionLabel)
+                        .legacyTextStyle(.actionLabel)
                         .foregroundStyle(.green)
                 }
                 Button(testing ? "Testing…" : testButtonTitle, action: test)
@@ -683,7 +683,7 @@ private struct CustomToolEditorSheet: View {
 
                     field("Parameters") {
                         TextEditor(text: $parametersJSON)
-                            .nativTextStyle(.code)
+                            .legacyTextStyle(.code)
                             .frame(height: 120)
                             .padding(6)
                             .overlay(
@@ -693,12 +693,12 @@ private struct CustomToolEditorSheet: View {
                     }
                     field("Test arguments") {
                         TextField(#"{"query":"test"}"#, text: $testArgumentsJSON)
-                            .nativTextStyle(.code)
+                            .legacyTextStyle(.code)
                     }
                 }
                 .padding(.top, 6)
             }
-            .nativTextStyle(.supportingEmphasized)
+            .legacyTextStyle(.supportingEmphasized)
         }
     }
 
@@ -709,7 +709,7 @@ private struct CustomToolEditorSheet: View {
                 .textContentType(.URL)
         }
         Text("Uses POST with a JSON request body.")
-            .nativTextStyle(.supporting)
+            .legacyTextStyle(.supporting)
             .foregroundStyle(.secondary)
     }
 
@@ -726,11 +726,11 @@ private struct CustomToolEditorSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             Text(scriptLanguage.availabilityNote)
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
             field("Script") {
                 TextEditor(text: $script)
-                    .nativTextStyle(.code)
+                    .legacyTextStyle(.code)
                     .frame(height: 180)
                     .padding(6)
                     .overlay(
@@ -739,7 +739,7 @@ private struct CustomToolEditorSheet: View {
                     )
             }
             Text("Arguments arrive as JSON on stdin. Return the tool result on stdout.")
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
         }
     }
@@ -771,7 +771,7 @@ private struct CustomToolEditorSheet: View {
                 }
             }
             Text("The header value is saved only in Keychain.")
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
         }
     }
@@ -842,7 +842,7 @@ private struct CustomToolEditorSheet: View {
     {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .nativTextStyle(.supportingEmphasized)
+                .legacyTextStyle(.supportingEmphasized)
             content()
         }
     }

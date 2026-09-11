@@ -8,7 +8,7 @@ Usage: release_macos.sh [options] VERSION
 
 Builds and Developer ID signs Nativ, packages it in a signed disk image,
 notarizes and staples the DMG, then generates its signed Sparkle appcast.
-VERSION may optionally start with "v".
+VERSION may optionally start with "v" and end in rcN (for example v0.4.0rc1).
 
 Options:
   --build-number NUMBER CFBundleVersion. Defaults to a UTC timestamp.
@@ -98,8 +98,8 @@ done
     exit 2
 }
 
-version="${1#v}"
-[[ "$version" =~ ^[0-9]+([.][0-9]+){1,2}$ ]] || fail "invalid version: $1"
+version_metadata="$(python3 "$script_directory/macos_release.py" version "$1")" || fail "invalid version: $1"
+read -r version marketing_version release_channel release_tag <<< "$version_metadata"
 if [[ -z "$build_number" ]]; then
     build_number="$(date -u +%Y%m%d%H%M)"
 fi
@@ -124,7 +124,8 @@ mkdir -p "$output_directory"
 
 archive_arguments=(
     --archive-path "$archive_path"
-    --marketing-version "$version"
+    --marketing-version "$marketing_version"
+    --release-version "$version"
     --build-number "$build_number"
     --sign
 )
@@ -156,7 +157,7 @@ else
     "$script_directory/notarize_macos_release.sh" "$release_dmg"
 fi
 
-appcast_arguments=(--output "$appcast_path")
+appcast_arguments=(--output "$appcast_path" --tag "$release_tag")
 if [[ -n "$release_notes" ]]; then
     appcast_arguments+=(--release-notes "$release_notes")
 fi

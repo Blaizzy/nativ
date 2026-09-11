@@ -206,16 +206,16 @@ private struct KitCard: View {
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(kit.name)
-                    .nativTextStyle(.cardTitle)
+                    .legacyTextStyle(.cardTitle)
                 if !kit.summary.isEmpty {
                     Text(kit.summary)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Text(capabilitiesText)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
             ViewThatFits(in: .horizontal) {
@@ -223,7 +223,7 @@ private struct KitCard: View {
                     .fixedSize(horizontal: true, vertical: false)
                 VStack(alignment: .leading, spacing: 8) { actions }
             }
-            .nativTextStyle(.supporting)
+            .legacyTextStyle(.supporting)
             .controlSize(.regular)
         }
         .padding(14)
@@ -336,12 +336,12 @@ private struct KitDetailView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(kit.name)
-                        .nativTextStyle(.detailTitle)
+                        .legacyTextStyle(.detailTitle)
                     KitStateIcon(state: snapshot.state)
                 }
                 if !kit.summary.isEmpty {
                     Text(kit.summary)
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -742,10 +742,10 @@ private struct KitGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .nativTextStyle(.sectionTitle)
+                    .legacyTextStyle(.sectionTitle)
                 if let caption {
                     Text(caption)
-                        .nativTextStyle(.metadata)
+                        .legacyTextStyle(.metadata)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -771,10 +771,10 @@ private struct KitPartRow: View {
                 .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(descriptor.title)
-                        .nativTextStyle(.rowTitle)
+                        .legacyTextStyle(.rowTitle)
                     if let subtitle = descriptor.subtitle {
                         Text(subtitle)
-                            .nativTextStyle(.metadata)
+                            .legacyTextStyle(.metadata)
                             .foregroundStyle(descriptor.isAvailable ? Color.secondary : Color.orange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -912,7 +912,7 @@ private enum KitComponentInventory {
                 component: component,
                 section: .skills,
                 title: skill.name,
-                subtitle: skill.instructions,
+                subtitle: skillSummary(skill.instructions),
                 symbol: "sparkles",
                 tint: .purple,
                 logoAssetName: nil,
@@ -957,5 +957,13 @@ private enum KitComponentInventory {
 
     private static func humanized(_ name: String) -> String {
         name.split(separator: "_").map { String($0).capitalized }.joined(separator: " ")
+    }
+
+    private static func skillSummary(_ instructions: String) -> String? {
+        instructions
+            .components(separatedBy: "\n\n")
+            .lazy
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
     }
 }

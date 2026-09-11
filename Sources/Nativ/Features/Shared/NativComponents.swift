@@ -4,6 +4,8 @@ import SwiftUI
 struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var gap: CGFloat = 8
+    var showsBorder: Bool = true
+    var isInteractive: Bool = true
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -19,7 +21,9 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             anchorView: anchorView,
             isPresented: $isPresented,
             gap: gap,
-            content: AnyView(content())
+            showsBorder: showsBorder,
+            isInteractive: isInteractive,
+            content: content
         )
     }
 
@@ -29,40 +33,19 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject {
-        private let panel: ArrowlessPopoverPanel
-        private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+        private var panel: ArrowlessPopoverPanel?
+        private var hostingView: NSHostingView<ArrowlessPopoverSurface<Content>>?
         private weak var anchorView: NSView?
         private var isPresented: Binding<Bool>?
         private var gap: CGFloat = 8
-
-        override init() {
-            panel = ArrowlessPopoverPanel(
-                contentRect: .zero,
-                styleMask: [.borderless],
-                backing: .buffered,
-                defer: true
-            )
-            super.init()
-
-            panel.isFloatingPanel = true
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = true
-            panel.hidesOnDeactivate = true
-            panel.isReleasedWhenClosed = false
-            panel.animationBehavior = .none
-            panel.contentView = hostingView
-            panel.onDismiss = { [weak self] in
-                guard self?.isPresented?.wrappedValue == true else { return }
-                self?.isPresented?.wrappedValue = false
-            }
-        }
 
         func update(
             anchorView: NSView,
             isPresented: Binding<Bool>,
             gap: CGFloat,
-            content: AnyView
+            showsBorder: Bool,
+            isInteractive: Bool,
+            content: () -> Content
         ) {
             self.anchorView = anchorView
             self.isPresented = isPresented
@@ -73,7 +56,16 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 return
             }
 
-            hostingView.rootView = AnyView(ArrowlessPopoverSurface(content: content))
+            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder)
+            if let hostingView {
+                hostingView.rootView = surface
+            } else {
+                let hostingView = NSHostingView(rootView: surface)
+                let panel = makePanel(hostingView: hostingView)
+                self.hostingView = hostingView
+                self.panel = panel
+            }
+            panel?.ignoresMouseEvents = !isInteractive
             showPanel()
         }
 
@@ -81,15 +73,44 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             if updateBinding, isPresented?.wrappedValue == true {
                 isPresented?.wrappedValue = false
             }
+            guard let panel, panel.isVisible || panel.parent != nil else {
+                return
+            }
             if let parent = panel.parent {
                 parent.removeChildWindow(panel)
             }
             panel.orderOut(nil)
         }
 
+        private func makePanel(
+            hostingView: NSHostingView<ArrowlessPopoverSurface<Content>>
+        ) -> ArrowlessPopoverPanel {
+            let panel = ArrowlessPopoverPanel(
+                contentRect: .zero,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: true
+            )
+            panel.isFloatingPanel = true
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.hidesOnDeactivate = true
+            panel.isReleasedWhenClosed = false
+            panel.animationBehavior = .none
+            panel.contentView = hostingView
+            panel.onDismiss = { [weak self] in
+                guard self?.isPresented?.wrappedValue == true else { return }
+                self?.isPresented?.wrappedValue = false
+            }
+            return panel
+        }
+
         private func showPanel() {
+            guard let panel, let hostingView else { return }
             guard let anchorView, let parentWindow = anchorView.window else {
                 DispatchQueue.main.async { [weak self] in
+                    guard self?.isPresented?.wrappedValue == true else { return }
                     self?.showPanel()
                 }
                 return
@@ -111,7 +132,11 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             }
             guard !wasVisible else { return }
             panel.alphaValue = 0
-            panel.makeKeyAndOrderFront(nil)
+            if panel.ignoresMouseEvents {
+                panel.orderFront(nil)
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 panel.animator().alphaValue = 1
@@ -123,17 +148,19 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             in parentWindow: NSWindow,
             size: NSSize
         ) {
+            guard let panel else { return }
             let windowRect = anchorView.convert(anchorView.bounds, to: nil)
             let screenRect = parentWindow.convertToScreen(windowRect)
+            let shadowPadding = ArrowlessPopoverSurface<Content>.shadowPadding
             var origin = NSPoint(
                 x: screenRect.midX - (size.width / 2),
-                y: screenRect.maxY + gap
+                y: screenRect.maxY + gap - shadowPadding
             )
 
             if let visibleFrame = parentWindow.screen?.visibleFrame {
                 origin.x = min(
-                    max(origin.x, visibleFrame.minX + 8),
-                    visibleFrame.maxX - size.width - 8
+                    max(origin.x, visibleFrame.minX + 8 - shadowPadding),
+                    visibleFrame.maxX - size.width - 8 + shadowPadding
                 )
             }
             panel.setFrameOrigin(origin)
@@ -159,16 +186,31 @@ private final class ArrowlessPopoverPanel: NSPanel {
     }
 }
 
-private struct ArrowlessPopoverSurface: View {
-    let content: AnyView
+private struct ArrowlessPopoverSurface<Content: View>: View {
+    // Keep the SwiftUI shadow inside the transparent, shadowless panel.
+    static var shadowRadius: CGFloat { 8 }
+    static var shadowPadding: CGFloat { shadowRadius * 3 }
+
+    let content: Content
+    let showsBorder: Bool
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+
         content
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+            .clipShape(shape)
+            .padding(Self.shadowPadding)
+            .background {
+                shape
+                    .fill(Color(nsColor: .textBackgroundColor))
+                    .overlay {
+                        if showsBorder {
+                            shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
+                        }
+                    }
+                    .shadow(color: .black.opacity(0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
+                    .padding(Self.shadowPadding)
+                    .drawingGroup()
             }
     }
 }
@@ -198,7 +240,7 @@ extension Color {
 // rather than a stack of boxes. Prefer these over re-rolling a pill/badge/dot.
 
 /// The application-wide typography roles used by Nativ interface chrome.
-enum NativTypography {
+enum LegacyTypography {
     enum Style {
         case displayTitle
         case pageTitle
@@ -298,8 +340,8 @@ enum NativTypography {
     }
 }
 
-private struct NativTypographyModifier: ViewModifier {
-    let style: NativTypography.Style
+private struct LegacyTypographyModifier: ViewModifier {
+    let style: LegacyTypography.Style
 
     func body(content: Content) -> some View {
         content.font(style.font)
@@ -355,8 +397,8 @@ private struct NativPanelSurfaceModifier: ViewModifier {
 
 extension View {
     /// Applies one of Nativ's application-wide typography roles.
-    func nativTextStyle(_ style: NativTypography.Style) -> some View {
-        modifier(NativTypographyModifier(style: style))
+    func legacyTextStyle(_ style: LegacyTypography.Style) -> some View {
+        modifier(LegacyTypographyModifier(style: style))
     }
 
     /// Applies Nativ's standard semantic panel surface.
@@ -373,7 +415,7 @@ extension View {
     }
 }
 
-private struct NativTypographyPreview: View {
+private struct LegacyTypographyPreview: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -431,7 +473,7 @@ private struct NativTypographyPreview: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
             content()
         }
     }
@@ -439,22 +481,22 @@ private struct NativTypographyPreview: View {
     private func previewRow(
         _ name: String,
         sample: String,
-        style: NativTypography.Style
+        style: LegacyTypography.Style
     ) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(name)
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .frame(width: 150, alignment: .leading)
             Text(sample)
-                .nativTextStyle(style)
+                .legacyTextStyle(style)
             Spacer(minLength: 0)
         }
     }
 }
 
 #Preview("Typography") {
-    NativTypographyPreview()
+    LegacyTypographyPreview()
         .frame(width: 520, height: 760)
 }
 
@@ -521,7 +563,7 @@ struct NativStatusBadge: View {
             }
             Text(text)
         }
-        .nativTextStyle(.statusBadge)
+        .legacyTextStyle(.statusBadge)
         .foregroundStyle(tone.color)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)

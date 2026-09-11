@@ -89,8 +89,7 @@ struct ArtifactsView: View {
     @State private var sort: ArtifactSort = .newest
     @State private var layout: ArtifactLayout = .grid
     @State private var previewID: Artifact.ID?
-    @State private var isSelecting = false
-    @State private var selection: Set<Artifact.ID> = []
+    @State private var artifactSelection = NativBulkSelection<Artifact.ID>()
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var inspectorArtifact: Artifact?
@@ -167,6 +166,10 @@ struct ArtifactsView: View {
         return result.filter { $0.searchText.contains(lowered) }.sorted(by: sort.comparator)
     }
 
+    private var visibleArtifactIDs: Set<Artifact.ID> {
+        Set(filtered.map(\.id))
+    }
+
     private var groups: [ArtifactGroup] {
         let items = filtered
         guard sort.isChronological else {
@@ -194,9 +197,9 @@ struct ArtifactsView: View {
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Turn On Smart Search")
-                        .nativTextStyle(.sectionTitle)
+                        .legacyTextStyle(.sectionTitle)
                     Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents. You can also do this later in Settings.")
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
@@ -229,7 +232,7 @@ struct ArtifactsView: View {
         .popover(isPresented: $showsSemanticPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Smart Search", systemImage: "sparkle.magnifyingglass")
-                    .nativTextStyle(.sectionTitle)
+                    .legacyTextStyle(.sectionTitle)
                 if config.isModelInstalled {
                     Toggle("Enabled", isOn: $smartSearchEnabled)
                         .toggleStyle(.switch)
@@ -237,10 +240,10 @@ struct ArtifactsView: View {
                     Text(smartSearchEnabled
                         ? "Searching by image, video and document contents."
                         : "Turned off. The model stays installed.")
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                     Text("Runs on-device — results are fastest when your Mac isn’t busy generating.")
-                        .nativTextStyle(.metadata)
+                        .legacyTextStyle(.metadata)
                         .foregroundStyle(.tertiary)
                     Divider()
                     Button("Remove Model", role: .destructive) {
@@ -252,11 +255,11 @@ struct ArtifactsView: View {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Downloading model… \(Int((config.downloadProgress * 100).rounded()))%")
-                            .nativTextStyle(.supporting)
+                            .legacyTextStyle(.supporting)
                     }
                 } else {
                     Text("Install a \(config.sizeLabel) on-device model to search artifacts by their contents.")
-                        .nativTextStyle(.supporting)
+                        .legacyTextStyle(.supporting)
                         .foregroundStyle(.secondary)
                     Button("Install") {
                         config.onEnable()
@@ -268,7 +271,7 @@ struct ArtifactsView: View {
                     .disabled(!config.canInstall)
                     if let reason = config.insufficientReason {
                         Text(reason)
-                            .nativTextStyle(.metadata)
+                            .legacyTextStyle(.metadata)
                             .foregroundStyle(.orange)
                     }
                 }
@@ -465,7 +468,7 @@ struct ArtifactsView: View {
             semanticBanner
             filterBar
             Divider()
-            if isSelecting {
+            if artifactSelection.isActive {
                 selectionBar
             }
             contentView
@@ -490,6 +493,9 @@ struct ArtifactsView: View {
         .onChange(of: searchIndex.indexedCount) { _, _ in
             scheduleSemanticSearch()
         }
+        .onChange(of: visibleArtifactIDs) { _, visibleIDs in
+            artifactSelection.retain(visibleIDs)
+        }
         .overlay {
             if previewID != nil {
                 ArtifactPreview(
@@ -507,10 +513,10 @@ struct ArtifactsView: View {
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
                 let deletedIDs = store.delete(pendingDelete)
-                selection.subtract(deletedIDs)
+                artifactSelection.remove(deletedIDs)
                 pendingDelete = []
-                if selection.isEmpty {
-                    isSelecting = false
+                if artifactSelection.isEmpty {
+                    artifactSelection.finish()
                 }
             }
             .keyboardShortcut(.defaultAction)
@@ -658,16 +664,16 @@ struct ArtifactsView: View {
                 ArtifactTile(
                     artifact: artifact,
                     store: store,
-                    isSelecting: isSelecting,
-                    isSelected: selection.contains(artifact.id),
+                    isSelecting: artifactSelection.isActive,
+                    isSelected: artifactSelection.contains(artifact.id),
                     isFavorite: store.isFavorite(artifact),
                     onInspect: { inspectorArtifact = artifact },
                     onToggleFavorite: { store.toggleFavorite(artifact) }
                 )
                 .onTapGesture { activate(artifact) }
-                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !artifactSelection.isActive))
                 .overlay {
-                    if isSelecting {
+                    if artifactSelection.isActive {
                         SelectionDrag(
                             onToggle: { activate(artifact) },
                             fileURLs: { selectedFileURLs(including: artifact) }
@@ -675,7 +681,7 @@ struct ArtifactsView: View {
                     }
                 }
                 .overlay {
-                    if cursorID == artifact.id, !isSelecting {
+                    if cursorID == artifact.id, !artifactSelection.isActive {
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .stroke(Color.accentColor.opacity(0.9), lineWidth: 2.5)
                     }
@@ -691,11 +697,11 @@ struct ArtifactsView: View {
                 ArtifactRow(
                     artifact: artifact,
                     store: store,
-                    isSelecting: isSelecting,
-                    isSelected: selection.contains(artifact.id)
+                    isSelecting: artifactSelection.isActive,
+                    isSelected: artifactSelection.contains(artifact.id)
                 )
                 .onTapGesture { activate(artifact) }
-                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !isSelecting))
+                .modifier(ArtifactDrag(store: store, artifact: artifact, enabled: !artifactSelection.isActive))
                 .contextMenu { menu(for: artifact) }
                 Divider()
             }
@@ -735,50 +741,37 @@ struct ArtifactsView: View {
     }
 
     private var selectionBar: some View {
-        HStack(spacing: 10) {
-            Text("\(selection.count) selected")
-                .nativTextStyle(.supportingEmphasized)
-                .foregroundStyle(.secondary)
-
-            Button(selection.count == filtered.count ? "Deselect All" : "Select All") {
-                if selection.count == filtered.count {
-                    selection.removeAll()
-                } else {
-                    selection = Set(filtered.map(\.id))
-                }
+        let artifacts = selectedArtifacts
+        return NativBulkSelectionToolbar(
+            selectedCount: artifacts.count,
+            allSelected: artifactSelection.includesAll(visibleArtifactIDs),
+            isSelectAllEnabled: !visibleArtifactIDs.isEmpty,
+            onToggleAll: {
+                artifactSelection.toggleAll(visibleArtifactIDs)
+            },
+            onDelete: {
+                pendingDelete = artifacts
+                isConfirmingDelete = true
             }
-            .nativTextStyle(.supporting)
-
-            Spacer(minLength: 0)
-
+        ) {
             Button {
-                ArtifactShare.present(urls: selectedArtifacts.map { store.fileURL(for: $0) })
+                ArtifactShare.present(urls: artifacts.map { store.fileURL(for: $0) })
             } label: {
                 Image(systemName: "square.and.arrow.up")
             }
             .help("Share")
-            .disabled(selection.isEmpty)
+            .disabled(artifacts.isEmpty)
 
             Button {
-                store.exportToDirectory(selectedArtifacts)
+                store.exportToDirectory(artifacts)
             } label: {
                 Image(systemName: "square.and.arrow.down")
             }
             .help("Export")
-            .disabled(selection.isEmpty)
-
-            Button(role: .destructive) {
-                pendingDelete = selectedArtifacts
-                isConfirmingDelete = true
-            } label: {
-                Image(systemName: "trash")
-            }
-            .help("Delete")
-            .disabled(selection.isEmpty)
+            .disabled(artifacts.isEmpty)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var filterBar: some View {
@@ -805,11 +798,8 @@ struct ArtifactsView: View {
 
                 Spacer(minLength: 16)
 
-                Button(isSelecting ? "Done" : "Select") {
-                    isSelecting.toggle()
-                    if !isSelecting {
-                        selection.removeAll()
-                    }
+                Button(artifactSelection.isActive ? "Done" : "Select") {
+                    artifactSelection.toggleMode()
                 }
 
                 Menu {
@@ -867,7 +857,7 @@ struct ArtifactsView: View {
             if activeFilterCount > 0 {
                 HStack {
                     Text("\(activeFilterCount) \(activeFilterCount == 1 ? "filter" : "filters") applied")
-                        .nativTextStyle(.metadata)
+                        .legacyTextStyle(.metadata)
                         .foregroundStyle(.secondary)
 
                     Spacer()
@@ -880,7 +870,7 @@ struct ArtifactsView: View {
                         groupByChat = false
                     }
                     .buttonStyle(.plain)
-                    .nativTextStyle(.badge)
+                    .legacyTextStyle(.badge)
                     .foregroundStyle(Color.accentColor)
                 }
             }
@@ -951,9 +941,9 @@ struct ArtifactsView: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title)
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
             Text("\(count)")
-                .nativTextStyle(.metadataNumeric)
+                .legacyTextStyle(.metadataNumeric)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -992,8 +982,10 @@ struct ArtifactsView: View {
     }
 
     private func selectedFileURLs(including artifact: Artifact) -> [URL] {
-        let ids = selection.contains(artifact.id) && !selection.isEmpty ? selection : [artifact.id]
-        return store.artifacts
+        let ids = artifactSelection.contains(artifact.id) && !artifactSelection.isEmpty
+            ? artifactSelection.ids
+            : [artifact.id]
+        return filtered
             .filter { ids.contains($0.id) }
             .map { store.fileURL(for: $0) }
     }
@@ -1005,8 +997,7 @@ struct ArtifactsView: View {
         let index = cursorID.flatMap { id in items.firstIndex { $0.id == id } }
 
         if press.modifiers.contains(.command), press.characters.lowercased() == "a" {
-            isSelecting = true
-            selection = Set(items.map(\.id))
+            artifactSelection.selectAll(Set(items.map(\.id)))
             return .handled
         }
 
@@ -1041,7 +1032,7 @@ struct ArtifactsView: View {
                         .font(.system(size: 10))
                 }
                 Text(title)
-                    .nativTextStyle(.supportingEmphasized)
+                    .legacyTextStyle(.supportingEmphasized)
                     .lineLimit(1)
                     .fixedSize()
             }
@@ -1062,9 +1053,9 @@ struct ArtifactsView: View {
                 .font(.system(size: 42))
                 .foregroundStyle(.secondary.opacity(0.5))
             Text(title)
-                .nativTextStyle(.cardTitle)
+                .legacyTextStyle(.cardTitle)
             Text(message)
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
@@ -1073,16 +1064,12 @@ struct ArtifactsView: View {
     }
 
     private var selectedArtifacts: [Artifact] {
-        store.artifacts.filter { selection.contains($0.id) }
+        filtered.filter { artifactSelection.contains($0.id) }
     }
 
     private func activate(_ artifact: Artifact) {
-        if isSelecting {
-            if selection.contains(artifact.id) {
-                selection.remove(artifact.id)
-            } else {
-                selection.insert(artifact.id)
-            }
+        if artifactSelection.isActive {
+            artifactSelection.toggle(artifact.id)
         } else {
             previewID = artifact.id
         }
@@ -1231,7 +1218,7 @@ struct ArtifactTile: View {
             .overlay(alignment: .bottom) {
                 if isHovering, !isSelecting {
                     Text(store.displayName(for: artifact))
-                        .nativTextStyle(.supportingEmphasized)
+                        .legacyTextStyle(.supportingEmphasized)
                         .foregroundStyle(.white)
                         .lineLimit(1)
                         .shadow(radius: 2)
@@ -1316,22 +1303,22 @@ struct ArtifactRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(artifact.filename)
-                    .nativTextStyle(.rowTitle)
+                    .legacyTextStyle(.rowTitle)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
-                    .nativTextStyle(.metadata)
+                    .legacyTextStyle(.metadata)
                     .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 0)
 
             Text(Int64(artifact.byteSize).formatted(.byteCount(style: .file)))
-                .nativTextStyle(.metadataNumeric)
+                .legacyTextStyle(.metadataNumeric)
                 .foregroundStyle(.secondary)
                 .frame(width: 70, alignment: .trailing)
 
             Text(artifact.createdAt.formatted(date: .abbreviated, time: .omitted))
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
                 .frame(width: 90, alignment: .trailing)
         }
@@ -1416,7 +1403,7 @@ private struct ArtifactThumbnail: View {
                 VStack(spacing: 8) {
                     FileTypeIcon(fileExtension: artifact.fileExtension, size: min(size.width, size.height) * 0.42)
                     Text(FileTypeStyle.resolve(fileExtension: artifact.fileExtension).label)
-                        .nativTextStyle(.badgeStrong)
+                        .legacyTextStyle(.badgeStrong)
                         .foregroundStyle(.secondary)
                 }
             } else {
@@ -1426,7 +1413,7 @@ private struct ArtifactThumbnail: View {
                         .foregroundStyle(.secondary)
                     if !artifact.fileExtension.isEmpty {
                         Text(artifact.fileExtension)
-                            .nativTextStyle(.badgeStrong)
+                            .legacyTextStyle(.badgeStrong)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -1446,7 +1433,7 @@ struct ArtifactInspector: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("Details")
-                    .nativTextStyle(.cardTitle)
+                    .legacyTextStyle(.cardTitle)
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -1474,10 +1461,10 @@ struct ArtifactInspector: View {
                         if let prompt = artifact.prompt, !prompt.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Prompt")
-                                    .nativTextStyle(.supportingEmphasized)
+                                    .legacyTextStyle(.supportingEmphasized)
                                     .foregroundStyle(.secondary)
                                 Text(prompt)
-                                    .nativTextStyle(.body)
+                                    .legacyTextStyle(.body)
                                     .textSelection(.enabled)
                             }
                         }
@@ -1500,11 +1487,11 @@ struct ArtifactInspector: View {
     private func detailRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(label)
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
                 .frame(width: 68, alignment: .leading)
             Text(value)
-                .nativTextStyle(.supporting)
+                .legacyTextStyle(.supporting)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(2)
                 .textSelection(.enabled)
@@ -1566,10 +1553,10 @@ struct ChatDeck: View {
             .frame(height: 190)
 
             Text(group.title)
-                .nativTextStyle(.sectionTitle)
+                .legacyTextStyle(.sectionTitle)
                 .lineLimit(1)
             Text("\(group.items.count) \(group.items.count == 1 ? "item" : "items")")
-                .nativTextStyle(.metadata)
+                .legacyTextStyle(.metadata)
                 .foregroundStyle(.secondary)
         }
     }
@@ -1594,7 +1581,7 @@ struct ChatDeck: View {
             Image(systemName: "square.on.square")
             Text("\(group.items.count)")
         }
-        .nativTextStyle(.statusBadge)
+        .legacyTextStyle(.statusBadge)
         .foregroundStyle(.white)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1625,7 +1612,7 @@ struct ArtifactAlbum: View {
                     }
                     Spacer()
                     Text(title)
-                        .nativTextStyle(.cardTitle)
+                        .legacyTextStyle(.cardTitle)
                         .lineLimit(1)
                     Spacer()
                     if let first = artifacts.first {

@@ -11,6 +11,8 @@ struct ChatPersistenceFailure: Equatable, Sendable {
 }
 
 struct ChatSession: Identifiable, Equatable, Codable {
+    static let newChatTitle = "New chat"
+
     var id: UUID
     var title: String
     var customTitle: String?
@@ -50,7 +52,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
         if scheduledTaskID != nil, !title.isEmpty {
             return title
         }
-        return Self.defaultTitle(for: messages, createdAt: createdAt, fallback: title)
+        return Self.defaultTitle(for: messages, fallback: title)
     }
 
     static func recencySort(_ lhs: ChatSession, _ rhs: ChatSession) -> Bool {
@@ -69,7 +71,6 @@ struct ChatSession: Identifiable, Equatable, Codable {
 
     static func defaultTitle(
         for messages: [ChatTranscriptMessage],
-        createdAt: Date,
         fallback: String? = nil
     ) -> String {
         if let firstUserMessage = messages.first(where: { $0.role == .user }) {
@@ -90,7 +91,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
             return trimmedFallback
         }
 
-        return timestampTitle(for: createdAt)
+        return newChatTitle
     }
 
     private static func title(fromUserContent content: String) -> String? {
@@ -199,6 +200,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolName: String?
     var toolStatus: ToolStatus?
     var toolArguments: String?
+    var annotations: [ChatAnnotation] = []
 
     init(
         id: UUID = UUID(),
@@ -253,6 +255,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolName
         case toolStatus
         case toolArguments
+        case annotations
     }
 
     init(from decoder: Decoder) throws {
@@ -279,6 +282,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
+        annotations = try container.decodeIfPresent([ChatAnnotation].self, forKey: .annotations) ?? []
 
         if role == .error,
             content == NativChatError.missingAssistantContent.localizedDescription,
@@ -307,6 +311,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
         try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
+        if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
     }
 
     var apiMessage: MLXChatMessage? {
@@ -319,7 +324,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let requestContent = [content, documentContext ?? ""]
+            let requestContent = [ChatAnnotation.prompt(annotations, request: content), documentContext ?? ""]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
             let imageParts =
@@ -695,6 +700,7 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
 }
 
 struct ChatSessionStore {
+    private static let migrationLock = NSLock()
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Nativ",
         category: "ChatPersistence"
@@ -861,28 +867,48 @@ struct ChatSessionStore {
     }
 
     private func migrateLegacyStoreIfNeeded() {
+        Self.migrationLock.lock()
+        defer { Self.migrationLock.unlock() }
+
+        let completionURL = chatDirectory.appendingPathComponent(".legacy-cache-migration-complete")
         guard let legacyChatDirectory,
               legacyChatDirectory.standardizedFileURL != chatDirectory.standardizedFileURL,
               fileManager.fileExists(atPath: legacyChatDirectory.path)
         else { return }
         do {
-            try fileManager.createDirectory(at: chatDirectory, withIntermediateDirectories: true)
-            for name in ["folders.json", "current.json"] {
-                let source = legacyChatDirectory.appendingPathComponent(name)
-                let destination = chatDirectory.appendingPathComponent(name)
-                if fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: destination.path) {
-                    try fileManager.copyItem(at: source, to: destination)
-                }
-            }
             let legacySessions = legacyChatDirectory.appendingPathComponent("Sessions", isDirectory: true)
+            var files = ["folders.json", "current.json"].map {
+                (source: legacyChatDirectory.appendingPathComponent($0), destination: chatDirectory.appendingPathComponent($0))
+            }.filter { fileManager.fileExists(atPath: $0.source.path) }
             if fileManager.fileExists(atPath: legacySessions.path) {
+                files += try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
+                    .filter { $0.pathExtension == "json" }
+                    .map { (source: $0, destination: sessionsDirectory.appendingPathComponent($0.lastPathComponent)) }
+            }
+            if !fileManager.fileExists(atPath: completionURL.path) {
                 try fileManager.createDirectory(at: sessionsDirectory, withIntermediateDirectories: true)
-                for source in try fileManager.contentsOfDirectory(at: legacySessions, includingPropertiesForKeys: nil)
-                    where source.pathExtension == "json" {
-                    let destination = sessionsDirectory.appendingPathComponent(source.lastPathComponent)
+                for (source, destination) in files {
                     if !fileManager.fileExists(atPath: destination.path) {
                         try fileManager.copyItem(at: source, to: destination)
                     }
+                    // Existing destination files are authoritative, but must be readable before discarding the fallback.
+                    let data = try Data(contentsOf: destination)
+                    switch source.lastPathComponent {
+                    case "folders.json": _ = try makeDecoder().decode([ChatFolder].self, from: data)
+                    case "current.json": _ = try makeDecoder().decode([ChatTranscriptMessage].self, from: data)
+                    default: _ = try makeDecoder().decode(ChatSession.self, from: data)
+                    }
+                }
+                // Commit before cleanup: a crash or failed removal must never cause deleted chats to be reimported.
+                try Data().write(to: completionURL, options: .atomic)
+            }
+            for (source, _) in files {
+                try fileManager.removeItem(at: source)
+            }
+            // Leave unrelated cache files alone, removing directories only when they are empty.
+            for directory in [legacySessions, legacyChatDirectory] where fileManager.fileExists(atPath: directory.path) {
+                if try fileManager.contentsOfDirectory(atPath: directory.path).isEmpty {
+                    try fileManager.removeItem(at: directory)
                 }
             }
         } catch {
@@ -915,8 +941,9 @@ struct ChatSessionStore {
                 updatedAt: updatedAt,
                 messages: messages
             )
-            saveSession(session)
-            try? fileManager.removeItem(at: legacyTranscriptURL)
+            if saveSession(session) {
+                try? fileManager.removeItem(at: legacyTranscriptURL)
+            }
         } catch {
             return
         }
