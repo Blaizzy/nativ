@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "capturedAt": "2026-09-10T00:59:07.559Z",
-  "currentTotal": 1411,
+  "capturedAt": "2026-09-11T00:58:43.181Z",
+  "currentTotal": 1417,
   "points": [
     {
       "date": "2026-07-19T00:00:00.000Z",
@@ -33,7 +33,7 @@
     },
     {
       "date": "2026-09-06T00:00:00.000Z",
-      "value": 1411
+      "value": 1417
     }
   ]
 }
