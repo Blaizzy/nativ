@@ -162,6 +162,7 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var hourlyActivityPoints: [ActivityPoint] = []
     @Published private(set) var modelPerformance: [ModelPerformance] = []
     @Published private(set) var modelTokenPoints: [ModelTokenPoint] = []
+    @Published private(set) var tokenUsageModels: [TokenUsageModel] = []
     @Published private(set) var recentRequestEvents: [NativAnalyticsRequestEvent] = []
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var localModelError: String?
@@ -300,12 +301,19 @@ final class DashboardViewModel: ObservableObject {
                     leadingModelIDs: leadingModelIDs,
                     groupsRemainingModels: modelPerformance.count > 12
                 )
+                let tokenUsageModels = TokenUsageModel.grouped(Self.modelTokenPoints(
+                    from: modelBuckets,
+                    bucketDates: points.map(\.bucketStart),
+                    leadingModelIDs: [],
+                    groupsRemainingModels: false
+                ))
                 return DashboardSnapshot(
                     summary: summary,
                     points: points,
                     activityPoints: activityPoints,
                     modelPerformance: modelPerformance,
                     modelTokenPoints: modelTokenPoints,
+                    tokenUsageModels: tokenUsageModels,
                     knownModelIDs: knownModelIDs,
                     recentRequestEvents: recentRequestEvents
                 )
@@ -323,6 +331,7 @@ final class DashboardViewModel: ObservableObject {
             hourlyActivityPoints = snapshot.activityPoints
             modelPerformance = snapshot.modelPerformance
             modelTokenPoints = snapshot.modelTokenPoints
+            tokenUsageModels = snapshot.tokenUsageModels
             appliedModelID = selectedModelID ?? ModelOption.allID
             historicalModelIDs = snapshot.knownModelIDs
             rebuildAvailableModels()
@@ -413,6 +422,7 @@ private extension DashboardViewModel {
         let activityPoints: [ActivityPoint]
         let modelPerformance: [ModelPerformance]
         let modelTokenPoints: [ModelTokenPoint]
+        let tokenUsageModels: [TokenUsageModel]
         let knownModelIDs: [String]
         let recentRequestEvents: [NativAnalyticsRequestEvent]
     }
@@ -682,5 +692,51 @@ private extension DashboardViewModel {
         case .day:
             return calendar.startOfDay(for: date)
         }
+    }
+}
+
+struct TokenUsageModel: Identifiable, Equatable, Sendable {
+    let id: String
+    let totalTokens: Int
+    let points: [DashboardViewModel.ModelTokenPoint]
+
+    static func grouped(_ points: [DashboardViewModel.ModelTokenPoint]) -> [Self] {
+        Dictionary(grouping: points, by: \.modelID)
+            .map { modelID, points in
+                Self(id: modelID, totalTokens: points.reduce(0) { $0 + $1.totalTokens }, points: points)
+            }
+            .sorted {
+                if $0.totalTokens != $1.totalTokens { return $0.totalTokens > $1.totalTokens }
+                return $0.id.localizedStandardCompare($1.id) == .orderedAscending
+            }
+    }
+}
+
+struct TokenUsageModelPage {
+    static let size = 8
+
+    let models: [TokenUsageModel]
+    let index: Int
+    let matchingCount: Int
+    let showsControls: Bool
+
+    init(models: [TokenUsageModel], query: String, index: Int) {
+        showsControls = models.count > Self.size
+        let query = showsControls ? query.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let matches = query.isEmpty ? models : models.filter { $0.id.localizedStandardContains(query) }
+        matchingCount = matches.count
+        self.index = min(max(index, 0), max((matches.count - 1) / Self.size, 0))
+        let start = self.index * Self.size
+        self.models = Array(matches.dropFirst(start).prefix(Self.size))
+    }
+
+    var hasPrevious: Bool { index > 0 }
+    var hasNext: Bool { (index + 1) * Self.size < matchingCount }
+    var points: [DashboardViewModel.ModelTokenPoint] { models.flatMap(\.points) }
+
+    var rangeLabel: String {
+        guard matchingCount > 0 else { return "0 of 0" }
+        let first = index * Self.size + 1
+        return "\(first)–\(first + models.count - 1) of \(matchingCount)"
     }
 }
