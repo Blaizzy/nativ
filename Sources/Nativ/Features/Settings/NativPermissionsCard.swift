@@ -1,7 +1,16 @@
 import SwiftUI
 
-struct NativPermissionsCard: View {
+struct NativPermissionsCard<AdditionalContent: View>: View {
     @ObservedObject var store: NativPermissionStore
+    private let additionalContent: AdditionalContent
+
+    init(
+        store: NativPermissionStore,
+        @ViewBuilder additionalContent: () -> AdditionalContent = { EmptyView() }
+    ) {
+        self.store = store
+        self.additionalContent = additionalContent()
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +29,8 @@ struct NativPermissionsCard: View {
                     store.resolve(permission)
                 }
             }
+
+            additionalContent
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
