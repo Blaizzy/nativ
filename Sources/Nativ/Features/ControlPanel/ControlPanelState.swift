@@ -165,7 +165,7 @@ final class ControlPanelContentState: ObservableObject {
         )
 
         extensionManager.$records
-            .map(Self.enabledSidebarContributions)
+            .map(NativExtensionSidebarOrdering.contributions(from:))
             .removeDuplicates()
             .sink { [weak self] value in
                 self?.update { $0.extensionSidebarContributions = value }
@@ -189,19 +189,5 @@ final class ControlPanelContentState: ObservableObject {
         mutate(&next)
         guard next != snapshot else { return }
         snapshot = next
-    }
-
-    private static func enabledSidebarContributions(
-        records: [NativExtensionRecord]
-    ) -> [NativSidebarContribution] {
-        records
-            .filter { $0.isEnabled && $0.hasRuntime }
-            .flatMap(\.manifest.contributions.sidebar)
-            .sorted {
-                if $0.order == $1.order {
-                    return $0.title.localizedStandardCompare($1.title) == .orderedAscending
-                }
-                return $0.order < $1.order
-            }
     }
 }
