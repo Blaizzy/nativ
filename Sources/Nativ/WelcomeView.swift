@@ -215,7 +215,7 @@ private struct WelcomeView: View {
 
             VStack(spacing: 6) {
                 Text("Welcome to Nativ")
-                    .nativTextStyle(.displayTitle)
+                    .legacyTextStyle(.displayTitle)
                 Text(stepSubtitle)
                     .font(.body)
                     .foregroundStyle(.secondary)

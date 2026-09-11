@@ -7,46 +7,48 @@ import UniformTypeIdentifiers
 
 extension ControlPanelView {
     var bulkSelectionBar: some View {
-        HStack(spacing: 6) {
-            Text(bulkSelectionTitle)
-                .nativTextStyle(.supporting)
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 0)
-
-            Button {
-                bulkTogglePinSelected()
-            } label: {
-                Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
-                    .frame(width: 24, height: 22)
-            }
-            .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
-            .disabled(!hasSelectedPinnable)
-
-            Button {
-                bulkExportSelected()
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Export selected")
-            .disabled(!hasSelectedChats)
-
-            Button(role: .destructive) {
-                isConfirmingBulkDelete = true
-            } label: {
-                Image(systemName: "trash")
-                    .frame(width: 24, height: 22)
-            }
-            .help("Delete selected")
-            .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
-
-            Button("Done") {
-                withAnimation(.snappy(duration: 0.2)) {
-                    exitSelectMode()
+        VStack(spacing: 6) {
+            HStack {
+                Text(bulkSelectionTitle)
+                    .legacyTextStyle(.supporting)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Done") {
+                    withAnimation(.snappy(duration: 0.2)) {
+                        exitSelectMode()
+                    }
                 }
+                .legacyTextStyle(.supportingEmphasized)
             }
-            .nativTextStyle(.supportingEmphasized)
+            HStack(spacing: 6) {
+                Button {
+                    bulkTogglePinSelected()
+                } label: {
+                    Image(systemName: allSelectedPinned ? "pin.slash" : "pin")
+                        .frame(width: 24, height: 22)
+                }
+                .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
+                .disabled(!hasSelectedPinnable)
+
+                Button {
+                    bulkExportSelected()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .frame(width: 24, height: 22)
+                }
+                .help("Export selected")
+                .disabled(!hasSelectedChats)
+
+                Button(role: .destructive) {
+                    isConfirmingBulkDelete = true
+                } label: {
+                    Image(systemName: "trash")
+                        .frame(width: 24, height: 22)
+                }
+                .help("Delete selected")
+                .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
+                Spacer(minLength: 0)
+            }
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

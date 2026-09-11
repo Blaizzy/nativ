@@ -108,6 +108,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
     @ObservedObject var dashboard: DashboardViewModel
     let titleLeadingInset: CGFloat
     @FocusState private var isModelSearchFocused: Bool
+    @FocusState private var isTokenUsageSearchFocused: Bool
     @State private var selectedChartMetric: DashboardOverviewMetric = .tokens
     @State private var isActivityExpanded = false
 
@@ -131,7 +132,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
                     VStack(alignment: .leading, spacing: 24) {
                         filterBar
                         overviewCards
-                        analyticsGrid
+                        analyticsGrid(availableWidth: min(geometry.size.width, 1500) - 44)
                         modelPerformanceSection
                         recentRequestsSection
                     }
@@ -152,6 +153,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
         .contentShape(Rectangle())
         .onTapGesture {
             isModelSearchFocused = false
+            isTokenUsageSearchFocused = false
         }
         .onAppear {
             syncDashboardState(scanModels: true, reloadHistory: true)
@@ -279,26 +281,24 @@ private struct DashboardContentView: View, @MainActor Equatable {
         }
     }
 
-    private var analyticsGrid: some View {
+    private func analyticsGrid(availableWidth: CGFloat) -> some View {
         Group {
             if isActivityExpanded {
                 userActivityPanel
                     .frame(maxWidth: .infinity)
+            } else if availableWidth >= 680 + 350 + 14 {
+                HStack(alignment: .top, spacing: 14) {
+                    analyticsChart
+
+                    userActivityPanel
+                        .frame(width: 350)
+                }
+                .fixedSize(horizontal: false, vertical: true)
             } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 14) {
-                        analyticsChart
-                            .frame(minWidth: 680, maxWidth: .infinity)
-
-                        userActivityPanel
-                            .frame(width: 350)
-                    }
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        analyticsChart
-                        userActivityPanel
-                            .frame(maxWidth: .infinity)
-                    }
+                VStack(alignment: .leading, spacing: 14) {
+                    analyticsChart
+                    userActivityPanel
+                        .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -309,11 +309,13 @@ private struct DashboardContentView: View, @MainActor Equatable {
         TokenUsagePanel(
             metric: selectedChartMetric,
             points: dashboard.bucketPoints,
-            modelPoints: dashboard.modelTokenPoints,
+            overviewModelPoints: dashboard.modelTokenPoints,
+            tokenUsageModels: dashboard.tokenUsageModels,
             range: dashboard.selectedRange,
-            showsAllModels: dashboard.appliedModelID == DashboardViewModel.ModelOption.allID
+            showsAllModels: dashboard.appliedModelID == DashboardViewModel.ModelOption.allID,
+            searchFocus: $isTokenUsageSearchFocused
         )
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     private var userActivityPanel: some View {
@@ -654,6 +656,7 @@ private struct UserActivityPanel: View {
             heatmap
             periodBreakdown
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(18)
         .nativPanelStyle(cornerRadius: .large)
         .animation(.snappy(duration: 0.24), value: isExpanded)
@@ -693,6 +696,7 @@ private struct UserActivityPanel: View {
         .frame(
             maxWidth: .infinity,
             minHeight: isExpanded ? 240 : 180,
+            maxHeight: .infinity,
             alignment: isExpanded ? .center : .leading
         )
         .accessibilityElement(children: .contain)
@@ -822,7 +826,7 @@ private struct UserActivityPanel: View {
                         Text(percentLabel(for: period))
                             .font(.caption.weight(.semibold).monospacedDigit())
                         Text(period.title)
-                            .nativTextStyle(.chartLabel)
+                            .legacyTextStyle(.chartLabel)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -1200,6 +1204,128 @@ private struct SuccessRateModelSummary: Identifiable {
     }
 }
 
+private struct TokenUsageModelLegend: View {
+    let page: TokenUsageModelPage
+    let colorDomain: [String]
+    @Binding var query: String
+    @Binding var pageIndex: Int
+    let searchFocus: FocusState<Bool>.Binding
+    @State private var hoveredModelID: String?
+    @ScaledMetric(relativeTo: .callout) private var rowHeight: CGFloat = 18
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if page.showsControls {
+                HStack(spacing: 12) {
+                    TextField("Search models", text: $query)
+                        .textFieldStyle(.roundedBorder)
+                        .focused(searchFocus)
+                        .frame(minWidth: 120, idealWidth: 200, maxWidth: 200)
+                        .accessibilityLabel("Search token usage models")
+                        .accessibilityIdentifier("tokenUsageModelSearch")
+
+                    Spacer(minLength: 0)
+
+                    Text(page.rangeLabel)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .fixedSize()
+                        .accessibilityLabel("Models \(page.rangeLabel)")
+
+                    Button("Previous models", systemImage: "chevron.left", action: previousPage)
+                        .disabled(!page.hasPrevious)
+                        .help("Previous models")
+                    Button("Next models", systemImage: "chevron.right", action: nextPage)
+                        .disabled(!page.hasNext)
+                        .help("Next models")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+            }
+
+            modelGrid
+        }
+        .font(.callout)
+        .onChange(of: page.models.map(\.id)) { _, _ in hoveredModelID = nil }
+        .onDisappear { hoveredModelID = nil }
+    }
+
+    private var modelGrid: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16), count: 4),
+            alignment: .leading,
+            spacing: 10
+        ) {
+            ForEach(Array(page.models.enumerated()), id: \.element.id) { index, model in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(DashboardModelColorScale.color(for: model.id, in: colorDomain))
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                    Text(model.id)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onHover { isHovering in
+                            if isHovering {
+                                hoveredModelID = model.id
+                            } else if hoveredModelID == model.id {
+                                hoveredModelID = nil
+                            }
+                        }
+                    Text(NativFormatting.compactCount(model.totalTokens).display)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .fixedSize()
+                }
+                .frame(height: rowHeight)
+                .textSelection(.disabled)
+                .overlay(alignment: index.isMultiple(of: 4) ? .topLeading : .topTrailing) {
+                    if hoveredModelID == model.id {
+                        Text(model.id)
+                            .font(.caption)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: 280, alignment: .leading)
+                            .padding(8)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.6)
+                            }
+                            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                            .frame(height: 0, alignment: .bottom)
+                            .offset(y: -6)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .zIndex(hoveredModelID == model.id ? 1 : 0)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(model.id)
+                .accessibilityValue("\(model.totalTokens.formatted()) tokens")
+            }
+            if page.showsControls {
+                ForEach(page.models.count..<TokenUsageModelPage.size, id: \.self) { _ in
+                    Color.clear.frame(height: rowHeight).accessibilityHidden(true)
+                }
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    private func previousPage() {
+        searchFocus.wrappedValue = false
+        pageIndex = page.index - 1
+    }
+
+    private func nextPage() {
+        searchFocus.wrappedValue = false
+        pageIndex = page.index + 1
+    }
+}
+
 private struct TokenUsagePanel: View {
     struct HistogramSegment: Identifiable {
         let modelID: String
@@ -1238,11 +1364,25 @@ private struct TokenUsagePanel: View {
 
     let metric: DashboardOverviewMetric
     let points: [DashboardViewModel.BucketPoint]
-    let modelPoints: [DashboardViewModel.ModelTokenPoint]
+    let overviewModelPoints: [DashboardViewModel.ModelTokenPoint]
+    let tokenUsageModels: [TokenUsageModel]
     let range: DashboardViewModel.RangeOption
     let showsAllModels: Bool
+    let searchFocus: FocusState<Bool>.Binding
     @State private var hoveredPointID: Date?
     @State private var allModelsDisplay: AllModelsDisplay = .lines
+    @State private var modelSearch = ""
+    @State private var modelPageIndex = 0
+
+    private var modelPage: TokenUsageModelPage {
+        TokenUsageModelPage(models: tokenUsageModels, query: modelSearch, index: modelPageIndex)
+    }
+
+    private var showsModelPage: Bool { metric == .tokens && showsAllModels }
+
+    private var modelPoints: [DashboardViewModel.ModelTokenPoint] {
+        showsModelPage ? modelPage.points : overviewModelPoints
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1269,6 +1409,9 @@ private struct TokenUsagePanel: View {
             if points.isEmpty {
                 DashboardEmptyChart()
                     .frame(minHeight: 230)
+            } else if showsModelPage && modelPage.models.isEmpty {
+                ContentUnavailableView.search(text: modelSearch)
+                    .frame(height: 250)
             } else if usesSuccessRateComparison {
                 SuccessRateModelComparisonChart(summaries: modelSuccessSummaries)
             } else {
@@ -1276,7 +1419,7 @@ private struct TokenUsagePanel: View {
                     usageMarks
                     hoverMarks
                 }
-                .chartLegend(showsAllModels ? .visible : .hidden)
+                .chartLegend(showsAllModels && !showsModelPage ? .visible : .hidden)
                 .chartForegroundStyleScale(
                     domain: modelColorDomain,
                     range: DashboardModelColorScale.colors(for: modelColorDomain)
@@ -1406,9 +1549,38 @@ private struct TokenUsagePanel: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: metric)
             }
+
+            if showsModelPage && !tokenUsageModels.isEmpty {
+                Divider()
+                TokenUsageModelLegend(
+                    page: modelPage,
+                    colorDomain: modelColorDomain,
+                    query: $modelSearch,
+                    pageIndex: $modelPageIndex,
+                    searchFocus: searchFocus
+                )
+            }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(18)
         .nativPanelStyle(cornerRadius: .large)
+        .onChange(of: modelSearch) { _, _ in resetModelPage() }
+        .onChange(of: range) { _, _ in resetModelPage() }
+        .onChange(of: tokenUsageModels.map(\.id)) { _, _ in
+            if tokenUsageModels.count <= TokenUsageModelPage.size { modelSearch = "" }
+            modelPageIndex = modelPage.index
+            hoveredPointID = nil
+        }
+        .onChange(of: modelPageIndex) { _, _ in hoveredPointID = nil }
+        .onChange(of: showsAllModels) { _, _ in
+            modelSearch = ""
+            resetModelPage()
+        }
+    }
+
+    private func resetModelPage() {
+        modelPageIndex = 0
+        hoveredPointID = nil
     }
 
     private var chartTitle: String {
@@ -1867,7 +2039,9 @@ private struct TokenUsagePanel: View {
     }
 
     private var modelColorDomain: [String] {
-        DashboardModelColorScale.domain(for: modelPoints.map(\.modelID))
+        showsModelPage
+            ? tokenUsageModels.map(\.id)
+            : DashboardModelColorScale.domain(for: modelPoints.map(\.modelID))
     }
 
     private var successRatePoints: [DashboardViewModel.BucketPoint] {

@@ -28,6 +28,14 @@ Available routes:
 
 External tools consume these endpoints — see [Integrations](integrations.md).
 
+The **Show cached models through API** toggle on the right of the Server Endpoints header,
+after the host and port controls, is off by default.
+When off, `/v1/models` lists loaded models. When on, it also lists eligible downloaded models
+from Nativ's configured Hugging Face cache, including models that are not loaded. The setting
+is saved automatically; use **Restart to Apply** for a running server, or start the server later.
+Listing models does not load them. Inference requests can already load or switch models using
+the request's `model` field. Additional model folders are not included in the cache scan.
+
 ## Hugging Face token
 
 A Hugging Face token enables downloading gated models. Set it in the Developer page or via
