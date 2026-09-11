@@ -162,6 +162,7 @@ private struct ChatTranscriptView: View {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
+    @State private var search = ChatSearchState()
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -186,6 +187,14 @@ private struct ChatTranscriptView: View {
         .background(Color.nativMainContentBackground)
         .environment(\.chatAnnotationActions, chat.annotationActions)
         .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
+        .environment(\.chatSearchState, search)
+        .focusedSceneValue(\.chatSearch, search)
+        .onChange(of: chat.currentSessionID, initial: true) { _, id in search.reset(sessionID: id) }
+        .onChange(of: search.query) { _, _ in search.update(items: chat.visibleTranscriptItems, queryChanged: true) }
+        .onChange(of: chat.transcriptRevision.value) { _, _ in
+            if !search.query.isEmpty { search.update(items: chat.visibleTranscriptItems) }
+        }
+        .onDisappear { search.reset(sessionID: nil) }
     }
 
     private func transcript(
@@ -199,13 +208,26 @@ private struct ChatTranscriptView: View {
             submissionID: chat.transcriptSubmissionID,
             scrollTargetMessageID: $chat.scrollTargetMessageID,
             itemIDs: items.map(\.id),
+            searchNavigation: search.navigationRequest,
+            onSearchNavigation: search.finishNavigation,
             topInset: {
-                if let project {
-                    ChatProjectContextBanner(
-                        project: project,
-                        rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: model.settings.projectToolsEnabled
-                    )
+                VStack(spacing: 0) {
+                    if search.isPresented {
+                        ChatSearchBar(search: search)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.leading, 16)
+                            .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                     + ControlPanelLayout.topControlSize + 12)
+                            .padding(.vertical, 8)
+                            .background(Color.nativMainContentBackground)
+                    }
+                    if let project {
+                        ChatProjectContextBanner(
+                            project: project,
+                            rootIsAvailable: projectRootIsAvailable,
+                            toolsEnabled: model.settings.projectToolsEnabled
+                        )
+                    }
                 }
             }
         ) { attachedRange in
@@ -227,8 +249,6 @@ private struct ChatTranscriptView: View {
                     forkableAssistantResponseIDs: forkableAssistantResponseIDs
                 )
             } footer: {
-                // Keep the overlay clearance inside the scroll target so pinning lands
-                // above the composer rather than aligning hidden content behind it.
                 Color.clear
                     .frame(
                         height: max(
@@ -1964,13 +1984,23 @@ private struct ChatMessageText: View {
     let isStreaming: Bool
     var isUserPrompt = false
     @Environment(\.chatFontScale) private var chatFontScale
+    @Environment(\.chatSearchState) private var search
+    @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder
     var body: some View {
+        let highlight = messageID.flatMap { search?.highlight(for: $0) }
         if isUserPrompt {
-            Text(verbatim: content)
-                .textSelection(.enabled)
-                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            if let highlight {
+                MarkdownView(content: content,
+                             style: MarkdownStyle(fontSize: ChatFontMetrics.baseBodyPointSize * chatFontScale,
+                                                  dark: colorScheme == .dark), plainText: true)
+                    .environment(\.chatSearchHighlight, highlight)
+            } else {
+                Text(verbatim: content)
+                    .textSelection(.enabled)
+                    .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            }
         } else if rendersMarkdown {
             ChatMarkdownRenderer(
                 messageID: messageID,
@@ -1978,6 +2008,7 @@ private struct ChatMessageText: View {
                 isStreaming: isStreaming,
                 fontScale: chatFontScale
             )
+            .environment(\.chatSearchHighlight, highlight)
         } else {
             Text(verbatim: content)
                 .textSelection(.enabled)
