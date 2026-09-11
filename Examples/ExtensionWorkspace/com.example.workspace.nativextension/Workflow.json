@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 2,
+  "triggers": [
+    {
+      "id": "save",
+      "type": "command",
+      "commandID": "com.example.workspace.save",
+      "steps": [
+        "read",
+        "save"
+      ]
+    },
+    {
+      "id": "clear",
+      "type": "command",
+      "commandID": "com.example.workspace.clear",
+      "steps": [
+        "clear"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "read",
+      "type": "storage.read",
+      "inputs": {
+        "key": "draft"
+      }
+    },
+    {
+      "id": "save",
+      "type": "storage.write",
+      "inputs": {
+        "key": "saved",
+        "value": "{{read.value}}"
+      }
+    },
+    {
+      "id": "clear",
+      "type": "storage.write",
+      "inputs": {
+        "key": "saved",
+        "value": ""
+      }
+    }
+  ]
+}

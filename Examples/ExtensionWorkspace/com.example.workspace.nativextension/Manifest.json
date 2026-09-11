@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "id": "com.example.workspace",
+  "version": "0.1.0",
+  "minimumNativVersion": "0.3.7",
+  "displayName": "Session Workspace",
+  "summary": "A native workspace with saved notes and session settings.",
+  "developer": "Example",
+  "systemImage": "square.grid.2x2",
+  "included": false,
+  "runtime": "declarative",
+  "workflow": "Workflow.json",
+  "dashboard": "Dashboard.json",
+  "contributions": {
+    "sidebar": [
+      {
+        "id": "com.example.workspace.home",
+        "title": "Session Workspace",
+        "systemImage": "square.grid.2x2",
+        "order": 500
+      }
+    ],
+    "commands": [
+      {
+        "id": "com.example.workspace.save",
+        "title": "Save session note"
+      },
+      {
+        "id": "com.example.workspace.clear",
+        "title": "Clear saved note"
+      }
+    ]
+  },
+  "permissions": [
+    "storage.namespaced"
+  ]
+}

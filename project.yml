@@ -185,6 +185,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
+      - path: Tests/NativExtensionSDKTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
@@ -222,7 +223,6 @@ targets:
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionCatalogClient.swift
-      - path: Sources/Nativ/Features/Extensions/NativExtensionPackageInstaller.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift
       - path: Sources/Nativ/Features/MCP/GitHubOAuth.swift
       - path: Sources/Nativ/Resources/MCPCatalog.json

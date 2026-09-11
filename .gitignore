@@ -11,3 +11,6 @@ __pycache__/
 .DS_Store
 AGENTS.md
 /Configuration/Signing.local.xcconfig
+
+# SwiftPM build products for the validator tooling
+/.build/
