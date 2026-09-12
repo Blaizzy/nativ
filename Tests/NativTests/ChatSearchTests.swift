@@ -211,11 +211,11 @@ final class ChatSearchTests: XCTestCase {
             for offset in [0, 1, 75, -60, 83, 1, -1] {
                 if offset != 0 { search.move(offset) }
                 try await settle(host)
-                try assertSelectedOccurrenceCentered(search, in: host)
+                try assertSelectedOccurrencePositioned(search, in: host)
             }
             for _ in 0..<55 { search.move(1) }
             try await settle(host)
-            try assertSelectedOccurrenceCentered(search, in: host)
+            try assertSelectedOccurrencePositioned(search, in: host)
         }
     }
 
@@ -229,7 +229,7 @@ final class ChatSearchTests: XCTestCase {
             for offset in [0, 1, 89, 1, 89, 1, -1, -90, -90] {
                 if offset != 0 { search.move(offset) }
                 try await settle(host)
-                try assertSelectedOccurrenceCentered(search, in: host)
+                try assertSelectedOccurrencePositioned(search, in: host)
             }
         }
     }
@@ -251,32 +251,69 @@ final class ChatSearchTests: XCTestCase {
             try await waitForSearch(search)
             try await settle(host)
             XCTAssertEqual(search.selected?.messageID, messages[35].id)
-            try assertSelectedOccurrenceCentered(search, in: host)
+            try assertSelectedOccurrencePositioned(search, in: host)
         }
     }
 
-    func testFirstAndLastFindingsCanBeCenteredInAShortChat() async throws {
+    func testSearchingShortChatsDoesNotExpandScrollBounds() async throws {
+        for messages in [
+            [ChatTranscriptMessage(role: .user, content: "notification")],
+            [ChatTranscriptMessage(role: .assistant, content: "notification")],
+            [ChatTranscriptMessage(role: .user, content: "notification"),
+             ChatTranscriptMessage(role: .assistant, content: "Last notification.")],
+        ] {
+            var originalHeight: CGFloat = 0
+            var originalLimits: ClosedRange<CGFloat> = 0...0
+            try await withSearchTranscript(messages, beforeSearch: { host in
+                let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }.first)
+                originalHeight = try XCTUnwrap(scroll.documentView).frame.height
+                originalLimits = scrollLimits(scroll.contentView)
+            }) { search, host in
+                for offset in [0, 1, -1] {
+                    if offset != 0 { search.move(offset) }
+                    try await settle(host)
+                    let scroll = try XCTUnwrap(descendants(host).compactMap { $0 as? NSScrollView }.first)
+                    XCTAssertEqual(try XCTUnwrap(scroll.documentView).frame.height, originalHeight, accuracy: 1,
+                                   "Searching must not add blank space to a short transcript")
+                    let limits = scrollLimits(scroll.contentView)
+                    XCTAssertEqual(limits.lowerBound, originalLimits.lowerBound, accuracy: 1)
+                    XCTAssertEqual(limits.upperBound, originalLimits.upperBound, accuracy: 1)
+                    try assertSelectedOccurrencePositioned(search, in: host)
+                }
+            }
+        }
+    }
+
+    private func scrollLimits(_ clip: NSClipView) -> ClosedRange<CGFloat> {
+        var bounds = clip.bounds
+        bounds.origin.y = -1_000_000
+        let top = clip.constrainBoundsRect(bounds).minY
+        bounds.origin.y = 1_000_000
+        return top...clip.constrainBoundsRect(bounds).minY
+    }
+
+    func testFirstAndLastFindingsStayVisibleInAShortChat() async throws {
         let messages = [ChatTranscriptMessage(role: .user, content: "notification"),
                         ChatTranscriptMessage(role: .assistant, content: "Last notification.")]
         try await withSearchTranscript(messages) { search, host in
             for offset in [0, 1, -1] {
                 if offset != 0 { search.move(offset) }
                 try await settle(host)
-                try assertSelectedOccurrenceCentered(search, in: host)
+                try assertSelectedOccurrencePositioned(search, in: host)
             }
         }
     }
 
-    func testPhraseSpanningParagraphsCentersTheWholeFinding() async throws {
+    func testPhraseSpanningParagraphsPositionsTheWholeFinding() async throws {
         let messages = [ChatTranscriptMessage(role: .assistant, content: "notification\n\npermissions")]
         try await withSearchTranscript(messages, query: "notification permissions") { search, host in
             try await settle(host)
             XCTAssertEqual(search.selected?.fragments.count, 2)
-            try assertSelectedOccurrenceCentered(search, in: host)
+            try assertSelectedOccurrencePositioned(search, in: host)
         }
     }
 
-    private func assertSelectedOccurrenceCentered(_ search: ChatSearchState, in host: NSView) throws {
+    private func assertSelectedOccurrencePositioned(_ search: ChatSearchState, in host: NSView) throws {
         let selected = try XCTUnwrap(search.selected)
         let surface = try XCTUnwrap(descendants(host).compactMap { $0 as? MarkdownSurface }.first {
             $0.searchHighlight?.selected?.location == selected.location
@@ -294,11 +331,19 @@ final class ChatSearchTests: XCTestCase {
                 bounds = bounds.map { $0.union(converted) } ?? converted
             }
         }
-        XCTAssertEqual(try XCTUnwrap(bounds).midY, clip.bounds.midY, accuracy: 1,
-                       "Occurrence \(search.selectedIndex) must be vertically centered")
+        let finding = try XCTUnwrap(bounds)
+        XCTAssertTrue(clip.bounds.intersects(finding), "The selected finding must be visible")
+        let delta = finding.midY - clip.bounds.midY
+        if abs(delta) > 1 {
+            var boundary = clip.bounds
+            boundary.origin.y = delta < 0 ? -1_000_000 : 1_000_000
+            XCTAssertEqual(clip.bounds.minY, clip.constrainBoundsRect(boundary).minY, accuracy: 1,
+                           "A finding must be centered unless the transcript's scroll limit prevents it")
+        }
     }
 
     private func withSearchTranscript(_ messages: [ChatTranscriptMessage], query: String = "notification",
+                                      beforeSearch: (NSView) async throws -> Void = { _ in },
                                       body: (ChatSearchState, NSView) async throws -> Void) async throws {
         let search = ChatSearchState()
         let items = ChatTranscriptPresentation.items(from: messages)
@@ -311,6 +356,8 @@ final class ChatSearchTests: XCTestCase {
         defer { search.stop(); window.close() }
         try await settle(host)
         search.present()
+        try await settle(host)
+        try await beforeSearch(host)
         search.query = query
         search.update(items: items, queryChanged: true)
         try await waitForSearch(search)

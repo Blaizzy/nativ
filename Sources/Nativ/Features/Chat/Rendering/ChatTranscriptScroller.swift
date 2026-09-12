@@ -45,8 +45,6 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         ScrollViewReader { proxy in
             ScrollView {
                 content(paging.attachedRange(in: itemIDs))
-                    // Leave room to center findings at either end of the conversation.
-                    .padding(.vertical, searchNavigation == nil ? 0 : viewportHeight / 2)
             }
                 .scrollPosition($readingPosition)
                 // Content-size changes are handled by the single pinner below.
