@@ -406,7 +406,6 @@ struct ChatLibrarySearchPopup: View {
                     .onKeyPress(.upArrow) { search.move(-1); return .handled }
                     .onExitCommand { search.dismiss() }
                     .accessibilityLabel("Search all chats")
-                if search.isSearching { ProgressView().controlSize(.small).frame(width: 16) }
                 Button("Close search", systemImage: "xmark") { search.dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
@@ -415,7 +414,9 @@ struct ChatLibrarySearchPopup: View {
             }
             .padding(20)
             Divider()
-            if search.results.isEmpty {
+            if search.isSearching && search.results.isEmpty {
+                ChatLibrarySearchLoadingRows()
+            } else if search.results.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(.tertiary)
                     Text(emptyTitle).font(.headline)
@@ -451,7 +452,8 @@ struct ChatLibrarySearchPopup: View {
             }
             Divider()
             HStack {
-                Text(search.hasMore ? "Showing the first 200 matching messages" : "\(search.results.count) matching messages")
+                Text(search.isSearching ? "Searching…" : search.hasMore
+                     ? "Showing the first 200 matching messages" : "\(search.results.count) matching messages")
                 Spacer()
                 Text("↑↓ Navigate   ↵ Open   Esc Close")
             }
@@ -470,8 +472,6 @@ struct ChatLibrarySearchPopup: View {
 
     private var emptyTitle: String {
         if let error = search.error { return error }
-        if chat.isLoadingSessions { return "Loading chats…" }
-        if search.isSearching { return "Searching…" }
         return search.query.isEmpty ? "Search all chats" : "No matching messages"
     }
 
@@ -492,5 +492,54 @@ struct ChatLibrarySearchPopup: View {
     private func openSelected() {
         guard search.results.indices.contains(search.selectedIndex) else { return }
         onSelect(search.results[search.selectedIndex])
+    }
+}
+
+private struct ChatLibrarySearchLoadingRows: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        rows
+            .foregroundStyle(Color.primary.opacity(0.07))
+            .overlay {
+                if !reduceMotion {
+                    GeometryReader { geometry in
+                        LinearGradient(colors: [.clear, Color.primary.opacity(0.09), .clear],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .frame(width: geometry.size.width * 0.45)
+                            .phaseAnimator([false, true]) { band, phase in
+                                band.offset(x: phase ? geometry.size.width : -geometry.size.width * 0.45)
+                            } animation: { phase in
+                                .linear(duration: phase ? 1.4 : 0)
+                            }
+                    }
+                    .mask { rows.foregroundStyle(.black) }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Searching chats")
+    }
+
+    private var rows: some View {
+        VStack(spacing: 2) {
+            ForEach(0..<4) { index in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 4).frame(width: 16, height: 16)
+                        RoundedRectangle(cornerRadius: 4).frame(width: CGFloat(160 + index * 24), height: 12)
+                        Spacer()
+                        RoundedRectangle(cornerRadius: 4).frame(width: 56, height: 10)
+                    }
+                    RoundedRectangle(cornerRadius: 4).frame(height: 12)
+                    RoundedRectangle(cornerRadius: 4).frame(height: 12)
+                        .padding(.trailing, CGFloat(80 + index % 3 * 40))
+                    RoundedRectangle(cornerRadius: 4).frame(width: 48, height: 10)
+                }
+                .padding(12)
+            }
+        }
+        .padding(8)
     }
 }
