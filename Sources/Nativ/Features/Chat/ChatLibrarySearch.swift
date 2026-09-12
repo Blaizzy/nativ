@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Observation
 import SwiftUI
 
@@ -61,11 +60,19 @@ struct ChatLibrarySearchResult: Identifiable, Equatable, Sendable {
 
 @MainActor @Observable
 final class ChatSearchLibrary {
+    private enum Update {
+        case snapshot(() -> ChatLibrarySearchSession?)
+        case removal
+    }
+
     let worker: ChatLibrarySearchWorker
-    private var startup: Task<Void, Error>?
     private(set) var revision = 0
-    private(set) var resetRevision = 0
-    private(set) var sessions: [UUID: Int] = [:]
+    private(set) var error: String?
+    @ObservationIgnored private var startup: Task<Void, Error>?
+    @ObservationIgnored private var updateTask: Task<Void, Error>?
+    @ObservationIgnored private var pending: [UUID: Update] = [:]
+    @ObservationIgnored private var knownSessions: Set<UUID> = []
+    @ObservationIgnored private var sources: [UUID: () -> ChatViewModel?] = [:]
 
     init(storageURL: URL? = nil) {
         worker = ChatLibrarySearchWorker(storageURL: storageURL)
@@ -73,25 +80,90 @@ final class ChatSearchLibrary {
 
     func start(_ sessions: [ChatSession]) {
         guard startup == nil else { return }
+        knownSessions.formUnion(sessions.map(\.id))
         let worker = worker
         startup = Task(priority: .utility) { [weak self] in
-            try await worker.bootstrap(sessions)
-            self?.revision &+= 1
+            do {
+                try await worker.bootstrap(sessions)
+                self?.revision &+= 1
+            } catch {
+                self?.error = "Search is unavailable. Try again."
+                self?.revision &+= 1
+                throw error
+            }
         }
+        schedule()
     }
 
-    func ready() async throws { try await startup?.value }
-
-    func invalidate(_ sessionID: UUID?) {
-        guard let sessionID else { return }
-        revision &+= 1
-        sessions[sessionID] = revision
+    func ready() async throws {
+        try await startup?.value
+        schedule()
+        try await updateTask?.value
     }
 
-    func reset() {
-        revision &+= 1
-        resetRevision = revision
-        sessions = [:]
+    func invalidate(_ sessionID: UUID?, from chat: ChatViewModel) {
+        guard let sessionID, !chat.isLoadingSessions, acceptsUpdates(for: sessionID, from: chat) else { return }
+        sources[sessionID] = { [weak chat] in chat }
+        enqueue(sessionID) { [weak chat] in chat?.searchSnapshot(in: sessionID) }
+    }
+
+    func enqueue(_ sessionID: UUID, snapshot: @escaping () -> ChatLibrarySearchSession?) {
+        knownSessions.insert(sessionID)
+        pending[sessionID] = .snapshot(snapshot)
+        schedule()
+    }
+
+    func remove(_ sessionID: UUID) {
+        knownSessions.remove(sessionID)
+        sources[sessionID] = nil
+        pending[sessionID] = .removal
+        schedule()
+    }
+
+    func reconcile(_ sessions: [ChatSessionSummary], from chat: ChatViewModel) {
+        let ids = Set(sessions.map(\.id))
+        for id in knownSessions.subtracting(ids) where acceptsUpdates(for: id, from: chat) { remove(id) }
+        for id in ids { invalidate(id, from: chat) }
+    }
+
+    private func acceptsUpdates(for sessionID: UUID, from chat: ChatViewModel) -> Bool {
+        guard chat.canModifySession(sessionID) else { return false }
+        if let source = sources[sessionID]?(), source !== chat, source.isSessionBusy(sessionID) { return false }
+        return true
+    }
+
+    private func schedule() {
+        guard startup != nil, updateTask == nil, !pending.isEmpty else { return }
+        updateTask = Task(priority: .utility) { [weak self] in
+            try await Task.sleep(for: .milliseconds(250))
+            guard let self else { return }
+            try await self.startup?.value
+            let updates = self.pending
+            self.pending = [:]
+            var snapshots: [ChatLibrarySearchSession] = []
+            var removed: Set<UUID> = []
+            var reload: Set<UUID> = []
+            for (id, update) in updates {
+                switch update {
+                case .snapshot(let read):
+                    if let snapshot = read() { snapshots.append(snapshot) }
+                    else { reload.insert(id) }
+                case .removal: removed.insert(id)
+                }
+            }
+            do {
+                try await self.worker.update(snapshots, removed: removed, reload: reload)
+                self.error = nil
+                self.revision &+= 1
+                self.updateTask = nil
+                self.schedule()
+            } catch {
+                for (id, update) in updates where self.pending[id] == nil { self.pending[id] = update }
+                self.error = "Search is unavailable. Try again."
+                self.updateTask = nil
+                throw error
+            }
+        }
     }
 }
 
@@ -127,10 +199,25 @@ actor ChatLibrarySearchWorker {
         try synchronize(snapshots, summaries: sessions.map(\.summary))
     }
 
-    func synchronize(_ inputs: [ChatSearchInput], sessionID: UUID) throws {
+    func update(_ sessions: [ChatLibrarySearchSession], removed: Set<UUID> = [], reload: Set<UUID> = []) throws {
         try restore()
-        try index.synchronize(inputs, sessionID: sessionID)
-        try save()
+        var sessions = sessions
+        var removed = removed
+        if !reload.isEmpty {
+            let source = ChatSessionStore()
+            for id in reload {
+                if let session = source.loadSession(id: id) {
+                    sessions.append(ChatLibrarySearchSession(summary: session.summary,
+                        items: ChatTranscriptPresentation.items(from: session.messages)))
+                } else { removed.insert(id) }
+            }
+        }
+        for id in removed { index.removeSession(id) }
+        for session in sessions { try index.synchronize(session.inputs, sessionID: session.id) }
+        let changed = sessions.map { ChatSearchStore.Session($0.summary) }.filter { summaries[$0.id] != $0 }
+        try save(sessions: changed, removed: removed)
+        for id in removed { summaries[id] = nil }
+        for session in changed { summaries[session.id] = session }
     }
 
     func checkpoint() throws { try store?.checkpoint() }
@@ -140,11 +227,11 @@ actor ChatLibrarySearchWorker {
         index.didSave()
     }
 
-    func search(_ query: String, sessionID: UUID, limit: Int = 10_000) throws -> ChatSearchWorker.Result {
+    func search(_ query: String, sessionID: UUID, messageID: UUID? = nil, limit: Int = 10_000) throws -> ChatSearchWorker.Result {
         try restore()
         guard limit > 0 else { return ChatSearchWorker.Result(occurrences: [], hasMore: false) }
         let limit = min(limit, 10_000)
-        let results = try index.search(query, limit: limit + 1, sessionID: sessionID) { _, left, _, right in
+        let results = try index.search(query, limit: limit + 1, sessionID: sessionID, messageID: messageID) { _, left, _, right in
             left.position < right.position
         }
         try save()
@@ -211,9 +298,6 @@ final class ChatLibrarySearchState {
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var revision = 0
-    @ObservationIgnored private var indexedSessions: [UUID: Int] = [:]
-    @ObservationIgnored private var indexedReset = -1
-    @ObservationIgnored private var needsSynchronization = true
 
     func present() { isPresented = true }
 
@@ -225,9 +309,6 @@ final class ChatLibrarySearchState {
         selectedIndex = 0
         hasMore = false
         error = nil
-        indexedSessions = [:]
-        indexedReset = -1
-        needsSynchronization = true
     }
 
     func move(_ offset: Int) {
@@ -248,8 +329,8 @@ final class ChatLibrarySearchState {
 
     func refresh(from chat: ChatViewModel, queryChanged: Bool = false) {
         guard isPresented else { return }
+        guard !chat.isLoadingSessions else { isSearching = true; return }
         revision &+= 1
-        if !queryChanged { needsSynchronization = true }
         if queryChanged {
             stop()
             results = []
@@ -275,21 +356,6 @@ final class ChatLibrarySearchState {
                 try await chat.searchLibrary.ready()
                 let worker = chat.searchLibrary.worker
                 let selected = self.results.indices.contains(self.selectedIndex) ? self.results[self.selectedIndex].id : nil
-                if self.needsSynchronization {
-                    let reset = chat.searchLibrary.resetRevision
-                    let versions = chat.searchLibrary.sessions
-                    let summaries = chat.sessions
-                    let changed = summaries.filter {
-                        reset != self.indexedReset || self.indexedSessions[$0.id] != (versions[$0.id] ?? 0)
-                    }.map {
-                        ChatLibrarySearchSession(summary: $0, items: chat.searchableTranscriptItems(in: $0.id))
-                    }
-                    try await worker.synchronize(changed, summaries: summaries)
-                    try Task.checkCancellation()
-                    self.indexedReset = reset
-                    self.indexedSessions = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, versions[$0.id] ?? 0) })
-                    self.needsSynchronization = self.revision != revision
-                }
                 let result = try await worker.search(self.query)
                 try Task.checkCancellation()
                 guard self.generation == generation else { return }
@@ -398,7 +464,6 @@ struct ChatLibrarySearchPopup: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .task { isFocused = true; search.refresh(from: chat) }
         .onChange(of: search.query) { _, _ in search.refresh(from: chat, queryChanged: true) }
-        .onReceive(chat.$sessions.dropFirst()) { _ in search.refresh(from: chat) }
         .onChange(of: chat.searchLibrary.revision) { _, _ in search.refresh(from: chat) }
         .onDisappear { search.dismiss() }
     }

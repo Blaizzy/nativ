@@ -262,6 +262,140 @@ final class ChatLibrarySearchTests: XCTestCase {
         XCTAssertEqual(result.messages.count, 1)
     }
 
+    func testMessageEventsUpdateThePersistentIndexWithoutOpeningSearch() async throws {
+        let url = try databaseURL()
+        let library = ChatSearchLibrary(storageURL: url)
+        library.start([])
+        let id = UUID()
+        var snapshot = session("Live", id: id, messages: [message("notification")])
+        library.enqueue(id) { snapshot }
+        try await library.ready()
+        let initial = try await library.worker.search("notification")
+        XCTAssertEqual(initial.messages.count, 1)
+        snapshot = session("Edited", id: id, messages: [message("permission", id: snapshot.inputs[0].messageID)])
+        library.enqueue(id) { snapshot }
+        try await library.ready()
+        let restored = ChatLibrarySearchWorker(storageURL: url)
+        let old = try await restored.search("notification")
+        XCTAssertTrue(old.messages.isEmpty)
+        let updated = try await restored.search("permission")
+        XCTAssertEqual(updated.messages.first?.title, "Edited")
+        library.remove(id)
+        try await library.ready()
+        let deleted = try await ChatLibrarySearchWorker(storageURL: url).search("permission")
+        XCTAssertTrue(deleted.messages.isEmpty)
+    }
+
+    func testBurstUpdatesReadOnlyTheLatestSnapshot() async throws {
+        let library = ChatSearchLibrary(storageURL: try databaseURL())
+        library.start([])
+        let id = UUID()
+        var reads = 0
+        var snapshot = session("Streaming", id: id, messages: [message("Initial")])
+        for index in 0..<100 {
+            snapshot = session("Streaming", id: id, messages: [message("notification revision \(index)")])
+            library.enqueue(id) { reads += 1; return snapshot }
+        }
+        try await library.ready()
+        XCTAssertEqual(reads, 1)
+        let result = try await library.worker.search("\"revision 99\"")
+        XCTAssertEqual(result.messages.count, 1)
+    }
+
+    func testStreamingUpdatesMakeProgressAndPersistTheFinalMessage() async throws {
+        let url = try databaseURL()
+        let library = ChatSearchLibrary(storageURL: url)
+        library.start([])
+        let id = UUID()
+        let messageID = UUID()
+        var reads = 0
+        var text = "notification"
+        for index in 0..<12 {
+            text += " update\(index)"
+            library.enqueue(id) {
+                reads += 1
+                return self.session("Streaming", id: id, messages: [self.message(text, id: messageID)])
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        XCTAssertGreaterThan(reads, 0)
+        try await library.ready()
+        XCTAssertLessThan(reads, 12)
+        let restored = ChatLibrarySearchWorker(storageURL: url)
+        let result = try await restored.search("\"update11\"")
+        XCTAssertEqual(result.messages.map { $0.occurrence.messageID }, [messageID])
+    }
+
+    func testDeletionSupersedesAnUnprocessedSnapshot() async throws {
+        let url = try databaseURL()
+        let library = ChatSearchLibrary(storageURL: url)
+        library.start([])
+        let chat = session("Deleted", messages: [message("notification")])
+        library.enqueue(chat.id) { chat }
+        library.remove(chat.id)
+        try await library.ready()
+        let result = try await ChatLibrarySearchWorker(storageURL: url).search("notification")
+        XCTAssertTrue(result.messages.isEmpty)
+    }
+
+    func testSharedInChatSearchDoesNotRequestTranscriptSnapshots() async throws {
+        let library = ChatSearchLibrary(storageURL: try databaseURL())
+        library.start([])
+        let chat = session("Shared", messages: [message("notification permission")])
+        library.enqueue(chat.id) { chat }
+        try await library.ready()
+        let state = ChatSearchState()
+        state.reset(sessionID: chat.id, library: library)
+        var reads = 0
+        func items() -> [ChatTranscriptItem] { reads += 1; return [] }
+        for query in ["notification", "permission"] {
+            state.query = query
+            state.update(items: items(), queryChanged: true)
+            try await waitForSearch(state)
+            XCTAssertEqual(state.occurrences.count, 1)
+        }
+        XCTAssertEqual(reads, 0)
+    }
+
+    func testTwoSearchViewsShareMessageUpdates() async throws {
+        let library = ChatSearchLibrary(storageURL: try databaseURL())
+        library.start([])
+        let id = UUID()
+        let messageID = UUID()
+        var snapshot = session("Shared", id: id, messages: [message("notification", id: messageID)])
+        library.enqueue(id) { snapshot }
+        try await library.ready()
+        let views = [ChatSearchState(), ChatSearchState()]
+        for view in views {
+            view.reset(sessionID: id, library: library)
+            view.query = "notification"
+            view.update(items: [], queryChanged: true)
+            try await waitForSearch(view)
+            XCTAssertEqual(view.occurrences.count, 1)
+        }
+        snapshot = session("Shared", id: id, messages: [message("replacement", id: messageID)])
+        library.enqueue(id) { snapshot }
+        try await library.ready()
+        for view in views {
+            view.update(items: [])
+            try await waitForSearch(view)
+            XCTAssertTrue(view.occurrences.isEmpty)
+        }
+    }
+
+    func testStartupStorageFailureIsReported() async throws {
+        let url = try databaseURL().deletingLastPathComponent()
+        let library = ChatSearchLibrary(storageURL: url)
+        library.start([])
+        do {
+            try await library.ready()
+            XCTFail("Expected the directory to be rejected as a database")
+        } catch {
+            XCTAssertNotNil(library.error)
+            XCTAssertGreaterThan(library.revision, 0)
+        }
+    }
+
     private func databaseURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ChatSearchTests-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

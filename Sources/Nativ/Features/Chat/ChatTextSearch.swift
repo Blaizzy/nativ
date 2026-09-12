@@ -193,12 +193,13 @@ enum ChatTextSearch {
             }
         }
 
-        func candidates(for query: Query) throws -> Set<ID> {
+        func candidates(for query: Query, within scope: Set<ID>? = nil) throws -> Set<ID> {
             try Task.checkCancellation()
             guard !query.text.isEmpty else { return [] }
             let grams = Self.fragments(query.text, longestOnly: true)
             let ordered = grams.sorted { (fragments[$0]?.count ?? 0) < (fragments[$1]?.count ?? 0) }
             var result = ordered.first.flatMap { fragments[$0] } ?? []
+            if let scope { result.formIntersection(scope) }
             for gram in ordered.dropFirst() {
                 if result.isEmpty { break }
                 try Task.checkCancellation()
@@ -206,7 +207,7 @@ enum ChatTextSearch {
             }
             var phrase: Set<ID>?
             for token in query.tokens {
-                let candidates = try candidates(for: token.word)
+                let candidates = try candidates(for: token.word, within: scope)
                 if phrase == nil { phrase = candidates }
                 else { phrase?.formIntersection(candidates) }
                 if phrase?.isEmpty == true { break }
@@ -215,7 +216,7 @@ enum ChatTextSearch {
             return result
         }
 
-        private func candidates(for query: Word) throws -> Set<ID> {
+        private func candidates(for query: Word, within scope: Set<ID>?) throws -> Set<ID> {
             var candidates = spellings[query.text] ?? []
             if query.allowsVariants {
                 for text in Set([query.text, query.lemma].compactMap { $0 }) {
@@ -241,7 +242,10 @@ enum ChatTextSearch {
             var result: Set<ID> = []
             for word in candidates {
                 try Task.checkCancellation()
-                if match(word, query: query) != nil { result.formUnion(words[word] ?? []) }
+                if match(word, query: query) != nil {
+                    let matches = words[word] ?? []
+                    result.formUnion(scope.map { matches.intersection($0) } ?? matches)
+                }
             }
             return result
         }

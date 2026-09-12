@@ -237,6 +237,20 @@ final class ChatTextSearchTests: XCTestCase {
         XCTAssertTrue(try index.candidates(for: ChatTextSearch.Query("xylophone", language: .english)).isEmpty)
     }
 
+    func testCandidateLookupCanBeRestrictedToAChatOrMessage() throws {
+        var index = ChatTextSearch.Index<Int>()
+        for id in 0..<10 {
+            let message = try ChatTextSearch.Message(id: UUID(), text: "Notification permissions", language: .english)
+            index.insert(message, id: id)
+        }
+        for text in ["ficat", "notificaiton", "permission"] {
+            let query = try ChatTextSearch.Query(text, language: .english)
+            XCTAssertEqual(try index.candidates(for: query, within: [2, 5]), [2, 5])
+            XCTAssertEqual(try index.candidates(for: query, within: [4]), [4])
+            XCTAssertTrue(try index.candidates(for: query, within: []).isEmpty)
+        }
+    }
+
     private func search(_ text: String, for query: String, limit: Int = 200) throws -> (texts: [String], matches: [ChatTextSearch.Match]) {
         let message = try ChatTextSearch.Message(id: UUID(), text: text, language: .english)
         let query = try ChatTextSearch.Query(query, language: .english)

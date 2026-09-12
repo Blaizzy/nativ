@@ -82,7 +82,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var currentProjectID: UUID?
     @Published private(set) var messages: [ChatTranscriptMessage] = [] {
-        didSet { searchLibrary.invalidate(currentSessionID) }
+        didSet { searchLibrary.invalidate(currentSessionID, from: self) }
     }
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
         didSet {
@@ -129,7 +129,7 @@ final class ChatViewModel: ObservableObject {
     @Published private var requestQueue: [QueuedChatRequest] = [] {
         didSet {
             for id in Set(oldValue.map(\.sessionID) + requestQueue.map(\.sessionID)) {
-                searchLibrary.invalidate(id)
+                searchLibrary.invalidate(id, from: self)
             }
         }
     }
@@ -254,6 +254,13 @@ final class ChatViewModel: ObservableObject {
                 && $0.reasoningContent.isEmpty
                 && !$0.toolCalls.isEmpty)
         }
+    }
+
+    func searchSnapshot(in sessionID: UUID) -> ChatLibrarySearchSession? {
+        let session = sessionID == currentSessionID
+            ? currentSessionSnapshot : storedSessions.first { $0.id == sessionID }
+        guard let session else { return nil }
+        return ChatLibrarySearchSession(summary: session.summary, items: searchableTranscriptItems(in: sessionID))
     }
 
     func searchableTranscriptItems(in sessionID: UUID) -> [ChatTranscriptItem] {
@@ -2367,7 +2374,7 @@ final class ChatViewModel: ObservableObject {
             return false
         }
         storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
-        searchLibrary.invalidate(sessionID)
+        searchLibrary.invalidate(sessionID, from: self)
         return true
     }
 
@@ -2565,7 +2572,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         storedSessions[sessionIndex].messages.removeAll { $0.id == messageID }
-        searchLibrary.invalidate(sessionID)
+        searchLibrary.invalidate(sessionID, from: self)
     }
 
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
@@ -2711,7 +2718,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         mutate(&storedSessions[sessionIndex].messages[messageIndex])
-        searchLibrary.invalidate(sessionID)
+        searchLibrary.invalidate(sessionID, from: self)
         return true
     }
 
@@ -2735,6 +2742,7 @@ final class ChatViewModel: ObservableObject {
     private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
         defer {
             searchLibrary.start(storedSessions)
+            searchLibrary.invalidate(currentSessionID, from: self)
             if needsPersistedSessionReload {
                 needsPersistedSessionReload = false
                 reloadPersistedSessions(preservingCurrentIfMissing: false)
@@ -2751,7 +2759,6 @@ final class ChatViewModel: ObservableObject {
             } == true
 
         storedSessions = bootstrap.sessions
-        searchLibrary.reset()
         if localSessionHasWork, let localSession {
             upsertStoredSession(localSession)
         }
@@ -2870,7 +2877,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         storedSessions = sessionStore.loadSessions()
-        searchLibrary.reset()
+        defer { searchLibrary.reconcile(sessions, from: self) }
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
                 if activeRequestSessionID != currentSession.id, fresh != currentSession {
@@ -2916,7 +2923,7 @@ final class ChatViewModel: ObservableObject {
 
     @discardableResult
     private func saveSession(_ session: ChatSession) -> Bool {
-        searchLibrary.invalidate(session.id)
+        searchLibrary.invalidate(session.id, from: self)
         guard canModifySession(session.id) else {
             return false
         }
@@ -2936,6 +2943,7 @@ final class ChatViewModel: ObservableObject {
 
     private func deletePersistedSession(_ sessionID: UUID) {
         sessionStore.deleteSession(id: sessionID)
+        searchLibrary.remove(sessionID)
         persistedDataChanges.send(.chatSession(sessionID), originWindowID: windowID)
     }
 

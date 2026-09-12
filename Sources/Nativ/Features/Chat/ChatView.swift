@@ -197,9 +197,9 @@ private struct ChatTranscriptView: View {
             search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value,
                           queryChanged: true)
         }
-        .onChange(of: chat.transcriptRevision.value) { _, _ in
+        .onChange(of: search.query.isEmpty ? 0 : chat.searchLibrary.revision) { _, _ in
             if !search.query.isEmpty {
-                search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value)
+                search.update(items: chat.visibleTranscriptItems, contentRevision: chat.searchLibrary.revision)
             }
         }
         .task(id: librarySearch?.destination?.id) {

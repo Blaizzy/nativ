@@ -35,8 +35,12 @@ final class ChatSearchStore {
     init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let code = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
-        guard code == SQLITE_OK else { throw failure(code) }
-        sqlite3_busy_timeout(database, 2_000)
+        guard code == SQLITE_OK else {
+            let error = failure(code)
+            sqlite3_close(database)
+            database = nil
+            throw error
+        }
         do {
             try configure()
         } catch let error as Failure where error.code == SQLITE_CORRUPT || error.code == SQLITE_NOTADB {
@@ -47,14 +51,29 @@ final class ChatSearchStore {
                 if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
             }
             let code = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
-            guard code == SQLITE_OK else { throw failure(code) }
-            try configure()
+            guard code == SQLITE_OK else {
+                let error = failure(code)
+                sqlite3_close(database)
+                database = nil
+                throw error
+            }
+            do { try configure() }
+            catch {
+                sqlite3_close(database)
+                database = nil
+                throw error
+            }
+        } catch {
+            sqlite3_close(database)
+            database = nil
+            throw error
         }
     }
 
     deinit { sqlite3_close(database) }
 
     private func configure() throws {
+        sqlite3_busy_timeout(database, 2_000)
         try execute("PRAGMA journal_mode=WAL")
         try execute("PRAGMA synchronous=NORMAL")
         try execute("PRAGMA secure_delete=ON")
