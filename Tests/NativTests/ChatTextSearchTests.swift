@@ -153,6 +153,90 @@ final class ChatTextSearchTests: XCTestCase {
         }
     }
 
+    func testIndexPreservesLiteralUnicodeAndSubstringMatches() throws {
+        let texts = ["NOTIFICATION notifications", "👋 Straße", "cafe\u{301} CAFÉ",
+                     "👩🏽‍💻 连接数据库", "foo_bar() notificationManager", "İstanbul Σίσυφος",
+                     "A **bold** phrase", "\n", "ﬃ ffi", "a\u{301}\u{323}"]
+        let queries = ["n", "on", "fic", "NOTIFICATION", "STRASSE", "ss", "café", "fé",
+                       "数据库", "👩🏽‍💻", "🏽", "foo_bar()", "**bold**", "İ", "σ", "ffi", "a\u{323}\u{301}"]
+        let messages = try texts.map { try ChatTextSearch.Message(id: UUID(), text: $0, language: .english) }
+        var index = ChatTextSearch.Index<UUID>()
+        for message in messages { index.insert(message, id: message.id) }
+        for text in queries {
+            let query = try ChatTextSearch.Query("\"\(text)\"", language: .english)
+            let candidates = try index.candidates(for: query)
+            for message in messages where try !ChatTextSearch.matches(in: message, query: query).isEmpty {
+                XCTAssertTrue(candidates.contains(message.id), "\(text) in \(message.text)")
+            }
+        }
+    }
+
+    func testIndexPreservesTypoCandidatesIncludingTwoTranspositions() throws {
+        for text in ["abcde", "planet", "abcdefgh", "abcdefghi", "notification", "aaaaaaaaab"] {
+            let message = try ChatTextSearch.Message(id: UUID(), text: text, language: .english)
+            var index = ChatTextSearch.Index<UUID>()
+            index.insert(message, id: message.id)
+            let characters = Array(text)
+            var queries: Set<String> = []
+            for offset in characters.indices {
+                var edited = characters
+                edited[offset] = "x"
+                queries.insert(String(edited))
+                edited = characters
+                edited.remove(at: offset)
+                queries.insert(String(edited))
+                edited = characters
+                edited.insert("x", at: offset)
+                queries.insert(String(edited))
+                if offset + 1 < characters.count {
+                    edited = characters
+                    edited.swapAt(offset, offset + 1)
+                    queries.insert(String(edited))
+                    for other in characters.indices.dropLast() {
+                        var twice = edited
+                        twice.swapAt(other, other + 1)
+                        queries.insert(String(twice))
+                    }
+                }
+            }
+            for text in queries {
+                let query = try ChatTextSearch.Query(text, language: .english)
+                if try !ChatTextSearch.matches(in: message, query: query).isEmpty {
+                    XCTAssertTrue(try index.candidates(for: query).contains(message.id), text)
+                }
+            }
+        }
+    }
+
+    func testIndexRemovesPostingsWithoutLosingSharedWords() throws {
+        let first = try ChatTextSearch.Message(id: UUID(), text: "We ran yesterday.", language: .english)
+        let second = try ChatTextSearch.Message(id: UUID(), text: "We ran yesterday.", language: .english)
+        var index = ChatTextSearch.Index<UUID>()
+        index.insert(first, id: first.id)
+        index.insert(second, id: second.id)
+        index.remove(first, id: first.id)
+        for text in ["running", "ran", "yesterdya"] {
+            let query = try ChatTextSearch.Query(text, language: .english)
+            XCTAssertEqual(try index.candidates(for: query), [second.id])
+        }
+        index.remove(second, id: second.id)
+        XCTAssertTrue(try index.candidates(for: ChatTextSearch.Query("running", language: .english)).isEmpty)
+    }
+
+    func testSelectiveIndexLookupDoesNotReturnUnrelatedMessages() throws {
+        var index = ChatTextSearch.Index<UUID>()
+        for _ in 0..<200 {
+            let message = try ChatTextSearch.Message(id: UUID(), text: "Ordinary background conversation.", language: .english)
+            index.insert(message, id: message.id)
+        }
+        let target = try ChatTextSearch.Message(id: UUID(), text: "Notification permissions were updated.", language: .english)
+        index.insert(target, id: target.id)
+        for text in ["notification", "notificaiton", "permission", "ficat"] {
+            XCTAssertEqual(try index.candidates(for: ChatTextSearch.Query(text, language: .english)), [target.id])
+        }
+        XCTAssertTrue(try index.candidates(for: ChatTextSearch.Query("xylophone", language: .english)).isEmpty)
+    }
+
     private func search(_ text: String, for query: String, limit: Int = 200) throws -> (texts: [String], matches: [ChatTextSearch.Match]) {
         let message = try ChatTextSearch.Message(id: UUID(), text: text, language: .english)
         let query = try ChatTextSearch.Query(query, language: .english)

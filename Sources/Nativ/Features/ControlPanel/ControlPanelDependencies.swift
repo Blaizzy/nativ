@@ -8,6 +8,7 @@ final class ControlPanelSharedDependencies {
     let persistedDataChanges = PersistedDataChangeHub()
     let inferenceActivity = InferenceActivityCoordinator()
     let projects = ChatProjectStore()
+    let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
 }
 
 @MainActor
@@ -19,12 +20,14 @@ final class ControlPanelDependencies: ObservableObject {
     let persistedDataChanges: PersistedDataChangeHub
     let inferenceActivity: InferenceActivityCoordinator
     let projects: ChatProjectStore
+    let chatSearch: ChatSearchLibrary
 
     lazy var chat = ChatViewModel(
         windowID: windowID,
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity,
-        projectStore: projects
+        projectStore: projects,
+        searchLibrary: chatSearch
     )
     lazy var imageGeneration = ImageGenerationViewModel(
         windowID: windowID,
@@ -66,5 +69,6 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges = shared.persistedDataChanges
         inferenceActivity = shared.inferenceActivity
         projects = shared.projects
+        chatSearch = shared.chatSearch
     }
 }

@@ -190,10 +190,17 @@ private struct ChatTranscriptView: View {
         .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
         .environment(\.chatSearchState, search)
         .focusedSceneValue(\.chatSearch, search)
-        .onChange(of: chat.currentSessionID, initial: true) { _, id in search.reset(sessionID: id) }
-        .onChange(of: search.query) { _, _ in search.update(items: chat.visibleTranscriptItems, queryChanged: true) }
+        .onChange(of: chat.currentSessionID, initial: true) { _, id in
+            search.reset(sessionID: id, library: chat.searchLibrary)
+        }
+        .onChange(of: search.query) { _, _ in
+            search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value,
+                          queryChanged: true)
+        }
         .onChange(of: chat.transcriptRevision.value) { _, _ in
-            if !search.query.isEmpty { search.update(items: chat.visibleTranscriptItems) }
+            if !search.query.isEmpty {
+                search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value)
+            }
         }
         .task(id: librarySearch?.destination?.id) {
             guard let destination = librarySearch?.takeDestination(for: chat.currentSessionID) else { return }

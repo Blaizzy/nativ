@@ -7,22 +7,61 @@ enum ChatTextSearch {
         case wordForm
         case typo
     }
- 
+
     struct Match: Equatable, Sendable {
         let messageID: UUID
         let range: NSRange
         let kind: MatchKind
     }
 
-    struct Message: Sendable {
+    struct Message: Codable, Sendable {
         let id: UUID
         let text: String
         fileprivate let tokens: [Token]
+        fileprivate let fragments: Set<UInt64>
+
+        var language: NLLanguage? {
+            tokens.first?.word.language.map { NLLanguage(rawValue: $0) }
+        }
+
+        var isSingleWord: Bool { tokens.count == 1 }
 
         init(id: UUID, text: String, language: NLLanguage? = nil) throws {
             self.id = id
             self.text = text
             tokens = try tokenize(text, language: language)
+            fragments = Index<Int>.fragments(text)
+        }
+
+        private struct StoredToken: Codable {
+            let word: Word
+            let range: NSRange
+        }
+
+        private enum CodingKeys: CodingKey { case id, text, tokens, fragments }
+
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            id = try values.decode(UUID.self, forKey: .id)
+            text = try values.decode(String.self, forKey: .text)
+            fragments = try values.decode(Set<UInt64>.self, forKey: .fragments)
+            let source = text
+            tokens = try values.decode([StoredToken].self, forKey: .tokens).map { token in
+                guard let range = Range(token.range, in: source) else {
+                    throw DecodingError.dataCorruptedError(forKey: .tokens, in: values,
+                                                           debugDescription: "Invalid token range")
+                }
+                return Token(word: token.word, range: range)
+            }
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var values = encoder.container(keyedBy: CodingKeys.self)
+            try values.encode(id, forKey: .id)
+            try values.encode(text, forKey: .text)
+            try values.encode(fragments, forKey: .fragments)
+            try values.encode(tokens.map { StoredToken(word: $0.word, range: NSRange($0.range, in: text)) },
+                              forKey: .tokens)
         }
     }
 
@@ -30,14 +69,21 @@ enum ChatTextSearch {
         let text: String
         fileprivate let tokens: [Token]
 
+        var language: NLLanguage? {
+            tokens.first?.word.language.map { NLLanguage(rawValue: $0) }
+        }
+
+        init(_ text: String, languageCode: String) throws {
+            try self.init(text, language: languageCode.isEmpty ? nil : NLLanguage(rawValue: languageCode))
+        }
+
         init(_ text: String, language: NLLanguage? = nil) throws {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let quoted = trimmed.count >= 2 && trimmed.first == "\"" && trimmed.last == "\""
             self.text = quoted ? String(trimmed.dropFirst().dropLast()) : trimmed
             let tokens = quoted ? [] : try tokenize(self.text, language: language)
-            // Paths, identifiers with punctuation, and symbols keep literal search semantics.
             self.tokens = isWordPhrase(self.text, tokens: tokens) ? tokens : []
-        }   
+        }
     }
 
     static func matches(in message: Message, query: Query, limit: Int = 200) throws -> [Match] {
@@ -101,12 +147,136 @@ enum ChatTextSearch {
         }
     }
 
+    struct Index<ID: Hashable & Sendable>: Sendable {
+        private var fragments: [UInt64: Set<ID>] = [:]
+        private var words: [Word: Set<ID>] = [:]
+        private var spellings: [String: Set<Word>] = [:]
+        private var pairs: [String: [String: Int]] = [:]
+
+        mutating func insert(_ message: Message, id: ID) {
+            for fragment in message.fragments {
+                fragments[fragment, default: []].insert(id)
+            }
+            for word in Set(message.tokens.map(\.word)) {
+                if words[word] == nil {
+                    for spelling in Set([word.text, word.lemma].compactMap { $0 }) {
+                        if spellings[spelling] == nil {
+                            for (pair, count) in Self.pairs(spelling) {
+                                pairs[pair, default: [:]][spelling] = count
+                            }
+                        }
+                        spellings[spelling, default: []].insert(word)
+                    }
+                }
+                words[word, default: []].insert(id)
+            }
+        }
+
+        mutating func remove(_ message: Message, id: ID) {
+            for fragment in message.fragments {
+                fragments[fragment]?.remove(id)
+                if fragments[fragment]?.isEmpty == true { fragments[fragment] = nil }
+            }
+            for word in Set(message.tokens.map(\.word)) {
+                words[word]?.remove(id)
+                guard words[word]?.isEmpty == true else { continue }
+                words[word] = nil
+                for spelling in Set([word.text, word.lemma].compactMap { $0 }) {
+                    spellings[spelling]?.remove(word)
+                    guard spellings[spelling]?.isEmpty == true else { continue }
+                    spellings[spelling] = nil
+                    for pair in Self.pairs(spelling).keys {
+                        pairs[pair]?[spelling] = nil
+                        if pairs[pair]?.isEmpty == true { pairs[pair] = nil }
+                    }
+                }
+            }
+        }
+
+        func candidates(for query: Query) throws -> Set<ID> {
+            try Task.checkCancellation()
+            guard !query.text.isEmpty else { return [] }
+            let grams = Self.fragments(query.text, longestOnly: true)
+            let ordered = grams.sorted { (fragments[$0]?.count ?? 0) < (fragments[$1]?.count ?? 0) }
+            var result = ordered.first.flatMap { fragments[$0] } ?? []
+            for gram in ordered.dropFirst() {
+                if result.isEmpty { break }
+                try Task.checkCancellation()
+                result.formIntersection(fragments[gram] ?? [])
+            }
+            var phrase: Set<ID>?
+            for token in query.tokens {
+                let candidates = try candidates(for: token.word)
+                if phrase == nil { phrase = candidates }
+                else { phrase?.formIntersection(candidates) }
+                if phrase?.isEmpty == true { break }
+            }
+            if let phrase { result.formUnion(phrase) }
+            return result
+        }
+
+        private func candidates(for query: Word) throws -> Set<ID> {
+            var candidates = spellings[query.text] ?? []
+            if query.allowsVariants {
+                for text in Set([query.text, query.lemma].compactMap { $0 }) {
+                    candidates.formUnion(spellings[text] ?? [])
+                    let length = text.count
+                    guard (5...64).contains(length) else { continue }
+                    let distance = length >= 9 ? 2 : 1
+                    let threshold = length - 1 - 3 * distance
+                    var overlap: [String: Int] = [:]
+                    for (pair, count) in Self.pairs(text) {
+                        try Task.checkCancellation()
+                        for (spelling, frequency) in pairs[pair] ?? [:] {
+                            overlap[spelling, default: 0] += min(count, frequency)
+                        }
+                    }
+                    for (spelling, count) in overlap where count >= threshold {
+                        if isSpellingVariant(spelling, text) {
+                            candidates.formUnion(spellings[spelling] ?? [])
+                        }
+                    }
+                }
+            }
+            var result: Set<ID> = []
+            for word in candidates {
+                try Task.checkCancellation()
+                if match(word, query: query) != nil { result.formUnion(words[word] ?? []) }
+            }
+            return result
+        }
+
+        private static func pairs(_ text: String) -> [String: Int] {
+            var result: [String: Int] = [:]
+            for (left, right) in zip(text, text.dropFirst()) {
+                result[String([left, right]), default: 0] += 1
+            }
+            return result
+        }
+
+        fileprivate static func fragments(_ text: String, longestOnly: Bool = false) -> Set<UInt64> {
+            let units = Array(text.folding(options: .caseInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+                .decomposedStringWithCanonicalMapping.utf16)
+            guard !units.isEmpty else { return [] }
+            let maximum = min(3, units.count)
+            var result: Set<UInt64> = []
+            for length in (longestOnly ? maximum : 1)...maximum {
+                for start in 0...(units.count - length) {
+                    var key = UInt64(length) << 48
+                    for offset in 0..<length { key |= UInt64(units[start + offset]) << (offset * 16) }
+                    result.insert(key)
+                }
+            }
+            return result
+        }
+    }
+
     fileprivate struct Token: Sendable {
         let word: Word
         let range: Range<String.Index>
     }
 
-    fileprivate struct Word: Hashable, Sendable {
+    fileprivate struct Word: Codable, Hashable, Sendable {
         let text: String
         let lemma: String?
         let language: String?
@@ -189,7 +359,6 @@ enum ChatTextSearch {
     private static func isSpellingVariant(_ lhs: String, _ rhs: String) -> Bool {
         let shorter = min(lhs.count, rhs.count)
         let longer = max(lhs.count, rhs.count)
-        // Bound both false positives for short words and work for unusually long tokens.
         guard shorter >= 5, longer <= 64 else { return false }
         let limit = shorter >= 9 ? 2 : 1
         guard longer - shorter <= limit else { return false }

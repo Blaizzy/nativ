@@ -1,10 +1,9 @@
 import AppKit
-import NaturalLanguage
 import Observation
 import QuartzCore
 import SwiftUI
 
-struct ChatSearchInput: Equatable, Sendable {
+struct ChatSearchInput: Codable, Equatable, Sendable {
     let messageID: UUID
     let rowID: UUID
     let text: String
@@ -52,7 +51,7 @@ struct ChatSearchOccurrence: Equatable, Sendable {
 }
 
 enum ChatSearchDocument {
-    struct Fragment: Equatable, Sendable {
+    struct Fragment: Codable, Equatable, Sendable {
         let id: String
         let text: String
     }
@@ -109,58 +108,187 @@ enum ChatSearchDocument {
     }
 }
 
-actor ChatSearchWorker {
-    struct Result: Sendable {
-        let occurrences: [ChatSearchOccurrence]
-        let hasMore: Bool
+struct ChatSearchIndex {
+    struct Key: Codable, Hashable, Sendable {
+        let sessionID: UUID?
+        let messageID: UUID
     }
 
-    private struct Entry {
+    struct Record: Codable {
+        let key: Key
         let input: ChatSearchInput
-        let fragments: [(ChatSearchDocument.Fragment, NSRange)]
+        let fragments: [ChatSearchDocument.Fragment]
         let message: ChatTextSearch.Message
-        let language: NLLanguage?
+        var alternatives: [String: ChatTextSearch.Message] = [:]
     }
 
-    private var entries: [UUID: Entry] = [:]
+    struct Entry {
+        let documentID: Int
+        let record: Record
+        let fragments: [(ChatSearchDocument.Fragment, NSRange)]
+        var position: Int
+        var input: ChatSearchInput { record.input }
+        var message: ChatTextSearch.Message { record.message }
+    }
 
-    func search(_ query: String, inputs: [ChatSearchInput], limit: Int = 10_000, firstMatchOnly: Bool = false) throws -> Result {
+    struct Changes {
+        var updated: Set<Key> = []
+        var removed: Set<Key> = []
+        var moved: Set<Key> = []
+    }
+
+    private struct SingleWords {
+        var index = ChatTextSearch.Index<Int>()
+        var messages: [Key: ChatTextSearch.Message] = [:]
+        var pending: Set<Key>
+    }
+
+    private(set) var entries: [Key: Entry] = [:]
+    private var sessions: [UUID?: Set<Key>] = [:]
+    private var index = ChatTextSearch.Index<Int>()
+    private var languages: [String: Int] = [:]
+    private var documents: [Int: Key] = [:]
+    private var nextDocumentID = 0
+    private var singleWords: Set<Key> = []
+    private var singleWordIndexes: [String: SingleWords] = [:]
+
+    private(set) var changes = Changes()
+
+    mutating func synchronize(_ inputs: [ChatSearchInput], sessionID: UUID? = nil) throws {
         try Task.checkCancellation()
-        guard limit > 0 else { return Result(occurrences: [], hasMore: false) }
-        let limit = min(limit, 10_000)
-        let ids = Set(inputs.map(\.messageID))
-        entries = entries.filter { ids.contains($0.key) }
-        var queries: [String: ChatTextSearch.Query] = [:]
-        var results: [ChatSearchOccurrence] = []
-        for input in inputs {
+        let keys = Set(inputs.map { Key(sessionID: sessionID, messageID: $0.messageID) })
+        for key in (sessions[sessionID] ?? []).subtracting(keys) {
+            remove(key)
+            changes.removed.insert(key)
+        }
+        sessions[sessionID] = keys
+        for (position, input) in inputs.enumerated() {
             try Task.checkCancellation()
-            let entry: Entry
-            if let cached = entries[input.messageID], cached.input == input {
-                entry = cached
-            } else {
-                let fragments = ChatSearchDocument.fragments(for: input)
-                let text = fragments.map(\.text).joined(separator: "\n\n")
-                let language = NLLanguageRecognizer.dominantLanguage(for: text)
-                var offset = 0
-                let positioned = fragments.map { fragment in
-                    let range = NSRange(location: offset, length: fragment.text.utf16.count)
-                    offset = NSMaxRange(range) + 2
-                    return (fragment, range)
+            let key = Key(sessionID: sessionID, messageID: input.messageID)
+            if entries[key]?.input == input {
+                if entries[key]?.position != position {
+                    entries[key]?.position = position
+                    changes.moved.insert(key)
                 }
-                entry = Entry(input: input, fragments: positioned,
-                              message: try ChatTextSearch.Message(id: input.messageID, text: text, language: language),
-                              language: language)
-                entries[input.messageID] = entry
+                continue
             }
-            let languageKey = entry.language?.rawValue ?? ""
-            let preparedQuery: ChatTextSearch.Query
-            if let cached = queries[languageKey] { preparedQuery = cached }
-            else {
-                preparedQuery = try ChatTextSearch.Query(query, language: entry.language)
-                queries[languageKey] = preparedQuery
+            let fragments = ChatSearchDocument.fragments(for: input)
+            let text = fragments.map(\.text).joined(separator: "\n\n")
+            let message = try ChatTextSearch.Message(id: input.messageID, text: text)
+            insert(Record(key: key, input: input, fragments: fragments, message: message), position: position)
+            changes.updated.insert(key)
+            changes.removed.remove(key)
+        }
+    }
+
+    mutating func insert(_ record: Record, position: Int) {
+        let key = record.key
+        let documentID = entries[key]?.documentID ?? nextDocumentID
+        if entries[key] == nil { nextDocumentID += 1 }
+        remove(key)
+        var offset = 0
+        let fragments = record.fragments.map { fragment in
+            let range = NSRange(location: offset, length: fragment.text.utf16.count)
+            offset = NSMaxRange(range) + 2
+            return (fragment, range)
+        }
+        documents[documentID] = key
+        entries[key] = Entry(documentID: documentID, record: record, fragments: fragments, position: position)
+        sessions[key.sessionID, default: []].insert(key)
+        index.insert(record.message, id: documentID)
+        languages[record.message.language?.rawValue ?? "", default: 0] += 1
+        if record.message.isSingleWord {
+            singleWords.insert(key)
+            for language in singleWordIndexes.keys { singleWordIndexes[language]?.pending.insert(key) }
+            for (language, message) in record.alternatives {
+                if singleWordIndexes[language] == nil { singleWordIndexes[language] = SingleWords(pending: singleWords) }
+                singleWordIndexes[language]?.pending.remove(key)
+                singleWordIndexes[language]?.messages[key] = message
+                singleWordIndexes[language]?.index.insert(message, id: documentID)
             }
-            let matches = try ChatTextSearch.matches(in: entry.message, query: preparedQuery,
-                                                    limit: firstMatchOnly ? 1 : max(1, limit + 1 - results.count))
+        }
+    }
+
+    func record(for key: Key) -> Record? {
+        guard var record = entries[key]?.record else { return nil }
+        record.alternatives = singleWordIndexes.compactMapValues { $0.messages[key] }
+        return record
+    }
+
+    mutating func didSave() { changes = Changes() }
+
+    mutating func removeSession(_ sessionID: UUID) {
+        for key in sessions.removeValue(forKey: sessionID) ?? [] {
+            remove(key)
+            changes.removed.insert(key)
+        }
+    }
+
+    private mutating func remove(_ key: Key) {
+        guard let entry = entries.removeValue(forKey: key) else { return }
+        documents[entry.documentID] = nil
+        index.remove(entry.message, id: entry.documentID)
+        let language = entry.message.language?.rawValue ?? ""
+        languages[language, default: 0] -= 1
+        if languages[language] == 0 { languages[language] = nil }
+        singleWords.remove(key)
+        for language in singleWordIndexes.keys {
+            singleWordIndexes[language]?.pending.remove(key)
+            if let message = singleWordIndexes[language]?.messages.removeValue(forKey: key) {
+                singleWordIndexes[language]?.index.remove(message, id: entry.documentID)
+            }
+        }
+    }
+
+    mutating func search(_ text: String, limit: Int, firstMatchOnly: Bool = false,
+                         sessionID: UUID? = nil,
+                         orderedBy: (Key, Entry, Key, Entry) -> Bool) throws -> [(Key, ChatSearchOccurrence)] {
+        try Task.checkCancellation()
+        guard limit > 0, !entries.isEmpty else { return [] }
+        let automatic = try ChatTextSearch.Query(text)
+        guard !automatic.text.isEmpty else { return [] }
+        var queries: [String: ChatTextSearch.Query] = [:]
+        var candidates: Set<Int> = []
+        for language in languages.keys {
+            let query = try ChatTextSearch.Query(text, languageCode: language)
+            queries[language] = query
+            candidates.formUnion(try index.candidates(for: query))
+        }
+        if let language = automatic.language, !singleWords.isEmpty {
+            let code = language.rawValue
+            if singleWordIndexes[code] == nil { singleWordIndexes[code] = SingleWords(pending: singleWords) }
+            for key in singleWordIndexes[code]?.pending ?? [] {
+                try Task.checkCancellation()
+                guard let entry = entries[key] else { continue }
+                if entry.message.language == language {
+                    singleWordIndexes[code]?.pending.remove(key)
+                    continue
+                }
+                let message = try ChatTextSearch.Message(id: key.messageID, text: entry.message.text,
+                                                         language: language)
+                singleWordIndexes[code]?.messages[key] = message
+                singleWordIndexes[code]?.index.insert(message, id: entry.documentID)
+                singleWordIndexes[code]?.pending.remove(key)
+                changes.updated.insert(key)
+            }
+            if let additional = try singleWordIndexes[code]?.index.candidates(for: automatic) {
+                candidates.formUnion(additional)
+            }
+        }
+        let ordered = candidates.compactMap { documents[$0] }.filter { sessionID == nil || $0.sessionID == sessionID }.sorted {
+            guard let left = entries[$0], let right = entries[$1] else { return false }
+            return orderedBy($0, left, $1, right)
+        }
+        var results: [(Key, ChatSearchOccurrence)] = []
+        for key in ordered {
+            try Task.checkCancellation()
+            guard let entry = entries[key], let query = queries[entry.message.language?.rawValue ?? ""] else { continue }
+            let matchLimit = firstMatchOnly ? 1 : limit - results.count
+            var matches = try ChatTextSearch.matches(in: entry.message, query: query, limit: matchLimit)
+            if matches.isEmpty, let code = automatic.language?.rawValue,
+               let message = singleWordIndexes[code]?.messages[key] {
+                matches = try ChatTextSearch.matches(in: message, query: automatic, limit: matchLimit)
+            }
             var firstFragment = 0
             for match in matches {
                 while firstFragment < entry.fragments.count,
@@ -176,14 +304,41 @@ actor ChatSearchWorker {
                     }
                 }
                 guard let first = parts.first else { continue }
-                results.append(ChatSearchOccurrence(messageID: input.messageID, rowID: input.rowID,
-                                                    fragment: first, continuations: Array(parts.dropFirst())))
-                if results.count > limit {
-                    return Result(occurrences: Array(results.prefix(limit)), hasMore: true)
-                }
+                results.append((key, ChatSearchOccurrence(messageID: key.messageID, rowID: entry.input.rowID,
+                                                          fragment: first, continuations: Array(parts.dropFirst()))))
+                if results.count == limit { return results }
             }
         }
-        return Result(occurrences: results, hasMore: false)
+        return results
+    }
+}
+
+actor ChatSearchWorker {
+    struct Result: Sendable {
+        let occurrences: [ChatSearchOccurrence]
+        let hasMore: Bool
+    }
+
+    private var index = ChatSearchIndex()
+
+    func synchronize(_ inputs: [ChatSearchInput]) throws {
+        try index.synchronize(inputs)
+        index.didSave()
+    }
+
+    func search(_ query: String, limit: Int = 10_000, firstMatchOnly: Bool = false) throws -> Result {
+        guard limit > 0 else { return Result(occurrences: [], hasMore: false) }
+        let limit = min(limit, 10_000)
+        let results = try index.search(query, limit: limit + 1, firstMatchOnly: firstMatchOnly) {
+            $1.position < $3.position
+        }
+        return Result(occurrences: results.prefix(limit).map { $0.1 }, hasMore: results.count > limit)
+    }
+
+    func search(_ query: String, inputs: [ChatSearchInput], limit: Int = 10_000,
+                firstMatchOnly: Bool = false) throws -> Result {
+        try synchronize(inputs)
+        return try search(query, limit: limit, firstMatchOnly: firstMatchOnly)
     }
 }
 
@@ -206,8 +361,11 @@ final class ChatSearchState {
     private(set) var revealID: UUID?
     private var matchesByMessage: [UUID: [ChatSearchOccurrence]] = [:]
     @ObservationIgnored private var worker = ChatSearchWorker()
+    @ObservationIgnored private var library: ChatSearchLibrary?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var inputs: [ChatSearchInput] = []
+    @ObservationIgnored private var snapshotRevision: Int?
+    @ObservationIgnored private var indexedRevision: Int?
     @ObservationIgnored private var sessionID: UUID?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var revision = 0
@@ -246,7 +404,8 @@ final class ChatSearchState {
         reset(sessionID: sessionID)
     }
 
-    func reset(sessionID: UUID?) {
+    func reset(sessionID: UUID?, library: ChatSearchLibrary? = nil) {
+        if let library { self.library = library }
         self.sessionID = sessionID
         isPresented = false
         clear()
@@ -256,6 +415,8 @@ final class ChatSearchState {
         stop()
         query = ""
         inputs = []
+        snapshotRevision = nil
+        indexedRevision = nil
         occurrences = []
         matchesByMessage = [:]
         selectedIndex = 0
@@ -266,13 +427,17 @@ final class ChatSearchState {
         requestedMatch = nil
     }
 
-    func update(items: [ChatTranscriptItem], queryChanged: Bool = false) {
+    func update(items: @autoclosure () -> [ChatTranscriptItem], contentRevision: Int? = nil,
+                queryChanged: Bool = false) {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clear()
             return
         }
-        inputs = ChatSearchInput.snapshots(from: items)
-        revision &+= 1
+        if contentRevision == nil || snapshotRevision != contentRevision {
+            inputs = ChatSearchInput.snapshots(from: items())
+            snapshotRevision = contentRevision
+            revision &+= 1
+        }
         if queryChanged {
             stop()
             occurrences = []
@@ -321,7 +486,23 @@ final class ChatSearchState {
                 let previous = self.selected
                 let requested = self.requestedMatch.flatMap { $0.query == self.query ? $0.location : nil }
                 let location = requested ?? previous?.location
-                var result = try await self.worker.search(self.query, inputs: self.inputs)
+                let resultWorker = self.library?.worker
+                try await self.library?.ready()
+                if self.indexedRevision != revision {
+                    if let resultWorker, let sessionID = self.sessionID {
+                        try await resultWorker.synchronize(self.inputs, sessionID: sessionID)
+                    } else {
+                        try await self.worker.synchronize(self.inputs)
+                    }
+                    try Task.checkCancellation()
+                    self.indexedRevision = revision
+                }
+                var result: ChatSearchWorker.Result
+                if let resultWorker, let sessionID = self.sessionID {
+                    result = try await resultWorker.search(self.query, sessionID: sessionID)
+                } else {
+                    result = try await self.worker.search(self.query)
+                }
                 if result.hasMore, let location,
                    !result.occurrences.contains(where: { $0.messageID == location.messageID }),
                    let input = self.inputs.first(where: { $0.messageID == location.messageID }) {
@@ -344,7 +525,6 @@ final class ChatSearchState {
                 }
                 self.task = nil
                 self.isSearching = false
-                // Streaming updates are throttled, not endlessly postponed by a trailing debounce.
                 if self.revision != revision { self.schedule() }
             } catch is CancellationError {
             } catch {
@@ -493,8 +673,6 @@ extension MarkdownSurface {
         for fragment in fragmentTargets {
             visibleTextViews.first { $0.fragmentID == fragment.id }?.scrollToVisible(fragment.rect)
         }
-        // Finish with the outer transcript's position, including when a code block
-        // has its own horizontal scroller or the finding was already visible.
         let clip = scroll.contentView
         var bounds = clip.bounds
         bounds.origin.y = convert(target, to: clip).midY - bounds.height / 2

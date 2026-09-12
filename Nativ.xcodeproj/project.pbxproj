@@ -477,6 +477,8 @@
 		FEB97639F6A1334E409830CF /* ChatWebSearchToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFA5142DB692E378ADE8DFA0 /* ChatWebSearchToolTests.swift */; };
 		FF3A7CB3645D73897EE7535A /* ScheduledTaskChatLinkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBC23C0369758C056A8182D /* ScheduledTaskChatLinkerTests.swift */; };
 		FF9252FDCB6E44F672B53452 /* ChatAttachmentValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9483127E124DE562AFFFAC94 /* ChatAttachmentValidator.swift */; };
+		D0894483234C4F31834BE4DB = {isa = PBXBuildFile; fileRef = 17EB4A67699945E7ADF19820; };
+		01A419F22E7747F1BC2B91D7 = {isa = PBXBuildFile; fileRef = 17EB4A67699945E7ADF19820; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -877,6 +879,7 @@
 		FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactDeletionTests.swift; sourceTree = "<group>"; };
 		FE82B4EBA796206F12005498 /* OfficeArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfficeArchive.swift; sourceTree = "<group>"; };
 		FF6D2D7280064648E0EFC847 /* BraveBrowsingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BraveBrowsingProvider.swift; sourceTree = "<group>"; };
+		17EB4A67699945E7ADF19820 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSearchStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1504,6 +1507,7 @@
 				7A9C24932DBACE75BA4E0CCB /* ChatFontScale.swift */,
 				F9988535384E783847070506 /* ChatImportAlert.swift */,
 				37E69CFB16DC6B3E115ABA77 /* ChatLibrarySearch.swift */,
+				17EB4A67699945E7ADF19820,
 				C11A25CB7C798C39A206FACC /* ChatProjectStore.swift */,
 				F3B8F25491BDEED4717A5D23 /* ChatPromptRevision.swift */,
 				8A11D3AF5467488478CAC264 /* ChatScreenCapture.swift */,
@@ -1926,6 +1930,7 @@
 				B426C6D2B2C1B7C7D2F831E2 /* ChatImageTool.swift in Sources */,
 				D96122BA0806CCE96CC145E0 /* ChatImportAlert.swift in Sources */,
 				92CAC313D093FBC25B4B1261 /* ChatLibrarySearch.swift in Sources */,
+				D0894483234C4F31834BE4DB,
 				04E587A0A3714FD30ECFDE91 /* ChatListModelsTool.swift in Sources */,
 				96A319074CB28B885E031213 /* ChatMarkdownRenderer.swift in Sources */,
 				59F063A85DE0A1DFA681282F /* ChatMathPreprocessor.swift in Sources */,
@@ -2137,6 +2142,7 @@
 				76EF60E40F6CC404F4CF8F91 /* ChatImageModelSelection.swift in Sources */,
 				D51D08482F5C0E76ACFEFDB1 /* ChatImageTool.swift in Sources */,
 				A821F372837FDD950F55193A /* ChatLibrarySearch.swift in Sources */,
+				01A419F22E7747F1BC2B91D7,
 				9251752AF85A79EEDF3D2E54 /* ChatLibrarySearchTests.swift in Sources */,
 				39F8BACAF5377A5DA14581BA /* ChatListModelsTool.swift in Sources */,
 				D835C99B486C3FE352A27039 /* ChatMarkdownRenderer.swift in Sources */,

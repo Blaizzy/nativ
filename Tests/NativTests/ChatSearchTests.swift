@@ -68,6 +68,61 @@ final class ChatSearchTests: XCTestCase {
         XCTAssertTrue(afterDelete.occurrences.isEmpty)
     }
 
+    func testWorkerPreservesWordFormsAndTyposWithoutExplicitLanguageDetection() async throws {
+        for (query, text) in [("running", "We ran yesterday."), ("mouse", "mice"),
+                              ("mouse", "The mice ate cheese."),
+                              ("child", "children"), ("conect", "We connected yesterday."),
+                              ("notificaiton", "notification")] {
+            for markdown in [false, true] {
+                let message = input(markdown ? "**\(text)**" : text, markdown: markdown)
+                let result = try await ChatSearchWorker().search(query, inputs: [message])
+                XCTAssertEqual(result.occurrences.map(\.messageID), [message.messageID], query)
+            }
+        }
+    }
+
+    func testIndexedQueriesReuseSnapshotsUntilContentChanges() async throws {
+        let state = ChatSearchState()
+        var reads = 0
+        var messages = [ChatTranscriptMessage(role: .user, content: "notification permissions")]
+        func items() -> [ChatTranscriptItem] {
+            reads += 1
+            return ChatTranscriptPresentation.items(from: messages)
+        }
+        state.query = "notification"
+        state.update(items: items(), contentRevision: 1, queryChanged: true)
+        try await waitForSearch(state)
+        state.query = "permission"
+        state.update(items: items(), contentRevision: 1, queryChanged: true)
+        try await waitForSearch(state)
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(state.occurrences.count, 1)
+        messages[0].content = "changed content"
+        state.update(items: items(), contentRevision: 2)
+        try await waitForSearch(state)
+        XCTAssertEqual(reads, 2)
+        XCTAssertTrue(state.occurrences.isEmpty)
+    }
+
+    func testSingleWordIndexRefreshesAfterEditsAndDeletions() async throws {
+        let worker = ChatSearchWorker()
+        let first = input("mice")
+        try await worker.synchronize([first])
+        for query in ["mouse", "mouse"] {
+            let result = try await worker.search(query)
+            XCTAssertEqual(result.occurrences.map(\.messageID), [first.messageID])
+        }
+        let edited = ChatSearchInput(messageID: first.messageID, rowID: first.rowID, text: "children", markdown: false)
+        try await worker.synchronize([edited])
+        let old = try await worker.search("mouse")
+        XCTAssertTrue(old.occurrences.isEmpty)
+        let new = try await worker.search("child")
+        XCTAssertEqual(new.occurrences.map(\.messageID), [first.messageID])
+        try await worker.synchronize([])
+        let deleted = try await worker.search("child")
+        XCTAssertTrue(deleted.occurrences.isEmpty)
+    }
+
     func testPhraseCanSpanMarkdownParagraphs() async throws {
         let result = try await ChatSearchWorker().search("notification permission", inputs: [
             input("notification\n\n**permissions**", markdown: true),

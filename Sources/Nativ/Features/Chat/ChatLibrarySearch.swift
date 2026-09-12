@@ -4,16 +4,13 @@ import Observation
 import SwiftUI
 
 struct ChatLibrarySearchSession: Sendable {
-    let id: UUID
-    let title: String
-    let updatedAt: Date
+    let summary: ChatSessionSummary
+    var id: UUID { summary.id }
     let inputs: [ChatSearchInput]
 
     init(summary: ChatSessionSummary, items: [ChatTranscriptItem]) {
-        id = summary.id
-        title = summary.title
-        updatedAt = summary.updatedAt
-        inputs = Array(ChatSearchInput.snapshots(from: items).reversed())
+        self.summary = summary
+        inputs = ChatSearchInput.snapshots(from: items)
     }
 }
 
@@ -62,41 +59,136 @@ struct ChatLibrarySearchResult: Identifiable, Equatable, Sendable {
     }
 }
 
+@MainActor @Observable
+final class ChatSearchLibrary {
+    let worker: ChatLibrarySearchWorker
+    private var startup: Task<Void, Error>?
+    private(set) var revision = 0
+    private(set) var resetRevision = 0
+    private(set) var sessions: [UUID: Int] = [:]
+
+    init(storageURL: URL? = nil) {
+        worker = ChatLibrarySearchWorker(storageURL: storageURL)
+    }
+
+    func start(_ sessions: [ChatSession]) {
+        guard startup == nil else { return }
+        let worker = worker
+        startup = Task(priority: .utility) { [weak self] in
+            try await worker.bootstrap(sessions)
+            self?.revision &+= 1
+        }
+    }
+
+    func ready() async throws { try await startup?.value }
+
+    func invalidate(_ sessionID: UUID?) {
+        guard let sessionID else { return }
+        revision &+= 1
+        sessions[sessionID] = revision
+    }
+
+    func reset() {
+        revision &+= 1
+        resetRevision = revision
+        sessions = [:]
+    }
+}
+
 actor ChatLibrarySearchWorker {
     struct Result: Sendable {
         let messages: [ChatLibrarySearchResult]
         let hasMore: Bool
     }
 
-    // Forks can share message IDs. Keep their prepared text in separate namespaces.
-    private var workers: [UUID: ChatSearchWorker] = [:]
+    private var index = ChatSearchIndex()
+    private var summaries: [UUID: ChatSearchStore.Session] = [:]
+    private let storageURL: URL?
+    private var store: ChatSearchStore?
+    private var restored = false
 
-    func search(_ query: String, sessions: [ChatLibrarySearchSession], limit: Int = 200) async throws -> Result {
+    init(storageURL: URL? = nil) { self.storageURL = storageURL }
+
+    func restore() throws {
+        guard !restored else { return }
+        if let storageURL {
+            let store = try ChatSearchStore(url: storageURL)
+            summaries = try store.restore(into: &index)
+            self.store = store
+        }
+        restored = true
+    }
+
+    func bootstrap(_ sessions: [ChatSession]) throws {
+        try restore()
+        let snapshots = sessions.map {
+            ChatLibrarySearchSession(summary: $0.summary, items: ChatTranscriptPresentation.items(from: $0.messages))
+        }
+        try synchronize(snapshots, summaries: sessions.map(\.summary))
+    }
+
+    func synchronize(_ inputs: [ChatSearchInput], sessionID: UUID) throws {
+        try restore()
+        try index.synchronize(inputs, sessionID: sessionID)
+        try save()
+    }
+
+    func checkpoint() throws { try store?.checkpoint() }
+
+    private func save(sessions: [ChatSearchStore.Session] = [], removed: Set<UUID> = []) throws {
+        try store?.save(index, sessions: sessions, removedSessions: removed)
+        index.didSave()
+    }
+
+    func search(_ query: String, sessionID: UUID, limit: Int = 10_000) throws -> ChatSearchWorker.Result {
+        try restore()
+        guard limit > 0 else { return ChatSearchWorker.Result(occurrences: [], hasMore: false) }
+        let limit = min(limit, 10_000)
+        let results = try index.search(query, limit: limit + 1, sessionID: sessionID) { _, left, _, right in
+            left.position < right.position
+        }
+        try save()
+        return ChatSearchWorker.Result(occurrences: results.prefix(limit).map { $0.1 }, hasMore: results.count > limit)
+    }
+
+    func synchronize(_ sessions: [ChatLibrarySearchSession], summaries: [ChatSessionSummary]) throws {
         try Task.checkCancellation()
+        try restore()
+        let updated = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, ChatSearchStore.Session($0)) })
+        let removed = Set(self.summaries.keys).subtracting(updated.keys)
+        let changed = updated.values.filter { self.summaries[$0.id] != $0 }
+        for id in removed { index.removeSession(id) }
+        for session in sessions { try index.synchronize(session.inputs, sessionID: session.id) }
+        try save(sessions: changed, removed: removed)
+        self.summaries = updated
+    }
+
+    func search(_ query: String, limit: Int = 200) throws -> Result {
+        try restore()
         guard limit > 0 else { return Result(messages: [], hasMore: false) }
         let limit = min(limit, 200)
-        let ids = Set(sessions.map(\.id))
-        workers = workers.filter { ids.contains($0.key) }
-        var messages: [ChatLibrarySearchResult] = []
-        let ordered = sessions.sorted {
-            $0.updatedAt == $1.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt
+        let summaries = summaries
+        let matches = try index.search(query, limit: limit + 1, firstMatchOnly: true) { left, lhs, right, rhs in
+            if left.sessionID == right.sessionID { return lhs.position > rhs.position }
+            let leftDate = left.sessionID.flatMap { summaries[$0]?.updatedAt } ?? .distantPast
+            let rightDate = right.sessionID.flatMap { summaries[$0]?.updatedAt } ?? .distantPast
+            return leftDate == rightDate
+                ? (left.sessionID?.uuidString ?? "") < (right.sessionID?.uuidString ?? "")
+                : leftDate > rightDate
         }
-        for session in ordered {
-            try Task.checkCancellation()
-            let worker = workers[session.id] ?? ChatSearchWorker()
-            workers[session.id] = worker
-            let result = try await worker.search(query, inputs: session.inputs, limit: limit + 1 - messages.count,
-                                                 firstMatchOnly: true)
-            guard !result.occurrences.isEmpty else { continue }
-            let inputs = Dictionary(uniqueKeysWithValues: session.inputs.map { ($0.messageID, $0) })
-            for occurrence in result.occurrences {
-                messages.append(ChatLibrarySearchResult(sessionID: session.id, title: session.title,
-                    updatedAt: session.updatedAt, isAssistant: inputs[occurrence.messageID]?.markdown == true,
-                    occurrence: occurrence))
-                if messages.count > limit { return Result(messages: Array(messages.prefix(limit)), hasMore: true) }
-            }
+        let messages = matches.prefix(limit).compactMap { key, occurrence -> ChatLibrarySearchResult? in
+            guard let id = key.sessionID, let summary = summaries[id] else { return nil }
+            return ChatLibrarySearchResult(sessionID: id, title: summary.title, updatedAt: summary.updatedAt,
+                                           isAssistant: index.entries[key]?.input.markdown == true,
+                                           occurrence: occurrence)
         }
-        return Result(messages: messages, hasMore: false)
+        try save()
+        return Result(messages: messages, hasMore: matches.count > limit)
+    }
+
+    func search(_ query: String, sessions: [ChatLibrarySearchSession], limit: Int = 200) throws -> Result {
+        try synchronize(sessions, summaries: sessions.map(\.summary))
+        return try search(query, limit: limit)
     }
 }
 
@@ -116,10 +208,12 @@ final class ChatLibrarySearchState {
     private(set) var hasMore = false
     private(set) var destination: Destination?
     var error: String?
-    @ObservationIgnored private var worker = ChatLibrarySearchWorker()
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var revision = 0
+    @ObservationIgnored private var indexedSessions: [UUID: Int] = [:]
+    @ObservationIgnored private var indexedReset = -1
+    @ObservationIgnored private var needsSynchronization = true
 
     func present() { isPresented = true }
 
@@ -131,7 +225,9 @@ final class ChatLibrarySearchState {
         selectedIndex = 0
         hasMore = false
         error = nil
-        worker = ChatLibrarySearchWorker()
+        indexedSessions = [:]
+        indexedReset = -1
+        needsSynchronization = true
     }
 
     func move(_ offset: Int) {
@@ -153,6 +249,7 @@ final class ChatLibrarySearchState {
     func refresh(from chat: ChatViewModel, queryChanged: Bool = false) {
         guard isPresented else { return }
         revision &+= 1
+        if !queryChanged { needsSynchronization = true }
         if queryChanged {
             stop()
             results = []
@@ -175,11 +272,25 @@ final class ChatLibrarySearchState {
                 try await Task.sleep(for: .milliseconds(150))
                 guard let self, let chat, self.generation == generation else { return }
                 let revision = self.revision
+                try await chat.searchLibrary.ready()
+                let worker = chat.searchLibrary.worker
                 let selected = self.results.indices.contains(self.selectedIndex) ? self.results[self.selectedIndex].id : nil
-                let sessions = chat.sessions.map {
-                    ChatLibrarySearchSession(summary: $0, items: chat.searchableTranscriptItems(in: $0.id))
+                if self.needsSynchronization {
+                    let reset = chat.searchLibrary.resetRevision
+                    let versions = chat.searchLibrary.sessions
+                    let summaries = chat.sessions
+                    let changed = summaries.filter {
+                        reset != self.indexedReset || self.indexedSessions[$0.id] != (versions[$0.id] ?? 0)
+                    }.map {
+                        ChatLibrarySearchSession(summary: $0, items: chat.searchableTranscriptItems(in: $0.id))
+                    }
+                    try await worker.synchronize(changed, summaries: summaries)
+                    try Task.checkCancellation()
+                    self.indexedReset = reset
+                    self.indexedSessions = Dictionary(uniqueKeysWithValues: summaries.map { ($0.id, versions[$0.id] ?? 0) })
+                    self.needsSynchronization = self.revision != revision
                 }
-                let result = try await self.worker.search(self.query, sessions: sessions)
+                let result = try await worker.search(self.query)
                 try Task.checkCancellation()
                 guard self.generation == generation else { return }
                 self.results = result.messages
@@ -288,7 +399,7 @@ struct ChatLibrarySearchPopup: View {
         .task { isFocused = true; search.refresh(from: chat) }
         .onChange(of: search.query) { _, _ in search.refresh(from: chat, queryChanged: true) }
         .onReceive(chat.$sessions.dropFirst()) { _ in search.refresh(from: chat) }
-        .onReceive(chat.$messages.dropFirst()) { _ in search.refresh(from: chat) }
+        .onChange(of: chat.searchLibrary.revision) { _, _ in search.refresh(from: chat) }
         .onDisappear { search.dismiss() }
     }
 

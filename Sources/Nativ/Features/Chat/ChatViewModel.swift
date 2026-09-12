@@ -81,7 +81,9 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var currentProjectID: UUID?
-    @Published private(set) var messages: [ChatTranscriptMessage] = []
+    @Published private(set) var messages: [ChatTranscriptMessage] = [] {
+        didSet { searchLibrary.invalidate(currentSessionID) }
+    }
     @Published private(set) var pendingImageAttachments: [ChatImageAttachment] = [] {
         didSet {
             if pendingImageAttachments.isEmpty {
@@ -107,6 +109,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var activeRequestSessionID: UUID?
     @Published private(set) var sendingStartedAt: Date?
     let transcriptRevision = ChatTranscriptRevision()
+    let searchLibrary: ChatSearchLibrary
     @Published private(set) var transcriptSubmissionID: UUID?
     @Published var scrollTargetMessageID: UUID?
     @Published private(set) var isLoadingSessions = true
@@ -123,7 +126,13 @@ final class ChatViewModel: ObservableObject {
     private var activeTask: Task<Void, Never>?
     private var activeRequestID: UUID?
     private var activeAssistantMessageID: UUID?
-    @Published private var requestQueue: [QueuedChatRequest] = []
+    @Published private var requestQueue: [QueuedChatRequest] = [] {
+        didSet {
+            for id in Set(oldValue.map(\.sessionID) + requestQueue.map(\.sessionID)) {
+                searchLibrary.invalidate(id)
+            }
+        }
+    }
     private var storedSessions: [ChatSession] = []
     private var currentSession: ChatSession?
     private var liveDecodeRateRefreshDates: [UUID: Date] = [:]
@@ -143,12 +152,14 @@ final class ChatViewModel: ObservableObject {
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
         inferenceActivity: InferenceActivityCoordinator = .init(),
-        projectStore: ChatProjectStore = .init()
+        projectStore: ChatProjectStore = .init(),
+        searchLibrary: ChatSearchLibrary = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
         self.projectStore = projectStore
+        self.searchLibrary = searchLibrary
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
@@ -2356,6 +2367,7 @@ final class ChatViewModel: ObservableObject {
             return false
         }
         storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
+        searchLibrary.invalidate(sessionID)
         return true
     }
 
@@ -2553,6 +2565,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         storedSessions[sessionIndex].messages.removeAll { $0.id == messageID }
+        searchLibrary.invalidate(sessionID)
     }
 
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
@@ -2698,6 +2711,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         mutate(&storedSessions[sessionIndex].messages[messageIndex])
+        searchLibrary.invalidate(sessionID)
         return true
     }
 
@@ -2720,6 +2734,7 @@ final class ChatViewModel: ObservableObject {
 
     private func finishLoadingSessions(_ bootstrap: ChatSessionBootstrap) {
         defer {
+            searchLibrary.start(storedSessions)
             if needsPersistedSessionReload {
                 needsPersistedSessionReload = false
                 reloadPersistedSessions(preservingCurrentIfMissing: false)
@@ -2736,6 +2751,7 @@ final class ChatViewModel: ObservableObject {
             } == true
 
         storedSessions = bootstrap.sessions
+        searchLibrary.reset()
         if localSessionHasWork, let localSession {
             upsertStoredSession(localSession)
         }
@@ -2854,6 +2870,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         storedSessions = sessionStore.loadSessions()
+        searchLibrary.reset()
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
                 if activeRequestSessionID != currentSession.id, fresh != currentSession {
@@ -2899,6 +2916,7 @@ final class ChatViewModel: ObservableObject {
 
     @discardableResult
     private func saveSession(_ session: ChatSession) -> Bool {
+        searchLibrary.invalidate(session.id)
         guard canModifySession(session.id) else {
             return false
         }

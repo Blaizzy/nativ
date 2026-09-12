@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import SwiftUI
 import XCTest
 
@@ -151,6 +152,121 @@ final class ChatLibrarySearchTests: XCTestCase {
         try await waitForSearch(state)
         XCTAssertEqual(state.selected?.messageID, messages.last?.id)
         XCTAssertEqual(state.navigationID, navigation)
+    }
+
+    func testIncrementalSynchronizationKeepsUnchangedChatsAndUpdatesOrdering() async throws {
+        let older = session("Older", updatedAt: .distantPast, messages: [message("notification")])
+        let newer = session("Newer", messages: [message("notification")])
+        let worker = ChatLibrarySearchWorker()
+        try await worker.synchronize([older, newer], summaries: [older.summary, newer.summary])
+        let initial = try await worker.search("notification")
+        XCTAssertEqual(initial.messages.map(\.sessionID), [newer.id, older.id])
+        let edited = session("Renamed", id: older.id, updatedAt: .distantFuture,
+                             messages: [message("notification permissions")])
+        try await worker.synchronize([edited], summaries: [edited.summary, newer.summary])
+        let updated = try await worker.search("notification")
+        XCTAssertEqual(updated.messages.map(\.sessionID), [older.id, newer.id])
+        XCTAssertEqual(updated.messages.first?.title, "Renamed")
+        try await worker.synchronize([], summaries: [newer.summary])
+        let deleted = try await worker.search("notification")
+        XCTAssertEqual(deleted.messages.map(\.sessionID), [newer.id])
+    }
+
+    func testPersistentIndexRestoresGlobalAndInChatResults() async throws {
+        let url = try databaseURL()
+        let messages = [message("👋 cafe\u{301} notification"), message("We ran yesterday."), message("mice")]
+        let chat = session("Stored", messages: messages)
+        let worker = ChatLibrarySearchWorker(storageURL: url)
+        try await worker.synchronize([chat], summaries: [chat.summary])
+        for query in ["café", "notificaiton", "running", "mouse"] {
+            let before = try await worker.search(query)
+            let restored = ChatLibrarySearchWorker(storageURL: url)
+            let after = try await restored.search(query)
+            XCTAssertEqual(after.messages, before.messages, query)
+            let local = try await restored.search(query, sessionID: chat.id)
+            XCTAssertEqual(Set(local.occurrences.map(\.messageID)), Set(before.messages.map { $0.occurrence.messageID }))
+        }
+    }
+
+    func testPersistentIndexReconcilesEditsDeletionsAndNewMessages() async throws {
+        let url = try databaseURL()
+        let first = session("First", messages: [message("notification")])
+        let removed = session("Removed", messages: [message("obsolete")])
+        let worker = ChatLibrarySearchWorker(storageURL: url)
+        try await worker.synchronize([first, removed], summaries: [first.summary, removed.summary])
+        let updated = session("Renamed", id: first.id, messages: [
+            message("permission", id: first.inputs[0].messageID), message("notification newest"),
+        ])
+        let relaunched = ChatLibrarySearchWorker(storageURL: url)
+        try await relaunched.synchronize([updated], summaries: [updated.summary])
+        let restored = ChatLibrarySearchWorker(storageURL: url)
+        let obsolete = try await restored.search("obsolete")
+        XCTAssertTrue(obsolete.messages.isEmpty)
+        let notification = try await restored.search("notification")
+        XCTAssertEqual(notification.messages.map { $0.occurrence.messageID }, [updated.inputs[1].messageID])
+        XCTAssertEqual(notification.messages.first?.title, "Renamed")
+        let permission = try await restored.search("permission")
+        XCTAssertEqual(permission.messages.map { $0.occurrence.messageID }, [updated.inputs[0].messageID])
+    }
+
+    func testPersistentIndexPreservesForkNamespacesAndMessageOrder() async throws {
+        let url = try databaseURL()
+        let sharedID = UUID()
+        let first = session("Original", messages: [message("notification", id: sharedID), message("notification later")])
+        let fork = session("Fork", messages: [message("permissions", id: sharedID)])
+        let worker = ChatLibrarySearchWorker(storageURL: url)
+        try await worker.synchronize([first, fork], summaries: [first.summary, fork.summary])
+        let restored = ChatLibrarySearchWorker(storageURL: url)
+        let global = try await restored.search("notification")
+        XCTAssertEqual(global.messages.map { $0.occurrence.messageID }, first.inputs.reversed().map(\.messageID))
+        let local = try await restored.search("notification", sessionID: first.id)
+        XCTAssertEqual(local.occurrences.map(\.messageID), first.inputs.map(\.messageID))
+        let other = try await restored.search("permission", sessionID: fork.id)
+        XCTAssertEqual(other.occurrences.map(\.messageID), [sharedID])
+    }
+
+    func testSharedIndexSurvivesSearchDismissalAndQueryClearing() async throws {
+        let url = try databaseURL()
+        let library = ChatSearchLibrary(storageURL: url)
+        let chat = session("Shared", messages: [message("notification")])
+        try await library.worker.synchronize([chat], summaries: [chat.summary])
+        let local = ChatSearchState()
+        local.reset(sessionID: chat.id, library: library)
+        local.query = "notification"
+        local.update(items: [.message(message("notification", id: chat.inputs[0].messageID))])
+        try await waitForSearch(local)
+        local.dismiss()
+        let popup = ChatLibrarySearchState()
+        popup.present()
+        popup.dismiss()
+        let remaining = try await library.worker.search("notification")
+        XCTAssertEqual(remaining.messages.count, 1)
+    }
+
+    func testDamagedAndIncompatibleCachesAreRebuilt() async throws {
+        let url = try databaseURL()
+        try Data("damaged cache".utf8).write(to: url)
+        let chat = session("Rebuilt", messages: [message("notification")])
+        var worker: ChatLibrarySearchWorker? = ChatLibrarySearchWorker(storageURL: url)
+        try await worker?.synchronize([chat], summaries: [chat.summary])
+        let first = try await worker?.search("notification")
+        XCTAssertEqual(first?.messages.count, 1)
+        worker = nil
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(database, "UPDATE metadata SET version = 'obsolete'", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+        let rebuilt = ChatLibrarySearchWorker(storageURL: url)
+        try await rebuilt.synchronize([chat], summaries: [chat.summary])
+        let result = try await rebuilt.search("notification")
+        XCTAssertEqual(result.messages.count, 1)
+    }
+
+    private func databaseURL() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ChatSearchTests-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        return directory.appending(path: "Search.sqlite")
     }
 
     private func waitForSearch(_ state: ChatSearchState) async throws {
