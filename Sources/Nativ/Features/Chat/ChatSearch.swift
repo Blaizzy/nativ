@@ -558,9 +558,13 @@ struct ChatSearchCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
-            Button("Find in Chat…") { search?.present() }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(search == nil)
+            Button(search?.isPresented == true ? "Hide Find in Chat" : "Find in Chat…") {
+                guard let search else { return }
+                if search.isPresented { search.dismiss() }
+                else { search.present() }
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(search == nil)
         }
     }
 }

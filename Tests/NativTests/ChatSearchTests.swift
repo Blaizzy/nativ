@@ -410,9 +410,9 @@ final class ChatSearchTests: XCTestCase {
         window.orderBack(nil)
         defer { search.stop(); window.close() }
         try await settle(host)
+        try await beforeSearch(host)
         search.present()
         try await settle(host)
-        try await beforeSearch(host)
         search.query = query
         search.update(items: items, queryChanged: true)
         try await waitForSearch(search)
@@ -472,9 +472,7 @@ private struct SearchNavigationFixture: View {
         ChatTranscriptScroller(currentSessionID: nil, revision: revision, submissionID: nil,
                                scrollTargetMessageID: $target, itemIDs: items.map(\.id),
                                searchNavigation: search.navigationRequest, onSearchNavigation: search.finishNavigation,
-                               topInset: {
-                                   if search.isPresented { ChatSearchBar(search: search).padding(8) }
-                               }) { attached in
+                               topInset: { EmptyView() }) { attached in
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(Array(items[attached])) { item in
                     if case .message(let message) = item {
@@ -493,6 +491,9 @@ private struct SearchNavigationFixture: View {
                 Color.clear.frame(height: 100).id(ChatTranscriptScrollTarget.bottom)
             }
             .padding(20)
+        }
+        .overlay(alignment: .topTrailing) {
+            if search.isPresented { ChatSearchBar(search: search).padding(8) }
         }
     }
 }

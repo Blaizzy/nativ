@@ -164,6 +164,7 @@ private struct ChatTranscriptView: View {
     @State private var composerBackdropHeight: CGFloat = 0
     @State private var search = ChatSearchState()
     @Environment(\.chatLibrarySearch) private var librarySearch
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -224,23 +225,12 @@ private struct ChatTranscriptView: View {
             searchNavigation: search.navigationRequest,
             onSearchNavigation: search.finishNavigation,
             topInset: {
-                VStack(spacing: 0) {
-                    if search.isPresented {
-                        ChatSearchBar(search: search)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.leading, 16)
-                            .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
-                                     + ControlPanelLayout.topControlSize + 12)
-                            .padding(.vertical, 8)
-                            .background(Color.nativMainContentBackground)
-                    }
-                    if let project {
-                        ChatProjectContextBanner(
-                            project: project,
-                            rootIsAvailable: projectRootIsAvailable,
-                            toolsEnabled: model.settings.projectToolsEnabled
-                        )
-                    }
+                if let project {
+                    ChatProjectContextBanner(
+                        project: project,
+                        rootIsAvailable: projectRootIsAvailable,
+                        toolsEnabled: model.settings.projectToolsEnabled
+                    )
                 }
             }
         ) { attachedRange in
@@ -282,6 +272,19 @@ private struct ChatTranscriptView: View {
                     + ChatTranscriptLayout.messageHorizontalInset
             )
             .padding(.top, 18)
+        }
+        .overlay(alignment: .topTrailing) {
+            ZStack(alignment: .topTrailing) {
+                if search.isPresented {
+                    ChatSearchBar(search: search)
+                        .padding(.leading, 16)
+                        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                 + ControlPanelLayout.topControlSize + 12)
+                        .padding(.top, 8)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: search.isPresented)
         }
     }
 
