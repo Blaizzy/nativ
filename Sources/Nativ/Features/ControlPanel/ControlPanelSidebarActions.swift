@@ -6,6 +6,18 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
+    func openChatSearchResult(_ result: ChatLibrarySearchResult) {
+        guard chat.sessions.contains(where: { $0.id == result.sessionID }),
+              result.isCurrent(in: chat.searchableTranscriptItems(in: result.sessionID)) else {
+            chatLibrarySearch.refresh(from: chat, queryChanged: true)
+            return
+        }
+        chat.selectSession(result.sessionID)
+        guard chat.currentSessionID == result.sessionID else { return }
+        applySidebarSelection(.chat(result.sessionID))
+        chatLibrarySearch.select(result)
+    }
+
     @ViewBuilder
     func recentSessionRow(
         _ recent: ControlPanelRecentSession,

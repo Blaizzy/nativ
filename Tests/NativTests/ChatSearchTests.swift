@@ -234,6 +234,27 @@ final class ChatSearchTests: XCTestCase {
         }
     }
 
+    func testLibraryResultCentersItsMessageInTheRealTranscript() async throws {
+        let messages = (0..<40).map { index in
+            ChatTranscriptMessage(role: .assistant,
+                                  content: index == 5 || index == 35 ? "notification \(index)" : "Background message \(index)")
+        }
+        let session = ChatSession(id: UUID(), title: "Target", createdAt: Date(), updatedAt: Date(), messages: messages)
+        let items = ChatTranscriptPresentation.items(from: messages)
+        let results = try await ChatLibrarySearchWorker().search("notification", sessions: [
+            ChatLibrarySearchSession(summary: session.summary, items: items)
+        ])
+        let target = try XCTUnwrap(results.messages.first)
+        try await withSearchTranscript(messages) { search, host in
+            search.reveal(target.occurrence, query: "notification", sessionID: session.id, items: items)
+            search.update(items: items, queryChanged: true)
+            try await waitForSearch(search)
+            try await settle(host)
+            XCTAssertEqual(search.selected?.messageID, messages[35].id)
+            try assertSelectedOccurrenceCentered(search, in: host)
+        }
+    }
+
     func testFirstAndLastFindingsCanBeCenteredInAShortChat() async throws {
         let messages = [ChatTranscriptMessage(role: .user, content: "notification"),
                         ChatTranscriptMessage(role: .assistant, content: "Last notification.")]

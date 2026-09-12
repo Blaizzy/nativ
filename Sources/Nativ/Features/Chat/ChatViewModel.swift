@@ -245,6 +245,13 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func searchableTranscriptItems(in sessionID: UUID) -> [ChatTranscriptItem] {
+        if sessionID == currentSessionID { return visibleTranscriptItems }
+        let queuedIDs = Set(requestQueue.lazy.filter { $0.sessionID == sessionID }.map(\.userMessageID))
+        let messages = (sessionMessages(for: sessionID) ?? []).filter { !queuedIDs.contains($0.id) }
+        return ChatTranscriptPresentation.items(from: messages)
+    }
+
     var visibleTranscriptItems: [ChatTranscriptItem] {
         ChatTranscriptPresentation.items(from: visibleUnqueuedMessages)
     }

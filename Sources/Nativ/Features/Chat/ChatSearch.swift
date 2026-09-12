@@ -124,7 +124,7 @@ actor ChatSearchWorker {
 
     private var entries: [UUID: Entry] = [:]
 
-    func search(_ query: String, inputs: [ChatSearchInput], limit: Int = 10_000) throws -> Result {
+    func search(_ query: String, inputs: [ChatSearchInput], limit: Int = 10_000, firstMatchOnly: Bool = false) throws -> Result {
         try Task.checkCancellation()
         guard limit > 0 else { return Result(occurrences: [], hasMore: false) }
         let limit = min(limit, 10_000)
@@ -160,7 +160,7 @@ actor ChatSearchWorker {
                 queries[languageKey] = preparedQuery
             }
             let matches = try ChatTextSearch.matches(in: entry.message, query: preparedQuery,
-                                                    limit: max(1, limit + 1 - results.count))
+                                                    limit: firstMatchOnly ? 1 : max(1, limit + 1 - results.count))
             var firstFragment = 0
             for match in matches {
                 while firstFragment < entry.fragments.count,
@@ -211,6 +211,7 @@ final class ChatSearchState {
     @ObservationIgnored private var sessionID: UUID?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var revision = 0
+    @ObservationIgnored private var requestedMatch: (query: String, location: ChatSearchOccurrence.Location)?
 
     var selected: ChatSearchOccurrence? {
         occurrences.indices.contains(selectedIndex) ? occurrences[selectedIndex] : nil
@@ -231,6 +232,14 @@ final class ChatSearchState {
     func present() {
         isPresented = true
         focusID = UUID()
+    }
+
+    func reveal(_ occurrence: ChatSearchOccurrence, query: String, sessionID: UUID, items: [ChatTranscriptItem]) {
+        reset(sessionID: sessionID)
+        requestedMatch = (query, occurrence.location)
+        self.query = query
+        present()
+        update(items: items, queryChanged: true)
     }
 
     func dismiss() {
@@ -254,6 +263,7 @@ final class ChatSearchState {
         error = nil
         revealID = nil
         worker = ChatSearchWorker()
+        requestedMatch = nil
     }
 
     func update(items: [ChatTranscriptItem], queryChanged: Bool = false) {
@@ -309,15 +319,25 @@ final class ChatSearchState {
                 guard let self, self.generation == generation else { return }
                 let revision = self.revision
                 let previous = self.selected
-                let result = try await self.worker.search(self.query, inputs: self.inputs)
+                let requested = self.requestedMatch.flatMap { $0.query == self.query ? $0.location : nil }
+                let location = requested ?? previous?.location
+                var result = try await self.worker.search(self.query, inputs: self.inputs)
+                if result.hasMore, let location,
+                   !result.occurrences.contains(where: { $0.messageID == location.messageID }),
+                   let input = self.inputs.first(where: { $0.messageID == location.messageID }) {
+                    let focused = try await ChatSearchWorker().search(self.query, inputs: [input], limit: 1)
+                    result = ChatSearchWorker.Result(occurrences: result.occurrences + focused.occurrences, hasMore: true)
+                }
                 try Task.checkCancellation()
                 guard self.generation == generation else { return }
                 self.occurrences = result.occurrences
                 self.matchesByMessage = Dictionary(grouping: result.occurrences, by: \.messageID)
                 self.hasMore = result.hasMore
-                self.selectedIndex = previous.flatMap { previous in
-                    self.occurrences.firstIndex { $0.location == previous.location }
+                self.selectedIndex = location.flatMap { location in
+                    self.occurrences.firstIndex { $0.location == location }
+                        ?? self.occurrences.firstIndex { $0.messageID == location.messageID }
                 } ?? 0
+                self.requestedMatch = nil
                 if previous?.location != self.selected?.location {
                     self.revealID = nil
                     self.navigationID = UUID()

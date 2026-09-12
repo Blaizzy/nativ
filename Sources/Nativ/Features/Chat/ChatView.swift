@@ -163,6 +163,7 @@ private struct ChatTranscriptView: View {
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
     @State private var search = ChatSearchState()
+    @Environment(\.chatLibrarySearch) private var librarySearch
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -193,6 +194,11 @@ private struct ChatTranscriptView: View {
         .onChange(of: search.query) { _, _ in search.update(items: chat.visibleTranscriptItems, queryChanged: true) }
         .onChange(of: chat.transcriptRevision.value) { _, _ in
             if !search.query.isEmpty { search.update(items: chat.visibleTranscriptItems) }
+        }
+        .task(id: librarySearch?.destination?.id) {
+            guard let destination = librarySearch?.takeDestination(for: chat.currentSessionID) else { return }
+            search.reveal(destination.result.occurrence, query: destination.query,
+                          sessionID: destination.result.sessionID, items: chat.visibleTranscriptItems)
         }
         .onDisappear { search.reset(sessionID: nil) }
     }
