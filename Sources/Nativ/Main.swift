@@ -130,6 +130,7 @@ private struct NativApplication: App {
         .windowBackgroundDragBehavior(.disabled)
         .commands {
             NativApplicationCommands(appDelegate: appDelegate)
+            ChatSearchCommands()
         }
     }
 }

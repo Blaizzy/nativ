@@ -162,6 +162,9 @@ private struct ChatTranscriptView: View {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
+    @State private var search = ChatSearchState()
+    @Environment(\.chatLibrarySearch) private var librarySearch
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -186,6 +189,26 @@ private struct ChatTranscriptView: View {
         .background(Color.nativMainContentBackground)
         .environment(\.chatAnnotationActions, chat.annotationActions)
         .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
+        .environment(\.chatSearchState, search)
+        .focusedSceneValue(\.chatSearch, search)
+        .onChange(of: chat.currentSessionID, initial: true) { _, id in
+            search.reset(sessionID: id, library: chat.searchLibrary)
+        }
+        .onChange(of: search.query) { _, _ in
+            search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value,
+                          queryChanged: true)
+        }
+        .onChange(of: search.query.isEmpty ? 0 : chat.searchLibrary.revision) { _, _ in
+            if !search.query.isEmpty {
+                search.update(items: chat.visibleTranscriptItems, contentRevision: chat.searchLibrary.revision)
+            }
+        }
+        .task(id: librarySearch?.destination?.id) {
+            guard let destination = librarySearch?.takeDestination(for: chat.currentSessionID) else { return }
+            search.reveal(destination.result.occurrence, query: destination.query,
+                          sessionID: destination.result.sessionID, items: chat.visibleTranscriptItems)
+        }
+        .onDisappear { search.reset(sessionID: nil) }
     }
 
     private func transcript(
@@ -199,6 +222,8 @@ private struct ChatTranscriptView: View {
             submissionID: chat.transcriptSubmissionID,
             scrollTargetMessageID: $chat.scrollTargetMessageID,
             itemIDs: items.map(\.id),
+            searchNavigation: search.navigationRequest,
+            onSearchNavigation: search.finishNavigation,
             topInset: {
                 if let project {
                     ChatProjectContextBanner(
@@ -227,8 +252,6 @@ private struct ChatTranscriptView: View {
                     forkableAssistantResponseIDs: forkableAssistantResponseIDs
                 )
             } footer: {
-                // Keep the overlay clearance inside the scroll target so pinning lands
-                // above the composer rather than aligning hidden content behind it.
                 Color.clear
                     .frame(
                         height: max(
@@ -249,6 +272,19 @@ private struct ChatTranscriptView: View {
                     + ChatTranscriptLayout.messageHorizontalInset
             )
             .padding(.top, 18)
+        }
+        .overlay(alignment: .topTrailing) {
+            ZStack(alignment: .topTrailing) {
+                if search.isPresented {
+                    ChatSearchBar(search: search)
+                        .padding(.leading, 16)
+                        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                 + ControlPanelLayout.topControlSize + 12)
+                        .padding(.top, 8)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: search.isPresented)
         }
     }
 
@@ -1964,13 +2000,23 @@ private struct ChatMessageText: View {
     let isStreaming: Bool
     var isUserPrompt = false
     @Environment(\.chatFontScale) private var chatFontScale
+    @Environment(\.chatSearchState) private var search
+    @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder
     var body: some View {
+        let highlight = messageID.flatMap { search?.highlight(for: $0) }
         if isUserPrompt {
-            Text(verbatim: content)
-                .textSelection(.enabled)
-                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            if let highlight {
+                MarkdownView(content: content,
+                             style: MarkdownStyle(fontSize: ChatFontMetrics.baseBodyPointSize * chatFontScale,
+                                                  dark: colorScheme == .dark), plainText: true)
+                    .environment(\.chatSearchHighlight, highlight)
+            } else {
+                Text(verbatim: content)
+                    .textSelection(.enabled)
+                    .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            }
         } else if rendersMarkdown {
             ChatMarkdownRenderer(
                 messageID: messageID,
@@ -1978,6 +2024,7 @@ private struct ChatMessageText: View {
                 isStreaming: isStreaming,
                 fontScale: chatFontScale
             )
+            .environment(\.chatSearchHighlight, highlight)
         } else {
             Text(verbatim: content)
                 .textSelection(.enabled)

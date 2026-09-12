@@ -1,24 +1,32 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// A cheap document shell. Its height comes from preflight; only nearby blocks create text views.
 struct MarkdownView: NSViewRepresentable {
     let content: String
     let style: MarkdownStyle
+    var plainText = false
+    @Environment(\.chatSearchHighlight) private var searchHighlight
 
     func makeNSView(context: Context) -> MarkdownSurface {
         let view = MarkdownSurface()
-        view.configure(content: content, style: style)
+        view.configure(content: content, style: style, plainText: plainText)
+        view.setSearchHighlight(searchHighlight)
         return view
     }
 
     func updateNSView(_ nsView: MarkdownSurface, context: Context) {
-        nsView.configure(content: content, style: style)
+        nsView.configure(content: content, style: style, plainText: plainText)
+        nsView.setSearchHighlight(searchHighlight)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MarkdownSurface, context: Context)
         -> CGSize?
     {
+        if proposal.width == nil, plainText, content.count <= 72, !content.contains(where: \.isNewline) {
+            return nsView.preflight(width: .greatestFiniteMagnitude).size
+        }
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         return nsView.preflight(width: width).size
     }
@@ -30,6 +38,9 @@ final class MarkdownSurface: NSView {
     var visibleTextViews: [MarkdownSelectableTextView] { mounted.values.flatMap { $0.content.textViews } }
     private var content: String?
     private var style = MarkdownStyle()
+    private var plainText = false
+    var searchHighlight: ChatSearchHighlight?
+    var pendingSearchReveal = false
     private var mounted: [String: MarkdownBlockView] = [:]
     private var measuredWidth: CGFloat = -1
     private(set) var snapshot: MarkdownLayout?
@@ -73,11 +84,12 @@ final class MarkdownSurface: NSView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("Not a serialized view") }
 
-    func configure(content: String, style: MarkdownStyle) {
-        guard self.content != content || self.style != style else { return }
+    func configure(content: String, style: MarkdownStyle, plainText: Bool = false) {
+        guard self.content != content || self.style != style || self.plainText != plainText else { return }
         selection.invalidate(contentChanged: self.content != content)
         self.content = content
         self.style = style
+        self.plainText = plainText
         measuredWidth = -1
         invalidateIntrinsicContentSize()
         needsLayout = true
@@ -85,8 +97,9 @@ final class MarkdownSurface: NSView {
 
     func preflight(width: CGFloat) -> MarkdownLayout {
         if let snapshot, measuredWidth == width { return snapshot }
-        let result = MarkdownLayoutCache.shared.layout(
-            content ?? "", width: width, style: style)
+        let result = plainText
+            ? Self.searchPlainTextLayout(content ?? "", width: width, style: style)
+            : MarkdownLayoutCache.shared.layout(content ?? "", width: width, style: style)
         setSnapshot(result)
         measuredWidth = width
         return result
@@ -110,6 +123,7 @@ final class MarkdownSurface: NSView {
         super.layout()
         if content != nil && bounds.width > 0 { _ = preflight(width: bounds.width) }
         refreshVisibleBlocks()
+        revealSearchMatchIfNeeded()
     }
 
     override func viewWillDraw() {
@@ -170,6 +184,7 @@ final class MarkdownSurface: NSView {
             view.removeFromSuperview()
             mounted.removeValue(forKey: id)
         }
+        applySearchHighlights()
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -303,6 +318,14 @@ final class MarkdownSelectableTextView: NSTextView {
     var documentSelection: NSRange? {
         didSet { if oldValue != documentSelection { needsDisplay = true } }
     }
+    var searchRanges: [NSRange] = [] {
+        didSet { if oldValue != searchRanges { needsDisplay = true } }
+    }
+    var activeSearchRange: NSRange? {
+        didSet { if oldValue != activeSearchRange { updateSearchFocus(previous: oldValue) } }
+    }
+    var pendingSearchPulse = false
+    var searchPulseLayer: CAShapeLayer?
     let system: MarkdownTextSystem
     private let original: NSAttributedString
     private let measuredWidth: CGFloat
@@ -399,7 +422,7 @@ final class MarkdownSelectableTextView: NSTextView {
 
     /// Find whole visible lines before enumerating selection geometry. Using line
     /// boundaries also preserves RTL text and wrapped paragraphs when clipping.
-    private func lineBoundary(at y: CGFloat, upper: Bool) -> Int? {
+    func lineBoundary(at y: CGFloat, upper: Bool) -> Int? {
         guard original.length > 0 else { return nil }
         let last = system.storage.location(system.storage.documentRange.location, offsetBy: original.length - 1)
         guard let fragment = system.manager.textLayoutFragment(for: CGPoint(x: bounds.minX, y: y))
@@ -419,6 +442,7 @@ final class MarkdownSelectableTextView: NSTextView {
                 NSBezierPath(rect: rect).fill()
             }
         }
+        drawSearchHighlights(in: dirtyRect)
         super.draw(dirtyRect)
     }
 

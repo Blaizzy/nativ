@@ -58,6 +58,7 @@ struct ControlPanelView: View {
     @State var projectErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
+    @State var chatLibrarySearch = ChatLibrarySearchState()
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
@@ -154,6 +155,10 @@ struct ControlPanelView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar(removing: .title)
         .frame(minWidth: 1040, minHeight: 600)
+        .environment(\.chatLibrarySearch, chatLibrarySearch)
+        .sheet(isPresented: $chatLibrarySearch.isPresented) {
+            ChatLibrarySearchPopup(search: chatLibrarySearch, chat: chat, onSelect: openChatSearchResult)
+        }
         .environment(\.controlPanelIsFullScreen, isFullScreen)
         .environment(\.controlPanelIsSidebarVisible, isSidebarVisible)
         .environment(\.openExtensionsHubSection) { section in
