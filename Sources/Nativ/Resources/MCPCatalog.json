@@ -58,6 +58,16 @@
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
   },
   {
+    "id": "lwc",
+    "name": "LWC",
+    "summary": "Explore source-grounded project memory and code context with bounded read-only MCP tools.",
+    "command": "npx",
+    "args": ["-y", "@i-xor/lwc@0.18.5", "serve", "--mcp"],
+    "symbol": "brain.head.profile",
+    "tint": "purple",
+    "sourceURL": "https://github.com/JanYork/llm-wiki-cli"
+  },
+  {
     "id": "sqlite",
     "name": "sqlite",
     "summary": "Query and edit a local SQLite database.",
