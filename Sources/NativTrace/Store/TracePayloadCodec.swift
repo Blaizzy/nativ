@@ -1,22 +1,15 @@
 import Compression
 import Foundation
 
-/// How a payload blob is stored.
-///
-/// Compression is a storage detail, never a format detail: an exported trace is
-/// always plain JSON. Keeping the two separate is what lets the on-disk codec
-/// change later without invalidating traces anyone has already exported.
 public enum TracePayloadCodec {
     public static let plain = "json"
     public static let deflated = "json+deflate"
 
-    /// Below this, framing overhead outweighs any saving.
     private static let compressionThreshold = 512
 
     public struct Encoded {
         public let data: Data
         public let encoding: String
-        /// Uncompressed byte count, required to size the decode buffer.
         public let byteCount: Int
     }
 

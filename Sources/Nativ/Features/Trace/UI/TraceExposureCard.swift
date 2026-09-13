@@ -1,12 +1,6 @@
 import NativTrace
 import SwiftUI
 
-/// What one model call put in front of the model.
-///
-/// Collapsed by default and summarised by counts, because the interesting
-/// question is usually "what changed" rather than "what is the whole prompt".
-/// Expanding walks down: sections, then a section's text; tools, then a tool's
-/// schema.
 struct TraceExposureCard: View {
     let exposure: ResolvedExposure
     let diff: TraceExposureDiff

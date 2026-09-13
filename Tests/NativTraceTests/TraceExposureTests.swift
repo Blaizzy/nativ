@@ -4,8 +4,6 @@ import NativTrace
 final class TraceExposureTests: XCTestCase {
     private let base = Date(timeIntervalSince1970: 1_000_000)
 
-    // MARK: - Resolution
-
     func testMessageReferenceResolvesAgainstTheTrace() throws {
         let body = "what is the capital of france"
         let items = TraceReducer.items(for: [
@@ -105,8 +103,6 @@ final class TraceExposureTests: XCTestCase {
         XCTAssertEqual(exposure.messages.first?.text, output)
         XCTAssertTrue(exposure.messages.first?.isVerified == true)
     }
-
-    // MARK: - Diff
 
     func testFirstCallHasNoDiff() {
         let diff = TraceExposureDiff.between(nil, and: RequestComposedPayload())

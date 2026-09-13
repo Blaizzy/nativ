@@ -90,8 +90,6 @@ struct ChatView: View {
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
-    /// Attaches or detaches recording to match the setting, and applies the
-    /// configured retention window.
     private func syncTraceRecording() {
         chat.traceProducer = TraceServices.shared.producer(
             enabled: model.settings.traceRecordingEnabled

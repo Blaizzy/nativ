@@ -1,20 +1,6 @@
 import Foundation
 import os
 
-/// The writer producers talk to.
-///
-/// Owns the two things a producer should not have to think about: keeping a
-/// token stream from becoming a row per token, and never letting a recording
-/// failure reach the feature being recorded. Nothing here throws — a broken
-/// trace must not break a chat — so failures are counted and logged instead.
-///
-/// ## Streaming
-///
-/// A model call emits thousands of deltas and one completion, and the
-/// completion carries the authoritative text. Persisting every delta would make
-/// a trace mostly chaff, so deltas accumulate in memory and reach the database
-/// only if the call never completes — a cancel or a crash, where the partial
-/// output is the only record of what happened. A completed call costs one row.
 public actor TraceRecorder {
     private struct PartialResponse {
         let traceID: String
@@ -36,8 +22,6 @@ public actor TraceRecorder {
         self.now = now
     }
 
-    // MARK: - Recording
-
     public func record<Payload: TracePayloadView & Encodable>(
         _ payload: Payload,
         traceID: String,
@@ -47,8 +31,6 @@ public actor TraceRecorder {
         await record(kind: Payload.kind, json: json, traceID: traceID, scope: scope)
     }
 
-    /// For payloads that are not a `TracePayloadView` — a wire body captured
-    /// verbatim, or an event replayed from another producer.
     public func record(
         kind: TraceEventKind,
         json: TraceJSON,
@@ -56,17 +38,11 @@ public actor TraceRecorder {
         scope: TraceScope
     ) async {
         if kind.sealsStreamedOutput {
-            // Sealing by call key cannot work here: a turn-ending event has no
-            // requestID, so the key it derives never matches the one the deltas
-            // were stored under. Everything still open in this trace is ending.
             await flushPartials(inTrace: traceID)
         }
         await write(kind: kind, json: json, traceID: traceID, scope: scope)
     }
 
-    // MARK: - Streaming
-
-    /// Accumulates streamed output without touching the database.
     public func appendDelta(
         content: String? = nil,
         reasoning: String? = nil,
@@ -81,13 +57,10 @@ public actor TraceRecorder {
         partials[key] = partial
     }
 
-    /// Drops the accumulated stream because the completion about to be recorded
-    /// supersedes it.
     public func discardPartial(traceID: String, scope: TraceScope) {
         partials.removeValue(forKey: TraceCallKey(traceID: traceID, scope: scope))
     }
 
-    /// Text streamed for a call that has not been sealed yet, for a live view.
     public func partialResponse(
         traceID: String,
         scope: TraceScope
@@ -96,15 +69,11 @@ public actor TraceRecorder {
         return (partial.content, partial.reasoning)
     }
 
-    /// Seals every open call. Call when a session closes or the app is quitting.
-    /// Seals every open call. Call at shutdown.
     public func flushAll() async {
         for key in partials.keys {
             await flushPartial(for: key)
         }
     }
-
-    // MARK: - Retention
 
     @discardableResult
     public func prune(retaining window: TraceRetentionWindow) async -> Int {
@@ -116,14 +85,6 @@ public actor TraceRecorder {
         }
     }
 
-    // MARK: - Internals
-
-    /// Awaits the store rather than spawning a task.
-    ///
-    /// A detached task would return here immediately and let the next event
-    /// reach the store first, which is how a tool result ends up recorded
-    /// before the call it answers. Callers already serialise their own writes;
-    /// this keeps that guarantee intact all the way to disk.
     private func write(
         kind: TraceEventKind,
         json: TraceJSON,
@@ -166,7 +127,6 @@ public actor TraceRecorder {
         }
     }
 
-    /// Records that a producer could not encode a payload it meant to write.
     public func noteEncodeFailure(kind: TraceEventKind, message: String) {
         logger.error(
             "trace payload could not be encoded for \(kind.rawValue, privacy: .public): \(message, privacy: .public)"
@@ -180,11 +140,6 @@ public actor TraceRecorder {
     }
 }
 
-/// Identity of one model call.
-///
-/// Streaming deltas have to find the message they belong to, and a turn can
-/// have many calls. Falls back to the turn when a producer does not assign
-/// request ids.
 struct TraceCallKey: Hashable, Sendable {
     private let value: String
 

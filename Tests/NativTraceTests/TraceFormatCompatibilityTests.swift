@@ -1,9 +1,6 @@
 import XCTest
 import NativTrace
 
-/// The trace format has to outlive the build that wrote it. These tests pin the
-/// properties that make that true; a change that breaks one of them is a format
-/// break, not a refactor.
 final class TraceFormatCompatibilityTests: XCTestCase {
     private struct PartialView: TracePayloadView, Codable {
         static let kind = TraceEventKind(rawValue: "kind_from_the_future")

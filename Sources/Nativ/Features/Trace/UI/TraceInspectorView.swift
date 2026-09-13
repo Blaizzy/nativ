@@ -2,18 +2,9 @@ import NativTrace
 import SwiftUI
 
 extension Notification.Name {
-    /// Asks the chat page's existing right-hand panel to reveal its trace pane.
-    /// The trace has no surface of its own: it lives behind the sidebar.right
-    /// button that is already there.
     static let showModelTrace = Notification.Name("ShowModelTrace")
 }
 
-/// What the model was shown, for one chat session or one request.
-///
-/// Two panes: the calls in the trace, and the transcript. Selecting a call
-/// scrolls its exposure into view rather than swapping the content, so the call
-/// stays in the context of the conversation it belongs to — which is the whole
-/// point of reading a trace rather than a log line.
 struct TraceInspectorView: View {
     enum Source: Hashable {
         case session(UUID)
@@ -27,9 +18,6 @@ struct TraceInspectorView: View {
 
     let source: Source
     var showsCallSidebar = true
-    /// Changes when the producer may have written more events — the end of a
-    /// turn, not every token. Reloading per token would re-read the database
-    /// hundreds of times for one answer.
     var reloadToken: AnyHashable?
 
     @StateObject private var model = TraceInspectorViewModel()
@@ -81,9 +69,6 @@ struct TraceInspectorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            // A chat has one trace per model that served it, so which model is
-            // being read has to be an explicit choice rather than an accident
-            // of ordering.
             if model.instances.count > 1 {
                 Picker("Model", selection: $model.selectedInstanceID) {
                     ForEach(model.instances) { instance in
@@ -133,7 +118,6 @@ struct TraceInspectorView: View {
     }
 }
 
-/// The calls in a trace, newest last, with what changed between them.
 struct TraceCallSidebar: View {
     @ObservedObject var model: TraceInspectorViewModel
 

@@ -181,8 +181,6 @@ public enum MLXChatMessageContent: Codable, Equatable, Sendable {
     case text(String)
     case parts([MLXChatContentPart])
 
-    /// The textual content, with non-text parts dropped. Used where a caller
-    /// needs something to hash or display and cannot act on an image part.
     public var plainText: String {
         switch self {
         case .text(let text):
@@ -559,7 +557,6 @@ public final class NativChatClient: @unchecked Sendable {
     private let session: URLSession
     private let timeout: TimeInterval
 
-
     public static let defaultIdleTimeout: TimeInterval = 600
 
     /// Total budget for one request. Long generations legitimately run for many
@@ -815,9 +812,6 @@ public final class NativChatClient: @unchecked Sendable {
         throw NativChatError.missingAssistantContent
     }
 
-    /// Header the server adopts as its own request id, so a trace recorded by
-    /// the app and the metrics row recorded by the server describe the same call
-    /// under the same key. Without it the two stores cannot be joined.
     public static let requestIDHeader = "X-Nativ-Request-Id"
 
     func makeURLRequest(

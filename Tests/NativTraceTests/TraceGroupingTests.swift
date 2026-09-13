@@ -88,8 +88,6 @@ final class TraceGroupingTests: XCTestCase {
         XCTAssertEqual(calls.count, 2)
     }
 
-    // MARK: - Helpers
-
     private func sampleEvents() throws -> [TraceEvent] {
         [
             event(.sessionStarted, try SessionStartedPayload(title: "Session").makePayload(), turnID: nil),

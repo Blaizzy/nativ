@@ -13,17 +13,9 @@ private enum ModelConfigurationLayoutMetrics {
     static let headerTrailingControlClearance: CGFloat = 52
 }
 
-/// An extra pane the right-hand panel can show instead of model configuration.
-///
-/// Surfaces that have somewhere else to put should reuse this panel rather than
-/// add chrome to the page: the toggle already exists, and a second button beside
-/// it would make the chat header a row of icons.
 struct ModelConfigurationAuxiliaryPane<Content: View> {
     let title: String
     let systemImage: String
-    /// Held as a builder, not a built view. Calling `content()` in the
-    /// initialiser would construct the pane on every enclosing body pass even
-    /// while the panel is shut — and this app's model ticks once a second.
     let content: () -> Content
 
     init(title: String, systemImage: String, @ViewBuilder content: @escaping () -> Content) {
@@ -39,9 +31,6 @@ struct ModelConfigurationLayout<Content: View, Auxiliary: View>: View {
     private let auxiliary: ModelConfigurationAuxiliaryPane<Auxiliary>?
     private let content: Content
 
-    /// One initialiser taking an optional pane. Two overloads sharing these
-    /// argument labels — one optional, one not — leave `Auxiliary` unbound at
-    /// every call site and blow up type inference in unrelated views.
     init(
         model: NativModel,
         isConfigurationVisible: Binding<Bool>,

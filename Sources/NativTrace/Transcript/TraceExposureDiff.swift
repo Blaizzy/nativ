@@ -1,15 +1,8 @@
 import Foundation
 
-/// What changed in the model's exposure between one call and the call before it.
-///
-/// The round gate withholds tools on the last round, MCP servers connect and
-/// drop, and a skill can be toggled mid-session — so two calls in one turn can
-/// show the model different things. That difference is invisible unless
-/// something computes it.
 public struct TraceExposureDiff: Sendable, Hashable {
     public let addedTools: [ToolDescriptor]
     public let removedTools: [ToolDescriptor]
-    /// Same name, different schema or origin — a silently swapped tool.
     public let redefinedTools: [ToolDescriptor]
     public let addedSections: [PromptSection]
     public let removedSections: [PromptSection]
@@ -25,7 +18,6 @@ public struct TraceExposureDiff: Sendable, Hashable {
             && addedSections.isEmpty && removedSections.isEmpty && editedSections.isEmpty
     }
 
-    /// `nil` previous means this is the first call, which is not a change.
     public static func between(
         _ previous: RequestComposedPayload?,
         and current: RequestComposedPayload
@@ -64,8 +56,6 @@ public struct TraceExposureDiff: Sendable, Hashable {
         )
     }
 
-    /// Sections are matched on origin and label, so re-ordering the prompt does
-    /// not read as an edit.
     private static func sectionKey(_ section: PromptSection) -> String {
         "\(section.origin.rawValue)|\(section.label)"
     }

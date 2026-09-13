@@ -1,5 +1,5 @@
 import Foundation
-import NativTrace
+import NativSQLite
 
 enum NativAnalyticsRange: CaseIterable {
     case last24Hours
@@ -143,9 +143,6 @@ struct NativAnalyticsRequestEvent: Identifiable, Sendable {
     let toolCalls: Bool
     let finishReason: String?
     let backend: String?
-    /// Id the calling app assigned before sending, when it supplied one. Joins
-    /// to `TraceScope.requestID` so a metrics row can be paired with the trace
-    /// of the same call.
     let clientRequestID: String?
 
     var id: String { requestID }
@@ -222,14 +219,6 @@ final class NativAnalyticsStore {
         self.connection = try? Self.openConnection(at: standardizedURL)
     }
 
-    /// Opens the analytics database for reading.
-    ///
-    /// The server is the only writer, so it owns the schema. This side used to
-    /// declare a byte-identical copy and re-apply an ALTER on every open,
-    /// which meant a column addition had to land in two places and the two had
-    /// already drifted on indexes. Read-only removes the question: before the
-    /// server has ever run there is no file, and every fetch already answers
-    /// with an empty summary when the connection is absent.
     private static func openConnection(at url: URL) throws -> SQLiteConnection {
         try SQLiteConnection(url: url, readOnly: true)
     }

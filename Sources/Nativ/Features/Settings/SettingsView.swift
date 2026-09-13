@@ -250,9 +250,6 @@ struct SettingsView: View {
         }
     }
 
-    /// Matches the manual-binding pattern used elsewhere here: `model` is an
-    /// Observable reference, not a `@Bindable`, and writes go through
-    /// `normalized()` so a typed retention value is clamped before it is saved.
     private var traceSettingsBinding: Binding<NativSettings> {
         Binding(
             get: { model.settings },

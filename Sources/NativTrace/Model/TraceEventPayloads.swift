@@ -1,9 +1,6 @@
 import Foundation
 
 extension TracePayloadView where Self: Decodable {
-    /// Tolerant decode: unrecognised fields are ignored, and a payload that
-    /// cannot be read at all yields `nil` so the reducer can fall back to
-    /// rendering the event opaquely instead of dropping it.
     public init?(payload: TraceJSON) {
         guard let data = try? payload.canonicalData(),
               let value = try? JSONDecoder().decode(Self.self, from: data)
@@ -44,13 +41,6 @@ public struct TurnStartedPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
-/// How a turn ended.
-///
-/// A closed enum on purpose. This was a `String` on both sides of the
-/// producer/reducer seam and drifted immediately: the reducer handled values no
-/// producer emitted. An unrecognised value now fails the payload view, which
-/// surfaces the event as `.unknown` rather than as a turn that silently means
-/// nothing.
 public enum TraceTurnStatus: String, Sendable, Hashable, Codable {
     case completed
     case cancelled
@@ -69,8 +59,6 @@ public struct TurnEndedPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
-/// Everything Nativ decided to show the model on one call, captured before the
-/// pieces are joined into a wire payload.
 public struct RequestComposedPayload: TracePayloadView, Codable, Hashable {
     public static let kind = TraceEventKind.requestComposed
 
@@ -79,7 +67,6 @@ public struct RequestComposedPayload: TracePayloadView, Codable, Hashable {
     public var parameters: SamplingParameters
     public var messages: [TraceMessageRef]
     public var omissions: [TraceOmission]
-    /// False when the round gate withheld tools for this call.
     public var advertisesTools: Bool
 
     public init(
@@ -198,7 +185,6 @@ public struct ToolResultPayload: TracePayloadView, Codable, Hashable {
     }
 }
 
-/// What the user decided about a gated tool call.
 public enum TraceConsentDecision: String, Sendable, Hashable, Codable {
     case requested
     case approved

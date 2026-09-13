@@ -18,10 +18,10 @@ format break, not a refactor.
    never part of one, because half a conversation cannot be folded into
    anything trustworthy.
 
-2. **Derived tables are rebuildable and say so.** `trace_index` and
-   `trace_models` exist to make listing fast. `TraceStore.rebuildIndex()` must
-   always reconstruct them from `trace_events` alone. Never read a fact from
-   them that is not derivable from the events.
+2. **There are no derived tables.** Listing and retention aggregate
+   `trace_events` directly. A cache of facts the events already carry has to be
+   maintained on every append and repaired when it drifts; a `GROUP BY` cannot
+   disagree with its source.
 
 3. **Readers tolerate what they do not understand.** `TraceEventKind` and the
    `*Origin` types are open string-backed types, not closed enums, and payloads
@@ -39,11 +39,10 @@ format break, not a refactor.
    it is never renamed, reordered, or edited — databases in the field record it
    as applied and will skip it forever.
 
-6. **The core imports Foundation, SQLite3, Compression, and CryptoKit.** No
+6. **The core imports Foundation, NativSQLite, Compression, and CryptoKit.** No
    SwiftUI, no AppKit, no app types. That is what lets a test harness, a CLI, or
    a separate viewer read traces without linking the app, and it is why the
-   suite runs without building Nativ. `scripts/dump_trace.py` exercises the
-   property: it reads a live trace in another language with no app involved.
+   suite runs without building Nativ.
 
 7. **Vocabulary crossing the producer/reducer seam is typed, not stringly.**
    `TraceEventKind` and the `*Origin` types are open because they name things a
@@ -80,7 +79,7 @@ format break, not a refactor.
 
 ```
 Model/       the format: events, kinds, payloads, exposure types
-Store/       SQLite persistence, schema, index, retention
+Store/       persistence, schema, index, retention (driver: NativSQLite)
 Transcript/  the fold: events → items → display blocks
 Capture/     the writer producers talk to
 ```

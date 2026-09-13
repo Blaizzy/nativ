@@ -10,8 +10,6 @@ enum TracePalette {
 }
 
 enum TraceCallLabel {
-    /// `index` counts calls within a trace; `round` counts them within a turn
-    /// and restarts at zero each time, so it cannot number the list on its own.
     static func title(index: Int, round: Int?) -> String {
         guard let round, round > 0 else { return "Call \(index)" }
         return "Call \(index) · round \(round + 1)"
@@ -24,7 +22,6 @@ enum TraceToolChange {
     case unchanged
 }
 
-/// A titled, collapsible block inside the exposure card.
 struct TraceDisclosureSection<Content: View>: View {
     let title: String
     let subtitle: String?
@@ -74,7 +71,6 @@ struct TraceDisclosureSection<Content: View>: View {
     }
 }
 
-/// One provenance-labelled span of the system prompt.
 struct TraceSectionRow: View {
     let section: PromptSection
     let isEdited: Bool
@@ -127,7 +123,6 @@ struct TraceSectionRow: View {
     }
 }
 
-/// One tool as it was advertised, with its schema behind a disclosure.
 struct TraceToolDescriptorRow: View {
     let tool: ToolDescriptor
     let change: TraceToolChange
@@ -187,7 +182,6 @@ struct TraceToolDescriptorRow: View {
     }
 }
 
-/// A message the call included, resolved back to its text.
 struct TraceResolvedMessageRow: View {
     let message: ResolvedMessage
 
@@ -283,7 +277,6 @@ struct TraceOriginChip: View {
     }
 }
 
-/// Compact "what changed" indicator shown on a collapsed call.
 struct TraceDiffBadges: View {
     let diff: TraceExposureDiff
 

@@ -1,15 +1,6 @@
 import Foundation
 import NativTrace
 
-/// Exercises the whole trace pipeline inside the built app.
-///
-/// The unit suite covers each stage against the framework directly. This runs
-/// the stages the way the app wires them — real store on disk, real recorder,
-/// real queue, real fold — and is what catches an integration mistake that
-/// per-stage tests cannot see: a producer writing a scope the reducer does not
-/// group, or a payload the resolver cannot resolve.
-///
-/// Invoked by `make xcode-trace-smoke`.
 @MainActor
 func runTraceSmokeTest() async -> Bool {
     let directory = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -69,8 +60,6 @@ func runTraceSmokeTest() async -> Bool {
         producer.toolResult(callID: "c1", name: "web_search", output: "Paris", isError: false, in: call)
         producer.turnEnded(turn, status: .completed, roundCount: 1)
 
-        // A second model takes over the same chat. It must get its own trace,
-        // and that trace must still account for what it was shown.
         let secondCall = ChatTraceCall(
             turn: ChatTraceTurn(sessionID: sessionID, turnID: UUID()),
             requestID: UUID(),
@@ -137,8 +126,6 @@ func runTraceSmokeTest() async -> Bool {
             "the second model's trace opens by naming the handover (\(secondKinds.map(\.rawValue)))"
         )
 
-        // Drive the view model the panel actually uses, rather than
-        // re-implementing the fold here and testing a copy.
         let inspector = TraceInspectorViewModel(store: store)
         await inspector.loadSession(sessionID)
         check(inspector.loadFailure == nil, "the inspector loaded without error")
@@ -161,7 +148,7 @@ func runTraceSmokeTest() async -> Bool {
 
         inspector.selectedInstanceID = inspector.instances.first?.id
         blocks = inspector.blocks
-        exposures = inspector.calls.compactMap { inspector.exposure(for: $0.id) }
+        exposures = inspector.calls.map(\.exposure)
         check(inspector.calls.count == 1, "the first instance lists its own single call")
     } catch {
         thrown = error

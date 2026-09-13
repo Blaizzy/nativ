@@ -1,6 +1,5 @@
 import Foundation
 
-/// One user prompt and everything the model did in response.
 public struct TraceTurn: Sendable, Hashable, Identifiable {
     public let id: String
     public let prompt: TraceItem?
@@ -10,9 +9,6 @@ public struct TraceTurn: Sendable, Hashable, Identifiable {
 
 public enum TraceDisplayBlock: Sendable, Hashable, Identifiable {
     case turn(TraceTurn)
-    /// A lifecycle item that separates two stretches of a trace — a chat
-    /// starting, or one model taking over. Carried as the item itself rather
-    /// than copied into a parallel type.
     case boundary(TraceItem)
 
     public var id: String {
@@ -23,12 +19,6 @@ public enum TraceDisplayBlock: Sendable, Hashable, Identifiable {
     }
 }
 
-/// Stage three of the fold: presentation.
-///
-/// Kept separate from `TraceReducer` because these are display choices — where
-/// to draw a divider, what belongs to which turn — and they must not leak into
-/// the semantic layer. Changing a grouping rule can never lose an item: every
-/// input item appears in exactly one output block, and a test says so.
 public enum TraceGrouping {
     public static func blocks(for items: [TraceItem]) -> [TraceDisplayBlock] {
         var blocks: [TraceDisplayBlock] = []
@@ -76,7 +66,6 @@ public enum TraceGrouping {
         return blocks
     }
 
-    /// Only these two lifecycle kinds divide a trace; the rest belong to a turn.
     private static func isBoundary(_ item: TraceItem) -> Bool {
         guard case .lifecycle(let lifecycle) = item.body else { return false }
         switch lifecycle.kind {

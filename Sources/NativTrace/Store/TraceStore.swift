@@ -1,4 +1,5 @@
 import Foundation
+import NativSQLite
 
 public enum TraceStoreError: Error, CustomStringConvertible {
     case unsupportedPayloadEncoding(String)
@@ -14,20 +15,7 @@ public enum TraceStoreError: Error, CustomStringConvertible {
     }
 }
 
-/// Append-only storage for trace events.
-///
-/// An actor so writes never block the main thread, and so sequence allocation
-/// and the append that consumes it cannot be separated by a suspension point.
-/// `record` does both in one call for exactly that reason: an API that hands
-/// out a sequence number and trusts the caller to use it invites two writers to
-/// interleave, and the resulting gap is silent.
-///
-/// Rows in `trace_events` are immutable once written. The only deletion is
-/// retention removing a whole trace.
 public actor TraceStore {
-    /// Key holding the decode failure when a payload cannot be read. The event
-    /// still returns, so a corrupt row shows up as an unknown item instead of
-    /// vanishing from the middle of a transcript.
     public static let unreadablePayloadKey = "_unreadable"
 
     private let connection: SQLiteConnection
@@ -49,10 +37,6 @@ public actor TraceStore {
             .appendingPathComponent("Traces.sqlite3")
     }
 
-    // MARK: - Writing
-
-    /// Appends one event, allocating its sequence number as part of the same
-    /// transaction. Returns the event as stored.
     @discardableResult
     public func record(
         kind: TraceEventKind,
@@ -73,11 +57,6 @@ public actor TraceStore {
         return event
     }
 
-    /// Appends events that already carry sequence numbers.
-    ///
-    /// For restoring an exported trace and for tests that need a specific
-    /// shape. Producers should use `record`, which cannot assign a colliding
-    /// sequence.
     public func insert(preSequenced events: [TraceEvent]) throws {
         guard !events.isEmpty else { return }
 
@@ -109,7 +88,6 @@ public actor TraceStore {
                     try statement.run()
                 }
             }
-            try TraceIndex.apply(events, on: connection)
         }
 
         for event in events {
@@ -120,10 +98,6 @@ public actor TraceStore {
         }
     }
 
-    // MARK: - Reading
-
-    /// Events in a trace, oldest first. `after` and `limit` page a long trace
-    /// so a reader is not forced to hold a whole session in memory.
     public func events(
         forTrace traceID: String,
         after seq: Int64? = nil,
@@ -156,14 +130,10 @@ public actor TraceStore {
         try TraceIndex.summaries(limit: limit, on: connection)
     }
 
-    /// Traces belonging to one chat, oldest first — one per model that served it.
     public func traces(forSession sessionID: String) throws -> [TraceSummary] {
         try TraceIndex.summaries(forSession: sessionID, on: connection)
     }
 
-    // MARK: - Maintenance
-
-    /// Removes whole traces that fall outside `window`. Returns how many went.
     @discardableResult
     public func prune(retaining window: TraceRetentionWindow, now: Date = Date()) throws -> Int {
         try connection.transaction {
@@ -179,26 +149,9 @@ public actor TraceStore {
     }
 
     public func deleteAll() throws {
-        try connection.transaction {
-            try connection.execute("DELETE FROM trace_events;")
-            try connection.execute("DELETE FROM trace_index;")
-            try connection.execute("DELETE FROM trace_models;")
-        }
+        try connection.execute("DELETE FROM trace_events;")
         nextSequenceByTrace.removeAll()
     }
-
-    /// Rebuilds the derived tables from `trace_events`.
-    ///
-    /// The index is a cache. If it is ever wrong — an interrupted write, a
-    /// restore from backup, a column a newer build added — this restores it
-    /// without touching the source of truth.
-    public func rebuildIndex() throws {
-        try connection.transaction {
-            try TraceIndex.rebuild(on: connection)
-        }
-    }
-
-    // MARK: - Internals
 
     private static let eventColumns = """
         trace_id, seq, ts, kind, format_version, session_id, turn_id, \
@@ -248,8 +201,6 @@ public actor TraceStore {
         }
     }
 
-    /// Cached so a burst of streaming events does not query the database once
-    /// per event just to learn where it goes.
     private func nextSequence(forTrace traceID: String) throws -> Int64 {
         if let cached = nextSequenceByTrace[traceID] { return cached }
 

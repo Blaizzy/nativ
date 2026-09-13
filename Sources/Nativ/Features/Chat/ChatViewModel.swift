@@ -40,15 +40,9 @@ final class ChatTranscriptRevision {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
-    /// Set by the app when trace recording is on; nil disables it entirely.
     var traceProducer: ChatTraceProducer?
-    /// The model call in flight, so the tool funnels below can attach their
-    /// events to it without threading identifiers through 21 call sites.
     private var activeTraceCall: ChatTraceCall?
-    /// Model calls made so far in the turn in flight.
     private var activeTurnRounds = 0
-    /// Increments once a turn has finished recording, so a trace reader can
-    /// reload when there is something new rather than twice per turn.
     @Published private(set) var completedTurnCount = 0
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
@@ -1472,7 +1466,6 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    /// Opens the turn in the trace, runs it, and records how it actually ended.
     private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
         let turn = ChatTraceTurn(sessionID: queuedRequest.sessionID, turnID: queuedRequest.id)
         traceProducer?.turnStarted(
@@ -1485,9 +1478,6 @@ final class ChatViewModel: ObservableObject {
         activeTurnRounds = 0
         defer {
             activeTraceCall = nil
-            // Read from the loop rather than from runTurn's return value: a turn
-            // that throws never returns one, and reporting zero rounds for a
-            // turn that had already made calls is worse than not reporting.
             traceProducer?.turnEnded(turn, status: outcome, roundCount: activeTurnRounds)
             completedTurnCount += 1
         }
@@ -1499,13 +1489,6 @@ final class ChatViewModel: ObservableObject {
             throw error
         }
     }
-
-    /// Outcome recorded for a turn.
-    ///
-    /// Derived from the thrown error rather than from `Task.isCancelled`, which
-    /// is false for every failure that is not a cancellation and would report a
-    /// model load failure as a completed turn.
-
 
     private func runTurn(
         _ queuedRequest: QueuedChatRequest,
@@ -2182,10 +2165,6 @@ final class ChatViewModel: ObservableObject {
                     role: TraceRole(rawValue: apiMessage.role),
                     messageID: message.toolCallID ?? message.id.uuidString,
                     contentHash: TraceHash.content(sentBody),
-                    // Document context is appended to the body on the way out,
-                    // so the transcript no longer holds what was sent. Inline it
-                    // rather than let the reader resolve to a shorter body and
-                    // call it verified.
                     inlineBody: sentBody == message.content ? nil : sentBody
                 )
             )
@@ -2307,10 +2286,6 @@ final class ChatViewModel: ObservableObject {
             stream: true
         )
 
-        // Describing the request costs a hash of every preceding message and an
-        // encode of every tool schema, and fittedDocumentContext calls this
-        // method up to four more times per round for token preflight, throwing
-        // the exposure away each time. Skip it when nothing is recording.
         guard traceProducer != nil else {
             return ComposedChatRequest(request: wireRequest, exposure: nil)
         }
@@ -2401,14 +2376,6 @@ final class ChatViewModel: ObservableObject {
         )
     }
 
-    /// Writes what a tool call did, once it reaches a state that will not
-    /// change again.
-    ///
-    /// A denial is recorded as a consent decision rather than a failed result:
-    /// the tool never ran, and a trace that says it failed would read as a bug
-    /// in the tool instead of a choice the user made. The switch is exhaustive
-    /// on purpose — a new status has to be classified here rather than falling
-    /// through a `default` and going unrecorded.
     private func recordToolOutcome(
         _ id: UUID,
         in sessionID: UUID,
@@ -2430,9 +2397,6 @@ final class ChatViewModel: ObservableObject {
                 callID: callID, name: message.toolName, decision: .denied, in: traceCall
             )
         case .running where message.toolStatus == .awaitingConsent:
-            // Approval has no status of its own — it is the move off
-            // awaitingConsent. Without recording it, a tool the user allowed
-            // reads as still blocked on them while it executes.
             traceProducer?.toolConsent(
                 callID: callID, name: message.toolName, decision: .approved, in: traceCall
             )

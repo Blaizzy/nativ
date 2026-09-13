@@ -26,15 +26,6 @@ public enum SQLiteError: Error, CustomStringConvertible {
     }
 }
 
-/// The app's SQLite wrapper.
-///
-/// Lives here because `NativTrace` has no dependencies, so both the trace store
-/// and the analytics reader can use it. It previously existed twice: this and a
-/// near-identical private copy in `NativAnalyticsStore`, differing only in one
-/// PRAGMA value.
-///
-/// Not thread-safe on its own. `TraceStore` is an actor; other owners must
-/// serialise access themselves.
 public final class SQLiteConnection {
     private let handle: OpaquePointer
     private var cache: [String: SQLiteStatement] = [:]
@@ -83,12 +74,6 @@ public final class SQLiteConnection {
         }
     }
 
-    /// Runs `body` against a prepared statement, reset and ready.
-    ///
-    /// Scoped rather than vended because a statement carries cursor state:
-    /// handing one out and trusting every caller to reset it is how a stale
-    /// binding leaks into the next query. Statements are cached and reused, so
-    /// the append path does not re-prepare its insert for every event.
     @discardableResult
     public func withStatement<Result>(
         _ sql: String,
@@ -107,11 +92,6 @@ public final class SQLiteConnection {
         return try body(statement)
     }
 
-    /// Runs `work` inside `BEGIN IMMEDIATE`, rolling back on any throw.
-    ///
-    /// Immediate rather than deferred so the writer takes its lock up front. A
-    /// deferred transaction that upgrades mid-way can fail with `SQLITE_BUSY`
-    /// after part of the work is already done.
     public func transaction<Result>(_ work: () throws -> Result) throws -> Result {
         try execute("BEGIN IMMEDIATE;")
         do {
@@ -124,12 +104,6 @@ public final class SQLiteConnection {
         }
     }
 
-    /// Vends a cached, reset statement.
-    ///
-    /// `withStatement` is preferred — it resets on both entry and exit and
-    /// refuses re-entrant use. This exists for the analytics reader, whose
-    /// queries bind and step across several statements at once, and whose
-    /// callers must therefore finish with one before re-requesting the same SQL.
     public func prepare(_ sql: String) throws -> SQLiteStatement {
         let statement = try cached(sql)
         statement.reset()
@@ -154,13 +128,8 @@ public final class SQLiteStatement {
     private unowned let connection: SQLiteConnection
     fileprivate var isInUse = false
 
-    /// Next parameter index for `bind(_:)`, so call sites do not hand-number
-    /// placeholders — a numbering mistake binds a value to the wrong column and
-    /// still runs.
     private var nextParameter: Int32 = 1
 
-    /// Set by the labelled `bind(_:at:)` overloads so a caller that numbers its
-    /// own placeholders and a caller that relies on order can share one type.
     private var bindingIndex: Int32 {
         get { nextParameter }
         set { nextParameter = newValue }
@@ -180,8 +149,6 @@ public final class SQLiteStatement {
         sqlite3_clear_bindings(handle)
         nextParameter = 1
     }
-
-    // MARK: - Binding
 
     @discardableResult
     public func bind(_ value: String?) -> SQLiteStatement {
@@ -254,9 +221,6 @@ public final class SQLiteStatement {
         return bind(value)
     }
 
-    // MARK: - Stepping
-
-    /// Advances the cursor. `true` means a row is available.
     @discardableResult
     public func step() throws -> Bool {
         switch sqlite3_step(handle) {
@@ -270,7 +234,6 @@ public final class SQLiteStatement {
         _ = try step()
     }
 
-    /// Steps to completion, collecting one value per row.
     public func rows<Row>(_ transform: (SQLiteStatement) -> Row) throws -> [Row] {
         var rows: [Row] = []
         while try step() {
@@ -279,18 +242,14 @@ public final class SQLiteStatement {
         return rows
     }
 
-    /// Steps once and reads a single value, or `nil` when there is no row.
     public func firstRow<Row>(_ transform: (SQLiteStatement) -> Row) throws -> Row? {
         try step() ? transform(self) : nil
     }
-
-    // MARK: - Reading
 
     public func string(at index: Int32) -> String? { string(index) }
     public func int64(at index: Int32) -> Int64 { int64(index) }
     public func double(at index: Int32) -> Double { double(index) }
     public func isNull(at index: Int32) -> Bool { isNull(index) }
-
 
     public func string(_ index: Int32) -> String? {
         guard let raw = sqlite3_column_text(handle, index) else { return nil }

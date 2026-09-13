@@ -1,11 +1,6 @@
 import NativTrace
 import SwiftUI
 
-/// Settings for what Nativ keeps about its own model calls.
-///
-/// States plainly that traces stay on the machine, because the honest reading of
-/// "record what the model was shown" is "store my prompts", and a user deciding
-/// whether to leave it on should not have to infer where that goes.
 struct TraceRecordingCard: View {
     @Binding var settings: NativSettings
 
@@ -92,9 +87,6 @@ struct TraceRecordingCard: View {
         }
     }
 
-    /// Sums the database and its write-ahead sidecars. Reporting only the main
-    /// file understates usage right after recording, when most of what was
-    /// written is still in the WAL.
     private func refreshSize() async {
         let base = TraceStore.defaultURL()
         let paths = [base.path, base.path + "-wal", base.path + "-shm"]

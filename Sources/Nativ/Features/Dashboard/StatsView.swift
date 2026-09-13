@@ -4222,9 +4222,6 @@ private struct RequestDetailView: View {
             case .metrics:
                 metrics
             case .trace:
-                // The trace is keyed by the id the app assigned, which the
-                // server records alongside its own. Without one this row came
-                // from a client that does not record traces.
                 if let clientRequestID = request.clientRequestID {
                     TraceInspectorView(source: .request(clientRequestID))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)

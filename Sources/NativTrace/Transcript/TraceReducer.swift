@@ -1,15 +1,5 @@
 import Foundation
 
-/// Folds trace events into renderable items.
-///
-/// The fold is the only place event semantics live. It is incremental so a live
-/// session can append one event at a time, and `items(for:)` replays the same
-/// steps for a cold read — feeding events one by one and feeding them in a batch
-/// must produce identical output, which is what makes the derived transcript
-/// safe to discard and rebuild.
-///
-/// An event this build does not recognise becomes a `.unknown` item rather than
-/// being skipped, so a trace never renders shorter than it is.
 public struct TraceReducer: Sendable {
     public private(set) var items: [TraceItem] = []
 
@@ -55,8 +45,6 @@ public struct TraceReducer: Sendable {
             append(event, body: .unknown(kind: event.kind, payload: event.payload))
         }
     }
-
-    // MARK: - Handlers
 
     private mutating func applySessionStarted(_ event: TraceEvent) {
         let payload = SessionStartedPayload(event: event)
@@ -248,8 +236,6 @@ public struct TraceReducer: Sendable {
         )))
     }
 
-    // MARK: - Helpers
-
     private func status(
         afterConsent decision: TraceConsentDecision,
         current: TraceToolBody.Status
@@ -265,11 +251,6 @@ public struct TraceReducer: Sendable {
         TraceCallKey(traceID: event.traceID, scope: event.scope)
     }
 
-    /// Marks every still-streaming assistant message as finished.
-    ///
-    /// A turn-ending event has no requestID, so it cannot name the call whose
-    /// message is open — matching on the key it derives never succeeds and
-    /// leaves a finished transcript rendering a live placeholder.
     private mutating func sealOpenAssistants() {
         for (key, itemID) in openAssistantItemID {
             openAssistantItemID.removeValue(forKey: key)
@@ -289,8 +270,6 @@ public struct TraceReducer: Sendable {
         return item.id
     }
 
-    /// A payload of a known kind that could not be read — a corrupt row, or a
-    /// shape a future build changed incompatibly. Surfaced rather than dropped.
     private mutating func appendUnreadable(_ event: TraceEvent) {
         append(event, body: .unknown(kind: event.kind, payload: event.payload))
     }

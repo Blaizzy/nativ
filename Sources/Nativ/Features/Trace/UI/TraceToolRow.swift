@@ -1,7 +1,6 @@
 import NativTrace
 import SwiftUI
 
-/// One tool call and its outcome, collapsed into a single row.
 struct TraceToolRow: View {
     let tool: TraceToolBody
 

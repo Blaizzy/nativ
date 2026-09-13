@@ -1,16 +1,5 @@
 import Foundation
 
-/// A lossless, `Sendable` JSON value.
-///
-/// Trace payloads are stored as JSON rather than as Swift enums with associated
-/// values so that a build of Nativ can read a trace written by a newer build:
-/// fields it does not understand survive decode, re-encode, and export instead
-/// of being dropped on the floor. Typed access happens through
-/// `TracePayloadView` conformances, which read what they need and ignore the
-/// rest.
-///
-/// Integers and floating-point numbers are separate cases so that a token count
-/// written as `1204` does not come back as `1204.0`.
 public enum TraceJSON: Sendable, Hashable {
     case null
     case bool(Bool)
@@ -61,11 +50,6 @@ extension TraceJSON: Codable {
 }
 
 extension TraceJSON {
-    /// Byte representation used for storage, hashing, and equality of payloads.
-    ///
-    /// Deterministic for a given value: object keys are sorted and slashes are
-    /// left unescaped. Content addressing in `TraceStore` depends on this, so
-    /// the encoder options must not be relaxed without a schema migration.
     public func canonicalData() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -84,8 +68,6 @@ extension TraceJSON {
         try decode(Data(string.utf8))
     }
 
-    /// Wraps an already-`Encodable` value, so producers can hand over their own
-    /// structs without hand-building a `TraceJSON` tree.
     public init<Value: Encodable>(encoding value: Value) throws {
         let data = try JSONEncoder().encode(value)
         self = try TraceJSON.decode(data)

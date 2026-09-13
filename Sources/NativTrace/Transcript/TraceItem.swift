@@ -1,10 +1,5 @@
 import Foundation
 
-/// One row of a rendered trace.
-///
-/// Produced only by `TraceReducer`, never written to disk. Common identity
-/// fields sit on the struct so readers can sort, group, and key a list without
-/// switching on the body; everything kind-specific lives in `body`.
 public struct TraceItem: Sendable, Hashable, Identifiable {
     public let id: String
     public let timestamp: Date
@@ -19,15 +14,10 @@ public struct TraceItem: Sendable, Hashable, Identifiable {
     }
 
     public enum Body: Sendable, Hashable {
-        /// Assistant reasoning lives on the message rather than in a case of
-        /// its own: one fact, one representation.
         case message(TraceMessageBody)
-        /// What Nativ composed for one call: system sections, tools, sampling.
         case exposure(RequestComposedPayload)
         case tool(TraceToolBody)
         case lifecycle(TraceLifecycleBody)
-        /// An event this build does not recognise. Kept so a trace written by a
-        /// newer Nativ still shows every row rather than silently shrinking.
         case unknown(kind: TraceEventKind, payload: TraceJSON)
     }
 }
@@ -80,7 +70,6 @@ public struct TraceToolBody: Sendable, Hashable {
     public var status: Status
     public var output: String?
     public var durationMilliseconds: Int?
-    /// `nil` when the call was never gated on the user.
     public var consentDecision: TraceConsentDecision?
 
     public init(

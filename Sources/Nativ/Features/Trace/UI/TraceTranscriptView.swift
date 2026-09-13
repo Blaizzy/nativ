@@ -1,11 +1,6 @@
 import NativTrace
 import SwiftUI
 
-/// Renders folded trace blocks in reading order.
-///
-/// Dispatches on `TraceItem.Body`, which is exhaustive — including the
-/// `.unknown` case, so an event written by a newer build still occupies a row
-/// rather than making the transcript quietly shorter than the trace.
 struct TraceTranscriptView: View {
     @ObservedObject var model: TraceInspectorViewModel
 
@@ -61,14 +56,11 @@ struct TraceTranscriptView: View {
             TraceMessageRow(message: message, timestamp: item.timestamp)
                 .id(item.id)
         case .exposure:
-            // Falling through to nothing here would drop a row from the
-            // transcript, which is the one thing the fold guarantees never
-            // happens. Resolution failing is a bug worth seeing, not hiding.
-            if let exposure = model.exposure(for: item.id) {
+            if let call = model.call(for: item.id) {
                 TraceExposureCard(
-                    exposure: exposure,
-                    diff: model.diff(for: item.id),
-                    label: model.callLabel(for: item.id),
+                    exposure: call.exposure,
+                    diff: call.diff,
+                    label: call.title,
                     modelID: item.scope.modelID,
                     isHighlighted: model.selectedCallID == item.id
                 )
@@ -77,7 +69,7 @@ struct TraceTranscriptView: View {
                 TraceLifecycleRow(
                     lifecycle: TraceLifecycleBody(
                         kind: .failure,
-                        title: model.callLabel(for: item.id),
+                        title: "Model call",
                         detail: "exposure could not be resolved"
                     ),
                     timestamp: item.timestamp
@@ -138,7 +130,6 @@ struct TraceMessageRow: View {
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
     }
 
-    /// The wire value is API vocabulary; the transcript is prose.
     static func finishReasonLabel(_ reason: String) -> String {
         switch reason {
         case "stop": "finished"
@@ -182,11 +173,6 @@ struct TraceMessageRow: View {
     }
 }
 
-/// The conversation a model was handed when it took over a chat.
-///
-/// Collapsed, because it is context rather than activity — but present, because
-/// a trace that opens with an answer to an unseen question is not an account of
-/// what the model saw.
 struct TraceInheritedContextRow: View {
     let messages: [ResolvedMessage]
     let fromModelID: String?
@@ -256,10 +242,6 @@ struct TraceBoundaryRow: View {
         .padding(.vertical, 6)
     }
 
-    /// Every text here is single-line on purpose. The rules either side are
-    /// flexible, so without a line limit they compress the label until it wraps
-    /// one character per line. A long model id truncates in the middle instead
-    /// of pushing the rules off the row.
     @ViewBuilder
     private var label: some View {
         if let lifecycle {

@@ -179,20 +179,19 @@ final class TraceStoreTests: XCTestCase {
         XCTAssertEqual(summary.modelIDs, ["gemma", "qwen"])
     }
 
-    func testRebuildIndexReproducesTheDerivedRows() async throws {
+    func testDeleteAllEmptiesEveryTrace() async throws {
         let store = try makeStore()
         try await store.insert(preSequenced: [
             makeEvent(seq: 0, kind: .sessionStarted, modelID: "qwen"),
             makeEvent(seq: 1, kind: .turnStarted, modelID: "qwen"),
         ])
         let before = try await store.recentTraces()
+        XCTAssertFalse(before.isEmpty)
 
-        try await store.rebuildIndex()
+        try await store.deleteAll()
+
         let after = try await store.recentTraces()
-
-        XCTAssertEqual(before.map(\.traceID), after.map(\.traceID))
-        XCTAssertEqual(before.map(\.eventCount), after.map(\.eventCount))
-        XCTAssertEqual(before.map(\.modelIDs), after.map(\.modelIDs))
+        XCTAssertTrue(after.isEmpty)
     }
 
     func testPruneDropsTracesOlderThanTheCutoff() async throws {

@@ -204,10 +204,6 @@ final class RoutineRunner {
     ) async throws -> ScheduledExecutionResult {
         let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
         var requestMessages: [MLXChatMessage] = []
-        // Parallel to `requestMessages`, minus the system message: the trace
-        // records system content as provenance-tagged sections, not as a
-        // message. Each entry carries the id the trace knows that body by, so
-        // an assistant turn resolves to its own text rather than the prompt's.
         var sentRefs: [TraceMessageRef] = []
         let systemPrompt = Self.systemPrompt(for: capabilities)
         if !systemPrompt.isEmpty {
@@ -228,9 +224,6 @@ final class RoutineRunner {
             modelID: routine.modelID
         )
 
-        // FINDING 13: without this, cancellation or a throwing tool left the
-        // turn open forever and a reader could not tell an aborted run from one
-        // still in flight.
         var outcome = TraceTurnStatus.completed
         var recordedRounds = 0
         defer {
@@ -367,9 +360,6 @@ final class RoutineRunner {
 
             for toolCall in toolCalls {
                 try Task.checkCancellation()
-                // FINDING 9: the call and its result must agree on the id, or
-                // the reducer cannot pair them and every result collapses onto
-                // one orphan row.
                 let traceCallID = toolCall.id ?? UUID().uuidString
                 if let name = toolCall.function?.name {
                     await tracer?.toolCall(
