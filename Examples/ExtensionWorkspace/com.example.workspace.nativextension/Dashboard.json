@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "title": "Session Workspace",
+  "storage": {
+    "draft": {
+      "type": "text",
+      "defaultValue": ""
+    },
+    "saved": {
+      "type": "text",
+      "defaultValue": ""
+    },
+    "tempo": {
+      "type": "number",
+      "defaultValue": 120
+    },
+    "metronome": {
+      "type": "boolean",
+      "defaultValue": false
+    },
+    "mood": {
+      "type": "text",
+      "defaultValue": "Calm"
+    }
+  },
+  "tabs": [
+    {
+      "id": "session",
+      "title": "Session",
+      "sections": [
+        {
+          "id": "notes",
+          "title": "Session notes",
+          "components": [
+            {
+              "id": "draft-input",
+              "type": "textField",
+              "title": "Notes",
+              "storageKey": "draft"
+            },
+            {
+              "id": "save-button",
+              "type": "button",
+              "title": "Save session note",
+              "commandID": "com.example.workspace.save"
+            },
+            {
+              "id": "saved-note",
+              "type": "text",
+              "title": "Saved note",
+              "storageKey": "saved"
+            },
+            {
+              "id": "clear-button",
+              "type": "button",
+              "title": "Clear saved note",
+              "commandID": "com.example.workspace.clear"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "settings",
+      "title": "Settings",
+      "sections": [
+        {
+          "id": "preferences",
+          "title": "Session preferences",
+          "components": [
+            {
+              "id": "tempo-input",
+              "type": "textField",
+              "title": "Tempo",
+              "storageKey": "tempo"
+            },
+            {
+              "id": "metronome-toggle",
+              "type": "toggle",
+              "title": "Metronome preference",
+              "storageKey": "metronome"
+            },
+            {
+              "id": "mood-picker",
+              "type": "picker",
+              "title": "Mood",
+              "storageKey": "mood",
+              "options": [
+                "Calm",
+                "Energetic",
+                "Reflective"
+              ]
+            },
+            {
+              "id": "scope-note",
+              "type": "text",
+              "title": "About this example",
+              "text": "These are saved preferences for testing the workspace platform; audio playback and music generation are not part of this example."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

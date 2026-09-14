@@ -349,8 +349,17 @@ final class NativExtensionManager: ObservableObject {
             NativSystemPermissionController.hasScreenCaptureAccess()
         case .accessibilityInsertText:
             NativSystemPermissionController.hasInsertTextAccess()
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .readSelection:
+            NativSystemPermissionController.hasAccessibilityAccess()
+        // Nothing outside Nativ gates these, so consent is the manifest
+        // declaration the user reviewed before enabling the extension.
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
             true
+        case .screenCapture:
+            NativSystemPermissionController.hasScreenCaptureAccess()
         case .notifications:
             false
         }
@@ -367,7 +376,7 @@ final class NativExtensionManager: ObservableObject {
             return AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
                 ? .notRequested
                 : .denied
-        case .systemAudioCapture, .accessibilityInsertText:
+        case .systemAudioCapture, .accessibilityInsertText, .readSelection, .screenCapture:
             if isPermissionGranted(permission) {
                 return .granted
             }
@@ -376,7 +385,10 @@ final class NativExtensionManager: ObservableObject {
             return requestedPermissions.contains(permission.rawValue)
                 ? .denied
                 : .notRequested
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
             return .granted
         case .notifications:
             return .notRequested
@@ -391,11 +403,13 @@ final class NativExtensionManager: ObservableObject {
             return nil
         }
         switch permission {
-        case .microphone, .systemAudioCapture, .accessibilityInsertText:
+        case .microphone, .systemAudioCapture, .accessibilityInsertText,
+             .readSelection, .screenCapture:
             return status == .denied ? "Open Settings" : "Request"
-        case .notifications:
-            return nil
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .notifications, .readClipboard, .writeClipboard, .saveFile, .overlay,
+             .namespacedStorage, .modelsLanguage, .modelsVision,
+             .modelsImageGeneration, .modelsImageEditing, .modelsSpeechToText,
+             .modelsTextToSpeech, .modelsEmbedding:
             return nil
         }
     }
@@ -426,18 +440,27 @@ final class NativExtensionManager: ObservableObject {
                 NativSystemPermissionController.openScreenCaptureSettings()
                 refreshPermissionStatuses()
             }
-        case .accessibilityInsertText:
+        case .accessibilityInsertText, .readSelection:
             markPermissionRequested(permission)
             _ = NativSystemPermissionController.requestInsertTextAccess()
             refreshPermissionStatuses()
             if !NativSystemPermissionController.hasInsertTextAccess() {
                 NativSystemPermissionController.openAccessibilitySettings()
             }
+        case .screenCapture:
+            markPermissionRequested(permission)
+            if !NativSystemPermissionController.requestScreenCaptureAccess() {
+                NativSystemPermissionController.openScreenCaptureSettings()
+            }
+            refreshPermissionStatuses()
         case .notifications:
             // No included extension currently requests notifications. Keep the
             // declaration visible without prompting for an unused capability.
             break
-        case .modelsSpeechToText, .overlay, .namespacedStorage:
+        case .readClipboard, .writeClipboard, .saveFile, .overlay, .namespacedStorage,
+             .modelsLanguage, .modelsVision, .modelsImageGeneration,
+             .modelsImageEditing, .modelsSpeechToText, .modelsTextToSpeech,
+             .modelsEmbedding:
             break
         }
     }
