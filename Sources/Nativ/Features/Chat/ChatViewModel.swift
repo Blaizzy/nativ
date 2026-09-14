@@ -271,7 +271,7 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var imageModelSelectionRequests:
         [UUID: ChatImageModelSelectionRequest] = [:]
 
-    private let sessionStore = ChatSessionStore()
+    private let sessionStore: ChatSessionStore
     private let windowID: UUID
     private let persistedDataChanges: PersistedDataChangeHub
     private let inferenceActivity: InferenceActivityCoordinator
@@ -301,19 +301,21 @@ final class ChatViewModel: ObservableObject {
     private var composerSnapshot: ComposerSnapshot?
     private var attachmentValidationTasks: [UUID: Task<Void, Never>] = [:]
     private var persistedDataChangeCancellable: AnyCancellable?
-    private var needsPersistedSessionReload = false
+    private var pendingPersistedSessionIDs: Set<UUID> = []
 
     init(
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
         inferenceActivity: InferenceActivityCoordinator = .init(),
         projectStore: ChatProjectStore = .init(),
+        sessionDirectory: URL? = nil,
         searchLibrary: ChatSearchLibrary = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
         self.projectStore = projectStore
+        self.sessionStore = ChatSessionStore(chatDirectory: sessionDirectory)
         self.searchLibrary = searchLibrary
         let documentExtractionCache = ChatDocumentExtractionCache()
         documentContextBuilder = ChatDocumentContextBuilder(
@@ -335,7 +337,7 @@ final class ChatViewModel: ObservableObject {
         )
 
         let loadTask = Task.detached(priority: .userInitiated) {
-            ChatSessionBootstrap(sessions: ChatSessionStore().loadSessions())
+            ChatSessionBootstrap(sessions: ChatSessionStore(chatDirectory: sessionDirectory).loadSessions())
         }
         sessionLoadTask = Task { @MainActor [weak self] in
             let bootstrap = await loadTask.value
@@ -2902,9 +2904,10 @@ final class ChatViewModel: ObservableObject {
         defer {
             searchLibrary.start(storedSessions)
             searchLibrary.invalidate(currentSessionID, from: self)
-            if needsPersistedSessionReload {
-                needsPersistedSessionReload = false
-                reloadPersistedSessions(preservingCurrentIfMissing: false)
+            if !pendingPersistedSessionIDs.isEmpty {
+                let ids = pendingPersistedSessionIDs
+                pendingPersistedSessionIDs = []
+                reloadPersistedSessions(preservingCurrentIfMissing: false, changedSessionIDs: ids)
             }
         }
         let localSession = currentSession
@@ -3031,12 +3034,12 @@ final class ChatViewModel: ObservableObject {
         reloadPersistedSessions(preservingCurrentIfMissing: true)
     }
 
-    private func reloadPersistedSessions(preservingCurrentIfMissing: Bool) {
+    private func reloadPersistedSessions(preservingCurrentIfMissing: Bool, changedSessionIDs: Set<UUID>? = nil) {
         guard !isLoadingSessions else {
             return
         }
         storedSessions = sessionStore.loadSessions()
-        defer { searchLibrary.reconcile(sessions, from: self) }
+        defer { searchLibrary.reconcile(sessions, changedSessionIDs: changedSessionIDs, from: self) }
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
                 if activeRequestSessionID != currentSession.id, fresh != currentSession {
@@ -3067,11 +3070,11 @@ final class ChatViewModel: ObservableObject {
         guard change.originWindowID != windowID else { return }
 
         switch change.kind {
-        case .chatSession:
+        case .chatSession(let id):
             if isLoadingSessions {
-                needsPersistedSessionReload = true
+                pendingPersistedSessionIDs.insert(id)
             } else {
-                reloadPersistedSessions(preservingCurrentIfMissing: false)
+                reloadPersistedSessions(preservingCurrentIfMissing: false, changedSessionIDs: [id])
             }
         case .chatFolders:
             folders = sessionStore.loadFolders()

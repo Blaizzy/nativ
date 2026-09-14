@@ -137,10 +137,11 @@ final class ChatSearchLibrary {
         schedule()
     }
 
-    func reconcile(_ sessions: [ChatSessionSummary], from chat: ChatViewModel) {
+    func reconcile(_ sessions: [ChatSessionSummary], changedSessionIDs: Set<UUID>? = nil, from chat: ChatViewModel) {
         let ids = Set(sessions.map(\.id))
-        for id in knownSessions.subtracting(ids) where acceptsUpdates(for: id, from: chat) { remove(id) }
-        for id in ids { invalidate(id, from: chat) }
+        let affected = changedSessionIDs ?? knownSessions.union(ids)
+        for id in knownSessions.subtracting(ids).intersection(affected) where acceptsUpdates(for: id, from: chat) { remove(id) }
+        for id in ids.intersection(affected) { invalidate(id, from: chat) }
     }
 
     private func acceptsUpdates(for sessionID: UUID, from chat: ChatViewModel) -> Bool {

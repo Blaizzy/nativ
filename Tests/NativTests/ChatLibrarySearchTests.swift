@@ -514,6 +514,74 @@ final class ChatLibrarySearchTests: XCTestCase {
         XCTAssertTrue(removed.messages.isEmpty, "Updates must continue after recovery")
     }
 
+    func testCrossWindowEventsOnlyReindexTheAffectedChat() async throws {
+        let directory = try databaseURL().deletingLastPathComponent()
+        let store = ChatSessionStore(chatDirectory: directory.appending(path: "Chats"),
+                                     mediaStore: MediaAssetStore(rootDirectory: directory.appending(path: "Media")))
+        var first = ChatSession(id: UUID(), title: "First", createdAt: Date(), updatedAt: .distantFuture,
+                                messages: [message("notification")])
+        var second = ChatSession(id: UUID(), title: "Second", createdAt: Date(), updatedAt: .distantPast,
+                                 messages: [message("permission")])
+        XCTAssertTrue(store.saveSession(first))
+        XCTAssertTrue(store.saveSession(second))
+        let hub = PersistedDataChangeHub()
+        let library = ChatSearchLibrary()
+        let chat = ChatViewModel(persistedDataChanges: hub, sessionDirectory: directory.appending(path: "Chats"), searchLibrary: library)
+        try await waitForHistory(chat)
+        try await library.ready()
+        first.messages[0].content = "changedfirst"
+        second.messages[0].content = "changedsecond"
+        XCTAssertTrue(store.saveSession(first))
+        XCTAssertTrue(store.saveSession(second))
+        let otherWindow = UUID()
+        hub.send(.chatSession(first.id), originWindowID: otherWindow)
+        try await library.ready()
+        let changedFirst = try await library.worker.search("changedfirst")
+        let unchangedSecond = try await library.worker.search("permission")
+        let changedSecond = try await library.worker.search("changedsecond")
+        XCTAssertEqual(changedFirst.messages.map(\.sessionID), [first.id])
+        XCTAssertEqual(unchangedSecond.messages.map(\.sessionID), [second.id])
+        XCTAssertTrue(changedSecond.messages.isEmpty, "An unrelated chat must wait for its own event")
+        hub.send(.chatSession(second.id), originWindowID: otherWindow)
+        try await library.ready()
+        let updatedSecond = try await library.worker.search("changedsecond")
+        XCTAssertEqual(updatedSecond.messages.map(\.sessionID), [second.id])
+        store.deleteSession(id: second.id)
+        hub.send(.chatSession(second.id), originWindowID: otherWindow)
+        try await library.ready()
+        let deleted = try await library.worker.search("changedsecond")
+        XCTAssertTrue(deleted.messages.isEmpty)
+    }
+
+    func testCrossWindowEventsDuringHistoryLoadingKeepEveryAffectedSession() async throws {
+        let directory = try databaseURL().deletingLastPathComponent()
+        let store = ChatSessionStore(chatDirectory: directory.appending(path: "Chats"),
+                                     mediaStore: MediaAssetStore(rootDirectory: directory.appending(path: "Media")))
+        let hub = PersistedDataChangeHub()
+        let library = ChatSearchLibrary()
+        let chat = ChatViewModel(persistedDataChanges: hub, sessionDirectory: directory.appending(path: "Chats"), searchLibrary: library)
+        XCTAssertTrue(chat.isLoadingSessions)
+        let sessions = ["notification", "permission"].map {
+            ChatSession(id: UUID(), title: $0, createdAt: Date(), updatedAt: Date(), messages: [message($0)])
+        }
+        for session in sessions {
+            XCTAssertTrue(store.saveSession(session))
+            hub.send(.chatSession(session.id), originWindowID: UUID())
+        }
+        try await waitForHistory(chat)
+        try await library.ready()
+        for session in sessions {
+            let result = try await library.worker.search(session.title)
+            XCTAssertEqual(result.messages.map(\.sessionID), [session.id])
+        }
+    }
+
+    private func waitForHistory(_ chat: ChatViewModel) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while chat.isLoadingSessions, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertFalse(chat.isLoadingSessions)
+    }
+
     private func databaseURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ChatSearchTests-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
