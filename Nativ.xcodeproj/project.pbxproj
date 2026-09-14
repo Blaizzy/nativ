@@ -269,7 +269,6 @@
 		83E74199C4F9A50350E3E354 /* NativComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */; };
 		859706E482A5B1BF77CFBECA /* LogTextStorageMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54B0E640985EEB0E4E0AEE79 /* LogTextStorageMutation.swift */; };
 		85D87B59449B338462FFAC13 /* NativWindowHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1301809E464FD9315BF2A22 /* NativWindowHandle.swift */; };
-		86B6CDB7DC7856740B795AB1 /* README.md in Resources */ = {isa = PBXBuildFile; fileRef = 2F09D04B67A20A6E87ED1715 /* README.md */; };
 		86C75AF5CF63104E397339FB /* ArtifactsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3387C33E274E567979F013 /* ArtifactsView.swift */; };
 		86FA648B4EC604E8347EAC9A /* TraceRecordingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D5D8617B3220845A772E3D2 /* TraceRecordingCard.swift */; };
 		872CB62F2CB2A0C716A60654 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A1B515ECDF21B3616E5A3D1 /* ChatViewModel.swift */; };
@@ -670,7 +669,6 @@
 		2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConfigurationView.swift; sourceTree = "<group>"; };
 		2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadmeTests.swift; sourceTree = "<group>"; };
 		2E103C92A2FC5D00734DC471 /* NativWindowStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativWindowStateTests.swift; sourceTree = "<group>"; };
-		2F09D04B67A20A6E87ED1715 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		2FF1D2267F5230F7692BC886 /* FileMutationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileMutationState.swift; sourceTree = "<group>"; };
 		30D9C81870FB504D03D2A1D5 /* MCPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPClient.swift; sourceTree = "<group>"; };
 		30E2A903D604A57696674510 /* NativSystemPermissionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativSystemPermissionController.swift; sourceTree = "<group>"; };
@@ -1566,7 +1564,6 @@
 		C88ADA69AA3057A906DF1CF5 /* NativTrace */ = {
 			isa = PBXGroup;
 			children = (
-				2F09D04B67A20A6E87ED1715 /* README.md */,
 				8647BEC8CA793C141BD90B1C /* Capture */,
 				075D97170D684FD60412525F /* Model */,
 				6E4704635F671CB36C869C5D /* Store */,
@@ -1793,7 +1790,6 @@
 			buildConfigurationList = 28BA1F5119503D4614E6A754 /* Build configuration list for PBXNativeTarget "NativTrace" */;
 			buildPhases = (
 				934438BD412926FFCD1CFBDD /* Sources */,
-				0C4E03894B888A135C998437 /* Resources */,
 				40695FAA227EF5B021CADEFA /* Frameworks */,
 			);
 			buildRules = (
@@ -2017,14 +2013,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				256B07A9158557D2E3AD2A35 /* Manifest.json in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		0C4E03894B888A135C998437 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				86B6CDB7DC7856740B795AB1 /* README.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2,19 +2,8 @@
 .PHONY: xcode-generate xcode-build xcode-sign xcode-run xcode-smoke xcode-lifecycle-smoke
 
 XCODE_DERIVED_DATA ?= build/NativDevelopmentDerivedData
-# Build-product name. Configure it in Configuration/Signing.local.xcconfig, or
-# override for one invocation:
-#   make xcode-run NATIV_PRODUCT_NAME=nativ-alpha-1
-# Read from the xcconfig chain (local first) so the paths below match what
-# xcodebuild produces, and only forwarded to xcodebuild when it was given on the
-# command line — otherwise passing it here would override the xcconfig this
-# comment tells you to use.
 NATIV_PRODUCT_NAME ?= $(firstword $(shell sed -n 's/^NATIV_PRODUCT_NAME[[:space:]]*=[[:space:]]*//p' \
 	Configuration/Signing.local.xcconfig Configuration/Signing.xcconfig 2>/dev/null) Nativ)
-# Forward the name to xcodebuild only when it came from outside the Makefile.
-# Passing it unconditionally would override the xcconfig this comment points at;
-# not passing an explicit override would build Nativ.app while the paths below
-# expect the overridden name.
 ifneq ($(filter command line environment,$(origin NATIV_PRODUCT_NAME)),)
 XCODE_PRODUCT_NAME_OVERRIDE := NATIV_PRODUCT_NAME=$(NATIV_PRODUCT_NAME)
 endif

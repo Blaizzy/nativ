@@ -15,9 +15,6 @@ app_path="$1"
 [[ -d "$app_path" ]] || fail "app bundle is missing: $app_path"
 app_path="$(cd "$(dirname "$app_path")" && pwd -P)/$(basename "$app_path")"
 
-# The product name is configurable (NATIV_PRODUCT_NAME), so the executable is
-# whatever the bundle says it is. Matching a hardcoded "Nativ" would fail for a
-# renamed build and, worse, terminate a different build than the one launching.
 executable_name="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
         "$app_path/Contents/Info.plist" 2>/dev/null || true
