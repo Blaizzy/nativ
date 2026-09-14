@@ -328,6 +328,73 @@ final class ChatPastedTextTests: XCTestCase {
         XCTAssertEqual(model.draft, markdown)
     }
 
+    func testLargeAttachmentSurvivesOneHundredEditsUndoAndRedo() {
+        let model = ChatViewModel()
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let content = String(repeating: "x", count: 1_048_576)
+        model.attachPastedText(content, replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        let attachmentID = model.pendingPastedTexts[0].id
+        for index in 0..<100 {
+            undo.beginUndoGrouping()
+            model.editComposerText(in: NSRange(location: index, length: 0), replacement: "a", undoManager: undo)
+            undo.endUndoGrouping()
+        }
+        let typed = String(repeating: "a", count: 100)
+        XCTAssertEqual(model.composerText, typed)
+        XCTAssertEqual(model.draft, content + typed)
+        for _ in 0..<100 { undo.undo() }
+        XCTAssertTrue(model.composerText.isEmpty)
+        XCTAssertEqual(model.draft, content)
+        for _ in 0..<100 { undo.redo() }
+        XCTAssertEqual(model.composerText, typed)
+        XCTAssertEqual(model.draft, content + typed)
+        XCTAssertEqual(model.pendingPastedTexts[0].id, attachmentID)
+        XCTAssertEqual(model.pendingPastedTexts[0].text, content)
+    }
+
+    func testRestoredTrimmedAttachmentKeepsItsRequestBytesAfterEditing() {
+        let prompt = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = ChatPastedText.afterTrimming(
+            [ChatPastedText(location: 0, length: markdown.utf16.count, text: markdown)], draft: markdown)
+        let original = ChatPastedTextDraft(text: prompt, pastedTexts: items)
+        let edited = original.replacingText(in: NSRange(location: 0, length: 0), with: "你好")
+        XCTAssertEqual(edited.editableText, "你好")
+        XCTAssertEqual(Array(edited.text.utf8), Array((prompt + "你好").utf8))
+        XCTAssertEqual(edited.pastedTexts, items)
+        XCTAssertEqual(Array(edited.pastedTexts[0].text.utf8), Array(markdown.utf8))
+        XCTAssertEqual(original.text, prompt)
+        let restored = ChatPastedTextDraft(text: edited.text, pastedTexts: edited.pastedTexts)
+        XCTAssertEqual(restored, edited)
+        XCTAssertEqual(restored.removingAttachment(items[0].id).text, "你好")
+    }
+
+    func testMultipleAttachmentsAtSamePositionKeepTheirOrderAfterEditing() {
+        var draft = ChatPastedTextDraft(text: "before after", pastedTexts: [])
+        draft = draft.replacingText(in: NSRange(location: 7, length: 0), with: "first", asAttachment: true)
+        draft = draft.replacingText(in: NSRange(location: 7, length: 0), with: "second", asAttachment: true)
+        let original = draft
+        draft = draft.replacingText(in: NSRange(location: 0, length: 7), with: "🌙")
+        XCTAssertEqual(draft.text, "🌙firstsecondafter")
+        XCTAssertEqual(draft.editableText, "🌙after")
+        XCTAssertEqual(draft.pastedTexts.map(\.location), [2, 7])
+        XCTAssertEqual(original.text, "before firstsecondafter")
+        draft = draft.removingAttachment(draft.pastedTexts[0].id)
+        XCTAssertEqual(draft.text, "🌙secondafter")
+        XCTAssertEqual(draft.pastedTexts[0].location, 2)
+    }
+
+    func testPastedTextContentControlsSendAvailability() {
+        let model = ChatViewModel()
+        model.attachPastedText(" \n\t", replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        XCTAssertFalse(model.canSend(isRunning: true, selectedModelID: "model"))
+        model.attachPastedText("content", replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        XCTAssertTrue(model.canSend(isRunning: true, selectedModelID: "model"))
+        model.removePendingPastedText(model.pendingPastedTexts[1].id, undoManager: nil)
+        XCTAssertFalse(model.canSend(isRunning: true, selectedModelID: "model"))
+        XCTAssertFalse(model.canRecallPreviousPrompt)
+    }
+
     func testInputMethodCommitPreservesPastedTextAndUnicode() {
         let model = ChatViewModel()
         model.draft = "🌙 before after"
