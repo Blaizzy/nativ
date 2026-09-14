@@ -199,6 +199,10 @@ private struct ChatTranscriptView: View {
             submissionID: chat.transcriptSubmissionID,
             scrollTargetMessageID: $chat.scrollTargetMessageID,
             itemIDs: items.map(\.id),
+            bottomOverlayClearance: max(
+                composerHeight,
+                composerBackdropHeight + ChatTranscriptLayout.composerFadeExtension
+            ),
             topInset: {
                 if let project {
                     ChatProjectContextBanner(

@@ -6,8 +6,10 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
     let submissionID: UUID?
     @Binding var scrollTargetMessageID: UUID?
     let itemIDs: [UUID]
+    let bottomOverlayClearance: CGFloat
     let topInset: TopInset
     let content: (Range<Int>) -> Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
     @State private var followState = ChatTranscriptFollowState()
@@ -16,6 +18,8 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
     @State private var pendingPrepend: ChatTranscriptGeometry?
     @State private var initialPositionEstablished = false
     @State private var topTriggerArmed = true
+    @State private var isNearBottom = true
+    @State private var isScrollingToLatest = false
 
     init(
         currentSessionID: UUID?,
@@ -23,6 +27,7 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         submissionID: UUID?,
         scrollTargetMessageID: Binding<UUID?>,
         itemIDs: [UUID],
+        bottomOverlayClearance: CGFloat = 0,
         @ViewBuilder topInset: () -> TopInset,
         @ViewBuilder content: @escaping (Range<Int>) -> Content
     ) {
@@ -31,6 +36,7 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         self.submissionID = submissionID
         _scrollTargetMessageID = scrollTargetMessageID
         self.itemIDs = itemIDs
+        self.bottomOverlayClearance = bottomOverlayClearance
         self.topInset = topInset()
         self.content = content
     }
@@ -63,6 +69,7 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                     )
                 } action: { _, geometry in
                     contentHeight = geometry.contentHeight
+                    isNearBottom = geometry.nearBottom
                     if let previous = pendingPrepend,
                         geometry.contentHeight != previous.contentHeight
                     {
@@ -99,9 +106,15 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                         withTransaction(transaction) { paging.revealOlder(in: itemIDs) }
                     }
                 }
-                .onScrollPhaseChange { _, newPhase, context in
+                .onScrollPhaseChange { oldPhase, newPhase, context in
                     followState.phaseChanged(
                         newPhase, nearBottom: isNearTranscriptBottom(context.geometry))
+                    if newPhase == .tracking || newPhase == .interacting || newPhase == .decelerating {
+                        isScrollingToLatest = false
+                    } else if isScrollingToLatest, oldPhase == .animating, newPhase == .idle {
+                        // Include any new output that arrived during the animation.
+                        resetAttachedHistory()
+                    }
                 }
                 .onChange(of: submissionID) { _, submission in
                     guard submission != nil else { return }
@@ -109,6 +122,7 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                 }
                 .onChange(of: scrollTargetMessageID) { _, target in
                     guard let target else { return }
+                    isScrollingToLatest = false
                     followState.pause()
                     pendingPrepend = nil
                     paging.reveal(target, in: itemIDs)
@@ -134,6 +148,26 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                         proxy: proxy
                     )
                 }
+                .overlay(alignment: .bottom) {
+                    ZStack {
+                        if !itemIDs.isEmpty, !isNearBottom {
+                            Button("Scroll to latest message", systemImage: "arrow.down", action: scrollToLatest)
+                                .labelStyle(.iconOnly)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 36, height: 36)
+                                .background(.regularMaterial, in: Circle())
+                                .overlay { Circle().strokeBorder(.quaternary, lineWidth: 1) }
+                                .contentShape(.circle)
+                                .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+                                .buttonStyle(.plain)
+                                .help("Scroll to latest message")
+                                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.92)))
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.18), value: isNearBottom)
+                    .padding(.bottom, bottomOverlayClearance + 8)
+                }
         }
         .id(currentSessionID)
         .onChange(of: itemIDs, initial: true) { _, ids in
@@ -144,12 +178,27 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         }
     }
 
+    private func scrollToLatest() {
+        guard !reduceMotion else {
+            resetAttachedHistory()
+            return
+        }
+        followState.pause()
+        isScrollingToLatest = true
+        pendingPrepend = nil
+        scrollTargetMessageID = nil
+        // Keep the current rows attached until the animation finishes so the
+        // content size and automatic pinner don't interrupt the scroll.
+        withAnimation(.easeInOut(duration: 0.4)) {
+            readingPosition.scrollTo(edge: .bottom)
+        }
+    }
+
     private func resetAttachedHistory() {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            // A send explicitly returns to the newest page even when the reader
-            // was paused in older history. Cancel any pending prepend correction.
+            // Returning to the newest page cancels any pending prepend correction.
             paging = ChatTranscriptPagingState()
             paging.updateItems(itemIDs)
             // Issue a new command rather than assigning another .bottom value:
@@ -160,6 +209,8 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
             initialPositionEstablished = false
             topTriggerArmed = true
             followState = ChatTranscriptFollowState()
+            isNearBottom = true
+            isScrollingToLatest = false
         }
     }
 
