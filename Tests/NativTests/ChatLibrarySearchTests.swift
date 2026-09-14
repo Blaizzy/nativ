@@ -308,6 +308,41 @@ final class ChatLibrarySearchTests: XCTestCase {
         XCTAssertEqual(result.messages.count, 1)
     }
 
+    func testCorruptionDuringRecordRestorationRebuildsTheCache() async throws {
+        let url = try databaseURL()
+        let chat = session("Rebuilt", messages: [message("notification")])
+        var worker: ChatLibrarySearchWorker? = ChatLibrarySearchWorker(storageURL: url)
+        try await worker?.synchronize([chat], summaries: [chat.summary])
+        try await worker?.checkpoint()
+        worker = nil
+
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &database), SQLITE_OK)
+        func integer(_ sql: String) throws -> Int {
+            var statement: OpaquePointer?
+            XCTAssertEqual(sqlite3_prepare_v2(database, sql, -1, &statement, nil), SQLITE_OK)
+            defer { sqlite3_finalize(statement) }
+            XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
+            return Int(sqlite3_column_int64(statement, 0))
+        }
+        let page = try integer("SELECT rootpage FROM sqlite_master WHERE name = 'messages'")
+        let pageSize = try integer("PRAGMA page_size")
+        XCTAssertEqual(sqlite3_close(database), SQLITE_OK)
+        // Preserve the schema and metadata, but invalidate the message table's B-tree page.
+        let file = try FileHandle(forWritingTo: url)
+        try file.seek(toOffset: UInt64((page - 1) * pageSize))
+        try file.write(contentsOf: Data([0xff]))
+        try file.close()
+
+        let rebuilt = ChatLibrarySearchWorker(storageURL: url)
+        try await rebuilt.synchronize([chat], summaries: [chat.summary])
+        let result = try await rebuilt.search("notification")
+        XCTAssertEqual(result.messages.map(\.sessionID), [chat.id])
+        let relaunched = ChatLibrarySearchWorker(storageURL: url)
+        let persisted = try await relaunched.search("notification")
+        XCTAssertEqual(persisted.messages, result.messages)
+    }
+
     func testMessageEventsUpdateThePersistentIndexWithoutOpeningSearch() async throws {
         let url = try databaseURL()
         let library = ChatSearchLibrary(storageURL: url)

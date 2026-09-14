@@ -17,12 +17,14 @@ final class ChatSearchStore {
     struct Failure: Error {
         let code: Int32
         let message: String
+        var isCorruption: Bool { code & 0xff == SQLITE_CORRUPT || code & 0xff == SQLITE_NOTADB }
     }
 
     static var defaultURL: URL {
         URL.applicationSupportDirectory.appending(path: "Nativ/Chat/Search.sqlite")
     }
 
+    private let url: URL
     private var database: OpaquePointer?
     private var needsCheckpoint = false
     private let encoder: PropertyListEncoder = {
@@ -34,44 +36,41 @@ final class ChatSearchStore {
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     init(url: URL) throws {
+        self.url = url
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let code = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
-        guard code == SQLITE_OK else {
-            let error = failure(code)
-            sqlite3_close(database)
-            database = nil
-            throw error
-        }
         do {
+            try open()
             try configure()
-        } catch let error as Failure where error.code == SQLITE_CORRUPT || error.code == SQLITE_NOTADB {
-            sqlite3_close(database)
-            database = nil
-            for suffix in ["", "-wal", "-shm"] {
-                let path = url.path + suffix
-                if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
-            }
-            let code = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
-            guard code == SQLITE_OK else {
-                let error = failure(code)
-                sqlite3_close(database)
-                database = nil
-                throw error
-            }
-            do { try configure() }
-            catch {
-                sqlite3_close(database)
-                database = nil
-                throw error
-            }
+        } catch let error as Failure where error.isCorruption {
+            do { try rebuild() }
+            catch { close(); throw error }
         } catch {
-            sqlite3_close(database)
-            database = nil
+            close()
             throw error
         }
     }
 
     deinit { sqlite3_close(database) }
+
+    private func open() throws {
+        let code = sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
+        try check(code)
+    }
+
+    private func close() {
+        sqlite3_close(database)
+        database = nil
+    }
+
+    private func rebuild() throws {
+        close()
+        for suffix in ["", "-wal", "-shm"] {
+            let path = url.path + suffix
+            if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
+        }
+        try open()
+        try configure()
+    }
 
     private func configure() throws {
         sqlite3_busy_timeout(database, 2_000)
@@ -110,13 +109,11 @@ final class ChatSearchStore {
                 let record = try decoder.decode(ChatSearchIndex.Record.self, from: data(statement, column: 1))
                 index.insert(record, position: Int(sqlite3_column_int64(statement, 0)))
             }
-        } catch is DecodingError {
-            try transaction {
-                try execute("DELETE FROM messages")
-                try execute("DELETE FROM sessions")
-            }
-            try checkpoint()
+        } catch {
+            guard error is DecodingError || (error as? Failure)?.isCorruption == true else { throw error }
+            // Neither partially decoded records nor a corrupt table may survive cache recovery.
             index = ChatSearchIndex()
+            try rebuild()
             return [:]
         }
         return sessions

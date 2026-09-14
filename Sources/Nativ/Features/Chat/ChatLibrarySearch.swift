@@ -185,7 +185,10 @@ actor ChatLibrarySearchWorker {
         guard !restored else { return }
         if let storageURL {
             let store = try ChatSearchStore(url: storageURL)
-            summaries = try store.restore(into: &index)
+            var restoredIndex = ChatSearchIndex()
+            let restoredSummaries = try store.restore(into: &restoredIndex)
+            index = restoredIndex
+            summaries = restoredSummaries
             self.store = store
         }
         restored = true
