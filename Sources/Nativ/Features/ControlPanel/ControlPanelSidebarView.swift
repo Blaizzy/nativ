@@ -166,9 +166,9 @@ extension ControlPanelView {
         }
     }
 
-    var resizableSidebar: some View {
+    func resizableSidebar(width: CGFloat, maximumWidth: CGFloat) -> some View {
         sidebar
-            .frame(width: sidebarWidth)
+            .frame(width: width)
             .background {
                 ControlPanelSidebarMaterial()
                     .overlay {
@@ -178,12 +178,12 @@ extension ControlPanelView {
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
-                sidebarResizeHandle
+                sidebarResizeHandle(width: width, maximumWidth: maximumWidth)
             }
             .zIndex(1)
     }
 
-    var sidebarResizeHandle: some View {
+    func sidebarResizeHandle(width: CGFloat, maximumWidth: CGFloat) -> some View {
         ZStack {
             Color.clear
 
@@ -201,14 +201,14 @@ extension ControlPanelView {
             DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if sidebarDragStartWidth == nil {
-                        sidebarDragStartWidth = sidebarWidth
+                        sidebarDragStartWidth = width
                     }
 
-                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let startWidth = sidebarDragStartWidth ?? width
                     let proposedWidth = startWidth + value.translation.width
                     sidebarWidth = min(
                         max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
-                        ControlPanelLayout.sidebarMaximumWidth
+                        maximumWidth
                     )
                 }
                 .onEnded { _ in
