@@ -422,10 +422,12 @@ struct AudioView: View {
             }
         case .shortcuts:
             AudioPage(
-                title: "Keyboard Shortcuts",
-                subtitle: "Customize the global commands for recording and retranscription"
+                title: "Shortcuts",
+                subtitle: "Customize keyboard shortcuts and spoken commands for dictation"
             ) {
                 shortcutConfigurationPanel
+                    .frame(maxWidth: 760)
+                spokenReturnConfigurationPanel
                     .frame(maxWidth: 760)
             }
         }
@@ -2416,6 +2418,57 @@ struct AudioView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var spokenReturnConfigurationPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Spoken Return", systemImage: "return")
+                        .font(.headline)
+                    Text("Say a word or phrase at the end of dictation to press Return.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 16)
+
+                Toggle("Spoken Return", isOn: $shortcuts.isReturnCommandEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Trigger word or phrase")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    TextField("For example, enter", text: $shortcuts.returnCommandTrigger)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Return trigger word or phrase")
+
+                    Button("Restore Default") {
+                        shortcuts.returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
+                    }
+                    .controlSize(.small)
+                    .disabled(shortcuts.returnCommandTrigger == VoiceDictationTranscript.defaultReturnCommandTrigger)
+                }
+            }
+            .disabled(!shortcuts.isReturnCommandEnabled)
+
+            Text(
+                !shortcuts.isReturnCommandEnabled
+                    ? "When off, the trigger remains ordinary dictated text."
+                    : shortcuts.activeReturnCommandTrigger == nil
+                        ? "Enter a word or phrase to activate this command."
+                        : "The trigger is removed from your transcript. Capitalization and trailing punctuation are ignored. Changes take effect immediately."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
         .padding(18)
         .audioPanelStyle()
