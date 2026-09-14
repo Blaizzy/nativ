@@ -12,13 +12,9 @@ struct ServerPrefillProgressLabel: View {
                     ServerPrefillProgressRing(progress: progress)
                         .accessibilityHidden(true)
                     Text("Reading prompt")
-                    ZStack(alignment: .trailing) {
-                        Text(1.0, format: .percent.precision(.fractionLength(0)))
-                            .hidden()
-                        Text(progress.fractionCompleted, format: .percent.precision(.fractionLength(0)))
-                    }
-                    .fontWeight(.semibold)
-                    .monospacedDigit()
+                    Text(progress.fractionCompleted, format: .percent.precision(.fractionLength(0)))
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(Color.accentColor)
