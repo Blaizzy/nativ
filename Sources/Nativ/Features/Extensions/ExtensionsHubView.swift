@@ -2,6 +2,7 @@ import AppKit
 import NativExtensionSDK
 import NativServerKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ExtensionsHubView: View {
     @ObservedObject var manager: NativExtensionManager
@@ -168,6 +169,47 @@ struct HubEmptyHint: View {
 
 // MARK: - Extensions section
 
+struct NoticeRow: View {
+    let tone: NativStatusTone
+    let title: String
+    var detail: String?
+    var onDismiss: (() -> Void)?
+
+    private var symbol: String {
+        switch tone {
+        case .danger: "exclamationmark.triangle.fill"
+        case .warning: "exclamationmark.circle.fill"
+        default: "info.circle.fill"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(tone.color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .legacyTextStyle(.supporting)
+                if let detail {
+                    Text(detail)
+                        .legacyTextStyle(.metadata)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if let onDismiss {
+                NativHoverCloseButton(action: onDismiss, help: "Dismiss")
+            }
+        }
+        .padding(12)
+        .background(
+            tone.color.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+    }
+}
+
 private struct ExtensionsSectionView: View {
     @ObservedObject var manager: NativExtensionManager
     @State private var selection: Selection = .discover
@@ -197,26 +239,70 @@ private struct ExtensionsSectionView: View {
             case .discover:
                 NativExtensionMarketplaceView()
             case .installed:
-                if manager.records.isEmpty {
-                    HubEmptyHint(
-                        icon: "square.stack.3d.up.slash",
-                        text: "No extensions installed."
-                    )
-                } else {
-                    VStack(spacing: 12) {
-                        ForEach(manager.records) { record in
-                            ExtensionRow(record: record, manager: manager)
-                        }
-                    }
-                }
+                installedTab
             }
         }
         .onAppear {
             manager.refreshPermissionStatuses()
         }
     }
-}
 
+    private var installedTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let message = manager.lastErrorMessage {
+                NoticeRow(tone: .danger, title: message) {
+                    manager.lastErrorMessage = nil
+                }
+            }
+            ForEach(manager.packageIssues) { issue in
+                NoticeRow(
+                    tone: .warning,
+                    title: "\(issue.packageName) was not loaded.",
+                    detail: issue.message
+                )
+            }
+            if manager.records.isEmpty {
+                HubEmptyHint(
+                    icon: "square.stack.3d.up.slash",
+                    text: "No extensions installed."
+                )
+            } else {
+                ForEach(manager.records) { record in
+                    ExtensionRow(record: record, manager: manager)
+                }
+            }
+            installFromFolderButton
+        }
+    }
+
+    private var installFromFolderButton: some View {
+        HStack(spacing: 8) {
+            Button("Install from Folder…") {
+                installFromFolder()
+            }
+            .controlSize(.small)
+            Text("Load a .nativextension package you are developing.")
+                .legacyTextStyle(.metadata)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.top, 2)
+    }
+
+    private func installFromFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = [UTType(exportedAs: "com.nativ.extension-package", conformingTo: .package)]
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Install"
+        panel.message = "Choose a .nativextension package."
+        guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        manager.installPackage(at: url)
+    }
+}
 private struct ExtensionRow: View {
     let record: NativExtensionRecord
     @ObservedObject var manager: NativExtensionManager
@@ -229,7 +315,12 @@ private struct ExtensionRow: View {
                     HStack(spacing: 8) {
                         Text(record.manifest.displayName)
                             .legacyTextStyle(.compactCardTitle)
-                        if record.isIncluded { includedBadge }
+                        if record.isIncluded {
+                            NativStatusBadge(text: "Included", tone: .active)
+                        }
+                        if record.isRemoved {
+                            NativStatusBadge(text: "Removed", tone: .neutral)
+                        }
                     }
                     Text(record.manifest.summary)
                         .legacyTextStyle(.supporting)
@@ -241,20 +332,31 @@ private struct ExtensionRow: View {
                         .padding(.top, 1)
                 }
                 Spacer(minLength: 12)
-                Toggle(
-                    "",
-                    isOn: Binding(
-                        get: { record.isEnabled },
-                        set: { manager.setEnabled($0, extensionID: record.id) }
+                if record.isRemoved {
+                    Button("Restore") {
+                        manager.restore(extensionID: record.id)
+                    }
+                    .controlSize(.small)
+                } else {
+                    Toggle(
+                        "",
+                        isOn: Binding(
+                            get: { record.isEnabled },
+                            set: { manager.setEnabled($0, extensionID: record.id) }
+                        )
                     )
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    removeMenu
+                }
+            }
+            if let errorMessage = record.errorMessage {
+                sectionDivider
+                NoticeRow(tone: .warning, title: errorMessage)
             }
             if !record.manifest.permissions.isEmpty {
-                Divider()
-                    .padding(.vertical, 14)
+                sectionDivider
                 permissions
             }
         }
@@ -269,8 +371,27 @@ private struct ExtensionRow: View {
         )
     }
 
-    private var includedBadge: some View {
-        NativStatusBadge(text: "Included", tone: .active)
+    private var sectionDivider: some View {
+        Divider()
+            .padding(.vertical, 14)
+    }
+
+    private var removeMenu: some View {
+        Menu {
+            Button("Remove Extension", role: .destructive) {
+                manager.remove(extensionID: record.id)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 18)
+        .help(
+            record.isIncluded
+                ? "Hide this included extension"
+                : "Delete this extension package"
+        )
     }
 
     private var permissions: some View {
@@ -292,7 +413,7 @@ private struct ExtensionRow: View {
     ) -> some View {
         let status = manager.permissionStatus(permission)
         let actionTitle = extensionIsEnabled
-            ? manager.permissionActionTitle(permission)
+            ? manager.permissionActionTitle(permission, status: status)
             : nil
         if let actionTitle {
             Button {

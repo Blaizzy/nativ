@@ -99,10 +99,35 @@ public struct NativExtensionContributions: Codable, Hashable, Sendable {
         self.shortcuts = shortcuts
         self.settings = settings
     }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sidebar = try container.decodeIfPresent(
+            [NativSidebarContribution].self,
+            forKey: .sidebar
+        ) ?? []
+        commands = try container.decodeIfPresent(
+            [NativCommandContribution].self,
+            forKey: .commands
+        ) ?? []
+        shortcuts = try container.decodeIfPresent(
+            [NativShortcutContribution].self,
+            forKey: .shortcuts
+        ) ?? []
+        settings = try container.decodeIfPresent(
+            [NativSettingsContribution].self,
+            forKey: .settings
+        ) ?? []
+    }
 }
 
 public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     public static let currentSchemaVersion = 1
+    public static let defaultExtensionPoint = "com.nativ.extension"
+    /// The schema under which omitting the field was legal. Deliberately a
+    /// literal, not `currentSchemaVersion` — otherwise raising the current
+    /// version would silently reinterpret every existing manifest as new.
+    private static let assumedSchemaVersion = 1
 
     public let schemaVersion: Int
     public let id: String
@@ -132,7 +157,7 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         included: Bool,
         enabledByDefault: Bool? = nil,
         runtime: NativExtensionRuntimeKind,
-        extensionPoint: String = "com.nativ.extension",
+        extensionPoint: String = NativExtensionManifest.defaultExtensionPoint,
         runtimeBundleIdentifier: String? = nil,
         contributions: NativExtensionContributions = .init(),
         permissions: [NativExtensionPermission] = []
@@ -152,6 +177,52 @@ public struct NativExtensionManifest: Codable, Hashable, Identifiable, Sendable 
         self.runtimeBundleIdentifier = runtimeBundleIdentifier
         self.contributions = contributions
         self.permissions = permissions
+    }
+
+    /// Only identity and presentation are required of an author. Structural
+    /// fields fall back to their empty or conventional values so a hand-written
+    /// manifest is not rejected for omitting boilerplate it does not use.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decodeIfPresent(
+            Int.self,
+            forKey: .schemaVersion
+        ) ?? Self.assumedSchemaVersion
+        id = try container.decode(String.self, forKey: .id)
+        version = try container.decode(String.self, forKey: .version)
+        minimumNativVersion = try container.decode(
+            String.self,
+            forKey: .minimumNativVersion
+        )
+        displayName = try container.decode(String.self, forKey: .displayName)
+        summary = try container.decode(String.self, forKey: .summary)
+        developer = try container.decode(String.self, forKey: .developer)
+        systemImage = try container.decode(String.self, forKey: .systemImage)
+        included = try container.decodeIfPresent(Bool.self, forKey: .included) ?? false
+        enabledByDefault = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .enabledByDefault
+        )
+        runtime = try container.decode(
+            NativExtensionRuntimeKind.self,
+            forKey: .runtime
+        )
+        extensionPoint = try container.decodeIfPresent(
+            String.self,
+            forKey: .extensionPoint
+        ) ?? Self.defaultExtensionPoint
+        runtimeBundleIdentifier = try container.decodeIfPresent(
+            String.self,
+            forKey: .runtimeBundleIdentifier
+        )
+        contributions = try container.decodeIfPresent(
+            NativExtensionContributions.self,
+            forKey: .contributions
+        ) ?? .init()
+        permissions = try container.decodeIfPresent(
+            [NativExtensionPermission].self,
+            forKey: .permissions
+        ) ?? []
     }
 
     public var isEnabledByDefault: Bool {
