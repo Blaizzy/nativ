@@ -2543,7 +2543,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = .clear
         textView.drawsBackground = false
-        textView.allowsUndo = true
+        textView.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
         textView.isRichText = false
         textView.importsGraphics = false
         textView.isVerticallyResizable = true
@@ -2588,13 +2588,14 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
         (textView as? ChatComposerNSTextView)?.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
+        (textView as? ChatComposerNSTextView)?.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
 
         if !textView.hasMarkedText(), textView.string != text {
             textView.string = text
         }
         if context.coordinator.lastResetToken != resetToken {
             context.coordinator.lastResetToken = resetToken
-            textView.undoManager?.removeAllActions()
+            textView.composerUndoManager?.removeAllActions()
         }
         context.coordinator.reportContentHeight()
         context.coordinator.requestFocus(ifNeeded: focusToken)
@@ -2650,17 +2651,17 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             }
 
             defer { pendingEdit = nil }
-            // The native undo operation and the paired draft snapshot restore one another.
-            if onTextEdit != nil, textView.undoManager?.isUndoing == true || textView.undoManager?.isRedoing == true {
+            if onTextEdit != nil || onTextCommit != nil,
+               textView.composerUndoManager?.isUndoing == true || textView.composerUndoManager?.isRedoing == true {
                 reportContentHeight()
                 return
             }
             if let onTextEdit, let edit = pendingEdit,
                Range(edit.range, in: text) != nil,
                (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement) == textView.string {
-                onTextEdit(edit.range, edit.replacement, textView.undoManager)
+                onTextEdit(edit.range, edit.replacement, textView.composerUndoManager)
             } else if let onTextCommit {
-                onTextCommit(textView.string, textView.undoManager)
+                onTextCommit(textView.string, textView.composerUndoManager)
             } else {
                 text = textView.string
             }
@@ -2675,7 +2676,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         func handlePasteText(_ pastedText: String, range: NSRange) -> Bool {
             guard let onPasteText else { return false }
-            onPasteText(pastedText, range, textView?.undoManager)
+            onPasteText(pastedText, range, textView?.composerUndoManager)
             return true
         }
 
@@ -2742,7 +2743,38 @@ private final class ChatComposerNSScrollView: NSScrollView {
     }
 }
 
+private extension NSTextView {
+    var composerUndoManager: UndoManager? {
+        (self as? ChatComposerNSTextView)?.draftHistory ?? undoManager
+    }
+}
+
 private final class ChatComposerNSTextView: NSTextView {
+    var usesDraftUndo = false {
+        didSet { allowsUndo = !usesDraftUndo }
+    }
+    private let draftUndoManager = UndoManager()
+
+    var draftHistory: UndoManager? {
+        usesDraftUndo ? (window?.undoManager ?? draftUndoManager) : super.undoManager
+    }
+
+    @objc func undo(_ sender: Any?) {
+        composerUndoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        composerUndoManager?.redo()
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): return composerUndoManager?.canUndo == true
+        case #selector(redo(_:)): return composerUndoManager?.canRedo == true
+        default: return super.validateMenuItem(menuItem)
+        }
+    }
+
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
