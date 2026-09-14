@@ -519,7 +519,11 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     ChatAnnotationCards(annotations: message.annotations)
                 }
                 if showsTextContent {
-                    textBubble
+                    if message.role == .user, !message.pastedTexts.isEmpty {
+                        pastedTextContent
+                    } else {
+                        textBubble(displayContent)
+                    }
                 }
             }
 
@@ -579,12 +583,33 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     @ViewBuilder
-    private var textBubble: some View {
+    private var pastedTextContent: some View {
+        let items = ChatPastedText.validated(message.pastedTexts, in: message.content)
+        let source = message.content as NSString
+        if items.isEmpty {
+            textBubble(displayContent)
+        } else {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let start = index == 0 ? 0 : NSMaxRange(items[index - 1].range)
+                if item.location > start {
+                    textBubble(source.substring(with: NSRange(location: start, length: item.location - start)))
+                }
+                ChatPastedTextCard(pastedText: item)
+                if index == items.count - 1, NSMaxRange(item.range) < source.length {
+                    textBubble(source.substring(from: NSMaxRange(item.range)))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textBubble(_ content: String) -> some View {
+        let usesCompactBubble = !content.contains(where: \.isNewline) && content.count <= 72
         Group {
             if usesCompactBubble {
                 ChatMessageText(
                     messageID: message.id,
-                    content: displayContent,
+                    content: content,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
                     isUserPrompt: message.role == .user
@@ -594,7 +619,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             } else {
                 ChatMessageText(
                     messageID: message.id,
-                    content: displayContent,
+                    content: content,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
                     isUserPrompt: message.role == .user
@@ -609,7 +634,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         .font(.body)
         .padding(.horizontal, message.role == .assistant ? 0 : 12)
         .padding(.vertical, message.role == .assistant ? 3 : 9)
-        .frame(maxWidth: bubbleMaximumWidth, alignment: alignment)
+        .frame(maxWidth: message.role == .user && !usesCompactBubble ? Self.maximumUserBubbleWidth : nil,
+               alignment: alignment)
         .foregroundStyle(foregroundStyle)
         .background(
             RoundedRectangle(cornerRadius: 8)
@@ -639,10 +665,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         message.role == .user ? .trailing : .leading
     }
 
-    private var bubbleMaximumWidth: CGFloat? {
-        message.role == .user && !usesCompactBubble ? Self.maximumUserBubbleWidth : nil
-    }
-
     private var alignment: Alignment {
         .leading
     }
@@ -657,11 +679,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
     private var displayContent: String {
         message.content.isEmpty ? " " : message.content
-    }
-
-    private var usesCompactBubble: Bool {
-        !displayContent.contains(where: \.isNewline)
-            && displayContent.count <= 72
     }
 
     private var showsTextContent: Bool {
