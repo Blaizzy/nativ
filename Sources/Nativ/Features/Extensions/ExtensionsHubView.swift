@@ -355,6 +355,10 @@ private struct ExtensionRow: View {
                 sectionDivider
                 NoticeRow(tone: .warning, title: errorMessage)
             }
+            if !runnableCommands.isEmpty {
+                sectionDivider
+                commands
+            }
             if !record.manifest.permissions.isEmpty {
                 sectionDivider
                 permissions
@@ -392,6 +396,32 @@ private struct ExtensionRow: View {
                 ? "Hide this included extension"
                 : "Delete this extension package"
         )
+    }
+
+    /// Declarative extensions have no page of their own yet, so their commands
+    /// need somewhere to be run from.
+    private var runnableCommands: [NativCommandContribution] {
+        guard record.manifest.runtime == .declarative, record.isEnabled else {
+            return []
+        }
+        return record.manifest.contributions.commands
+    }
+
+    private var commands: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text("Commands")
+                .font(.subheadline.weight(.semibold))
+            FlowLayout(spacing: 8) {
+                ForEach(runnableCommands) { command in
+                    Button {
+                        manager.performCommand(id: command.id)
+                    } label: {
+                        Label(command.title, systemImage: command.systemImage ?? "play")
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
     }
 
     private var permissions: some View {
