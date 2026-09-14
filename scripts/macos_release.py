@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release metadata and preview appcasts. Uses only the Python standard library."""
+"""Release metadata and appcast publication. Uses only the Python standard library."""
 
 import argparse
 import base64
@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 PREVIEW_TAG = "preview"
+TEMPORARY_APPCAST_LABEL = "Temporary appcast from "
 ET.register_namespace("sparkle", SPARKLE)
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?(?:rc([1-9][0-9]*))?")
 
@@ -183,8 +184,11 @@ class GitHub:
                     "Download applications from the versioned releases. This release contains only update metadata.",
         })
 
-    def upload_preview_asset(self, release_id, name, data):
-        return self.mutate("POST", f"releases/{release_id}/assets?{urllib.parse.urlencode({'name': name})}",
+    def upload_appcast_asset(self, release_id, name, data, *, label=None):
+        parameters = {"name": name}
+        if label is not None:
+            parameters["label"] = label
+        return self.mutate("POST", f"releases/{release_id}/assets?{urllib.parse.urlencode(parameters)}",
                            data, upload=True)
 
     def rename_asset(self, asset_id, name):
@@ -194,6 +198,10 @@ class GitHub:
         self.mutate("DELETE", f"releases/assets/{asset_id}")
 
 
+def is_temporary_appcast(asset):
+    return bool(asset and (asset.get("label") or "").startswith(TEMPORARY_APPCAST_LABEL))
+
+
 def release_items(github, releases, *, check_downloads=False):
     result = []
     for release in releases:
@@ -201,8 +209,9 @@ def release_items(github, releases, *, check_downloads=False):
             continue
         assets = {asset["name"]: asset for asset in release.get("assets", [])}
         # Published releases exist before the macOS build completes. Never expose
-        # these until the appcast (uploaded last) and archive are both available.
-        if "appcast.xml" not in assets:
+        # these until the final appcast and archive are both available. A copied
+        # feed keeps stable updates working, but still describes an older release.
+        if "appcast.xml" not in assets or is_temporary_appcast(assets["appcast.xml"]):
             continue
         version, _, _, key = validate_release(release)
         tag = release["tag_name"]
@@ -243,10 +252,10 @@ def validate_preview_release(preview):
     return {asset["name"]: asset for asset in preview.get("assets", [])}
 
 
-def verify_preview_download(github, name, data):
+def verify_appcast_download(github, tag, name, data):
     # A content-specific query avoids a cached redirect to the previous asset ID.
     digest = hashlib.sha256(data).hexdigest()
-    url = f"https://github.com/{github.repository}/releases/download/{PREVIEW_TAG}/{name}?sha256={digest}"
+    url = f"https://github.com/{github.repository}/releases/download/{tag}/{name}?sha256={digest}"
     for attempt in range(6):
         try:
             if github.request(url) == data:
@@ -256,7 +265,7 @@ def verify_preview_download(github, name, data):
                 raise
         if attempt < 5:
             time.sleep(2)
-    raise ValueError(f"Published preview asset does not match the validated feed: {name}")
+    raise ValueError(f"{tag}: published asset does not match the validated feed: {name}")
 
 
 def publish_preview(github, output_path):
@@ -273,7 +282,16 @@ def publish_preview(github, output_path):
         if error.code != 404:
             raise
         preview = github.create_preview()
-    assets = validate_preview_release(preview)
+    validate_preview_release(preview)
+    replace_appcast(github, preview, data)
+    print(f"Published {len(records)} releases to "
+          f"https://github.com/{github.repository}/releases/download/{PREVIEW_TAG}/appcast.xml")
+
+
+def replace_appcast(github, target, data):
+    """Stage and verify a feed before swapping it with a replaceable appcast."""
+    tag = target["tag_name"]
+    assets = {asset["name"]: asset for asset in target.get("assets", [])}
     current = assets.get("appcast.xml")
     backup = assets.get("appcast-previous.xml")
     # Recover an interrupted rename before attempting another publication.
@@ -281,9 +299,9 @@ def publish_preview(github, output_path):
         current = github.rename_asset(backup["id"], "appcast.xml")
         backup = None
     if current is not None:
-        url = f"https://github.com/{github.repository}/releases/download/{PREVIEW_TAG}/appcast.xml?asset={current['id']}"
+        url = f"https://github.com/{github.repository}/releases/download/{tag}/appcast.xml?asset={current['id']}"
         if github.request(url) == data:
-            print("Preview appcast is already current")
+            print(f"{tag}: appcast is already current")
             return
 
     staged_name = f"appcast-staged-{hashlib.sha256(data).hexdigest()}.xml"
@@ -292,8 +310,8 @@ def publish_preview(github, output_path):
         github.delete_asset(staged["id"])
         staged = None
     if staged is None:
-        staged = github.upload_preview_asset(preview["id"], staged_name, data)
-    verify_preview_download(github, staged_name, data)
+        staged = github.upload_appcast_asset(target["id"], staged_name, data)
+    verify_appcast_download(github, tag, staged_name, data)
 
     # GitHub has no atomic asset replacement. Upload/verify first, keep the old
     # asset as a backup, and restore it if promoting the new feed fails.
@@ -303,10 +321,10 @@ def publish_preview(github, output_path):
                 github.delete_asset(backup["id"])
             github.rename_asset(current["id"], "appcast-previous.xml")
         github.rename_asset(staged["id"], "appcast.xml")
-        verify_preview_download(github, "appcast.xml", data)
+        verify_appcast_download(github, tag, "appcast.xml", data)
     except Exception as publish_error:
         try:
-            remaining = validate_preview_release(github.release(PREVIEW_TAG))
+            remaining = {asset["name"]: asset for asset in github.release(tag).get("assets", [])}
             live = remaining.get("appcast.xml")
             if live is not None and live["id"] == staged["id"]:
                 github.rename_asset(staged["id"], staged_name)
@@ -314,18 +332,88 @@ def publish_preview(github, output_path):
             if current is not None and previous is not None and previous["id"] == current["id"]:
                 github.rename_asset(current["id"], "appcast.xml")
         except Exception as recovery_error:
-            raise RuntimeError("Preview publication and recovery failed; rerun the workflow with tag=preview "
-                               f"to recover the saved feed: {recovery_error}") from publish_error
+            raise RuntimeError(f"{tag}: appcast publication and recovery failed; "
+                               f"recover appcast-previous.xml before retrying: {recovery_error}") from publish_error
         raise
-    print(f"Published {len(records)} releases to "
-          f"https://github.com/{github.repository}/releases/download/{PREVIEW_TAG}/appcast.xml")
+
+
+def seed_appcast(github, tag):
+    target = github.release(tag)
+    _, _, channel, key = validate_release(target)
+    if channel != "stable":
+        return  # RC releases use the fixed preview feed, not releases/latest.
+    assets = {asset["name"]: asset for asset in target.get("assets", [])}
+    current = assets.get("appcast.xml")
+    if current is not None and (not is_temporary_appcast(current) or current.get("state") == "uploaded"):
+        print(f"{tag}: appcast is already attached")
+        return
+    if target.get("immutable"):
+        raise ValueError(f"{tag}: cannot attach an appcast to an immutable release")
+    if current is not None:
+        github.delete_asset(current["id"])  # Retry an incomplete placeholder upload.
+    backup = assets.get("appcast-previous.xml")
+    if is_temporary_appcast(backup):
+        github.rename_asset(backup["id"], "appcast.xml")
+        return
+    candidates = []
+    for previous in github.releases():
+        if previous.get("draft") or previous.get("prerelease") or previous["tag_name"] == PREVIEW_TAG:
+            continue
+        appcast = next((asset for asset in previous.get("assets", []) if asset["name"] == "appcast.xml"), None)
+        if appcast is None or is_temporary_appcast(appcast):
+            continue
+        previous_key = validate_release(previous)[3]
+        if previous_key < key:
+            candidates.append((previous_key, previous))
+    if not candidates:
+        print(f"{tag}: no previous stable macOS appcast to attach")
+        return
+    # Only download the selected feed so startup does not wait on every release.
+    _, previous = max(candidates, key=lambda candidate: candidate[0])
+    release_items(github, [previous], check_downloads=True)
+    source_tag = previous["tag_name"]
+    data = github.request(f"https://github.com/{github.repository}/releases/download/{source_tag}/appcast.xml")
+    parse_item(data, source_tag, github.repository)
+    github.upload_appcast_asset(target["id"], "appcast.xml", data,
+                                label=TEMPORARY_APPCAST_LABEL + source_tag)
+    verify_appcast_download(github, tag, "appcast.xml", data)
+    print(f"{tag}: attached the {source_tag} appcast until the new build is ready")
+
+
+def publish_release_appcast(github, tag, path):
+    target = github.release(tag)
+    version, _, _, _ = validate_release(target)
+    if target.get("immutable"):
+        raise ValueError(f"{tag}: cannot publish an appcast to an immutable release")
+    data = Path(path).read_bytes()
+    item = parse_item(data, tag, github.repository)
+    assets = {asset["name"]: asset for asset in target.get("assets", [])}
+    archive = assets.get(f"Nativ-{version}.dmg")
+    enclosure = item.find("enclosure")
+    if (not archive or archive.get("state") != "uploaded"
+            or archive["size"] != int(enclosure.get("length"))):
+        raise ValueError(f"{tag}: upload the matching DMG before publishing its appcast")
+    github.request(enclosure.get("url"), head=True)
+    current = assets.get("appcast.xml")
+    if current is not None and not is_temporary_appcast(current):
+        url = f"https://github.com/{github.repository}/releases/download/{tag}/appcast.xml?asset={current['id']}"
+        if github.request(url) == data:
+            print(f"{tag}: appcast is already current")
+            return
+        raise ValueError(f"{tag}: refusing to replace a completed release appcast")
+    backup = assets.get("appcast-previous.xml")
+    if backup is not None and not is_temporary_appcast(backup):
+        raise ValueError(f"{tag}: refusing to replace an unrecognized appcast backup")
+    replace_appcast(github, target, data)
+    print(f"{tag}: published the new release appcast")
 
 
 def preflight(github, tag, environment_path, notes_path):
     release = github.release(tag)
     version, _, channel, key = validate_release(release)
-    protected_assets = {"appcast.xml", f"Nativ-{version}.dmg"}
-    if any(asset["name"] in protected_assets for asset in release.get("assets", [])):
+    if any(asset["name"] == f"Nativ-{version}.dmg"
+           or (asset["name"] == "appcast.xml" and not is_temporary_appcast(asset))
+           for asset in release.get("assets", [])):
         raise ValueError(f"{tag}: release assets already exist; publish a new version instead of replacing signed downloads")
     records = release_items(github, github.releases())
     if channel == "rc" and any(record[0] >= key for record in records):
@@ -356,6 +444,13 @@ def main():
     validate = commands.add_parser("validate-release")
     validate.add_argument("--tag", required=True)
     validate.add_argument("--repository", required=True)
+    seed = commands.add_parser("seed-appcast", help="Temporarily attach the previous stable feed during a build")
+    seed.add_argument("--tag", required=True)
+    seed.add_argument("--repository", required=True)
+    publish_release = commands.add_parser("publish-appcast", help="Replace a temporary feed after uploading the DMG")
+    publish_release.add_argument("--tag", required=True)
+    publish_release.add_argument("--repository", required=True)
+    publish_release.add_argument("--path", default="dist/release/appcast.xml")
     preview = commands.add_parser("preview")
     preview.add_argument("--repository", required=True)
     preview.add_argument("--output", required=True)
@@ -372,6 +467,10 @@ def main():
         preflight(GitHub(args.repository), args.tag, args.environment, args.notes)
     elif args.command == "validate-release":
         validate_release(GitHub(args.repository).release(args.tag))
+    elif args.command == "seed-appcast":
+        seed_appcast(GitHub(args.repository), args.tag)
+    elif args.command == "publish-appcast":
+        publish_release_appcast(GitHub(args.repository), args.tag, args.path)
     elif args.command == "publish-preview":
         publish_preview(GitHub(args.repository), args.output)
     else:

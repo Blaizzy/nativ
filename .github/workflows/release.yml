@@ -38,6 +38,11 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
+      - name: Keep the previous stable appcast available during the build
+        run: |
+          python3 scripts/macos_release.py seed-appcast \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
+
       - name: Validate release configuration
         env:
           DEVELOPER_ID_APPLICATION_P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
@@ -118,7 +123,7 @@ jobs:
             --release-notes "$RUNNER_TEMP/release-notes.md" \
             "$RELEASE_VERSION"
 
-      - name: Upload notarized app and appcast to GitHub Release
+      - name: Upload notarized app to GitHub Release
         run: |
           set -euo pipefail
           python3 scripts/macos_release.py validate-release \
@@ -133,7 +138,6 @@ jobs:
 
           assets=(
             "dist/release/Nativ-${RELEASE_VERSION}.dmg|application/x-apple-diskimage"
-            "dist/release/appcast.xml|application/xml"
           )
           for asset in "${assets[@]}"; do
             IFS='|' read -r asset_path content_type <<< "$asset"
@@ -163,6 +167,12 @@ jobs:
               "${upload_url}?name=${asset_name}"
             jq -r '"Uploaded \(.name): \(.browser_download_url)"' "$response_path"
           done
+
+      - name: Replace the temporary appcast with the new release feed
+        run: |
+          python3 scripts/macos_release.py publish-appcast \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --path dist/release/appcast.xml
 
       - name: Verify published appcast
         run: |
