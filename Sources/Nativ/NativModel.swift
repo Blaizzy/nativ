@@ -89,6 +89,8 @@ final class NativModel: ChatModelSwitchingSurface {
     private var modelSwitchWatchdog: Task<Void, Never>?
     @ObservationIgnored private var inferenceActivity: InferenceActivityCoordinator?
     private(set) var modelLoadingProgress: Double?
+    private(set) var prefillProgress = NativPrefillProgressState()
+    private var prefillCompletionTask: Task<Void, Never>?
     private(set) var modelLoadFailure: ModelLoadFailure?
     private(set) var modelPreloadMemoryWarning: ModelPreloadMemoryWarning?
     private(set) var metricsLoading = false
@@ -1107,6 +1109,15 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     private func configureServerCallbacks() {
+        server.onPrefillProgress = { [weak self] events in
+            Task { @MainActor [weak self] in
+                guard let self, self.server.isRunning else { return }
+                for event in events {
+                    self.prefillProgress.apply(event)
+                }
+                self.schedulePrefillCompletionCleanup()
+            }
+        }
         server.onOutput = { [weak self] text in
             Task { @MainActor [weak self] in
                 self?.handleServerOutput(text)
@@ -1166,7 +1177,26 @@ final class NativModel: ChatModelSwitchingSurface {
         }
     }
 
+    private func schedulePrefillCompletionCleanup() {
+        guard prefillCompletionTask == nil,
+              prefillProgress.requests.contains(where: \.isComplete) else { return }
+        prefillCompletionTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.prefillProgress.removeCompleted(before: Date().addingTimeInterval(-1))
+            self.prefillCompletionTask = nil
+            self.schedulePrefillCompletionCleanup()
+        }
+    }
+
     private func startMetricsPolling() {
+        prefillCompletionTask?.cancel()
+        prefillCompletionTask = nil
+        prefillProgress.apply(.reset)
         lastMetricsError = nil
         metrics = nil
         metricsLoading = true
@@ -1195,6 +1225,9 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     private func stopMetricsPolling(clearSession: Bool) {
+        prefillCompletionTask?.cancel()
+        prefillCompletionTask = nil
+        prefillProgress.apply(.reset)
         metricsFetchTask?.cancel()
         metricsFetchTask = nil
         metricsTimer?.invalidate()

@@ -327,6 +327,7 @@ private struct ChatTranscriptView: View {
         case .agentTurn(let turn):
             ChatAgentTurnRow(
                 turn: turn,
+                prefillProgress: turn.isAssistantStreaming ? model.prefillProgress : .init(),
                 imageModelSelectionRequests: imageModelSelectionRequests(for: turn),
                 canForkAssistantResponse: turn.finalAssistantMessage.map {
                     forkableAssistantResponseIDs.contains($0.id)
@@ -368,7 +369,9 @@ private struct ChatTranscriptView: View {
             onSelectImageModel: chat.selectImageModel,
             onCancelImageModelSelection: chat.cancelImageModelSelection,
             onExploreImageModels: onExploreImageModels,
-            onPreviewAttachment: onPreviewAttachment
+            onPreviewAttachment: onPreviewAttachment,
+            prefillProgress: message.role == .assistant && message.isStreaming
+                ? model.prefillProgress : .init()
         )
         .equatable()
         .id(message.id)
@@ -515,6 +518,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     var displaysModelTitle = true
     var displaysThinking = true
+    var prefillProgress = NativPrefillProgressState()
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -528,14 +532,18 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
             && lhs.displaysModelTitle == rhs.displaysModelTitle
             && lhs.displaysThinking == rhs.displaysThinking
+            && lhs.prefillProgress == rhs.prefillProgress
     }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
             if displaysModelTitle && !title.isEmpty {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(title)
+                    ServerPrefillProgressLabel(progress: prefillProgress)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             if message.role == .tool {
@@ -842,6 +850,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
 private struct ChatAgentTurnRow: View {
     let turn: ChatAgentTurnPresentation
+    var prefillProgress = NativPrefillProgressState()
     let imageModelSelectionRequests: [UUID: ChatImageModelSelectionRequest]
     let canForkAssistantResponse: Bool
     let onForkAssistantResponse: (UUID) -> Void
@@ -854,9 +863,12 @@ private struct ChatAgentTurnRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(modelTitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(modelTitle)
+                ServerPrefillProgressLabel(progress: prefillProgress)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
 
             if showsThinkingBubble {
                 ChatThinkingBubble(
