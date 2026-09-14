@@ -12,6 +12,20 @@ and enabled by default; disable, remove, and restore are supported — see
 A global shortcut starts capture anywhere. On release/stop, the recording is transcribed and the
 text is inserted at the current cursor position; the transcript is also placed on the clipboard.
 
+By default, say **“enter”** as the final word to press Return after inserting the text. For example,
+“Send me the details enter” inserts “Send me the details” and then presses Return in the target
+app. The command is omitted from the inserted text, clipboard, saved transcript, and dictation
+history. Capitalization and trailing punctuation (such as “Enter.”) are ignored. Saying only
+“enter” presses Return without pasting text or changing the clipboard. “Enter” elsewhere in a
+dictation remains ordinary text. This also applies when retrying a dictation.
+
+In **Audio → Shortcuts → Spoken Return**, turn the command on or off and change its **Trigger
+word or phrase** (for example, “send it”). Only the configured trigger at the end of dictation
+presses Return; earlier occurrences remain text. **Restore Default** changes the trigger back to
+“enter”. Settings are saved automatically and take effect immediately for both speech engines
+and retries. Turning the command off or leaving the trigger blank keeps all dictated words in
+the transcript without pressing Return.
+
 ## Shortcuts and modes
 
 | Action | Default | Behavior |
