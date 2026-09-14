@@ -154,9 +154,8 @@ enum HuggingFaceCapabilityFilter {
 }
 
 enum HuggingFaceDownloadFilePolicy {
-    /// Repositories are selected through the Hub's SafeTensors index. A mixed
-    /// repository can still contain optional GGUF artifacts, so exclude those
-    /// files from the snapshot instead of hiding the entire repository.
+    /// Also skip optional GGUF artifacts when repository metadata does not
+    /// identify them or a download is requested outside Discover.
     static let ignoredPatterns = ["*.[gG][gG][uU][fF]"]
 
     static var pythonListLiteral: String {
@@ -191,6 +190,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let capabilities: Set<LocalModelCapability>
     let memoryEstimate: LocalModelMemoryEstimate?
     let drafterKind: String?
+
+    var isGGUF: Bool {
+        id.localizedCaseInsensitiveContains("gguf")
+            || libraryName?.localizedCaseInsensitiveContains("gguf") == true
+            || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
