@@ -607,7 +607,8 @@ final class ChatViewModel: ObservableObject {
     func archive(
         for sessionID: UUID,
         selectedModelID: String?,
-        systemPrompt: String
+        systemPrompt: String,
+        includePersonalization: Bool = false
     ) -> ChatArchive? {
         let session: ChatSession?
         if sessionID == currentSessionID {
@@ -628,7 +629,8 @@ final class ChatViewModel: ObservableObject {
         return ChatArchive(
             chat: session,
             modelRepositoryID: modelRepositoryID,
-            systemPrompt: session.importedSystemPrompt ?? systemPrompt
+            systemPrompt: session.importedSystemPrompt ?? systemPrompt,
+            includePersonalization: includePersonalization
         )
     }
 
