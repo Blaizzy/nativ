@@ -87,7 +87,6 @@ private struct DashboardModelState: Equatable {
     let analyticsDatabaseURL: URL
     let loadedModelID: String?
     let historicalMetricsRevision: DashboardMetricsRevision?
-    let prefillProgress: NativPrefillProgressState
 
     @MainActor
     init(model: NativModel) {
@@ -95,7 +94,6 @@ private struct DashboardModelState: Equatable {
         modelSearchPaths = model.settings.localModelSearchPaths
         analyticsDatabaseURL = model.analyticsDatabaseURL
         loadedModelID = model.metrics?.server.loadedModel
-        prefillProgress = model.prefillProgress
         historicalMetricsRevision = model.metrics.map {
             DashboardMetricsRevision(
                 completedRequests: $0.summary.requestsCompleted,
@@ -133,11 +131,6 @@ private struct DashboardContentView: View, @MainActor Equatable {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         filterBar
-                        if !modelState.prefillProgress.requests.isEmpty {
-                            ServerPrefillProgressView(progress: modelState.prefillProgress)
-                                .padding(12)
-                                .nativPanelStyle()
-                        }
                         overviewCards
                         analyticsGrid(availableWidth: min(geometry.size.width, 1500) - 44)
                         modelPerformanceSection
