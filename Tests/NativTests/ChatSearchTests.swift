@@ -30,10 +30,45 @@ final class ChatSearchTests: XCTestCase {
         let fragments = ChatSearchDocument.fragments(for: input)
         let layout = MarkdownLayouter.layout(MathPreprocessor.preprocess(source), width: 500, style: MarkdownStyle())
         let rendered = Dictionary(uniqueKeysWithValues: layout.blocks.flatMap { block in
-            block.text.map { (block.id + "/" + $0.id, $0.text.string) }
+            block.text.map { (block.id + "/" + $0.id, MarkdownSearchText($0.text).text) }
         })
         for fragment in fragments { XCTAssertEqual(fragment.text, rendered[fragment.id], fragment.id) }
         XCTAssertFalse(fragments.map(\.text).joined().contains("example.com/hidden"))
+    }
+
+    func testMathFallbackAndAttachmentsKeepHighlightingAndNavigationAligned() async throws {
+        for expression in [#"$\notARealCommand$"#, #"$\frac{a}{b}$"#,
+                           #"$\frac{a}{b}$ then $\notARealCommand$"#] {
+            let source = String(repeating: "Background paragraph.\n\n", count: 60)
+                + "Before 👩🏽‍💻 \(expression) notification café."
+            let result = try await ChatSearchWorker().search("notification", inputs: [input(source, markdown: true)])
+            let selected = try XCTUnwrap(result.occurrences.first)
+            let (window, scroll, surface) = fixture(MathPreprocessor.preprocess(source))
+            defer { window.close() }
+            surface.setSearchHighlight(ChatSearchHighlight(matches: result.occurrences, selected: selected, revealID: UUID()))
+            surface.layoutSubtreeIfNeeded()
+            surface.revealSearchMatchIfNeeded()
+            XCTAssertGreaterThan(scroll.contentView.bounds.minY, 500, expression)
+            surface.refreshVisibleBlocks()
+            let view = try XCTUnwrap(surface.visibleTextViews.first { $0.fragmentID == selected.fragmentID })
+            let range = try XCTUnwrap(view.activeSearchRange)
+            XCTAssertEqual((view.string as NSString).substring(with: range), "notification", expression)
+            XCTAssertEqual(view.searchRanges, [range])
+            XCTAssertEqual(view.searchText.text, selected.text)
+        }
+    }
+
+    func testSearchInsideMathSelectsTheAttachmentAndSpanningRangesIncludeSurroundingText() throws {
+        let source = #"Before $\frac{a}{b}$ after $\notARealCommand$ café"#
+        let layout = MarkdownLayouter.layout(MathPreprocessor.preprocess(source), width: 500, style: .init())
+        let rendered = try XCTUnwrap(layout.blocks.first?.text.first?.text)
+        let projection = MarkdownSearchText(rendered)
+        XCTAssertEqual(projection.text, #"Before \frac{a}{b} after \notARealCommand café"#)
+        let formula = try XCTUnwrap(projection.renderedRange(for: (projection.text as NSString).range(of: "frac")))
+        XCTAssertEqual(formula.length, 1)
+        XCTAssertNotNil(rendered.attribute(.attachment, at: formula.location, effectiveRange: nil))
+        let spanning = try XCTUnwrap(projection.renderedRange(for: (projection.text as NSString).range(of: #"Before \frac{a}{b} after"#)))
+        XCTAssertEqual((rendered.string as NSString).substring(with: spanning), "Before \u{FFFC} after")
     }
 
     func testSearchIncludesRenderedMessagesAndMapsGroupedResponsesToTheirRow() {

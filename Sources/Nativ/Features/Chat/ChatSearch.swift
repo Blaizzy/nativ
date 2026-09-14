@@ -96,7 +96,9 @@ enum ChatSearchDocument {
             case "softbreak": return " "
             case "linebreak": return "\n"
             case "image":
-                if URL(string: node.destination)?.scheme == "swiftmath" { return "\u{FFFC}" }
+                if let url = URL(string: node.destination), url.scheme == "swiftmath" {
+                    return MathPreprocessor.decodeBase64URL(String(url.path.dropFirst())) ?? "math"
+                }
                 let label = inline(node.children)
                 return label.isEmpty ? node.destination : label
             case "html_inline":
@@ -647,11 +649,12 @@ extension MarkdownSurface {
         guard let searchHighlight else { return }
         let fragments = Dictionary(grouping: searchHighlight.matches.flatMap(\.fragments), by: \.id)
         for view in visibleTextViews {
-            let matches = fragments[view.fragmentID]?.filter { $0.text == view.string } ?? []
-            view.searchRanges = matches.map(\.range)
+            let projection = view.searchText
+            let matches = fragments[view.fragmentID]?.filter { $0.text == projection.text } ?? []
+            view.searchRanges = matches.compactMap { projection.renderedRange(for: $0.range) }
             view.activeSearchRange = searchHighlight.selected?.fragments.first {
-                $0.id == view.fragmentID && $0.text == view.string
-            }?.range
+                $0.id == view.fragmentID && $0.text == projection.text
+            }.flatMap { projection.renderedRange(for: $0.range) }
         }
     }
 
@@ -663,11 +666,13 @@ extension MarkdownSurface {
         for block in snapshot.blocks {
             for fragment in block.text {
                 let id = block.id + "/" + fragment.id
-                guard let match = selected.fragments.first(where: { $0.id == id && $0.text == fragment.text.string }) else { continue }
+                let projection = MarkdownSearchText(fragment.text)
+                guard let match = selected.fragments.first(where: { $0.id == id && $0.text == projection.text }),
+                      let range = projection.renderedRange(for: match.range) else { continue }
                 let system = visibleTextViews.first { $0.fragmentID == id }?.system
                     ?? MarkdownTextSystem(fragment.text, width: fragment.frame.width)
-                guard let start = system.storage.location(system.storage.documentRange.location, offsetBy: match.range.location),
-                      let end = system.storage.location(start, offsetBy: match.range.length),
+                guard let start = system.storage.location(system.storage.documentRange.location, offsetBy: range.location),
+                      let end = system.storage.location(start, offsetBy: range.length),
                       let range = NSTextRange(location: start, end: end) else { return }
                 system.manager.ensureLayout(for: system.storage.documentRange)
                 var local: CGRect?

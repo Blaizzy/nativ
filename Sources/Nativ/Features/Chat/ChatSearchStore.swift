@@ -79,7 +79,7 @@ final class ChatSearchStore {
         try execute("PRAGMA secure_delete=ON")
         try execute("CREATE TABLE IF NOT EXISTS metadata (version TEXT NOT NULL)")
         let system = ProcessInfo.processInfo.operatingSystemVersion
-        let version = "1:\(system.majorVersion).\(system.minorVersion)"
+        let version = "2:\(system.majorVersion).\(system.minorVersion)"
         var storedVersion: String?
         try rows("SELECT version FROM metadata") { statement in
             if let text = sqlite3_column_text(statement, 0) { storedVersion = String(cString: text) }

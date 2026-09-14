@@ -25,6 +25,7 @@
 		086BC5B6FF02F0305536333B /* CustomTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */; };
 		086BDF7ECBBC6CF5F63C63CB /* TavilyBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C90AC464C5C04FB14A3C789 /* TavilyBrowsingProvider.swift */; };
 		088297CDFEFECD2787806AD7 /* VoiceCaptureCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D07325FEFBE7AF27167E009 /* VoiceCaptureCoordinator.swift */; };
+		08ED57DC3609DD5F20F2C0CE /* MarkdownSearchText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7FEC99DBAD937331D69E847 /* MarkdownSearchText.swift */; };
 		0935A0AC0D6A6298D551EEAE /* ArtifactSemanticSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46BCF5F68C499E27A789A91F /* ArtifactSemanticSearch.swift */; };
 		0940E69FB438245641377D01 /* NativKitLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBE65855FB48CA89F7A0DDA8 /* NativKitLibrary.swift */; };
 		09AFBDCFDE11D1048329E070 /* WebBrowsingRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 254FDFBF7C5F7C8019E9E03F /* WebBrowsingRuntime.swift */; };
@@ -59,6 +60,7 @@
 		1A82A76742BFEEBE881659BD /* TavilyBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C90AC464C5C04FB14A3C789 /* TavilyBrowsingProvider.swift */; };
 		1AF312AA0292E34A471F5D16 /* ChatToolConfirmationButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8272E05C13BEB152E8C7C3D4 /* ChatToolConfirmationButton.swift */; };
 		1BC04270E5886ABB757CF78B /* ChatTextSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88A912DB7266F6655AA7BB8E /* ChatTextSearchTests.swift */; };
+		1C4E47D90B9A83469EE80D5D /* MarkdownSearchText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7FEC99DBAD937331D69E847 /* MarkdownSearchText.swift */; };
 		1C6295D830FE941FDCE3ECCC /* CodexCLIProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */; };
 		1CD847CE1BC2696D9306656D /* ChatSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 530D284E65297E3CA8050AE1 /* ChatSessionStore.swift */; };
 		1DCBC70AA972310D3FBC22CC /* ChatSwitchModelTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BBBE5DAD60FA5D2450B2CD /* ChatSwitchModelTool.swift */; };
@@ -821,6 +823,7 @@
 		C503D1550EDF250574853F25 /* LocalModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelDiscoveryTests.swift; sourceTree = "<group>"; };
 		C5BBBE5DAD60FA5D2450B2CD /* ChatSwitchModelTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSwitchModelTool.swift; sourceTree = "<group>"; };
 		C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomTool.swift; sourceTree = "<group>"; };
+		C7FEC99DBAD937331D69E847 /* MarkdownSearchText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSearchText.swift; sourceTree = "<group>"; };
 		C870DD5A3B825D12BC04EB9D /* PersistedDataChangeHubTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedDataChangeHubTests.swift; sourceTree = "<group>"; };
 		C8B94192425D46A59F516118 /* PersistedDataChangeHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistedDataChangeHub.swift; sourceTree = "<group>"; };
 		C9A57792805B0438492CB6AB /* ChatToolRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatToolRegistryTests.swift; sourceTree = "<group>"; };
@@ -947,6 +950,7 @@
 				B3A721B07262EFFDF44CC505 /* MarkdownImages.swift */,
 				FC4975A173CF8A58FC745811 /* MarkdownLayout.swift */,
 				B89C8AB8FCF1292D303C7EB2 /* MarkdownRenderer.swift */,
+				C7FEC99DBAD937331D69E847 /* MarkdownSearchText.swift */,
 				8DE109F2077912969C25E134 /* MarkdownSelection.swift */,
 				B50DB6DEB5C434C27FE9AF66 /* MarkdownText.swift */,
 				317509D10D670E696B038E8E /* MarkdownView.swift */,
@@ -2029,6 +2033,7 @@
 				AAF463B00CFC2B97177A7032 /* MarkdownImages.swift in Sources */,
 				9E77E20A4E80B421AAA4B744 /* MarkdownLayout.swift in Sources */,
 				241AEF4F70EFE8E163A904D9 /* MarkdownRenderer.swift in Sources */,
+				08ED57DC3609DD5F20F2C0CE /* MarkdownSearchText.swift in Sources */,
 				779FE0893F39B59395C991C8 /* MarkdownSelection.swift in Sources */,
 				F39E0A3FF5B7D6375EBB71BC /* MarkdownText.swift in Sources */,
 				5A149C678F9793812E308BB7 /* MarkdownView.swift in Sources */,
@@ -2252,6 +2257,7 @@
 				38956710F4584FF34F0C9CAC /* MarkdownImages.swift in Sources */,
 				828C68B2F6BC8AE5019D2D4D /* MarkdownLayout.swift in Sources */,
 				EED0FA36452769271F0CB8BB /* MarkdownRenderer.swift in Sources */,
+				1C4E47D90B9A83469EE80D5D /* MarkdownSearchText.swift in Sources */,
 				F3D21045349377FF044ABDC7 /* MarkdownSelection.swift in Sources */,
 				E82F16B73372F51DA3767A67 /* MarkdownSelectionTests.swift in Sources */,
 				91D44CF9A9E6E472C7498789 /* MarkdownTests.swift in Sources */,

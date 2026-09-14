@@ -327,6 +327,7 @@ final class MarkdownSelectableTextView: NSTextView {
     var pendingSearchPulse = false
     var searchPulseLayer: CAShapeLayer?
     let system: MarkdownTextSystem
+    var searchText: MarkdownSearchText { MarkdownSearchText(original) }
     private let original: NSAttributedString
     private let measuredWidth: CGFloat
     var hasActiveSelection: Bool { window?.firstResponder === self && selectedRange().length > 0 }
@@ -456,12 +457,6 @@ final class MarkdownSelectableTextView: NSTextView {
     }
 
     static func plainText(_ text: NSAttributedString) -> String {
-        var result = ""
-        text.enumerateAttribute(
-            .markdownAlternative, in: NSRange(location: 0, length: text.length)
-        ) { alternative, range, _ in
-            result += (alternative as? String) ?? (text.string as NSString).substring(with: range)
-        }
-        return result
+        MarkdownSearchText(text).text
     }
 }
