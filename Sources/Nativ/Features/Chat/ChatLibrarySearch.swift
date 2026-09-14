@@ -69,6 +69,7 @@ final class ChatSearchLibrary {
     private(set) var revision = 0
     private(set) var error: String?
     @ObservationIgnored private var startup: Task<Void, Error>?
+    @ObservationIgnored private var startupSessions: [ChatSession]?
     @ObservationIgnored private var updateTask: Task<Void, Error>?
     @ObservationIgnored private var pending: [UUID: Update] = [:]
     @ObservationIgnored private var knownSessions: Set<UUID> = []
@@ -81,24 +82,40 @@ final class ChatSearchLibrary {
     func start(_ sessions: [ChatSession]) {
         guard startup == nil else { return }
         knownSessions.formUnion(sessions.map(\.id))
+        startupSessions = sessions
+        startIfNeeded()
+    }
+
+    private func startIfNeeded() {
+        guard startup == nil, let sessions = startupSessions else { return }
         let worker = worker
         startup = Task(priority: .utility) { [weak self] in
             do {
                 try await worker.bootstrap(sessions)
+                self?.startupSessions = nil
+                self?.error = nil
                 self?.revision &+= 1
+                self?.schedule()
             } catch {
-                self?.error = "Search is unavailable. Try again."
-                self?.revision &+= 1
+                self?.startup = nil
+                self?.reportFailure()
                 throw error
             }
         }
-        schedule()
     }
 
     func ready() async throws {
+        startIfNeeded()
         try await startup?.value
         schedule()
         try await updateTask?.value
+    }
+
+    private func reportFailure() {
+        // Repeated failures must not trigger an endless retry through revision observers.
+        guard error == nil else { return }
+        error = "Search is unavailable. Try again."
+        revision &+= 1
     }
 
     func invalidate(_ sessionID: UUID?, from chat: ChatViewModel) {
@@ -133,38 +150,41 @@ final class ChatSearchLibrary {
     }
 
     private func schedule() {
-        guard startup != nil, updateTask == nil, !pending.isEmpty else { return }
+        // Updates begin only after bootstrap succeeds, so none retain a failed startup task.
+        guard startup != nil, startupSessions == nil, updateTask == nil, !pending.isEmpty else { return }
         updateTask = Task(priority: .utility) { [weak self] in
-            try await Task.sleep(for: .milliseconds(250))
-            guard let self else { return }
-            try await self.startup?.value
-            let updates = self.pending
-            self.pending = [:]
-            var snapshots: [ChatLibrarySearchSession] = []
-            var removed: Set<UUID> = []
-            var reload: Set<UUID> = []
-            for (id, update) in updates {
-                switch update {
-                case .snapshot(let read):
-                    if let snapshot = read() { snapshots.append(snapshot) }
-                    else { reload.insert(id) }
-                case .removal: removed.insert(id)
-                }
-            }
+            var updates: [UUID: Update] = [:]
             do {
+                try await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
+                updates = self.pending
+                self.pending = [:]
+                var snapshots: [ChatLibrarySearchSession] = []
+                var removed: Set<UUID> = []
+                var reload: Set<UUID> = []
+                for (id, update) in updates {
+                    switch update {
+                    case .snapshot(let read):
+                        if let snapshot = read() { snapshots.append(snapshot) }
+                        else { reload.insert(id) }
+                    case .removal: removed.insert(id)
+                    }
+                }
                 try await self.worker.update(snapshots, removed: removed, reload: reload)
                 self.error = nil
                 self.revision &+= 1
                 self.updateTask = nil
                 self.schedule()
             } catch {
+                guard let self else { throw error }
                 for (id, update) in updates where self.pending[id] == nil { self.pending[id] = update }
-                self.error = "Search is unavailable. Try again."
+                self.reportFailure()
                 self.updateTask = nil
                 throw error
             }
         }
     }
+
 }
 
 actor ChatLibrarySearchWorker {

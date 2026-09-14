@@ -477,6 +477,44 @@ final class ChatLibrarySearchTests: XCTestCase {
         }
     }
 
+    func testStartupCanRetryWithoutRestartingAndPreservesPendingChanges() async throws {
+        let url = try databaseURL()
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        let original = ChatSession(id: UUID(), title: "Original", createdAt: Date(), updatedAt: Date(),
+                                   messages: [message("notification")])
+        let deleted = ChatSession(id: UUID(), title: "Deleted", createdAt: Date(), updatedAt: Date(),
+                                  messages: [message("obsolete")])
+        let library = ChatSearchLibrary(storageURL: url)
+        library.start([original, deleted])
+        let edited = session("Edited", id: original.id, messages: [message("permission")])
+        var reads = 0
+        library.enqueue(original.id) { reads += 1; return edited }
+        library.remove(deleted.id)
+        for _ in 0..<2 {
+            do {
+                try await library.ready()
+                XCTFail("Expected storage failure")
+            } catch { XCTAssertNotNil(library.error) }
+        }
+        XCTAssertEqual(reads, 0, "Pending snapshots must wait for a successful bootstrap")
+        try FileManager.default.removeItem(at: url)
+        async let first: Void = library.ready()
+        async let second: Void = library.ready()
+        _ = try await (first, second)
+        XCTAssertEqual(reads, 1)
+        XCTAssertNil(library.error)
+        let obsolete = try await library.worker.search("obsolete")
+        let stale = try await library.worker.search("notification")
+        let current = try await library.worker.search("permission")
+        XCTAssertTrue(obsolete.messages.isEmpty)
+        XCTAssertTrue(stale.messages.isEmpty)
+        XCTAssertEqual(current.messages.map(\.sessionID), [original.id])
+        library.remove(original.id)
+        try await library.ready()
+        let removed = try await library.worker.search("permission")
+        XCTAssertTrue(removed.messages.isEmpty, "Updates must continue after recovery")
+    }
+
     private func databaseURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "ChatSearchTests-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
