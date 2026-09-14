@@ -405,6 +405,53 @@ struct ModelConfigProfile: Codable, Equatable {
     }
 }
 
+struct NativPersonalization: Codable, Equatable {
+    struct Profile: Codable, Equatable {
+        var preferredName = ""
+        var occupation = ""
+        var responseStyle = ""
+        var aboutYou = ""
+    }
+
+    static let rollingMemoryLimit = 20
+
+    var profile = Profile()
+    var collectionEnabled = false
+    private(set) var rollingMemories: [String] = []
+
+    mutating func appendMemory(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collectionEnabled, !text.isEmpty else { return }
+        rollingMemories.append(text)
+        rollingMemories = Array(rollingMemories.suffix(Self.rollingMemoryLimit))
+    }
+
+    mutating func removeAllMemories() {
+        rollingMemories.removeAll()
+    }
+
+    var systemPrompt: String {
+        let fields = [
+            ("Preferred name", profile.preferredName),
+            ("Occupation", profile.occupation),
+            ("Response preferences", profile.responseStyle),
+            ("About the user", profile.aboutYou),
+        ]
+        let profileLines = fields.compactMap { label, value -> String? in
+            let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : "\(label): \(value)"
+        }
+        var sections: [String] = []
+        if !profileLines.isEmpty {
+            sections.append("User profile:\n" + profileLines.joined(separator: "\n"))
+        }
+        if !rollingMemories.isEmpty {
+            sections.append("Remembered information about the user:\n" + rollingMemories.joined(separator: "\n"))
+        }
+        return sections.joined(separator: "\n\n")
+    }
+}
+
 struct NativSettings: Codable, Equatable {
     /// Default hub cache location, resolved from the environment.
     /// See `HuggingFaceCache.defaultHubPath`.
@@ -440,6 +487,7 @@ struct NativSettings: Codable, Equatable {
     var maxTokens: Int
     var maxKVSize: Int
     var systemPrompt: String
+    var personalization: NativPersonalization
     var temperature: Double
     var topK: Int
     var topP: Double
@@ -500,6 +548,7 @@ struct NativSettings: Codable, Equatable {
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         systemPrompt: String = "",
+        personalization: NativPersonalization = NativPersonalization(),
         temperature: Double = 0,
         topK: Int = 0,
         topP: Double = 1,
@@ -558,6 +607,7 @@ struct NativSettings: Codable, Equatable {
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.systemPrompt = systemPrompt
+        self.personalization = personalization
         self.temperature = temperature
         self.topK = topK
         self.topP = topP
@@ -619,6 +669,7 @@ struct NativSettings: Codable, Equatable {
         case maxTokens
         case maxKVSize
         case systemPrompt
+        case personalization
         case temperature
         case topK
         case topP
@@ -727,6 +778,8 @@ struct NativSettings: Codable, Equatable {
         systemPrompt =
             try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? defaults.systemPrompt
+        personalization = try container.decodeIfPresent(NativPersonalization.self, forKey: .personalization)
+            ?? defaults.personalization
         temperature =
             try container.decodeIfPresent(Double.self, forKey: .temperature) ?? defaults.temperature
         topK = try container.decodeIfPresent(Int.self, forKey: .topK) ?? defaults.topK
@@ -841,6 +894,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(systemPrompt, forKey: .systemPrompt)
+        try container.encode(personalization, forKey: .personalization)
         try container.encode(temperature, forKey: .temperature)
         try container.encode(topK, forKey: .topK)
         try container.encode(topP, forKey: .topP)

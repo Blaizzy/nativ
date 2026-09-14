@@ -28,6 +28,12 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
+    var personalizationSnapshot: String? = nil
+
+    mutating func capturePersonalization(_ personalization: NativPersonalization) {
+        guard personalizationSnapshot == nil else { return }
+        personalizationSnapshot = messages.isEmpty ? personalization.systemPrompt : ""
+    }
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(

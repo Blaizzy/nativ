@@ -5,7 +5,8 @@ import XCTest
 final class ChatArchiveTests: XCTestCase {
     func testArchiveRoundTrip() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let session = makeSession(date: date)
+        var session = makeSession(date: date)
+        session.personalizationSnapshot = "User profile:\nPreferred name: Alex"
         let archive = ChatArchive(
             chat: session,
             modelRepositoryID: "mlx-community/Qwen3-4B",
@@ -17,6 +18,8 @@ final class ChatArchiveTests: XCTestCase {
         let decoded = try ChatArchiveCodec.decode(data)
 
         XCTAssertEqual(decoded, archive)
+        let imported = try ChatArchiveCodec.importedSession(from: decoded)
+        XCTAssertEqual(imported.personalizationSnapshot, session.personalizationSnapshot)
     }
 
     func testImportAssignsNewLocalIDsAndPreservesToolCallLinks() throws {

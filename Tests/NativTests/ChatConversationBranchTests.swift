@@ -1,6 +1,49 @@
 import XCTest
 
 final class ChatConversationBranchTests: XCTestCase {
+    func testPersonalizationSnapshotIsFrozenAcrossEditsReloadAndBranching() throws {
+        var personalization = NativPersonalization()
+        personalization.profile.preferredName = "Alex"
+        personalization.collectionEnabled = true
+        personalization.appendMemory("Lives in Paris")
+        var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        session.capturePersonalization(personalization)
+        let snapshot = try XCTUnwrap(session.personalizationSnapshot)
+        XCTAssertTrue(snapshot.contains("Alex"))
+        XCTAssertTrue(snapshot.contains("Lives in Paris"))
+        session.messages.append(ChatTranscriptMessage(role: .user, content: "Hello"))
+
+        personalization.profile.preferredName = "Sam"
+        personalization.removeAllMemories()
+        session = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
+        session.capturePersonalization(personalization)
+        XCTAssertEqual(session.personalizationSnapshot, snapshot)
+        let branch = ChatConversationBranch.make(from: session, messages: session.messages)
+        XCTAssertEqual(branch.personalizationSnapshot, snapshot)
+
+        var newSession = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        newSession.capturePersonalization(personalization)
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains("Sam"))
+        XCTAssertFalse(try XCTUnwrap(newSession.personalizationSnapshot).contains("Paris"))
+    }
+
+    func testEmptySnapshotStaysEmptyAndLegacyHistoryDoesNotGainPersonalization() throws {
+        var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        session.capturePersonalization(NativPersonalization())
+        var personalization = NativPersonalization()
+        personalization.profile.preferredName = "Alex"
+        session.capturePersonalization(personalization)
+        XCTAssertEqual(session.personalizationSnapshot, "")
+
+        session.personalizationSnapshot = nil
+        session.messages = [ChatTranscriptMessage(role: .user, content: "Existing history")]
+        let data = try JSONEncoder().encode(session)
+        var legacy = try JSONDecoder().decode(ChatSession.self, from: data)
+        XCTAssertNil(legacy.personalizationSnapshot)
+        legacy.capturePersonalization(personalization)
+        XCTAssertEqual(legacy.personalizationSnapshot, "")
+    }
+
     func testRevisingLatestPromptReplacesItsResponseHistoryWithoutChangingSession() throws {
         let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
         let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")

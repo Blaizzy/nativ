@@ -33,6 +33,7 @@ struct ChatArchiveConversation: Codable, Equatable {
     let updatedAt: Date
     let messages: [ChatTranscriptMessage]
     let imageGenerationModelID: String?
+    let personalizationSnapshot: String?
 
     init(_ chat: ChatSession) {
         title = chat.title
@@ -41,6 +42,7 @@ struct ChatArchiveConversation: Codable, Equatable {
         updatedAt = chat.updatedAt
         messages = chat.messages
         imageGenerationModelID = chat.imageGenerationModelID
+        personalizationSnapshot = chat.personalizationSnapshot
     }
 }
 
@@ -134,7 +136,8 @@ enum ChatArchiveCodec {
             messages: messages,
             imageGenerationModelID: archive.chat.imageGenerationModelID,
             importedModelRepositoryID: archive.modelRepositoryID,
-            importedSystemPrompt: archive.systemPrompt
+            importedSystemPrompt: archive.systemPrompt,
+            personalizationSnapshot: archive.chat.personalizationSnapshot
         )
     }
 

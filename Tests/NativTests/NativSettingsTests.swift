@@ -4,6 +4,53 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testPersonalizationRoundTripsSeparatelyFromSystemPrompt() throws {
+        var settings = NativSettings(systemPrompt: "Existing instructions")
+        settings.personalization.profile = .init(
+            preferredName: "Alex", occupation: "Designer",
+            responseStyle: "Concise", aboutYou: "Lives in Paris"
+        )
+        settings.personalization.collectionEnabled = true
+        settings.personalization.appendMemory("Enjoys ice cream")
+        let decoded = try PropertyListDecoder().decode(
+            NativSettings.self, from: PropertyListEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.personalization, settings.personalization)
+        XCTAssertEqual(decoded.systemPrompt, "Existing instructions")
+        XCTAssertTrue(settings.hasSameLaunchConfiguration(as: NativSettings(systemPrompt: "Existing instructions")))
+    }
+
+    func testLegacySettingsHaveEmptyPersonalizationAndCollectionOff() throws {
+        let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(settings.personalization, NativPersonalization())
+        XCTAssertTrue(settings.personalization.systemPrompt.isEmpty)
+        XCTAssertFalse(settings.personalization.collectionEnabled)
+    }
+
+    func testRollingMemoriesEvictOldestAndNeverEditProfile() {
+        var personalization = NativPersonalization()
+        personalization.profile.responseStyle = "Concise answers"
+        let profile = personalization.profile
+        personalization.appendMemory("Not saved while off")
+        XCTAssertTrue(personalization.rollingMemories.isEmpty)
+        personalization.collectionEnabled = true
+        personalization.appendMemory("  \n ")
+        for index in 0...NativPersonalization.rollingMemoryLimit {
+            personalization.appendMemory("Fact \(index)")
+        }
+        XCTAssertEqual(personalization.rollingMemories.count, NativPersonalization.rollingMemoryLimit)
+        XCTAssertEqual(personalization.rollingMemories.first, "Fact 1")
+        personalization.appendMemory("Fact 20")
+        XCTAssertEqual(personalization.rollingMemories.suffix(2), ["Fact 20", "Fact 20"])
+        let snapshot = personalization.systemPrompt
+        personalization.collectionEnabled = false
+        personalization.appendMemory("Not saved")
+        XCTAssertEqual(personalization.systemPrompt, snapshot)
+        personalization.removeAllMemories()
+        XCTAssertTrue(personalization.rollingMemories.isEmpty)
+        XCTAssertEqual(personalization.profile, profile)
+    }
+
     func testPinnedModelsRoundTripInOrder() throws {
         let settings = NativSettings(
             pinnedModelIDs: ["org/most-used", "org/second"]
