@@ -181,7 +181,6 @@ struct LocalModel: Identifiable, Equatable, Sendable {
             let bitsPerParameter = Double(quantizationBits ?? 16)
             var bytesPerParameter = bitsPerParameter / 8
 
-            // MLX quantization stores a scale and bias (two Float16 values) per group.
             if quantizationBits != nil,
                let quantizationGroupSize,
                quantizationGroupSize > 0 {
@@ -190,23 +189,14 @@ struct LocalModel: Identifiable, Equatable, Sendable {
             estimates.append(Double(parameterCount) * bytesPerParameter)
         }
 
-        guard let estimatedBytes = estimates.max(),
-              estimatedBytes.isFinite,
-              estimatedBytes > 0,
-              estimatedBytes <= Double(Int64.max)
-        else {
+        guard let estimatedBytes = estimates.max() else {
             return nil
         }
 
-        let memoryBudgetBytes = UInt64(
-            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
-                .rounded(.down)
-        )
         return LocalModelMemoryEstimate(
-            estimatedModelBytes: UInt64(estimatedBytes.rounded(.up)),
-            memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes,
-            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
+            modelBytes: estimatedBytes,
+            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities),
+            totalMemoryBytes: totalMemoryBytes
         )
     }
 
@@ -341,6 +331,30 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
             return "Estimated weights: \(estimated), plus ~\(reserve) peak activation for image generation. Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
         }
         return "Estimated model memory: \(estimated). Usable budget: \(budget) of \(total) unified memory, reserving \(headroomPercent)% for KV cache and runtime headroom."
+    }
+}
+
+extension LocalModelMemoryEstimate {
+    init?(
+        modelBytes: Double,
+        activationReserveBytes: UInt64 = 0,
+        totalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) {
+        guard totalMemoryBytes > 0,
+              modelBytes.isFinite,
+              modelBytes > 0,
+              modelBytes <= Double(Int64.max)
+        else {
+            return nil
+        }
+        self.init(
+            estimatedModelBytes: UInt64(modelBytes.rounded(.up)),
+            memoryBudgetBytes: UInt64(
+                (Double(totalMemoryBytes) * (1 - Self.headroomFraction)).rounded(.down)
+            ),
+            totalMemoryBytes: totalMemoryBytes,
+            activationReserveBytes: activationReserveBytes
+        )
     }
 }
 
