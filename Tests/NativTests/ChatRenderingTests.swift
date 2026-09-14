@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import NativServerKit
 import XCTest
 
 @MainActor
@@ -188,5 +189,221 @@ final class ChatStreamingRenderPolicyTests: XCTestCase {
     func testStreamingUsesSmoothTwentyHertzCadence() {
         XCTAssertEqual(ChatStreamingRenderPolicy.updatesPerSecond, 20)
         XCTAssertEqual(ChatStreamingRenderPolicy.flushInterval, .seconds(1.0 / 20.0))
+    }
+}
+
+@MainActor
+final class ChatPastedTextTests: XCTestCase {
+    private let markdown = "  # Raw **Markdown**\r\n\t`code` 🌙 e\u{301}\n\n"
+
+    func testOnlyLargePastesQualify() {
+        XCTAssertFalse(ChatPastedText.shouldCollapse(String(repeating: "a", count: 1_999)))
+        XCTAssertTrue(ChatPastedText.shouldCollapse(String(repeating: "a", count: 2_000)))
+    }
+
+    func testMultiplePastesRemainInOriginalMessageOrderWithoutEditorTokens() {
+        var draft = ChatPastedTextDraft(text: "Before 🌙betweenafter", pastedTexts: [])
+        draft = draft.replacingText(in: NSRange(location: "Before 🌙".utf16.count, length: 0), with: markdown, asAttachment: true)
+        draft = draft.replacingText(in: NSRange(location: "Before 🌙between".utf16.count, length: 0), with: markdown, asAttachment: true)
+        XCTAssertEqual(draft.editableText, "Before 🌙betweenafter")
+        XCTAssertEqual(Array(draft.text.utf8), Array(("Before 🌙" + markdown + "between" + markdown + "after").utf8))
+        XCTAssertEqual(draft.pastedTexts.count, 2)
+        XCTAssertFalse(draft.editableText.contains("\u{fffc}"))
+    }
+
+    func testEditingAcrossAttachmentsKeepsTheirContentAndExplicitRemovalDeletesOnlyOne() {
+        var draft = ChatPastedTextDraft(text: "before middle after", pastedTexts: [])
+        draft = draft.replacingText(in: NSRange(location: 7, length: 0), with: markdown, asAttachment: true)
+        draft = draft.replacingText(in: NSRange(location: 14, length: 0), with: markdown, asAttachment: true)
+        let removedID = draft.pastedTexts[0].id
+        draft = draft.replacingText(in: NSRange(location: 0, length: draft.editableText.utf16.count), with: "")
+        XCTAssertEqual(draft.editableText, "")
+        XCTAssertEqual(draft.text, markdown + markdown)
+        draft = draft.removingAttachment(removedID)
+        XCTAssertEqual(draft.text, markdown)
+        XCTAssertEqual(draft.pastedTexts.count, 1)
+        XCTAssertEqual(draft.pastedTexts[0].location, 0)
+    }
+
+    func testExistingSendTrimmingPreservesOriginalForPreviewAndEditedRequest() throws {
+        let item = ChatPastedText(location: 0, length: markdown.utf16.count, text: markdown)
+        let prompt = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = ChatPastedText.afterTrimming([item], draft: markdown)
+        let saved = try XCTUnwrap(items.first)
+        XCTAssertEqual(saved.range, NSRange(location: 0, length: prompt.utf16.count))
+        XCTAssertEqual(Array(saved.text.utf8), Array(markdown.utf8))
+        let edited = ChatPastedTextDraft(text: prompt, pastedTexts: items)
+        XCTAssertEqual(edited.editableText, "")
+        XCTAssertEqual(Array(edited.text.utf8), Array(prompt.utf8))
+        XCTAssertEqual(edited.pastedTexts, items)
+    }
+
+    func testPresentationMetadataDoesNotChangeAPIBytesIncludingExistingContext() throws {
+        let prompt = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        var original = ChatTranscriptMessage(role: .user, content: prompt)
+        let source = ChatTranscriptMessage(role: .assistant, content: "Reference")
+        original.annotations = [try XCTUnwrap(ChatAnnotation.capture(
+            message: source, range: NSRange(location: 0, length: 9)))]
+        original.imageAttachments = [ChatImageAttachment(filename: "existing.png", mimeType: "image/png",
+                                                         base64Data: Data([0, 1, 2]).base64EncodedString())]
+        var collapsed = original
+        collapsed.pastedTexts = ChatPastedText.afterTrimming(
+            [ChatPastedText(location: 0, length: markdown.utf16.count, text: markdown)], draft: markdown)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        for context in [nil, "Existing document context"] as [String?] {
+            for includesImages in [true, false] {
+                let originalMessage = try XCTUnwrap(original.apiMessage(documentContext: context, includesImages: includesImages))
+                let collapsedMessage = try XCTUnwrap(collapsed.apiMessage(documentContext: context, includesImages: includesImages))
+                func request(_ message: MLXChatMessage) -> MLXChatCompletionRequest {
+                    MLXChatCompletionRequest(model: "test/model", messages: [
+                        MLXChatMessage(role: "system", content: "Existing system prefix"), message
+                    ], maxTokens: 512, temperature: 0.7, topK: 0, topP: 0.95, minP: 0)
+                }
+                XCTAssertEqual(
+                    try encoder.encode(request(originalMessage)),
+                    try encoder.encode(request(collapsedMessage))
+                )
+            }
+        }
+        let restored = try JSONDecoder().decode(ChatTranscriptMessage.self, from: encoder.encode(collapsed))
+        XCTAssertEqual(restored.pastedTexts, collapsed.pastedTexts)
+        XCTAssertEqual(try encoder.encode(restored.apiMessage), try encoder.encode(original.apiMessage))
+    }
+
+    func testOldSessionsAndInvalidRangesRemainVisibleAsOrdinaryText() throws {
+        let old = try JSONDecoder().decode(ChatTranscriptMessage.self, from: Data(#"{"role":"user","content":"hello"}"#.utf8))
+        XCTAssertTrue(old.pastedTexts.isEmpty)
+        let items = [
+            ChatPastedText(location: -1, length: 3, text: "bad"),
+            ChatPastedText(location: Int.max, length: Int.max, text: "bad"),
+            ChatPastedText(location: 0, length: 5, text: "other")
+        ]
+        let draft = ChatPastedTextDraft(text: "hello", pastedTexts: items)
+        XCTAssertEqual(draft.editableText, "hello")
+    }
+
+    func testRemoveButtonPreservesTypedTextAndSupportsUndo() {
+        let model = ChatViewModel()
+        let undo = UndoManager()
+        model.draft = "before after"
+        model.attachPastedText(markdown, replacing: NSRange(location: 7, length: 0), undoManager: nil)
+        let original = model.draft
+        undo.beginUndoGrouping()
+        model.removePendingPastedText(model.pendingPastedTexts[0].id, undoManager: undo)
+        undo.endUndoGrouping()
+        XCTAssertEqual(model.composerText, "before after")
+        XCTAssertEqual(model.draft, "before after")
+        undo.undo()
+        XCTAssertEqual(model.draft, original)
+        XCTAssertEqual(model.composerText, "before after")
+    }
+
+    func testReplacingDraftClearsPresentationMetadata() {
+        let model = ChatViewModel()
+        model.attachPastedText(markdown, replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        XCTAssertEqual(model.pendingPastedTexts.count, 1)
+        model.draft = "Another draft"
+        XCTAssertTrue(model.pendingPastedTexts.isEmpty)
+        XCTAssertEqual(model.draft, "Another draft")
+    }
+
+    func testUndoRestoresAttachmentPositionAfterDeletingSurroundingText() {
+        let model = ChatViewModel()
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        model.draft = "before after"
+        model.attachPastedText(markdown, replacing: NSRange(location: 7, length: 0), undoManager: nil)
+        let original = model.draft
+        undo.beginUndoGrouping()
+        model.editComposerText(in: NSRange(location: 0, length: model.composerText.utf16.count),
+                               replacement: "", undoManager: undo)
+        undo.endUndoGrouping()
+        XCTAssertEqual(model.draft, markdown)
+        XCTAssertEqual(model.composerText, "")
+        undo.undo()
+        XCTAssertEqual(model.draft, original)
+        XCTAssertEqual(model.composerText, "before after")
+        undo.redo()
+        XCTAssertEqual(model.draft, markdown)
+    }
+
+    func testLargeAttachmentSurvivesOneHundredEditsUndoAndRedo() {
+        let model = ChatViewModel()
+        let undo = UndoManager()
+        undo.groupsByEvent = false
+        let content = String(repeating: "x", count: 1_048_576)
+        model.attachPastedText(content, replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        let attachmentID = model.pendingPastedTexts[0].id
+        for index in 0..<100 {
+            undo.beginUndoGrouping()
+            model.editComposerText(in: NSRange(location: index, length: 0), replacement: "a", undoManager: undo)
+            undo.endUndoGrouping()
+        }
+        let typed = String(repeating: "a", count: 100)
+        XCTAssertEqual(model.composerText, typed)
+        XCTAssertEqual(model.draft, content + typed)
+        for _ in 0..<100 { undo.undo() }
+        XCTAssertTrue(model.composerText.isEmpty)
+        XCTAssertEqual(model.draft, content)
+        for _ in 0..<100 { undo.redo() }
+        XCTAssertEqual(model.composerText, typed)
+        XCTAssertEqual(model.draft, content + typed)
+        XCTAssertEqual(model.pendingPastedTexts[0].id, attachmentID)
+        XCTAssertEqual(model.pendingPastedTexts[0].text, content)
+    }
+
+    func testRestoredTrimmedAttachmentKeepsItsRequestBytesAfterEditing() {
+        let prompt = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = ChatPastedText.afterTrimming(
+            [ChatPastedText(location: 0, length: markdown.utf16.count, text: markdown)], draft: markdown)
+        let original = ChatPastedTextDraft(text: prompt, pastedTexts: items)
+        let edited = original.replacingText(in: NSRange(location: 0, length: 0), with: "你好")
+        XCTAssertEqual(edited.editableText, "你好")
+        XCTAssertEqual(Array(edited.text.utf8), Array((prompt + "你好").utf8))
+        XCTAssertEqual(edited.pastedTexts, items)
+        XCTAssertEqual(Array(edited.pastedTexts[0].text.utf8), Array(markdown.utf8))
+        XCTAssertEqual(original.text, prompt)
+        let restored = ChatPastedTextDraft(text: edited.text, pastedTexts: edited.pastedTexts)
+        XCTAssertEqual(restored, edited)
+        XCTAssertEqual(restored.removingAttachment(items[0].id).text, "你好")
+    }
+
+    func testMultipleAttachmentsAtSamePositionKeepTheirOrderAfterEditing() {
+        var draft = ChatPastedTextDraft(text: "before after", pastedTexts: [])
+        draft = draft.replacingText(in: NSRange(location: 7, length: 0), with: "first", asAttachment: true)
+        draft = draft.replacingText(in: NSRange(location: 7, length: 0), with: "second", asAttachment: true)
+        let original = draft
+        draft = draft.replacingText(in: NSRange(location: 0, length: 7), with: "🌙")
+        XCTAssertEqual(draft.text, "🌙firstsecondafter")
+        XCTAssertEqual(draft.editableText, "🌙after")
+        XCTAssertEqual(draft.pastedTexts.map(\.location), [2, 7])
+        XCTAssertEqual(original.text, "before firstsecondafter")
+        draft = draft.removingAttachment(draft.pastedTexts[0].id)
+        XCTAssertEqual(draft.text, "🌙secondafter")
+        XCTAssertEqual(draft.pastedTexts[0].location, 2)
+    }
+
+    func testPastedTextContentControlsSendAvailability() {
+        let model = ChatViewModel()
+        model.attachPastedText(" \n\t", replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        XCTAssertFalse(model.canSend(isRunning: true, selectedModelID: "model"))
+        model.attachPastedText("content", replacing: NSRange(location: 0, length: 0), undoManager: nil)
+        XCTAssertTrue(model.canSend(isRunning: true, selectedModelID: "model"))
+        model.removePendingPastedText(model.pendingPastedTexts[1].id, undoManager: nil)
+        XCTAssertFalse(model.canSend(isRunning: true, selectedModelID: "model"))
+        XCTAssertFalse(model.canRecallPreviousPrompt)
+    }
+
+    func testInputMethodCommitPreservesPastedTextAndUnicode() {
+        let model = ChatViewModel()
+        model.draft = "🌙 before after"
+        let prefix = "🌙 before "
+        model.attachPastedText(markdown, replacing: NSRange(location: prefix.utf16.count, length: 0),
+                               undoManager: nil)
+        model.commitComposerText("🌙 before 日本語 after", undoManager: nil)
+        XCTAssertEqual(model.composerText, "🌙 before 日本語 after")
+        XCTAssertEqual(Array(model.draft.utf8), Array((prefix + markdown + "日本語 after").utf8))
+        XCTAssertEqual(model.pendingPastedTexts.first?.text, markdown)
     }
 }

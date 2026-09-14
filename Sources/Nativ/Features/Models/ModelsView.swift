@@ -1244,13 +1244,29 @@ struct ModelsView: View {
     }
 
     private var discoverFilterBar: some View {
-        HStack(spacing: 12) {
-            hubSortPicker
-            hubSortDirectionPicker
-            hubCapabilityPicker
-            hubAccessPicker
-            Spacer(minLength: 8)
-            shownModelCount
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                hubSortPicker
+                hubSortDirectionPicker
+                hubCapabilityPicker
+                hubAccessPicker
+                Spacer(minLength: 8)
+                shownModelCount
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    hubSortPicker
+                    hubSortDirectionPicker
+                    Spacer(minLength: 8)
+                    shownModelCount
+                }
+
+                HStack(spacing: 12) {
+                    hubCapabilityPicker
+                    hubAccessPicker
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1367,9 +1383,7 @@ struct ModelsView: View {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
         return { hubModel in
-            // Search results are already restricted to the Hub's SafeTensors
-            // index. Mixed repositories remain visible; the downloader skips
-            // any optional GGUF files they also contain.
+            guard !hubModel.isGGUF else { return false }
             let matchesCapability = HuggingFaceCapabilityFilter.matches(
                 hubModel,
                 capabilities: capabilities

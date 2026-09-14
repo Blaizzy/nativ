@@ -122,31 +122,37 @@ struct ControlPanelView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: isSidebarVisible ? sidebarWidth : 0)
+        GeometryReader { geometry in
+            let maximumSidebarWidth = ControlPanelLayout.maximumSidebarWidth(
+                availableWidth: geometry.size.width
+            )
+            let visibleSidebarWidth = min(sidebarWidth, maximumSidebarWidth)
+            let sidebarInset = isSidebarVisible ? visibleSidebarWidth : 0
 
-                detail
-                    .frame(
-                        minWidth: ControlPanelLayout.detailMinimumWidth,
-                        maxWidth: .infinity,
-                        maxHeight: .infinity
-                    )
-                    .ignoresSafeArea(
-                        .container,
-                        edges: isSidebarVisible ? .top : []
-                    )
-            }
+            ZStack(alignment: .leading) {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarInset)
 
-            resizableSidebar
-                .offset(
-                    x: isSidebarVisible
-                        ? 0
-                        : -sidebarWidth
+                    detail
+                        .frame(width: max(0, geometry.size.width - sidebarInset))
+                        .frame(maxHeight: .infinity)
+                        .clipped()
+                        .ignoresSafeArea(
+                            .container,
+                            edges: isSidebarVisible ? .top : []
+                        )
+                }
+
+                resizableSidebar(
+                    width: visibleSidebarWidth,
+                    maximumWidth: maximumSidebarWidth
                 )
+                .offset(x: isSidebarVisible ? 0 : -visibleSidebarWidth)
                 .allowsHitTesting(isSidebarVisible)
                 .accessibilityHidden(!isSidebarVisible)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
         }
         .animation(
             .easeInOut(duration: ControlPanelLayout.sidebarTransitionDuration),

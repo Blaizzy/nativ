@@ -38,7 +38,122 @@ final class ChatTranscriptRevision {
 @MainActor
 @Observable
 private final class ChatComposerDraft {
-    var text = ""
+    var value = ChatPastedTextDraft(text: "", pastedTexts: [])
+    var resetToken = 0
+}
+
+struct ChatPastedTextDraft: Equatable {
+    private struct Attachment: Equatable {
+        var item: ChatPastedText
+        let content: String
+    }
+
+    private(set) var editableText: String
+    private var attachments: [Attachment]
+
+    init(text: String, pastedTexts: [ChatPastedText]) {
+        let items = ChatPastedText.validated(pastedTexts, in: text)
+        guard !items.isEmpty else {
+            editableText = text
+            attachments = []
+            return
+        }
+        let source = text as NSString
+        var visible = ""
+        var cursor = 0
+        var hiddenLength = 0
+        attachments = []
+        for item in items {
+            visible += source.substring(with: NSRange(location: cursor, length: item.location - cursor))
+            var anchoredItem = item
+            anchoredItem.location -= hiddenLength
+            let content = source.substring(with: item.range)
+            attachments.append(Attachment(item: anchoredItem, content: content == item.text ? item.text : content))
+            hiddenLength += item.length
+            cursor = NSMaxRange(item.range)
+        }
+        visible += source.substring(from: cursor)
+        editableText = visible
+    }
+
+    private init(editableText: String, attachments: [Attachment]) {
+        self.editableText = editableText
+        self.attachments = attachments
+    }
+
+    var text: String {
+        guard !attachments.isEmpty else { return editableText }
+        let visible = editableText as NSString
+        var result = ""
+        var cursor = 0
+        for attachment in attachments {
+            result += visible.substring(with: NSRange(location: cursor, length: attachment.item.location - cursor))
+            result += attachment.content
+            cursor = attachment.item.location
+        }
+        result += visible.substring(from: cursor)
+        return result
+    }
+
+    var pastedTexts: [ChatPastedText] {
+        var hiddenLength = 0
+        return attachments.map { attachment in
+            var item = attachment.item
+            item.location += hiddenLength
+            hiddenLength += item.length
+            return item
+        }
+    }
+
+    var isEmpty: Bool {
+        editableText.isEmpty && attachments.isEmpty
+    }
+
+    var hasContent: Bool {
+        let nonWhitespace = CharacterSet.whitespacesAndNewlines.inverted
+        return editableText.rangeOfCharacter(from: nonWhitespace) != nil
+            || attachments.contains { $0.content.rangeOfCharacter(from: nonWhitespace) != nil }
+    }
+
+    func replacingText(in range: NSRange, with replacement: String, asAttachment: Bool = false) -> Self {
+        guard Range(range, in: editableText) != nil else { return self }
+        let insertedText = asAttachment ? "" : replacement
+        let edited = (editableText as NSString).replacingCharacters(in: range, with: insertedText)
+        let delta = insertedText.utf16.count - range.length
+        var anchored = attachments.map { attachment in
+            var updated = attachment
+            let oldAnchor = attachment.item.location
+            if oldAnchor > range.location {
+                updated.item.location = oldAnchor >= NSMaxRange(range) ? oldAnchor + delta : range.location
+            }
+            return updated
+        }
+        if asAttachment, !replacement.isEmpty {
+            let item = ChatPastedText(location: range.location, length: replacement.utf16.count, text: replacement)
+            let index = anchored.firstIndex { $0.item.location > range.location } ?? anchored.endIndex
+            anchored.insert(Attachment(item: item, content: replacement), at: index)
+        }
+        return Self(editableText: edited, attachments: anchored)
+    }
+
+    func removingAttachment(_ id: UUID) -> Self {
+        Self(editableText: editableText, attachments: attachments.filter { $0.item.id != id })
+    }
+
+    /// Fallback for input-method commits that arrive as several native text edits.
+    func replacingEditableText(with value: String) -> Self {
+        let before = Array(editableText)
+        let after = Array(value)
+        var prefix = 0
+        while prefix < min(before.count, after.count), before[prefix] == after[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(before.count, after.count) - prefix,
+              before[before.count - suffix - 1] == after[after.count - suffix - 1] { suffix += 1 }
+        let location = String(before[..<prefix]).utf16.count
+        let length = String(before[prefix..<(before.count - suffix)]).utf16.count
+        return replacingText(in: NSRange(location: location, length: length),
+                             with: String(after[prefix..<(after.count - suffix)]))
+    }
 }
 
 @MainActor
@@ -60,7 +175,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     private struct ComposerSnapshot {
-        let draft: String
+        let draft: ChatPastedTextDraft
         let attachments: [ChatImageAttachment]
         let annotations: [ChatAnnotation]
     }
@@ -101,8 +216,48 @@ final class ChatViewModel: ObservableObject {
     // on the chat model also rebuilds the lazy transcript and its scroll layout.
     private let composerDraft = ChatComposerDraft()
     var draft: String {
-        get { composerDraft.text }
-        set { composerDraft.text = newValue }
+        get { pastedTextDraft.text }
+        set { restoreComposerDraft(ChatPastedTextDraft(text: newValue, pastedTexts: [])) }
+    }
+    var pendingPastedTexts: [ChatPastedText] { pastedTextDraft.pastedTexts }
+    var composerResetToken: Int { composerDraft.resetToken }
+    var composerText: String {
+        get { pastedTextDraft.editableText }
+        set { commitComposerText(newValue, undoManager: nil) }
+    }
+
+    private var pastedTextDraft: ChatPastedTextDraft {
+        composerDraft.value
+    }
+
+    private func restoreComposerDraft(_ value: ChatPastedTextDraft) {
+        composerDraft.value = value
+        composerDraft.resetToken += 1
+    }
+
+    func editComposerText(in range: NSRange, replacement: String, undoManager: UndoManager?) {
+        applyComposerEdit(pastedTextDraft.replacingText(in: range, with: replacement), undoManager: undoManager)
+    }
+
+    func commitComposerText(_ text: String, undoManager: UndoManager?) {
+        applyComposerEdit(pastedTextDraft.replacingEditableText(with: text), undoManager: undoManager)
+    }
+
+    func attachPastedText(_ text: String, replacing range: NSRange, undoManager: UndoManager?) {
+        applyComposerEdit(pastedTextDraft.replacingText(in: range, with: text, asAttachment: true), undoManager: undoManager)
+    }
+
+    func removePendingPastedText(_ id: UUID, undoManager: UndoManager?) {
+        applyComposerEdit(pastedTextDraft.removingAttachment(id), undoManager: undoManager)
+    }
+
+    private func applyComposerEdit(_ value: ChatPastedTextDraft, undoManager: UndoManager?) {
+        let previous = pastedTextDraft
+        guard value != previous else { return }
+        undoManager?.registerUndo(withTarget: self) { [weak undoManager] model in
+            model.applyComposerEdit(previous, undoManager: undoManager)
+        }
+        composerDraft.value = value
     }
     @Published private(set) var promptEditContext: ChatPromptEditContext?
     @Published private(set) var composerFocusToken = 0
@@ -308,7 +463,7 @@ final class ChatViewModel: ObservableObject {
         isRunning
             && selectedModelID?.isEmpty == false
             && !hasBlockingAttachmentValidation
-            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (pastedTextDraft.hasContent
                 || !pendingImageAttachments.isEmpty)
     }
 
@@ -381,12 +536,12 @@ final class ChatViewModel: ObservableObject {
 
         cancelPromptEditing()
         composerSnapshot = ComposerSnapshot(
-            draft: draft,
+            draft: pastedTextDraft,
             attachments: pendingImageAttachments,
             annotations: pendingAnnotations
         )
         promptEditContext = ChatPromptEditContext(messageID: messageID)
-        draft = message.content
+        restoreComposerDraft(ChatPastedTextDraft(text: message.content, pastedTexts: message.pastedTexts))
         pendingImageAttachments = message.imageAttachments
         pendingAnnotations = message.annotations
         composerFocusToken += 1
@@ -395,7 +550,7 @@ final class ChatViewModel: ObservableObject {
     /// Whether Up would recall a prompt right now, for the composer's hint.
     var canRecallPreviousPrompt: Bool {
         guard promptEditContext == nil,
-            draft.isEmpty,
+            pastedTextDraft.isEmpty,
             pendingImageAttachments.isEmpty,
             let messageID = latestUserMessageID
         else {
@@ -429,7 +584,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
         if let composerSnapshot {
-            draft = composerSnapshot.draft
+            restoreComposerDraft(composerSnapshot.draft)
             pendingImageAttachments = composerSnapshot.attachments
             pendingAnnotations = composerSnapshot.annotations
         }
@@ -996,7 +1151,9 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let untrimmedPrompt = draft
+        let prompt = untrimmedPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pastedTexts = ChatPastedText.afterTrimming(pendingPastedTexts, draft: untrimmedPrompt)
         let imageAttachments = pendingImageAttachments
         let annotations = pendingAnnotations
 
@@ -1017,8 +1174,9 @@ final class ChatViewModel: ObservableObject {
             messages = revision.messages
             if let index = messages.firstIndex(where: { $0.id == editedMessageID }) {
                 messages[index].annotations = annotations
+                messages[index].pastedTexts = pastedTexts
             }
-            draft = composerSnapshot?.draft ?? ""
+            restoreComposerDraft(composerSnapshot?.draft ?? ChatPastedTextDraft(text: "", pastedTexts: []))
             pendingImageAttachments = composerSnapshot?.attachments ?? []
             pendingAnnotations = composerSnapshot?.annotations ?? []
             discardPromptEditing()
@@ -1045,6 +1203,7 @@ final class ChatViewModel: ObservableObject {
             imageAttachments: imageAttachments
         )
         userMessage.annotations = annotations
+        userMessage.pastedTexts = pastedTexts
         messages.append(userMessage)
         persistCurrentSession(updateTimestamp: true)
         enqueueGeneration(
@@ -2752,7 +2911,7 @@ final class ChatViewModel: ObservableObject {
         let localSessionHasWork =
             localSession.map { session in
                 !session.messages.isEmpty
-                    || !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || pastedTextDraft.hasContent
                     || !pendingImageAttachments.isEmpty
                     || !pendingAnnotations.isEmpty
                     || activeRequestID != nil
@@ -2836,7 +2995,7 @@ final class ChatViewModel: ObservableObject {
     ) {
         persistCurrentSession(updateTimestamp: false)
 
-        draft = composer?.draft ?? ""
+        restoreComposerDraft(composer?.draft ?? ChatPastedTextDraft(text: "", pastedTexts: []))
         pendingImageAttachments = composer?.attachments ?? []
         pendingAnnotations = composer?.annotations ?? []
         discardPromptEditing()
@@ -2974,7 +3133,7 @@ final class ChatViewModel: ObservableObject {
 
         return currentSession.projectID == projectID
             && messages.isEmpty
-            && draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !pastedTextDraft.hasContent
             && pendingImageAttachments.isEmpty
             && pendingAnnotations.isEmpty
     }

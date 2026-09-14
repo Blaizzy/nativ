@@ -174,17 +174,6 @@ struct SettingsView: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
                 }
-
-                Divider()
-                    .padding(.leading, 52)
-
-                settingsRow(
-                    title: "Notifications",
-                    description: notificationDescription,
-                    systemImage: "bell.badge"
-                ) {
-                    notificationSettingsControl
-                }
             }
             .background(Color(nsColor: .controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -200,7 +189,18 @@ struct SettingsView: View {
             Text("Permissions")
                 .font(.headline)
 
-            NativPermissionsCard(store: permissions)
+            NativPermissionsCard(store: permissions) {
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
+                    title: "Notifications",
+                    description: notificationDescription,
+                    systemImage: "bell.badge"
+                ) {
+                    notificationSettingsControl
+                }
+            }
         }
         .onAppear {
             permissions.refresh()

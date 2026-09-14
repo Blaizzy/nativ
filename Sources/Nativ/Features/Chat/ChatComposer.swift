@@ -218,6 +218,7 @@ struct ChatComposer: View {
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection
+    @Environment(\.undoManager) private var undoManager
     @StateObject private var localLibrary = LocalModelLibrary()
     let unavailableReason: String?
     let canCompose: Bool
@@ -282,6 +283,20 @@ struct ChatComposer: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
+                if !viewModel.pendingPastedTexts.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(viewModel.pendingPastedTexts) { item in
+                                ChatPastedTextCard(pastedText: item, onRemove: {
+                                    viewModel.removePendingPastedText(item.id, undoManager: undoManager)
+                                })
+                            }
+                        }
+                        .padding(2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                }
                 if !viewModel.pendingAnnotations.isEmpty {
                     ChatAnnotationCards(
                         annotations: viewModel.pendingAnnotations,
@@ -291,7 +306,7 @@ struct ChatComposer: View {
                 }
                 ZStack(alignment: .topLeading) {
                     ChatComposerTextEditor(
-                        text: $viewModel.draft,
+                        text: $viewModel.composerText,
                         isEnabled: canCompose,
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
@@ -303,10 +318,15 @@ struct ChatComposer: View {
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
                         allowsDefaultActionWhenEmpty: viewModel.pendingImageAttachments.isEmpty
-                            && viewModel.promptEditContext == nil
+                            && viewModel.pendingPastedTexts.isEmpty
+                            && viewModel.promptEditContext == nil,
+                        onPasteText: viewModel.attachPastedText,
+                        onTextEdit: viewModel.editComposerText,
+                        onTextCommit: viewModel.commitComposerText,
+                        resetToken: viewModel.composerResetToken
                     )
 
-                    if viewModel.draft.isEmpty {
+                    if viewModel.composerText.isEmpty {
                         HStack(spacing: 8) {
                             Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
                             if showsRecallHint {
@@ -2491,6 +2511,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     var fontScale: Double = 1.0
     var focusToken: Int = 0
     var allowsDefaultActionWhenEmpty = false
+    var onPasteText: ((String, NSRange, UndoManager?) -> Void)?
+    var onTextEdit: ((NSRange, String, UndoManager?) -> Void)?
+    var onTextCommit: ((String, UndoManager?) -> Void)?
+    var resetToken = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -2511,6 +2535,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.onCancel = context.coordinator.handleCancel
         textView.onRecallPrevious = context.coordinator.handleRecallPrevious
         textView.onPasteImage = context.coordinator.handlePasteImage
+        textView.onPasteText = context.coordinator.handlePasteText
         textView.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
@@ -2518,7 +2543,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = .clear
         textView.drawsBackground = false
-        textView.allowsUndo = true
+        textView.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
         textView.isRichText = false
         textView.importsGraphics = false
         textView.isVerticallyResizable = true
@@ -2538,6 +2563,9 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         scrollView.onLayout = context.coordinator.reportContentHeight
 
         context.coordinator.textView = textView
+        context.coordinator.onPasteText = onPasteText
+        context.coordinator.onTextEdit = onTextEdit
+        context.coordinator.onTextCommit = onTextCommit
         context.coordinator.reportContentHeight()
         return scrollView
     }
@@ -2546,6 +2574,9 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
         context.coordinator.onPasteImage = onPasteImage
+        context.coordinator.onPasteText = onPasteText
+        context.coordinator.onTextEdit = onTextEdit
+        context.coordinator.onTextCommit = onTextCommit
         context.coordinator.onContentHeightChange = onContentHeightChange
 
         guard let textView = context.coordinator.textView else {
@@ -2557,9 +2588,14 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
         (textView as? ChatComposerNSTextView)?.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
+        (textView as? ChatComposerNSTextView)?.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
 
         if !textView.hasMarkedText(), textView.string != text {
             textView.string = text
+        }
+        if context.coordinator.lastResetToken != resetToken {
+            context.coordinator.lastResetToken = resetToken
+            textView.composerUndoManager?.removeAllActions()
         }
         context.coordinator.reportContentHeight()
         context.coordinator.requestFocus(ifNeeded: focusToken)
@@ -2572,6 +2608,11 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         var onCancel: (() -> Void)?
         var onRecallPrevious: (() -> Bool)?
         var onPasteImage: (NSPasteboard) -> Bool
+        var onPasteText: ((String, NSRange, UndoManager?) -> Void)?
+        var onTextEdit: ((NSRange, String, UndoManager?) -> Void)?
+        var onTextCommit: ((String, UndoManager?) -> Void)?
+        var lastResetToken = 0
+        private var pendingEdit: (range: NSRange, replacement: String)?
         var onContentHeightChange: (CGFloat) -> Void
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
@@ -2609,8 +2650,34 @@ struct ChatComposerTextEditor: NSViewRepresentable {
                 return
             }
 
-            text = textView.string
+            defer { pendingEdit = nil }
+            if onTextEdit != nil || onTextCommit != nil,
+               textView.composerUndoManager?.isUndoing == true || textView.composerUndoManager?.isRedoing == true {
+                reportContentHeight()
+                return
+            }
+            if let onTextEdit, let edit = pendingEdit,
+               Range(edit.range, in: text) != nil,
+               (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement) == textView.string {
+                onTextEdit(edit.range, edit.replacement, textView.composerUndoManager)
+            } else if let onTextCommit {
+                onTextCommit(textView.string, textView.composerUndoManager)
+            } else {
+                text = textView.string
+            }
             reportContentHeight()
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                      replacementString: String?) -> Bool {
+            pendingEdit = replacementString.map { (affectedCharRange, $0) }
+            return true
+        }
+
+        func handlePasteText(_ pastedText: String, range: NSRange) -> Bool {
+            guard let onPasteText else { return false }
+            onPasteText(pastedText, range, textView?.composerUndoManager)
+            return true
         }
 
         func handleSubmit() {
@@ -2676,11 +2743,43 @@ private final class ChatComposerNSScrollView: NSScrollView {
     }
 }
 
+private extension NSTextView {
+    var composerUndoManager: UndoManager? {
+        (self as? ChatComposerNSTextView)?.draftHistory ?? undoManager
+    }
+}
+
 private final class ChatComposerNSTextView: NSTextView {
+    var usesDraftUndo = false {
+        didSet { allowsUndo = !usesDraftUndo }
+    }
+    private let draftUndoManager = UndoManager()
+
+    var draftHistory: UndoManager? {
+        usesDraftUndo ? (window?.undoManager ?? draftUndoManager) : super.undoManager
+    }
+
+    @objc func undo(_ sender: Any?) {
+        composerUndoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        composerUndoManager?.redo()
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): return composerUndoManager?.canUndo == true
+        case #selector(redo(_:)): return composerUndoManager?.canRedo == true
+        default: return super.validateMenuItem(menuItem)
+        }
+    }
+
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
     var allowsDefaultActionWhenEmpty = false
+    var onPasteText: ((String, NSRange) -> Bool)?
     /// Returns whether the recall happened, so an Up key that recalls nothing
     /// still moves the caret.
     var onRecallPrevious: (() -> Bool)?
@@ -2723,10 +2822,27 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
+        guard isEditable else { return }
         if onPasteImage?(NSPasteboard.general) == true {
             return
         }
-        super.paste(sender)
+        guard let text = NSPasteboard.general.string(forType: .string),
+              ChatPastedText.shouldCollapse(text), let onPasteText else {
+            super.paste(sender)
+            return
+        }
+        breakUndoCoalescing()
+        let range = selectedRange()
+        guard onPasteText(text, range) else {
+            super.paste(sender)
+            return
+        }
+        // The attachment lives outside NSTextView. Only the selected ordinary text disappears.
+        if range.length > 0 {
+            string = (string as NSString).replacingCharacters(in: range, with: "")
+            setSelectedRange(NSRange(location: range.location, length: 0))
+        }
+        breakUndoCoalescing()
     }
 }
 
@@ -2772,6 +2888,114 @@ private enum ComposerReturnBehavior {
 
     private static func relevantModifiers(for event: NSEvent) -> NSEvent.ModifierFlags {
         event.modifierFlags.intersection([.command, .control, .option, .shift])
+    }
+}
+
+struct ChatPastedTextCard: View {
+    let pastedText: ChatPastedText
+    var onRemove: (() -> Void)?
+    @State private var showsPreview = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button { showsPreview = true } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .help("View pasted text")
+
+            if let onRemove {
+                Button("Remove pasted text", systemImage: "xmark", action: onRemove)
+                    .labelStyle(.iconOnly)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+                    .padding(4)
+                    .help("Remove pasted text")
+            }
+        }
+        .sheet(isPresented: $showsPreview) {
+            preview
+                .frame(width: 640, height: 480)
+        }
+    }
+
+    private var label: some View {
+        let lineCount = pastedText.lineCount
+        return HStack(spacing: 10) {
+            Image(systemName: "doc.text")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Pasted text")
+                    .font(.callout.weight(.medium))
+                Text(lineCount == 1 ? "1 line" : "\(lineCount) lines")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: 180)
+        .foregroundStyle(.primary)
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var preview: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Pasted text")
+                    .font(.headline)
+                Text(pastedText.lineCount == 1 ? "1 line" : "\(pastedText.lineCount) lines")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Copy", systemImage: "document.on.document") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(pastedText.text, forType: .string)
+                }
+                .labelStyle(.iconOnly)
+                .help("Copy raw text")
+                Button("Close", systemImage: "xmark") { showsPreview = false }
+                    .labelStyle(.iconOnly)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .buttonStyle(.borderless)
+            .padding(16)
+            Divider()
+            ChatPastedTextRawView(text: pastedText.text)
+        }
+    }
+}
+
+/// A plain, selectable text view keeps large pastes out of the Markdown renderer.
+private struct ChatPastedTextRawView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isRichText = false
+            textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            textView.textContainerInset = NSSize(width: 16, height: 16)
+            textView.setAccessibilityLabel("Raw pasted text")
+            textView.string = text
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView, textView.string != text else { return }
+        textView.string = text
     }
 }
 
