@@ -6,6 +6,8 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
     let submissionID: UUID?
     @Binding var scrollTargetMessageID: UUID?
     let itemIDs: [UUID]
+    let searchNavigation: ChatSearchNavigationRequest?
+    let onSearchNavigation: (UUID) -> Void
     let bottomOverlayClearance: CGFloat
     let topInset: TopInset
     let content: (Range<Int>) -> Content
@@ -27,6 +29,8 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         submissionID: UUID?,
         scrollTargetMessageID: Binding<UUID?>,
         itemIDs: [UUID],
+        searchNavigation: ChatSearchNavigationRequest? = nil,
+        onSearchNavigation: @escaping (UUID) -> Void = { _ in },
         bottomOverlayClearance: CGFloat = 0,
         @ViewBuilder topInset: () -> TopInset,
         @ViewBuilder content: @escaping (Range<Int>) -> Content
@@ -36,6 +40,8 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         self.submissionID = submissionID
         _scrollTargetMessageID = scrollTargetMessageID
         self.itemIDs = itemIDs
+        self.searchNavigation = searchNavigation
+        self.onSearchNavigation = onSearchNavigation
         self.bottomOverlayClearance = bottomOverlayClearance
         self.topInset = topInset()
         self.content = content
@@ -43,7 +49,9 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView { content(paging.attachedRange(in: itemIDs)) }
+            ScrollView {
+                content(paging.attachedRange(in: itemIDs))
+            }
                 .scrollPosition($readingPosition)
                 // Content-size changes are handled by the single pinner below.
                 // Applying the default anchor to them as well competes with that scroll.
@@ -133,6 +141,16 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                         proxy.scrollTo(target, anchor: .center)
                         scrollTargetMessageID = nil
                     }
+                }
+                .task(id: searchNavigation) {
+                    guard let request = searchNavigation else { return }
+                    followState.pause()
+                    pendingPrepend = nil
+                    paging.reveal(request.rowID, in: itemIDs)
+                    initialPositionEstablished = true
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    onSearchNavigation(request.id)
                 }
                 .background {
                     ChatTranscriptScrollPinner(
