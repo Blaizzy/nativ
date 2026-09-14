@@ -31,15 +31,6 @@ packages:
     url: https://github.com/weichsel/ZIPFoundation.git
     exactVersion: 0.9.20
 schemes:
-  NativTrace:
-    build:
-      targets:
-        NativTrace: all
-        NativTraceTests: [test]
-    test:
-      config: Debug
-      targets:
-        - NativTraceTests
   Nativ:
     build:
       targets:
@@ -107,19 +98,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_TRACE_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
-  NativTraceTests:
-    type: bundle.unit-test
-    platform: macOS
-    sources:
-      - path: Tests/NativTraceTests
-    dependencies:
-      - target: NativTrace
-    settings:
-      base:
-        ARCHS: arm64
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
-        PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTraceTests
-        GENERATE_INFOPLIST_FILE: YES
   NativServerKit:
     type: framework
     platform: macOS
@@ -239,6 +217,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
+      - path: Tests/NativTraceTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
