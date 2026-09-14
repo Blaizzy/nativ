@@ -370,16 +370,17 @@ final class ChatSearchState {
     private(set) var navigationID = UUID()
     private(set) var revealID: UUID?
     private var matchesByMessage: [UUID: [ChatSearchOccurrence]] = [:]
-    @ObservationIgnored private var worker = ChatSearchWorker()
-    @ObservationIgnored private var library: ChatSearchLibrary?
+    @ObservationIgnored private let library: ChatSearchLibrary
     @ObservationIgnored private var task: Task<Void, Never>?
-    @ObservationIgnored private var inputs: [ChatSearchInput] = []
-    @ObservationIgnored private var snapshotRevision: Int?
-    @ObservationIgnored private var indexedRevision: Int?
     @ObservationIgnored private var sessionID: UUID?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var requestedMatch: (query: String, location: ChatSearchOccurrence.Location)?
+
+    init(library: ChatSearchLibrary, sessionID: UUID? = nil) {
+        self.library = library
+        self.sessionID = sessionID
+    }
 
     var selected: ChatSearchOccurrence? {
         occurrences.indices.contains(selectedIndex) ? occurrences[selectedIndex] : nil
@@ -402,20 +403,19 @@ final class ChatSearchState {
         focusID = UUID()
     }
 
-    func reveal(_ occurrence: ChatSearchOccurrence, query: String, sessionID: UUID, items: [ChatTranscriptItem]) {
+    func reveal(_ occurrence: ChatSearchOccurrence, query: String, sessionID: UUID) {
         reset(sessionID: sessionID)
         requestedMatch = (query, occurrence.location)
         self.query = query
         present()
-        update(items: items, queryChanged: true)
+        update(queryChanged: true)
     }
 
     func dismiss() {
         reset(sessionID: sessionID)
     }
 
-    func reset(sessionID: UUID?, library: ChatSearchLibrary? = nil) {
-        if let library { self.library = library }
+    func reset(sessionID: UUID?) {
         self.sessionID = sessionID
         isPresented = false
         clear()
@@ -424,31 +424,21 @@ final class ChatSearchState {
     private func clear() {
         stop()
         query = ""
-        inputs = []
-        snapshotRevision = nil
-        indexedRevision = nil
         occurrences = []
         matchesByMessage = [:]
         selectedIndex = 0
         hasMore = false
         error = nil
         revealID = nil
-        worker = ChatSearchWorker()
         requestedMatch = nil
     }
 
-    func update(items: @autoclosure () -> [ChatTranscriptItem], contentRevision: Int? = nil,
-                queryChanged: Bool = false) {
+    func update(queryChanged: Bool = false) {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             clear()
             return
         }
-        if library == nil, contentRevision == nil || snapshotRevision != contentRevision {
-            inputs = ChatSearchInput.snapshots(from: items())
-            snapshotRevision = contentRevision
-            revision &+= 1
-        }
-        if library != nil { revision &+= 1 }
+        revision &+= 1
         if queryChanged {
             stop()
             occurrences = []
@@ -485,7 +475,7 @@ final class ChatSearchState {
     }
 
     private func schedule() {
-        guard task == nil else { return }
+        guard task == nil, let sessionID else { return }
         isSearching = true
         error = nil
         let generation = generation
@@ -497,31 +487,13 @@ final class ChatSearchState {
                 let previous = self.selected
                 let requested = self.requestedMatch.flatMap { $0.query == self.query ? $0.location : nil }
                 let location = requested ?? previous?.location
-                let resultWorker = self.library?.worker
-                try await self.library?.ready()
-                if resultWorker == nil, self.indexedRevision != revision {
-                    try await self.worker.synchronize(self.inputs)
-                    try Task.checkCancellation()
-                    self.indexedRevision = revision
-                }
-                var result: ChatSearchWorker.Result
-                if let resultWorker, let sessionID = self.sessionID {
-                    result = try await resultWorker.search(self.query, sessionID: sessionID)
-                } else {
-                    result = try await self.worker.search(self.query)
-                }
+                try await self.library.ready()
+                var result = try await self.library.worker.search(self.query, sessionID: sessionID)
                 if result.hasMore, let location,
                    !result.occurrences.contains(where: { $0.messageID == location.messageID }) {
-                    let focused: ChatSearchWorker.Result?
-                    if let resultWorker, let sessionID = self.sessionID {
-                        focused = try await resultWorker.search(self.query, sessionID: sessionID,
-                                                                 messageID: location.messageID, limit: 1)
-                    } else if let input = self.inputs.first(where: { $0.messageID == location.messageID }) {
-                        focused = try await ChatSearchWorker().search(self.query, inputs: [input], limit: 1)
-                    } else { focused = nil }
-                    if let focused {
-                        result = ChatSearchWorker.Result(occurrences: result.occurrences + focused.occurrences, hasMore: true)
-                    }
+                    let focused = try await self.library.worker.search(self.query, sessionID: sessionID,
+                                                                        messageID: location.messageID, limit: 1)
+                    result = ChatSearchWorker.Result(occurrences: result.occurrences + focused.occurrences, hasMore: true)
                 }
                 try Task.checkCancellation()
                 guard self.generation == generation else { return }

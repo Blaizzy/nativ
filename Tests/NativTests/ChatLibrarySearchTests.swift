@@ -126,11 +126,12 @@ final class ChatLibrarySearchTests: XCTestCase {
         let input = session("Target", messages: messages)
         let result = try await ChatLibrarySearchWorker().search("notification", sessions: [input])
         let target = try XCTUnwrap(result.messages.first)
-        let state = ChatSearchState()
-        state.reveal(target.occurrence, query: "notification", sessionID: input.id,
-                     items: ChatTranscriptPresentation.items(from: messages))
+        let library = ChatSearchLibrary()
+        try await library.worker.synchronize([input], summaries: [input.summary])
+        let state = ChatSearchState(library: library)
+        state.reveal(target.occurrence, query: "notification", sessionID: input.id)
         // The view also observes the query change when the destination opens.
-        state.update(items: ChatTranscriptPresentation.items(from: messages), queryChanged: true)
+        state.update(queryChanged: true)
         try await waitForSearch(state)
         XCTAssertEqual(state.selected?.messageID, messages.last?.id)
         XCTAssertTrue(state.isPresented)
@@ -141,14 +142,17 @@ final class ChatLibrarySearchTests: XCTestCase {
         let input = session("Long chat", messages: messages)
         let result = try await ChatLibrarySearchWorker().search("notification", sessions: [input])
         let target = try XCTUnwrap(result.messages.first)
-        let state = ChatSearchState()
-        state.reveal(target.occurrence, query: "notification", sessionID: input.id,
-                     items: ChatTranscriptPresentation.items(from: messages))
+        let library = ChatSearchLibrary()
+        try await library.worker.synchronize([input], summaries: [input.summary])
+        let state = ChatSearchState(library: library)
+        state.reveal(target.occurrence, query: "notification", sessionID: input.id)
         try await waitForSearch(state)
         XCTAssertEqual(state.selected?.messageID, messages.last?.id)
         XCTAssertTrue(state.hasMore)
         let navigation = state.navigationID
-        state.update(items: ChatTranscriptPresentation.items(from: messages + [message("New background message")]))
+        let updated = session("Long chat", id: input.id, messages: messages + [message("New background message")])
+        try await library.worker.update([updated])
+        state.update()
         try await waitForSearch(state)
         XCTAssertEqual(state.selected?.messageID, messages.last?.id)
         XCTAssertEqual(state.navigationID, navigation)
@@ -276,10 +280,9 @@ final class ChatLibrarySearchTests: XCTestCase {
         let library = ChatSearchLibrary(storageURL: url)
         let chat = session("Shared", messages: [message("notification")])
         try await library.worker.synchronize([chat], summaries: [chat.summary])
-        let local = ChatSearchState()
-        local.reset(sessionID: chat.id, library: library)
+        let local = ChatSearchState(library: library, sessionID: chat.id)
         local.query = "notification"
-        local.update(items: [.message(message("notification", id: chat.inputs[0].messageID))])
+        local.update()
         try await waitForSearch(local)
         local.dismiss()
         let popup = ChatLibrarySearchState()
@@ -425,17 +428,13 @@ final class ChatLibrarySearchTests: XCTestCase {
         let chat = session("Shared", messages: [message("notification permission")])
         library.enqueue(chat.id) { chat }
         try await library.ready()
-        let state = ChatSearchState()
-        state.reset(sessionID: chat.id, library: library)
-        var reads = 0
-        func items() -> [ChatTranscriptItem] { reads += 1; return [] }
+        let state = ChatSearchState(library: library, sessionID: chat.id)
         for query in ["notification", "permission"] {
             state.query = query
-            state.update(items: items(), queryChanged: true)
+            state.update(queryChanged: true)
             try await waitForSearch(state)
             XCTAssertEqual(state.occurrences.count, 1)
         }
-        XCTAssertEqual(reads, 0)
     }
 
     func testTwoSearchViewsShareMessageUpdates() async throws {
@@ -446,11 +445,11 @@ final class ChatLibrarySearchTests: XCTestCase {
         var snapshot = session("Shared", id: id, messages: [message("notification", id: messageID)])
         library.enqueue(id) { snapshot }
         try await library.ready()
-        let views = [ChatSearchState(), ChatSearchState()]
+        let views = [ChatSearchState(library: library), ChatSearchState(library: library)]
         for view in views {
-            view.reset(sessionID: id, library: library)
+            view.reset(sessionID: id)
             view.query = "notification"
-            view.update(items: [], queryChanged: true)
+            view.update(queryChanged: true)
             try await waitForSearch(view)
             XCTAssertEqual(view.occurrences.count, 1)
         }
@@ -458,7 +457,7 @@ final class ChatLibrarySearchTests: XCTestCase {
         library.enqueue(id) { snapshot }
         try await library.ready()
         for view in views {
-            view.update(items: [])
+            view.update()
             try await waitForSearch(view)
             XCTAssertTrue(view.occurrences.isEmpty)
         }

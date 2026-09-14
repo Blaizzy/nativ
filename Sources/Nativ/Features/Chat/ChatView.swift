@@ -162,9 +162,28 @@ private struct ChatTranscriptView: View {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
-    @State private var search = ChatSearchState()
+    @State private var search: ChatSearchState
     @Environment(\.chatLibrarySearch) private var librarySearch
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(model: NativModel, chat: ChatViewModel, extensionManager: NativExtensionManager,
+         project: ChatProject?, projectRootIsAvailable: Bool, workspaceMode: ChatWorkspaceMode,
+         onSelectWorkspaceMode: @escaping (ChatWorkspaceMode) -> Void,
+         onExploreImageModels: @escaping (ChatImageOperation) -> Void,
+         onFindDraftModels: @escaping (String) -> Void,
+         onPreviewAttachment: @escaping (ChatImageAttachment) -> Void) {
+        self.model = model
+        self.chat = chat
+        self.extensionManager = extensionManager
+        self.project = project
+        self.projectRootIsAvailable = projectRootIsAvailable
+        self.workspaceMode = workspaceMode
+        self.onSelectWorkspaceMode = onSelectWorkspaceMode
+        self.onExploreImageModels = onExploreImageModels
+        self.onFindDraftModels = onFindDraftModels
+        self.onPreviewAttachment = onPreviewAttachment
+        _search = State(initialValue: ChatSearchState(library: chat.searchLibrary))
+    }
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -192,21 +211,20 @@ private struct ChatTranscriptView: View {
         .environment(\.chatSearchState, search)
         .focusedSceneValue(\.chatSearch, search)
         .onChange(of: chat.currentSessionID, initial: true) { _, id in
-            search.reset(sessionID: id, library: chat.searchLibrary)
+            search.reset(sessionID: id)
         }
         .onChange(of: search.query) { _, _ in
-            search.update(items: chat.visibleTranscriptItems, contentRevision: chat.transcriptRevision.value,
-                          queryChanged: true)
+            search.update(queryChanged: true)
         }
         .onChange(of: search.query.isEmpty ? 0 : chat.searchLibrary.revision) { _, _ in
             if !search.query.isEmpty {
-                search.update(items: chat.visibleTranscriptItems, contentRevision: chat.searchLibrary.revision)
+                search.update()
             }
         }
         .task(id: librarySearch?.destination?.id) {
             guard let destination = librarySearch?.takeDestination(for: chat.currentSessionID) else { return }
             search.reveal(destination.result.occurrence, query: destination.query,
-                          sessionID: destination.result.sessionID, items: chat.visibleTranscriptItems)
+                          sessionID: destination.result.sessionID)
         }
         .onDisappear { search.reset(sessionID: nil) }
     }

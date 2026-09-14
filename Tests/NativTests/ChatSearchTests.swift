@@ -116,26 +116,21 @@ final class ChatSearchTests: XCTestCase {
         }
     }
 
-    func testIndexedQueriesReuseSnapshotsUntilContentChanges() async throws {
-        let state = ChatSearchState()
-        var reads = 0
+    func testQueriesUseTheSharedIndexAndObserveMessageChanges() async throws {
+        let chat = SearchSessionFixture()
+        let state = chat.state
         var messages = [ChatTranscriptMessage(role: .user, content: "notification permissions")]
-        func items() -> [ChatTranscriptItem] {
-            reads += 1
-            return ChatTranscriptPresentation.items(from: messages)
+        chat.setMessages(messages)
+        for query in ["notification", "permission"] {
+            state.query = query
+            state.update(queryChanged: true)
+            try await waitForSearch(state)
+            XCTAssertEqual(state.occurrences.count, 1)
         }
-        state.query = "notification"
-        state.update(items: items(), contentRevision: 1, queryChanged: true)
-        try await waitForSearch(state)
-        state.query = "permission"
-        state.update(items: items(), contentRevision: 1, queryChanged: true)
-        try await waitForSearch(state)
-        XCTAssertEqual(reads, 1)
-        XCTAssertEqual(state.occurrences.count, 1)
         messages[0].content = "changed content"
-        state.update(items: items(), contentRevision: 2)
+        chat.setMessages(messages)
+        state.update()
         try await waitForSearch(state)
-        XCTAssertEqual(reads, 2)
         XCTAssertTrue(state.occurrences.isEmpty)
     }
 
@@ -176,8 +171,8 @@ final class ChatSearchTests: XCTestCase {
     }
 
     func testNavigationWrapsAndChatSwitchClearsState() async throws {
-        let state = ChatSearchState()
-        state.reset(sessionID: UUID())
+        let chat = SearchSessionFixture()
+        let state = chat.state
         XCTAssertFalse(state.isPresented)
         state.present()
         XCTAssertTrue(state.isPresented)
@@ -185,7 +180,8 @@ final class ChatSearchTests: XCTestCase {
         state.present()
         XCTAssertNotEqual(state.focusID, focus)
         state.query = "notification"
-        state.update(items: [.message(ChatTranscriptMessage(role: .user, content: "notification notification"))], queryChanged: true)
+        chat.setMessages([ChatTranscriptMessage(role: .user, content: "notification notification")])
+        state.update(queryChanged: true)
         try await waitForSearch(state)
         XCTAssertEqual(state.countLabel, "1/2")
         state.move(-1)
@@ -206,17 +202,18 @@ final class ChatSearchTests: XCTestCase {
     }
 
     func testSupersededQueriesAndSessionResetsCannotPublishOldResults() async throws {
-        let state = ChatSearchState()
-        let items = [ChatTranscriptItem.message(ChatTranscriptMessage(role: .user, content: "notification permission"))]
+        let chat = SearchSessionFixture()
+        let state = chat.state
+        chat.setMessages([ChatTranscriptMessage(role: .user, content: "notification permission")])
         state.query = "notification"
-        state.update(items: items, queryChanged: true)
+        state.update(queryChanged: true)
         state.query = "permission"
-        state.update(items: items, queryChanged: true)
+        state.update(queryChanged: true)
         try await waitForSearch(state)
         let match = try XCTUnwrap(state.selected)
         XCTAssertEqual((match.text as NSString).substring(with: match.range), "permission")
         state.query = "notification"
-        state.update(items: items, queryChanged: true)
+        state.update(queryChanged: true)
         state.reset(sessionID: UUID())
         try await Task.sleep(for: .milliseconds(250))
         XCTAssertTrue(state.occurrences.isEmpty)
@@ -224,12 +221,13 @@ final class ChatSearchTests: XCTestCase {
     }
 
     func testStreamingUpdatesAreNotStarvedByDebouncing() async throws {
-        let state = ChatSearchState()
+        let chat = SearchSessionFixture()
+        let state = chat.state
         state.query = "notification"
         let id = UUID()
         for index in 0..<12 {
-            state.update(items: [.message(ChatTranscriptMessage(id: id, role: .user,
-                                                               content: "notification \(index)"))])
+            chat.setMessages([ChatTranscriptMessage(id: id, role: .user, content: "notification \(index)")])
+            state.update()
             try await Task.sleep(for: .milliseconds(40))
         }
         XCTAssertFalse(state.occurrences.isEmpty)
@@ -239,13 +237,16 @@ final class ChatSearchTests: XCTestCase {
     }
 
     func testStreamingDoesNotRepeatedlyNavigateToAnUnchangedMatch() async throws {
-        let state = ChatSearchState()
+        let chat = SearchSessionFixture()
+        let state = chat.state
         state.query = "notification"
         let id = UUID()
-        state.update(items: [.message(ChatTranscriptMessage(id: id, role: .user, content: "notification"))])
+        chat.setMessages([ChatTranscriptMessage(id: id, role: .user, content: "notification")])
+        state.update()
         try await waitForSearch(state)
         let navigation = state.navigationID
-        state.update(items: [.message(ChatTranscriptMessage(id: id, role: .user, content: "notification continued"))])
+        chat.setMessages([ChatTranscriptMessage(id: id, role: .user, content: "notification continued")])
+        state.update()
         try await waitForSearch(state)
         XCTAssertEqual(state.navigationID, navigation)
     }
@@ -335,9 +336,9 @@ final class ChatSearchTests: XCTestCase {
             ChatLibrarySearchSession(summary: session.summary, items: items)
         ])
         let target = try XCTUnwrap(results.messages.first)
-        try await withSearchTranscript(messages) { search, host in
-            search.reveal(target.occurrence, query: "notification", sessionID: session.id, items: items)
-            search.update(items: items, queryChanged: true)
+        try await withSearchTranscript(messages, sessionID: session.id) { search, host in
+            search.reveal(target.occurrence, query: "notification", sessionID: session.id)
+            search.update(queryChanged: true)
             try await waitForSearch(search)
             try await settle(host)
             XCTAssertEqual(search.selected?.messageID, messages[35].id)
@@ -433,9 +434,12 @@ final class ChatSearchTests: XCTestCase {
     }
 
     private func withSearchTranscript(_ messages: [ChatTranscriptMessage], query: String = "notification",
+                                      sessionID: UUID = UUID(),
                                       beforeSearch: (NSView) async throws -> Void = { _ in },
                                       body: (ChatSearchState, NSView) async throws -> Void) async throws {
-        let search = ChatSearchState()
+        let chat = SearchSessionFixture(id: sessionID)
+        chat.setMessages(messages)
+        let search = chat.state
         let items = ChatTranscriptPresentation.items(from: messages)
         let host = NSHostingView(rootView: SearchNavigationFixture(search: search, items: items))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 360),
@@ -449,7 +453,7 @@ final class ChatSearchTests: XCTestCase {
         search.present()
         try await settle(host)
         search.query = query
-        search.update(items: items, queryChanged: true)
+        search.update(queryChanged: true)
         try await waitForSearch(search)
         try await body(search, host)
     }
@@ -530,5 +534,25 @@ private struct SearchNavigationFixture: View {
         .overlay(alignment: .topTrailing) {
             if search.isPresented { ChatSearchBar(search: search).padding(8) }
         }
+    }
+}
+
+@MainActor
+private final class SearchSessionFixture {
+    let id: UUID
+    let library = ChatSearchLibrary()
+    let state: ChatSearchState
+
+    init(id: UUID = UUID()) {
+        self.id = id
+        state = ChatSearchState(library: library, sessionID: id)
+        library.start([])
+    }
+
+    func setMessages(_ messages: [ChatTranscriptMessage]) {
+        let session = ChatSession(id: id, title: "Search", createdAt: Date(), updatedAt: Date(), messages: messages)
+        let snapshot = ChatLibrarySearchSession(summary: session.summary,
+                                               items: ChatTranscriptPresentation.items(from: messages))
+        library.enqueue(id) { snapshot }
     }
 }
