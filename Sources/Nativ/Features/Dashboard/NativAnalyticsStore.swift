@@ -143,7 +143,6 @@ struct NativAnalyticsRequestEvent: Identifiable, Sendable {
     let toolCalls: Bool
     let finishReason: String?
     let backend: String?
-    let clientRequestID: String?
 
     var id: String { requestID }
 
@@ -593,8 +592,7 @@ final class NativAnalyticsStore {
                 thinking_enabled,
                 tool_calls,
                 finish_reason,
-                backend,
-                client_request_id
+                backend
             FROM request_events
             WHERE 1 = 1
             \(range.rangeStartUnix == nil ? "" : "AND completed_at >= ?")
@@ -645,8 +643,7 @@ final class NativAnalyticsStore {
                     thinkingEnabled: statement.int64(at: 18) != 0,
                     toolCalls: statement.int64(at: 19) != 0,
                     finishReason: statement.string(at: 20),
-                    backend: statement.string(at: 21),
-                    clientRequestID: statement.string(at: 22)
+                    backend: statement.string(at: 21)
                 )
             )
         }

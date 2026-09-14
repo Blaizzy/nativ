@@ -10,8 +10,7 @@ struct TraceTranscriptView: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if let instance = model.selectedInstance, !instance.inheritedContext.isEmpty {
                         TraceInheritedContextRow(
-                            messages: instance.inheritedContext,
-                            fromModelID: instance.precedingModelID
+                            messages: instance.inheritedContext
                         )
                     }
 
@@ -175,7 +174,6 @@ struct TraceMessageRow: View {
 
 struct TraceInheritedContextRow: View {
     let messages: [TraceMessageRef]
-    let fromModelID: String?
 
     @State private var isExpanded = false
 
@@ -188,7 +186,7 @@ struct TraceInheritedContextRow: View {
                     Image(systemName: "arrow.turn.down.right")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text(title)
+                    Text("Context sent to this call")
                         .font(.callout)
                     Text("\(messages.count) messages")
                         .font(.caption)
@@ -217,11 +215,6 @@ struct TraceInheritedContextRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .nativPanelStyle(cornerRadius: .compact)
-    }
-
-    private var title: String {
-        guard let fromModelID else { return "Context carried into this model" }
-        return "Carried over from \(fromModelID)"
     }
 }
 

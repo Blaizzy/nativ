@@ -295,10 +295,7 @@ final class RoutineRunner {
 
             let completion: MLXChatCompletion
             do {
-                completion = try await client.completeChat(
-                    request,
-                    requestID: call.requestID.uuidString
-                )
+                completion = try await client.completeChat(request)
             } catch {
                 await tracer?.responseFailed(
                     message: String(describing: error),

@@ -53,10 +53,6 @@ public final class TraceEventQueue: Sendable {
         continuation.yield(.run { await $0.discardPartial(traceID: traceID, scope: scope) })
     }
 
-    public func prune(retaining window: TraceRetentionWindow) {
-        continuation.yield(.run { await $0.prune(retaining: window) })
-    }
-
     public func flushAll() {
         continuation.yield(.run { await $0.flushAll() })
     }

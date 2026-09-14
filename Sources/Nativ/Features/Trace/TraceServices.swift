@@ -9,7 +9,6 @@ final class TraceServices {
     private let logger = Logger(subsystem: "dev.local.Nativ", category: "trace")
     private let makeStore: () throws -> TraceStore
     private var store: TraceStore?
-    private var recorder: TraceRecorder?
     private(set) var producer: ChatTraceProducer?
     private var lastAppliedRetention: TraceRetentionWindow?
 
@@ -24,7 +23,6 @@ final class TraceServices {
         guard let store = openStore() else { return nil }
         let recorder = TraceRecorder(store: store)
         let producer = ChatTraceProducer(recorder: recorder)
-        self.recorder = recorder
         self.producer = producer
         return producer
     }
@@ -69,7 +67,6 @@ final class TraceServices {
 
     func stop() {
         producer = nil
-        recorder = nil
         store = nil
     }
 }

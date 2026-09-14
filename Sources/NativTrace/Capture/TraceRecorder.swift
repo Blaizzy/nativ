@@ -58,16 +58,6 @@ public actor TraceRecorder {
         }
     }
 
-    @discardableResult
-    public func prune(retaining window: TraceRetentionWindow) async -> Int {
-        do {
-            return try await store.prune(retaining: window, now: now())
-        } catch {
-            note(error, while: "pruning")
-            return 0
-        }
-    }
-
     private func write(
         kind: TraceEventKind,
         json: TraceJSON,

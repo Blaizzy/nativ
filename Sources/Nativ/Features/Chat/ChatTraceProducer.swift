@@ -113,16 +113,8 @@ final class ChatTraceProducer {
         record(ToolConsentPayload(callID: callID, name: name, decision: decision), call: call)
     }
 
-    func prune(retaining window: TraceRetentionWindow) {
-        queue.prune(retaining: window)
-    }
-
     func shutDown() async {
         queue.flushAll()
-        await queue.drain()
-    }
-
-    func drain() async {
         await queue.drain()
     }
 

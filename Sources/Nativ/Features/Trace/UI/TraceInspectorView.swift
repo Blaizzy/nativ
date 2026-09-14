@@ -8,7 +8,6 @@ extension Notification.Name {
 struct TraceInspectorView: View {
     enum Source: Hashable {
         case session(UUID)
-        case request(String)
     }
 
     private struct Reload: Hashable {
@@ -102,7 +101,6 @@ struct TraceInspectorView: View {
     private func load() async {
         switch source {
         case .session(let id): await model.loadSession(id)
-        case .request(let id): await model.loadRequest(id)
         }
     }
 }

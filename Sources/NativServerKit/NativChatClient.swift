@@ -585,20 +585,13 @@ public final class NativChatClient: @unchecked Sendable {
         session.finishTasksAndInvalidate()
     }
 
-    public func completeChat(
-        _ request: MLXChatCompletionRequest,
-        requestID: String? = nil
-    ) async throws -> MLXChatCompletion {
+    public func completeChat(_ request: MLXChatCompletionRequest) async throws -> MLXChatCompletion {
         var payload = request
         payload.stream = false
         payload.streamOptions = nil
 
         let requestStartedAt = Date()
-        let urlRequest = try makeURLRequest(
-            payload: payload,
-            accepts: "application/json",
-            requestID: requestID
-        )
+        let urlRequest = try makeURLRequest(payload: payload, accepts: "application/json")
         let (data, response) = try await session.data(for: urlRequest)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -648,10 +641,9 @@ public final class NativChatClient: @unchecked Sendable {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        requestID: String? = nil,
         onDelta: @escaping @Sendable (String) async -> Void
     ) async throws -> MLXChatCompletion {
-        try await streamChat(request, requestID: requestID, onEvent: { event in
+        try await streamChat(request, onEvent: { event in
             if let content = event.content, !content.isEmpty {
                 await onDelta(content)
             }
@@ -660,7 +652,6 @@ public final class NativChatClient: @unchecked Sendable {
 
     public func streamChat(
         _ request: MLXChatCompletionRequest,
-        requestID: String? = nil,
         onEvent: @escaping @Sendable (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXChatCompletion {
         let decoder = JSONDecoder()
@@ -669,7 +660,7 @@ public final class NativChatClient: @unchecked Sendable {
         payload.streamOptions = MLXChatStreamOptions(includeUsage: true)
 
         let requestStartedAt = Date()
-        let urlRequest = try makeURLRequest(payload: payload, accepts: "text/event-stream", requestID: requestID)
+        let urlRequest = try makeURLRequest(payload: payload, accepts: "text/event-stream")
         let (bytes, response) = try await session.bytes(for: urlRequest)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -812,22 +803,13 @@ public final class NativChatClient: @unchecked Sendable {
         throw NativChatError.missingAssistantContent
     }
 
-    public static let requestIDHeader = "X-Nativ-Request-Id"
-
-    func makeURLRequest(
-        payload: MLXChatCompletionRequest,
-        accepts: String,
-        requestID: String? = nil
-    ) throws -> URLRequest {
+    func makeURLRequest(payload: MLXChatCompletionRequest, accepts: String) throws -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/chat/completions"))
         request.httpMethod = "POST"
         request.timeoutInterval = timeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accepts, forHTTPHeaderField: "Accept")
-        if let requestID {
-            request.setValue(requestID, forHTTPHeaderField: Self.requestIDHeader)
-        }
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
         request.httpBody = try JSONEncoder().encode(payload)
         return request

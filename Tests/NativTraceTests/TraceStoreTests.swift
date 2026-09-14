@@ -89,21 +89,6 @@ final class TraceStoreTests: XCTestCase {
         )
     }
 
-    func testEventsCanBePaged() async throws {
-        let store = try makeStore()
-        for _ in 0..<5 {
-            try await store.record(
-                kind: .turnStarted, payload: .object([:]), traceID: "t1", scope: TraceScope()
-            )
-        }
-
-        let firstPage = try await store.events(forTrace: "t1", limit: 2)
-        let secondPage = try await store.events(forTrace: "t1", after: firstPage.last?.seq, limit: 2)
-
-        XCTAssertEqual(firstPage.map(\.seq), [0, 1])
-        XCTAssertEqual(secondPage.map(\.seq), [2, 3])
-    }
-
     func testEventsReadBackInSequenceOrder() async throws {
         let store = try makeStore()
         try await store.insert(preSequenced: [
@@ -139,7 +124,7 @@ final class TraceStoreTests: XCTestCase {
             )
         ])
 
-        let events = try await store.events(forRequest: "r1")
+        let events = try await store.events(forTrace: "t1")
         let restored = try XCTUnwrap(RequestComposedPayload(event: try XCTUnwrap(events.first)))
 
         XCTAssertEqual(restored.systemSections.map(\.origin), [.userSystemPrompt, .skill])

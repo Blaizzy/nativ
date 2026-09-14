@@ -98,32 +98,22 @@ public actor TraceStore {
         }
     }
 
-    public func events(
-        forTrace traceID: String,
-        after seq: Int64? = nil,
-        limit: Int? = nil
-    ) throws -> [TraceEvent] {
+    public func events(forTrace traceID: String) throws -> [TraceEvent] {
         try connection.withStatement(
             """
             SELECT \(Self.eventColumns) FROM trace_events
-            WHERE trace_id = ?\(seq == nil ? "" : " AND seq > ?")
+            WHERE trace_id = ?
             ORDER BY seq ASC
-            \(limit == nil ? "" : "LIMIT ?");
+            ;
             """
         ) { statement in
             statement.bind(traceID)
-            if let seq { statement.bind(seq) }
-            if let limit { statement.bind(Int64(limit)) }
             return try statement.rows(Self.event)
         }
     }
 
     public func events(forSession sessionID: String) throws -> [TraceEvent] {
         try events(matching: "session_id = ?", value: sessionID)
-    }
-
-    public func events(forRequest requestID: String) throws -> [TraceEvent] {
-        try events(matching: "request_id = ?", value: requestID)
     }
 
     @discardableResult

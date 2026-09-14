@@ -1588,7 +1588,6 @@ final class ChatViewModel: ObservableObject {
             do {
                 completion = try await client.streamChat(
                     request,
-                    requestID: call.requestID.uuidString,
                     onEvent: { event in
                         await eventRelay.submit(event)
                     })

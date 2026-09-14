@@ -4,7 +4,6 @@ import SwiftUI
 
 struct TraceCall: Identifiable, Hashable {
     let id: String
-    let requestID: String?
     let title: String
     let timestamp: Date
     let exposure: RequestComposedPayload
@@ -21,7 +20,6 @@ struct TraceInstance: Identifiable, Hashable {
     let blocks: [TraceDisplayBlock]
     let calls: [TraceCall]
     let inheritedContext: [TraceMessageRef]
-    let precedingModelID: String?
 
     var modelLabel: String {
         switch modelIDs.count {
@@ -45,7 +43,6 @@ final class TraceInspectorViewModel: ObservableObject {
         }
     }
 
-    private var pendingRequestSelection: String?
     private var callsByItemID: [String: TraceCall] = [:]
     private let injectedStore: TraceStore?
 
@@ -69,18 +66,6 @@ final class TraceInspectorViewModel: ObservableObject {
         await load { store in
             let events = try await store.events(forSession: sessionID.uuidString)
             return events.isEmpty ? [] : [events]
-        }
-    }
-
-    func loadRequest(_ requestID: String) async {
-        pendingRequestSelection = requestID
-        await load { store in
-            guard let event = try await store.events(forRequest: requestID).first else { return [] }
-            if let sessionID = event.scope.sessionID {
-                let events = try await store.events(forSession: sessionID)
-                return events.isEmpty ? [] : [events]
-            }
-            return [try await store.events(forTrace: event.traceID)]
         }
     }
 
@@ -115,7 +100,6 @@ final class TraceInspectorViewModel: ObservableObject {
                 let (item, payload) = entry
                 return TraceCall(
                     id: item.id,
-                    requestID: item.scope.requestID,
                     title: TraceCallLabel.title(index: position + 1, round: item.scope.roundIndex),
                     timestamp: item.timestamp,
                     exposure: payload,
@@ -139,8 +123,7 @@ final class TraceInspectorViewModel: ObservableObject {
                 eventCount: events.count,
                 blocks: TraceGrouping.blocks(for: items),
                 calls: calls,
-                inheritedContext: inherited,
-                precedingModelID: offset > 0 ? traces[offset - 1].first?.scope.modelID : nil
+                inheritedContext: inherited
             )
         }
 
@@ -152,16 +135,6 @@ final class TraceInspectorViewModel: ObservableObject {
 
         if !instances.contains(where: { $0.id == selectedInstanceID }) {
             selectedInstanceID = instances.last?.id
-        }
-        if let requested = pendingRequestSelection {
-            pendingRequestSelection = nil
-            for instance in instances {
-                guard let match = instance.calls.first(where: { $0.requestID == requested })
-                else { continue }
-                selectedInstanceID = instance.id
-                selectedCallID = match.id
-                return
-            }
         }
         selectLastCallIfStale()
     }

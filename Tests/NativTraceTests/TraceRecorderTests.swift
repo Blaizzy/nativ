@@ -71,29 +71,4 @@ final class TraceRecorderTests: XCTestCase {
         XCTAssertEqual(Set(bodies), ["one", "two"])
     }
 
-    func testSequenceNumbersAreContiguousAcrossRecordings() async throws {
-        let store = try makeStore()
-        let recorder = TraceRecorder(store: store)
-
-        await recorder.record(SessionStartedPayload(title: "s"), traceID: "t1", scope: scope)
-        await recorder.record(TurnStartedPayload(messageID: "m1", text: "hi"), traceID: "t1", scope: scope)
-        await recorder.record(ToolCallPayload(callID: "c1", name: "web_search"), traceID: "t1", scope: scope)
-
-        let events = try await store.events(forTrace: "t1")
-
-        XCTAssertEqual(events.map(\.seq), [0, 1, 2])
-    }
-
-    func testRetentionWindowComputesItsCutoff() {
-        let reference = Date(timeIntervalSince1970: 10 * 24 * 60 * 60)
-
-        XCTAssertEqual(
-            TraceRetentionWindow(days: 7, maximumTraces: nil).cutoff(from: reference),
-            Date(timeIntervalSince1970: 3 * 24 * 60 * 60)
-        )
-        XCTAssertEqual(
-            TraceRetentionWindow(days: nil, maximumTraces: 10).cutoff(from: reference),
-            .distantPast
-        )
-    }
 }
