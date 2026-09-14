@@ -406,11 +406,182 @@ struct ModelConfigProfile: Codable, Equatable {
 }
 
 struct NativPersonalization: Codable, Equatable {
+    enum ConversationStyle: String, CaseIterable, Codable, Identifiable {
+        case `default`, concise, friendly, professional, detailed
+
+        var id: Self { self }
+
+        var title: String { rawValue.capitalized }
+
+        var description: String {
+            switch self {
+            case .default: "Natural and balanced"
+            case .concise: "Short and direct"
+            case .friendly: "Warm and conversational"
+            case .professional: "Polished and precise"
+            case .detailed: "Thorough explanations"
+            }
+        }
+
+        var systemPrompt: String {
+            let instructions: String
+            switch self {
+            case .default:
+                return ""
+            case .concise:
+                instructions = """
+                    Lead with the answer and use the fewest words needed to make it useful and clear. \
+                    Prioritize essential facts, decisions, and next steps. Omit conversational filler, \
+                    repeated conclusions, and examples that add little value. Preserve necessary context, \
+                    qualifications, and uncertainty; brevity must not make the answer misleading or incomplete.
+                    """
+            case .friendly:
+                instructions = """
+                    Use a warm, relaxed, conversational tone with clear, everyday language. Be attentive \
+                    to the user's situation and explain unfamiliar ideas in an approachable way. Show \
+                    encouragement when useful, without flattery, exaggerated enthusiasm, or forced intimacy. \
+                    Keep the conversation focused, and adopt a calm, serious tone when the subject calls for it.
+                    """
+            case .professional:
+                instructions = """
+                    Use a composed, professional tone with precise language and clear organization. \
+                    Present the main point first, then the supporting details needed to understand or act \
+                    on it. Distinguish facts, assumptions, and recommendations. Avoid slang, casual banter, \
+                    and inflated business language. Remain approachable, and use technical terms only when \
+                    they suit the audience.
+                    """
+            case .detailed:
+                instructions = """
+                    Give thorough, well-organized explanations that help the user understand the topic. \
+                    Start with the main answer, then develop relevant context, important distinctions, \
+                    and practical implications. Explain unfamiliar concepts and use concrete examples \
+                    when they improve understanding. Match depth to the question's complexity, and avoid \
+                    repetition, tangents, or padding merely to make the response longer.
+                    """
+            }
+            return instructions + "\nTreat this as the default communication style. Follow the user's explicit requests for tone, length, and format when they differ. Maintain accuracy and clearly express uncertainty in every style."
+        }
+    }
+
+    enum EmojiUsage: String, CaseIterable, Codable, Identifiable {
+        case none, `default`, more
+
+        var id: Self { self }
+        var title: String { rawValue.capitalized }
+
+        var description: String {
+            switch self {
+            case .none: "No added emojis"
+            case .default: "Model default"
+            case .more: "More expressive"
+            }
+        }
+
+        var systemPrompt: String {
+            switch self {
+            case .none:
+                """
+                Do not add emojis or decorative pictographs to your responses. Express tone through \
+                words and punctuation. Preserve emojis when quoting user-provided text or when they \
+                are necessary to explain the topic. Follow explicit requests to include particular emojis.
+                """
+            case .default:
+                ""
+            case .more:
+                """
+                Use emojis naturally to add warmth, emphasis, or occasional visual cues when appropriate \
+                to the conversation. Keep them selective and relevant; avoid repeated symbols, emoji chains, \
+                or decorating every paragraph. Keep technical content and serious or sensitive discussions \
+                restrained. Follow the user's explicit requests about emoji use.
+                """
+            }
+        }
+    }
+
+    enum MarkdownUsage: String, CaseIterable, Codable, Identifiable {
+        case minimal, `default`, structured
+
+        var id: Self { self }
+        var title: String { rawValue.capitalized }
+
+        var description: String {
+            switch self {
+            case .minimal: "Mostly plain text"
+            case .default: "Model default"
+            case .structured: "More headings and lists"
+            }
+        }
+
+        var systemPrompt: String {
+            switch self {
+            case .minimal:
+                """
+                Prefer plain paragraphs and simple punctuation. Avoid decorative headings, bold emphasis, \
+                tables, and unnecessary lists. Use formatting when it materially improves readability \
+                or preserves meaning, such as code blocks for code and numbered steps for procedures. \
+                Keep short answers especially simple. Follow the user's explicit formatting requests.
+                """
+            case .default:
+                ""
+            case .structured:
+                """
+                Use Markdown to make substantial responses easy to scan. Group related information under \
+                descriptive headings, use lists for steps or parallel points, and use tables when they \
+                make comparisons clearer. Apply bold emphasis sparingly to key conclusions. Keep short \
+                answers compact, and avoid redundant headings or excessive nesting. Follow the user's \
+                explicit formatting requests.
+                """
+            }
+        }
+    }
+
     struct Profile: Codable, Equatable {
-        var preferredName = ""
-        var occupation = ""
-        var responseStyle = ""
-        var aboutYou = ""
+        static let maximumFieldLength = 200
+
+        var preferredName: String
+        var occupation: String
+        var conversationStyle: ConversationStyle
+        var emojiUsage: EmojiUsage
+        var markdownUsage: MarkdownUsage
+        var aboutYou: String
+
+        init(
+            preferredName: String = "", occupation: String = "",
+            conversationStyle: ConversationStyle = .default, aboutYou: String = "",
+            emojiUsage: EmojiUsage = .default, markdownUsage: MarkdownUsage = .default
+        ) {
+            self.preferredName = preferredName
+            self.occupation = occupation
+            self.conversationStyle = conversationStyle
+            self.emojiUsage = emojiUsage
+            self.markdownUsage = markdownUsage
+            self.aboutYou = aboutYou
+            limitFieldLengths()
+        }
+
+        mutating func limitFieldLengths() {
+            preferredName = String(preferredName.prefix(Self.maximumFieldLength))
+            occupation = String(occupation.prefix(Self.maximumFieldLength))
+            aboutYou = String(aboutYou.prefix(Self.maximumFieldLength))
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case preferredName, occupation, conversationStyle, aboutYou, emojiUsage, markdownUsage
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            preferredName = try container.decodeIfPresent(String.self, forKey: .preferredName) ?? ""
+            occupation = try container.decodeIfPresent(String.self, forKey: .occupation) ?? ""
+            let style = try container.decodeIfPresent(String.self, forKey: .conversationStyle) ?? "default"
+            conversationStyle = ConversationStyle(rawValue: style) ?? .default
+            let emoji = try container.decodeIfPresent(String.self, forKey: .emojiUsage) ?? "default"
+            emojiUsage = EmojiUsage(rawValue: emoji) ?? .default
+            let markdown = try container.decodeIfPresent(String.self, forKey: .markdownUsage) ?? "default"
+            markdownUsage = MarkdownUsage(rawValue: markdown) ?? .default
+            aboutYou = try container.decodeIfPresent(String.self, forKey: .aboutYou) ?? ""
+            limitFieldLengths()
+        }
     }
 
     static let rollingMemoryLimit = 20
@@ -430,11 +601,15 @@ struct NativPersonalization: Codable, Equatable {
         rollingMemories.removeAll()
     }
 
+    mutating func removeMemory(at index: Int) {
+        guard rollingMemories.indices.contains(index) else { return }
+        rollingMemories.remove(at: index)
+    }
+
     var systemPrompt: String {
         let fields = [
             ("Preferred name", profile.preferredName),
             ("Occupation", profile.occupation),
-            ("Response preferences", profile.responseStyle),
             ("About the user", profile.aboutYou),
         ]
         let profileLines = fields.compactMap { label, value -> String? in
@@ -444,6 +619,15 @@ struct NativPersonalization: Codable, Equatable {
         var sections: [String] = []
         if !profileLines.isEmpty {
             sections.append("User profile:\n" + profileLines.joined(separator: "\n"))
+        }
+        if !profile.conversationStyle.systemPrompt.isEmpty {
+            sections.append("Conversation style:\n" + profile.conversationStyle.systemPrompt)
+        }
+        if !profile.emojiUsage.systemPrompt.isEmpty {
+            sections.append("Emoji usage:\n" + profile.emojiUsage.systemPrompt)
+        }
+        if !profile.markdownUsage.systemPrompt.isEmpty {
+            sections.append("Markdown usage:\n" + profile.markdownUsage.systemPrompt)
         }
         if !rollingMemories.isEmpty {
             sections.append("Remembered information about the user:\n" + rollingMemories.joined(separator: "\n"))

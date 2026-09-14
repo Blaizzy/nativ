@@ -50,6 +50,7 @@ struct SettingsView: View {
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
+    @State private var showsPersonalization = false
     @ObservedObject private var notifications = NativNotificationService.shared
 
     var body: some View {
@@ -68,6 +69,9 @@ struct SettingsView: View {
             .padding(.bottom, 26)
         }
         .background(Color.nativMainContentBackground)
+        .sheet(isPresented: $showsPersonalization) {
+            PersonalizationView(model: model)
+        }
     }
 
     private var pageHeader: some View {
@@ -138,6 +142,21 @@ struct SettingsView: View {
                     systemImage: "textformat.size"
                 ) {
                     chatTextSizeControl
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
+                    title: "Personalization",
+                    description: "Manage your profile and remembered information.",
+                    systemImage: "person.crop.circle"
+                ) {
+                    Button("Manage…") {
+                        showsPersonalization = true
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Manage personalization")
                 }
 
                 Divider()
@@ -410,5 +429,179 @@ struct SettingsView: View {
             return "Version \(version) (\(build))"
         }
         return "Version \(version)"
+    }
+}
+
+struct PersonalizationView: View {
+    let model: NativModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var profile: NativPersonalization.Profile
+    @State private var collectionEnabled: Bool
+
+    init(model: NativModel) {
+        self.model = model
+        _profile = State(initialValue: model.settings.personalization.profile)
+        _collectionEnabled = State(initialValue: model.settings.personalization.collectionEnabled)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Personalization")
+                    .font(.title2.weight(.semibold))
+                Text("Tell Nativ a little about yourself. All answers are optional, and you can edit them in Settings anytime.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(24)
+
+            Divider()
+
+            Form {
+                Section {
+                    profileField("What should Nativ call you?", placeholder: "Your preferred name", text: $profile.preferredName)
+                    profileField("What do you do?", placeholder: "Your work, studies, or interests", text: $profile.occupation)
+                    profileField("Anything else Nativ should know about you?", placeholder: "Anything you want Nativ to keep in mind", text: $profile.aboutYou)
+                } header: {
+                    Text("Your profile")
+                } footer: {
+                    Text("Only you can change these answers. Profile changes apply to new chats.")
+                }
+
+                Section {
+                    Picker("Style", selection: $profile.conversationStyle) {
+                        ForEach(NativPersonalization.ConversationStyle.allCases) { style in
+                            Text("\(style.title) — \(style.description)").tag(style)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityLabel("Conversation style")
+                } header: {
+                    Text("Conversation style")
+                } footer: {
+                    Text("Choose how Nativ responds. Style changes apply to new chats.")
+                }
+
+                Section {
+                    Picker("Emoji usage", selection: $profile.emojiUsage) {
+                        ForEach(NativPersonalization.EmojiUsage.allCases) { usage in
+                            Text("\(usage.title) — \(usage.description)").tag(usage)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    Picker("Markdown usage", selection: $profile.markdownUsage) {
+                        ForEach(NativPersonalization.MarkdownUsage.allCases) { usage in
+                            Text("\(usage.title) — \(usage.description)").tag(usage)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    Text("Response formatting")
+                } footer: {
+                    Text("Choose how much emoji and formatting Nativ uses. Changes apply to new chats.")
+                }
+
+                Section {
+                    Toggle("Remember information from chats", isOn: $collectionEnabled)
+                        .toggleStyle(.switch)
+                } header: {
+                    Text("Memory")
+                } footer: {
+                    Text("Allow Nativ to remember facts you share over time. It keeps the latest \(NativPersonalization.rollingMemoryLimit) memories. Turning this off keeps existing memories.")
+                }
+
+                Section {
+                    if model.settings.personalization.rollingMemories.isEmpty {
+                        Text("No saved memories yet.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(model.settings.personalization.rollingMemories.enumerated()), id: \.offset) { index, memory in
+                            HStack(alignment: .top, spacing: 12) {
+                                Text(memory)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .textSelection(.enabled)
+                                Button("Remove memory", systemImage: "trash") {
+                                    model.settings.personalization.removeMemory(at: index)
+                                }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .help("Remove this memory")
+                                .accessibilityLabel("Remove memory: \(memory)")
+                            }
+                        }
+                        Button("Clear all memories", role: .destructive) {
+                            model.settings.personalization.removeAllMemories()
+                        }
+                    }
+                } header: {
+                    Text("Saved memories")
+                } footer: {
+                    Text("Removing memories takes effect immediately for new chats. Existing chats keep their original personalization.")
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+
+            HStack {
+                Button("Cancel", action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 560, height: 660)
+        .interactiveDismissDisabled()
+    }
+
+    private func profileField(_ title: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.headline)
+            TextEditor(text: text)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .frame(height: 64)
+                .padding(6)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .topLeading) {
+                    if text.wrappedValue.isEmpty {
+                        Text(placeholder)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityLabel(title)
+                .onChange(of: text.wrappedValue) { _, value in
+                    if value.count > NativPersonalization.Profile.maximumFieldLength {
+                        text.wrappedValue = String(value.prefix(NativPersonalization.Profile.maximumFieldLength))
+                    }
+                }
+            Text("\(text.wrappedValue.count)/\(NativPersonalization.Profile.maximumFieldLength)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityLabel("\(text.wrappedValue.count) of \(NativPersonalization.Profile.maximumFieldLength) characters")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func save() {
+        profile.limitFieldLengths()
+        model.settings.personalization.profile = profile
+        model.settings.personalization.collectionEnabled = collectionEnabled
+        dismiss()
+    }
+
+    private func cancel() {
+        dismiss()
     }
 }

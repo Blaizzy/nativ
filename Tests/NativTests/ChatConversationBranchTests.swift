@@ -4,16 +4,25 @@ final class ChatConversationBranchTests: XCTestCase {
     func testPersonalizationSnapshotIsFrozenAcrossEditsReloadAndBranching() throws {
         var personalization = NativPersonalization()
         personalization.profile.preferredName = "Alex"
+        personalization.profile.conversationStyle = .concise
+        personalization.profile.emojiUsage = .none
+        personalization.profile.markdownUsage = .minimal
         personalization.collectionEnabled = true
         personalization.appendMemory("Lives in Paris")
         var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
         session.capturePersonalization(personalization)
         let snapshot = try XCTUnwrap(session.personalizationSnapshot)
         XCTAssertTrue(snapshot.contains("Alex"))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.ConversationStyle.concise.systemPrompt))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.EmojiUsage.none.systemPrompt))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.MarkdownUsage.minimal.systemPrompt))
         XCTAssertTrue(snapshot.contains("Lives in Paris"))
         session.messages.append(ChatTranscriptMessage(role: .user, content: "Hello"))
 
         personalization.profile.preferredName = "Sam"
+        personalization.profile.conversationStyle = .detailed
+        personalization.profile.emojiUsage = .more
+        personalization.profile.markdownUsage = .structured
         personalization.removeAllMemories()
         session = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
         session.capturePersonalization(personalization)
@@ -24,6 +33,9 @@ final class ChatConversationBranchTests: XCTestCase {
         var newSession = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
         newSession.capturePersonalization(personalization)
         XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains("Sam"))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.ConversationStyle.detailed.systemPrompt))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.EmojiUsage.more.systemPrompt))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.MarkdownUsage.structured.systemPrompt))
         XCTAssertFalse(try XCTUnwrap(newSession.personalizationSnapshot).contains("Paris"))
     }
 

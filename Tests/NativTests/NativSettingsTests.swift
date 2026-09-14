@@ -4,11 +4,111 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testFormattingPreferencesRoundTripIndependentlyAndInjectOnlySelectedPrompts() throws {
+        for emoji in NativPersonalization.EmojiUsage.allCases {
+            for markdown in NativPersonalization.MarkdownUsage.allCases {
+                var settings = NativSettings()
+                settings.personalization.profile.emojiUsage = emoji
+                settings.personalization.profile.markdownUsage = markdown
+                let decoded = try PropertyListDecoder().decode(
+                    NativSettings.self, from: PropertyListEncoder().encode(settings)
+                )
+                XCTAssertEqual(decoded.personalization.profile.emojiUsage, emoji)
+                XCTAssertEqual(decoded.personalization.profile.markdownUsage, markdown)
+                var expected: [String] = []
+                if emoji != .default { expected.append("Emoji usage:\n" + emoji.systemPrompt) }
+                if markdown != .default { expected.append("Markdown usage:\n" + markdown.systemPrompt) }
+                XCTAssertEqual(decoded.personalization.systemPrompt, expected.joined(separator: "\n\n"))
+            }
+        }
+    }
+
+    func testMissingOrUnknownFormattingPreferencesUseModelDefaults() throws {
+        for fields in ["", ",\"emojiUsage\":\"unknown\",\"markdownUsage\":\"unknown\""] {
+            let data = Data("{\"preferredName\":\"Alex\",\"conversationStyle\":\"friendly\"\(fields)}".utf8)
+            let profile = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+            XCTAssertEqual(profile.emojiUsage, .default)
+            XCTAssertEqual(profile.markdownUsage, .default)
+            XCTAssertEqual(profile.conversationStyle, .friendly)
+            XCTAssertEqual(profile.preferredName, "Alex")
+        }
+    }
+
+    func testPersonalInfoFieldsAreLimitedTo200CharactersIncludingUnicode() throws {
+        let text = "First line\n" + String(repeating: "👩🏽‍💻", count: 210)
+        let expected = String(text.prefix(200))
+        let profile = NativPersonalization.Profile(
+            preferredName: text, occupation: text, conversationStyle: .friendly, aboutYou: text
+        )
+        XCTAssertEqual(profile.preferredName, expected)
+        XCTAssertEqual(profile.occupation, expected)
+        XCTAssertEqual(profile.aboutYou, expected)
+        XCTAssertEqual(profile.aboutYou.count, 200)
+        XCTAssertTrue(profile.aboutYou.contains("\n"))
+
+        let data = try JSONSerialization.data(withJSONObject: [
+            "preferredName": text, "occupation": text, "aboutYou": text,
+            "conversationStyle": "friendly",
+        ])
+        var decoded = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+        XCTAssertEqual(decoded, profile)
+        decoded.aboutYou = text
+        decoded.limitFieldLengths()
+        XCTAssertEqual(decoded, profile)
+    }
+
+    func testConversationStylesRoundTripAndOnlySelectedPromptIsIncluded() throws {
+        for style in NativPersonalization.ConversationStyle.allCases {
+            var settings = NativSettings()
+            settings.personalization.profile.conversationStyle = style
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self, from: PropertyListEncoder().encode(settings)
+            )
+            XCTAssertEqual(decoded.personalization.profile.conversationStyle, style)
+            if style == .default {
+                XCTAssertTrue(decoded.personalization.systemPrompt.isEmpty)
+            } else {
+                XCTAssertEqual(decoded.personalization.systemPrompt, "Conversation style:\n" + style.systemPrompt)
+            }
+        }
+    }
+
+    func testMissingOrUnknownConversationStyleDefaultsWithoutLosingProfile() throws {
+        for styleField in ["\"responseStyle\":\"Old custom style\"", "\"conversationStyle\":\"unknown\""] {
+            let data = Data("{\"preferredName\":\"Alex\",\"occupation\":\"Designer\",\"aboutYou\":\"Lives in Paris\",\(styleField)}".utf8)
+            let profile = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+            XCTAssertEqual(profile.conversationStyle, .default)
+            XCTAssertEqual(profile.preferredName, "Alex")
+            XCTAssertEqual(profile.occupation, "Designer")
+            XCTAssertEqual(profile.aboutYou, "Lives in Paris")
+        }
+    }
+
+    func testRemovingMemoryOnlyRemovesSelectedEntryAndPersists() throws {
+        var settings = NativSettings()
+        settings.personalization.profile.preferredName = "Alex"
+        settings.personalization.collectionEnabled = true
+        settings.personalization.appendMemory("Enjoys walking")
+        settings.personalization.appendMemory("Lives in Paris")
+        settings.personalization.appendMemory("Enjoys walking")
+        settings.personalization.collectionEnabled = false
+        settings.personalization.removeMemory(at: 2)
+        settings.personalization.removeMemory(at: -1)
+        settings.personalization.removeMemory(at: 20)
+
+        let decoded = try PropertyListDecoder().decode(
+            NativSettings.self, from: PropertyListEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.personalization.rollingMemories, ["Enjoys walking", "Lives in Paris"])
+        XCTAssertEqual(decoded.personalization.profile.preferredName, "Alex")
+        XCTAssertFalse(decoded.personalization.collectionEnabled)
+    }
+
     func testPersonalizationRoundTripsSeparatelyFromSystemPrompt() throws {
         var settings = NativSettings(systemPrompt: "Existing instructions")
         settings.personalization.profile = .init(
             preferredName: "Alex", occupation: "Designer",
-            responseStyle: "Concise", aboutYou: "Lives in Paris"
+            conversationStyle: .concise, aboutYou: "Lives in Paris"
         )
         settings.personalization.collectionEnabled = true
         settings.personalization.appendMemory("Enjoys ice cream")
@@ -29,7 +129,7 @@ final class NativSettingsTests: XCTestCase {
 
     func testRollingMemoriesEvictOldestAndNeverEditProfile() {
         var personalization = NativPersonalization()
-        personalization.profile.responseStyle = "Concise answers"
+        personalization.profile.conversationStyle = .concise
         let profile = personalization.profile
         personalization.appendMemory("Not saved while off")
         XCTAssertTrue(personalization.rollingMemories.isEmpty)
