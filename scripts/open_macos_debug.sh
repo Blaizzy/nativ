@@ -15,12 +15,6 @@ app_path="$1"
 [[ -d "$app_path" ]] || fail "app bundle is missing: $app_path"
 app_path="$(cd "$(dirname "$app_path")" && pwd -P)/$(basename "$app_path")"
 
-executable_name="$(
-    /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
-        "$app_path/Contents/Info.plist" 2>/dev/null || true
-)"
-[[ -n "$executable_name" ]] || executable_name="$(basename "$app_path" .app)"
-
 bundle_identifier="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
         "$app_path/Contents/Info.plist" 2>/dev/null || true
@@ -45,11 +39,11 @@ signature_details="$(codesign -dvvv -r- "$app_path" 2>&1)"
 while IFS= read -r process_id; do
     [[ -n "$process_id" ]] || continue
     kill "$process_id" 2>/dev/null || true
-done < <(pgrep -x "$executable_name" || true)
+done < <(pgrep -x Nativ || true)
 
 open -na "$app_path"
 
-expected_command="$app_path/Contents/MacOS/$executable_name"
+expected_command="$app_path/Contents/MacOS/Nativ"
 for _ in {1..20}; do
     while IFS= read -r process_id; do
         [[ -n "$process_id" ]] || continue
@@ -60,8 +54,8 @@ for _ in {1..20}; do
             echo "Bundle identifier: $bundle_identifier"
             exit 0
         fi
-    done < <(pgrep -x "$executable_name" || true)
+    done < <(pgrep -x Nativ || true)
     sleep 0.25
 done
 
-fail "$executable_name did not remain running after launch"
+fail "Nativ did not remain running after launch"

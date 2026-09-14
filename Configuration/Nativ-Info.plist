@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>$(NATIV_PRODUCT_NAME)</string>
+	<string>Nativ</string>
 	<key>CFBundleIconFile</key>
 	<string>NotificationAppIcon</string>
 	<key>CFBundleIconName</key>

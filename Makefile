@@ -2,12 +2,6 @@
 .PHONY: xcode-generate xcode-build xcode-sign xcode-run xcode-smoke xcode-lifecycle-smoke
 
 XCODE_DERIVED_DATA ?= build/NativDevelopmentDerivedData
-NATIV_PRODUCT_NAME ?= $(firstword $(shell sed -n 's/^NATIV_PRODUCT_NAME[[:space:]]*=[[:space:]]*//p' \
-	Configuration/Signing.local.xcconfig Configuration/Signing.xcconfig 2>/dev/null) Nativ)
-ifneq ($(filter command line environment,$(origin NATIV_PRODUCT_NAME)),)
-XCODE_PRODUCT_NAME_OVERRIDE := NATIV_PRODUCT_NAME=$(NATIV_PRODUCT_NAME)
-endif
-NATIV_APP := $(XCODE_DERIVED_DATA)/Build/Products/Debug/$(NATIV_PRODUCT_NAME).app
 export DEVELOPER_DIR ?= /Applications/Xcode.app/Contents/Developer
 
 build:
@@ -26,16 +20,16 @@ xcode-generate:
 	xcodegen generate
 
 xcode-build: xcode-generate
-	xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug -derivedDataPath $(XCODE_DERIVED_DATA) $(XCODE_PRODUCT_NAME_OVERRIDE) CODE_SIGNING_ALLOWED=NO build
+	xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug -derivedDataPath $(XCODE_DERIVED_DATA) CODE_SIGNING_ALLOWED=NO build
 
 xcode-sign: xcode-build
-	./scripts/sign_macos_debug.sh $(abspath $(NATIV_APP))
+	./scripts/sign_macos_debug.sh $(abspath $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app)
 
 xcode-run: xcode-sign
-	./scripts/open_macos_debug.sh $(abspath $(NATIV_APP))
+	./scripts/open_macos_debug.sh $(abspath $(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app)
 
 xcode-smoke: xcode-build
-	$(NATIV_APP)/Contents/MacOS/$(NATIV_PRODUCT_NAME) --smoke-test
+	$(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app/Contents/MacOS/Nativ --smoke-test
 
 xcode-lifecycle-smoke: xcode-build
-	$(NATIV_APP)/Contents/MacOS/$(NATIV_PRODUCT_NAME) --lifecycle-smoke-test
+	$(XCODE_DERIVED_DATA)/Build/Products/Debug/Nativ.app/Contents/MacOS/Nativ --lifecycle-smoke-test
