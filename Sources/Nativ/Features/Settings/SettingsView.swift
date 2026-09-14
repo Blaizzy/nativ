@@ -447,7 +447,7 @@ struct PersonalizationView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Personalization")
                     .font(.title2.weight(.semibold))
-                Text("Tell Nativ a little about yourself. All answers are optional, and you can edit them in Settings anytime.")
+                Text("Make Nativ feel personal. All settings are stored locally.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
