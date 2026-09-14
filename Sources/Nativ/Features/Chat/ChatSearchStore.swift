@@ -24,6 +24,7 @@ final class ChatSearchStore {
     }
 
     private var database: OpaquePointer?
+    private var needsCheckpoint = false
     private let encoder: PropertyListEncoder = {
         let encoder = PropertyListEncoder()
         encoder.outputFormat = .binary
@@ -91,6 +92,7 @@ final class ChatSearchStore {
                 try execute("DELETE FROM metadata")
                 try execute("INSERT INTO metadata VALUES (?)", strings: [version])
             }
+            try checkpoint()
         }
         try execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, payload BLOB NOT NULL)")
         try execute("CREATE TABLE IF NOT EXISTS messages (session_id TEXT NOT NULL, message_id TEXT NOT NULL, position INTEGER NOT NULL, payload BLOB NOT NULL, PRIMARY KEY (session_id, message_id))")
@@ -113,6 +115,7 @@ final class ChatSearchStore {
                 try execute("DELETE FROM messages")
                 try execute("DELETE FROM sessions")
             }
+            try checkpoint()
             index = ChatSearchIndex()
             return [:]
         }
@@ -122,7 +125,10 @@ final class ChatSearchStore {
     func save(_ index: ChatSearchIndex, sessions: [Session] = [], removedSessions: Set<UUID> = []) throws {
         let changes = index.changes
         guard !changes.updated.isEmpty || !changes.removed.isEmpty || !changes.moved.isEmpty
-                || !sessions.isEmpty || !removedSessions.isEmpty else { return }
+                || !sessions.isEmpty || !removedSessions.isEmpty else {
+            if needsCheckpoint { try checkpoint() }
+            return
+        }
         try transaction {
             for id in removedSessions {
                 try execute("DELETE FROM messages WHERE session_id = ?", strings: [id.uuidString])
@@ -146,9 +152,15 @@ final class ChatSearchStore {
                             strings: identifiers(key), position: entry.position, positionFirst: true)
             }
         }
+        needsCheckpoint = needsCheckpoint || !changes.removed.isEmpty || !removedSessions.isEmpty
+        if needsCheckpoint { try checkpoint() }
     }
 
-    func checkpoint() throws { try execute("PRAGMA wal_checkpoint(TRUNCATE)") }
+    func checkpoint() throws {
+        // Unlike the PRAGMA result row, this API reports an incomplete checkpoint as SQLITE_BUSY.
+        try check(sqlite3_wal_checkpoint_v2(database, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil))
+        needsCheckpoint = false
+    }
 
     private func identifiers(_ key: ChatSearchIndex.Key) -> [String] {
         [key.sessionID?.uuidString ?? "", key.messageID.uuidString]

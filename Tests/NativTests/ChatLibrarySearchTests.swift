@@ -209,6 +209,52 @@ final class ChatLibrarySearchTests: XCTestCase {
         XCTAssertEqual(permission.messages.map { $0.occurrence.messageID }, [updated.inputs[0].messageID])
     }
 
+    func testDeletingChatsAndMessagesTruncatesTheirCachedText() async throws {
+        for deleteChat in [true, false] {
+            let url = try databaseURL()
+            let marker = "deletedsearchtext" + UUID().uuidString
+            let chat = session("Deleted", messages: [message(marker)])
+            let worker = ChatLibrarySearchWorker(storageURL: url)
+            try await worker.synchronize([chat], summaries: [chat.summary])
+            XCTAssertNotNil(try Data(contentsOf: URL(filePath: url.path + "-wal")).range(of: Data(marker.utf8)))
+            if deleteChat {
+                try await worker.update([], removed: [chat.id])
+            } else {
+                let empty = session("Deleted", id: chat.id, messages: [])
+                try await worker.update([empty])
+            }
+            let results = try await worker.search(marker)
+            XCTAssertTrue(results.messages.isEmpty)
+            for suffix in ["", "-wal"] {
+                let data = try Data(contentsOf: URL(filePath: url.path + suffix))
+                XCTAssertNil(data.range(of: Data(marker.utf8)), suffix)
+                if suffix == "-wal" { XCTAssertTrue(data.isEmpty) }
+            }
+        }
+    }
+
+    func testDeletionRetriesCheckpointBlockedByAReader() async throws {
+        let url = try databaseURL()
+        let chat = session("Deleted", messages: [message("notification")])
+        let worker = ChatLibrarySearchWorker(storageURL: url)
+        try await worker.synchronize([chat], summaries: [chat.summary])
+        var reader: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &reader), SQLITE_OK)
+        defer { sqlite3_close(reader) }
+        XCTAssertEqual(sqlite3_exec(reader, "BEGIN; SELECT * FROM messages", nil, nil, nil), SQLITE_OK)
+        do {
+            try await worker.update([], removed: [chat.id])
+            XCTFail("A blocked truncation must be reported so deletion can be retried")
+        } catch let error as ChatSearchStore.Failure {
+            XCTAssertEqual(error.code, SQLITE_BUSY)
+        }
+        XCTAssertEqual(sqlite3_exec(reader, "COMMIT", nil, nil, nil), SQLITE_OK)
+        try await worker.update([], removed: [chat.id])
+        XCTAssertTrue(try Data(contentsOf: URL(filePath: url.path + "-wal")).isEmpty)
+        let results = try await worker.search("notification")
+        XCTAssertTrue(results.messages.isEmpty)
+    }
+
     func testPersistentIndexPreservesForkNamespacesAndMessageOrder() async throws {
         let url = try databaseURL()
         let sharedID = UUID()
