@@ -15,7 +15,7 @@ public actor TraceRecorder {
     private let now: @Sendable () -> Date
     private let logger = Logger(subsystem: "dev.local.NativTrace", category: "recorder")
 
-    private var partials: [TraceCallKey: PartialResponse] = [:]
+    private var partials: [String: PartialResponse] = [:]
 
     public init(store: TraceStore, now: @escaping @Sendable () -> Date = Date.init) {
         self.store = store
@@ -28,19 +28,10 @@ public actor TraceRecorder {
         scope: TraceScope
     ) async {
         guard let json = encode(payload) else { return }
-        await record(kind: Payload.kind, json: json, traceID: traceID, scope: scope)
-    }
-
-    public func record(
-        kind: TraceEventKind,
-        json: TraceJSON,
-        traceID: String,
-        scope: TraceScope
-    ) async {
-        if kind.sealsStreamedOutput {
+        if Payload.kind.sealsStreamedOutput {
             await flushPartials(inTrace: traceID)
         }
-        await write(kind: kind, json: json, traceID: traceID, scope: scope)
+        await write(kind: Payload.kind, json: json, traceID: traceID, scope: scope)
     }
 
     public func appendDelta(
@@ -50,7 +41,7 @@ public actor TraceRecorder {
         scope: TraceScope
     ) {
         guard content?.isEmpty == false || reasoning?.isEmpty == false else { return }
-        let key = TraceCallKey(traceID: traceID, scope: scope)
+        let key = partialKey(traceID: traceID, scope: scope)
         var partial = partials[key] ?? PartialResponse(traceID: traceID, scope: scope)
         partial.content += content ?? ""
         partial.reasoning += reasoning ?? ""
@@ -58,15 +49,7 @@ public actor TraceRecorder {
     }
 
     public func discardPartial(traceID: String, scope: TraceScope) {
-        partials.removeValue(forKey: TraceCallKey(traceID: traceID, scope: scope))
-    }
-
-    public func partialResponse(
-        traceID: String,
-        scope: TraceScope
-    ) -> (content: String, reasoning: String)? {
-        guard let partial = partials[TraceCallKey(traceID: traceID, scope: scope)] else { return nil }
-        return (partial.content, partial.reasoning)
+        partials.removeValue(forKey: partialKey(traceID: traceID, scope: scope))
     }
 
     public func flushAll() async {
@@ -106,7 +89,7 @@ public actor TraceRecorder {
         }
     }
 
-    private func flushPartial(for key: TraceCallKey) async {
+    private func flushPartial(for key: String) async {
         guard let partial = partials.removeValue(forKey: key),
               !partial.isEmpty,
               let json = encode(ResponseDeltaPayload(
@@ -127,27 +110,13 @@ public actor TraceRecorder {
         }
     }
 
-    public func noteEncodeFailure(kind: TraceEventKind, message: String) {
-        logger.error(
-            "trace payload could not be encoded for \(kind.rawValue, privacy: .public): \(message, privacy: .public)"
-        )
-    }
-
     private func note(_ error: Error, while activity: String) {
         logger.error(
             "trace recording failed while \(activity, privacy: .public): \(String(describing: error), privacy: .public)"
         )
     }
-}
 
-struct TraceCallKey: Hashable, Sendable {
-    private let value: String
-
-    init(traceID: String, scope: TraceScope) {
-        if let requestID = scope.requestID {
-            value = "r:\(requestID)"
-        } else {
-            value = "t:\(traceID):\(scope.turnID ?? "-")"
-        }
+    private func partialKey(traceID: String, scope: TraceScope) -> String {
+        scope.requestID.map { "r:\($0)" } ?? "t:\(traceID):\(scope.turnID ?? "-")"
     }
 }

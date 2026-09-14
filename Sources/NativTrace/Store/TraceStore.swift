@@ -126,21 +126,18 @@ public actor TraceStore {
         try events(matching: "request_id = ?", value: requestID)
     }
 
-    public func recentTraces(limit: Int = 50) throws -> [TraceSummary] {
-        try TraceIndex.summaries(limit: limit, on: connection)
-    }
-
-    public func traces(forSession sessionID: String) throws -> [TraceSummary] {
-        try TraceIndex.summaries(forSession: sessionID, on: connection)
-    }
-
     @discardableResult
     public func prune(retaining window: TraceRetentionWindow, now: Date = Date()) throws -> Int {
         try connection.transaction {
-            let doomed = try TraceIndex.doomedTraceIDs(window, now: now, on: connection)
+            let doomed = try doomedTraceIDs(retaining: window, now: now)
             guard !doomed.isEmpty else { return 0 }
 
-            try TraceIndex.remove(traceIDs: doomed, on: connection)
+            for traceID in doomed {
+                try connection.withStatement("DELETE FROM trace_events WHERE trace_id = ?;") { statement in
+                    statement.bind(traceID)
+                    try statement.run()
+                }
+            }
             for traceID in doomed {
                 nextSequenceByTrace.removeValue(forKey: traceID)
             }
@@ -213,5 +210,29 @@ public actor TraceStore {
         let next = stored + 1
         nextSequenceByTrace[traceID] = next
         return next
+    }
+
+    private func doomedTraceIDs(
+        retaining window: TraceRetentionWindow,
+        now: Date
+    ) throws -> [String] {
+        var traceIDs = Set<String>()
+        if window.days != nil {
+            try connection.withStatement(
+                "SELECT trace_id FROM trace_events GROUP BY trace_id HAVING MAX(ts) < ?;"
+            ) { statement in
+                statement.bind(window.cutoff(from: now))
+                traceIDs.formUnion(try statement.rows { $0.string(0) }.compactMap { $0 })
+            }
+        }
+        if let maximum = window.maximumTraces, maximum >= 0 {
+            try connection.withStatement(
+                "SELECT trace_id FROM trace_events GROUP BY trace_id ORDER BY MAX(ts) DESC LIMIT -1 OFFSET ?;"
+            ) { statement in
+                statement.bind(Int64(maximum))
+                traceIDs.formUnion(try statement.rows { $0.string(0) }.compactMap { $0 })
+            }
+        }
+        return traceIDs.sorted()
     }
 }

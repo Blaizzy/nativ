@@ -2,7 +2,7 @@ import NativTrace
 import SwiftUI
 
 struct TraceExposureCard: View {
-    let exposure: ResolvedExposure
+    let exposure: RequestComposedPayload
     let diff: TraceExposureDiff
     let label: String
     let modelID: String?
@@ -30,13 +30,14 @@ struct TraceExposureCard: View {
 
     private var header: some View {
         Button {
-            withAnimation(.easeOut(duration: 0.16)) { isExpanded.toggle() }
+            isExpanded.toggle()
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.easeOut(duration: 0.16), value: isExpanded)
 
                 Text(label)
                     .font(.callout.weight(.semibold))
@@ -75,7 +76,7 @@ struct TraceExposureCard: View {
         TraceDisclosureSection(
             title: "System prompt",
             subtitle: "\(exposure.systemSections.count) sections",
-            startsExpanded: true
+            startsExpanded: false
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(exposure.systemSections.enumerated()), id: \.offset) { _, section in
@@ -89,7 +90,7 @@ struct TraceExposureCard: View {
         TraceDisclosureSection(
             title: "Tools exposed",
             subtitle: exposure.advertisesTools ? "\(exposure.tools.count)" : "withheld this round",
-            startsExpanded: true
+            startsExpanded: false
         ) {
             if exposure.tools.isEmpty {
                 Text("No tools were advertised on this call.")
@@ -98,10 +99,7 @@ struct TraceExposureCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(exposure.tools, id: \.name) { tool in
-                        TraceToolDescriptorRow(
-                            tool: tool,
-                            change: change(for: tool)
-                        )
+                        TraceToolDescriptorRow(tool: tool, change: change(for: tool))
                     }
                 }
             }
@@ -144,4 +142,5 @@ struct TraceExposureCard: View {
         if diff.redefinedTools.contains(where: { $0.name == tool.name }) { return .redefined }
         return .unchanged
     }
+
 }

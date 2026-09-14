@@ -4,7 +4,7 @@ public struct TraceReducer: Sendable {
     public private(set) var items: [TraceItem] = []
 
     private var indexByItemID: [String: Int] = [:]
-    private var openAssistantItemID: [TraceCallKey: String] = [:]
+    private var openAssistantItemID: [String: String] = [:]
     private var toolItemIDByCallID: [String: String] = [:]
 
     public init() {}
@@ -247,8 +247,8 @@ public struct TraceReducer: Sendable {
         }
     }
 
-    private func callKey(for event: TraceEvent) -> TraceCallKey {
-        TraceCallKey(traceID: event.traceID, scope: event.scope)
+    private func callKey(for event: TraceEvent) -> String {
+        event.scope.requestID.map { "r:\($0)" } ?? "t:\(event.traceID):\(event.scope.turnID ?? "-")"
     }
 
     private mutating func sealOpenAssistants() {

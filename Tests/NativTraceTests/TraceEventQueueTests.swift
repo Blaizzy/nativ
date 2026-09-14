@@ -23,18 +23,13 @@ final class TraceEventQueueTests: XCTestCase {
         let scope = TraceScope(sessionID: "s1", turnID: "u1", requestID: "r1")
 
         for index in 0..<200 {
-            queue.record(
-                kind: .toolCall,
-                payload: ["index": .int(Int64(index))],
-                traceID: "t1",
-                scope: scope
-            )
+            queue.record(ToolCallPayload(callID: "c\(index)", name: "read_file"), traceID: "t1", scope: scope)
         }
         await queue.drain()
 
-        let recorded = try await store.events(forTrace: "t1").compactMap { $0.payload["index"]?.intValue }
+        let recorded = try await store.events(forTrace: "t1").compactMap { ToolCallPayload(event: $0)?.callID }
 
-        XCTAssertEqual(recorded, Array(0..<200), "the queue may never reorder what a producer emitted")
+        XCTAssertEqual(recorded, (0..<200).map { "c\($0)" }, "the queue may never reorder what a producer emitted")
     }
 
     func testAToolResultNeverOvertakesTheCallItAnswers() async throws {
@@ -83,7 +78,7 @@ final class TraceEventQueueTests: XCTestCase {
         let store = try makeStore()
         let queue = TraceEventQueue(recorder: TraceRecorder(store: store))
 
-        queue.record(kind: .turnStarted, payload: .object([:]), traceID: "t1", scope: TraceScope())
+        queue.record(TurnStartedPayload(messageID: "m1", text: "hi"), traceID: "t1", scope: TraceScope())
         await queue.drain()
 
         let events = try await store.events(forTrace: "t1")

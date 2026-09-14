@@ -2164,8 +2164,7 @@ final class ChatViewModel: ObservableObject {
                 TraceMessageRef(
                     role: TraceRole(rawValue: apiMessage.role),
                     messageID: message.toolCallID ?? message.id.uuidString,
-                    contentHash: TraceHash.content(sentBody),
-                    inlineBody: sentBody == message.content ? nil : sentBody
+                    body: sentBody
                 )
             )
         }

@@ -75,7 +75,7 @@ final class TraceReducerTests: XCTestCase {
     func testToolCallAndResultCollapseIntoOneItem() throws {
         let items = TraceReducer.items(for: [
             event(.toolCall, try ToolCallPayload(
-                callID: "c1", name: "web_search", origin: .builtIn, arguments: ["q": "paris"]
+                callID: "c1", name: "web_search", origin: .builtIn, arguments: .object(["q": .string("paris")])
             ).makePayload()),
             event(.toolResult, try ToolResultPayload(
                 callID: "c1", output: "2 results", durationMilliseconds: 340
@@ -91,7 +91,12 @@ final class TraceReducerTests: XCTestCase {
         XCTAssertEqual(tool.status, .completed)
         XCTAssertEqual(tool.output, "2 results")
         XCTAssertEqual(tool.durationMilliseconds, 340)
-        XCTAssertEqual(tool.arguments?["q"]?.stringValue, "paris")
+        guard case .object(let arguments)? = tool.arguments,
+              case .string(let query)? = arguments["q"]
+        else {
+            return XCTFail("tool arguments were not preserved")
+        }
+        XCTAssertEqual(query, "paris")
     }
 
     func testFailedToolResultMarksTheCallFailed() throws {
@@ -141,19 +146,22 @@ final class TraceReducerTests: XCTestCase {
 
     func testUnknownEventKindStillProducesARow() throws {
         let items = TraceReducer.items(for: [
-            event(TraceEventKind(rawValue: "invented_later"), ["detail": "something"])
+            event(TraceEventKind(rawValue: "invented_later"), .object(["detail": .string("something")]))
         ])
 
         guard case .unknown(let kind, let payload) = try XCTUnwrap(items.first).body else {
             return XCTFail("expected an unknown item")
         }
         XCTAssertEqual(kind.rawValue, "invented_later")
-        XCTAssertEqual(payload["detail"]?.stringValue, "something")
+        guard case .object(let values) = payload, case .string(let detail)? = values["detail"] else {
+            return XCTFail("unknown payload was not preserved")
+        }
+        XCTAssertEqual(detail, "something")
     }
 
     func testUnreadablePayloadOfAKnownKindIsSurfacedNotDropped() throws {
         let items = TraceReducer.items(for: [
-            event(.toolCall, ["totally": "wrong shape"])
+            event(.toolCall, .object(["totally": .string("wrong shape")]))
         ])
 
         guard case .unknown = try XCTUnwrap(items.first).body else {

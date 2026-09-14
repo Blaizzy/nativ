@@ -56,11 +56,14 @@ final class TraceStoreTests: XCTestCase {
         let events = try await store.events(forTrace: "t1")
 
         XCTAssertEqual(events.count, 1)
-        XCTAssertNil(events[0].payload[TraceStore.unreadablePayloadKey])
+        guard case .object(let payload) = events[0].payload else {
+            return XCTFail("payload was not decoded as an object")
+        }
+        XCTAssertNil(payload[TraceStore.unreadablePayloadKey])
     }
 
     func testPayloadWrittenByAFutureCodecIsRejectedRatherThanGuessed() throws {
-        let encoded = try TracePayloadCodec.encode(["a": 1])
+        let encoded = try TracePayloadCodec.encode(.object(["a": .int(1)]))
 
         XCTAssertThrowsError(
             try TracePayloadCodec.decode(
@@ -122,7 +125,7 @@ final class TraceStoreTests: XCTestCase {
                 PromptSection(origin: .skill, label: "Chicago footnotes", body: "Cite sources."),
             ],
             tools: [
-                ToolDescriptor(name: "web_search", origin: .builtIn, parameters: ["type": "object"]),
+                ToolDescriptor(name: "web_search", origin: .builtIn, parameters: .object(["type": .string("object")])),
                 ToolDescriptor(name: "list_issues", origin: .mcp, originDetail: "github"),
             ],
             parameters: SamplingParameters(temperature: 0.7, maxTokens: 2048, thinkingEnabled: true),
@@ -164,33 +167,18 @@ final class TraceStoreTests: XCTestCase {
         XCTAssertEqual(restored.systemSections.first?.body, body)
     }
 
-    func testIndexTracksEventCountsAndModels() async throws {
-        let store = try makeStore()
-        try await store.insert(preSequenced: [
-            makeEvent(seq: 0, kind: .sessionStarted, modelID: "qwen"),
-            makeEvent(seq: 1, kind: .modelSwitched, modelID: "gemma"),
-        ])
-
-        let traces = try await store.recentTraces()
-        let summary = try XCTUnwrap(traces.first)
-
-        XCTAssertEqual(summary.eventCount, 2)
-        XCTAssertEqual(summary.lastSeq, 1)
-        XCTAssertEqual(summary.modelIDs, ["gemma", "qwen"])
-    }
-
     func testDeleteAllEmptiesEveryTrace() async throws {
         let store = try makeStore()
         try await store.insert(preSequenced: [
             makeEvent(seq: 0, kind: .sessionStarted, modelID: "qwen"),
             makeEvent(seq: 1, kind: .turnStarted, modelID: "qwen"),
         ])
-        let before = try await store.recentTraces()
+        let before = try await store.events(forTrace: "t1")
         XCTAssertFalse(before.isEmpty)
 
         try await store.deleteAll()
 
-        let after = try await store.recentTraces()
+        let after = try await store.events(forTrace: "t1")
         XCTAssertTrue(after.isEmpty)
     }
 
@@ -204,10 +192,8 @@ final class TraceStoreTests: XCTestCase {
         )
 
         let remaining = try await store.events(forTrace: "t1")
-        let traces = try await store.recentTraces()
         XCTAssertEqual(removed, 1)
         XCTAssertTrue(remaining.isEmpty)
-        XCTAssertTrue(traces.isEmpty)
     }
 
     func testBothRetentionLimitsApply() async throws {
@@ -227,7 +213,7 @@ final class TraceStoreTests: XCTestCase {
             now: base.addingTimeInterval(4 * 24 * 60 * 60)
         )
 
-        let kept = try await store.recentTraces().map(\.traceID).sorted()
+        let kept = try await existingTraceIDs(["t0", "t1", "t2", "t3"], in: store)
         XCTAssertEqual(removed, 2, "age removes t0 and t1; the count limit would keep two anyway")
         XCTAssertEqual(kept, ["t2", "t3"])
     }
@@ -248,7 +234,7 @@ final class TraceStoreTests: XCTestCase {
             retaining: TraceRetentionWindow(days: nil, maximumTraces: 2), now: base
         )
 
-        let kept = try await store.recentTraces().map(\.traceID).sorted()
+        let kept = try await existingTraceIDs((0..<5).map { "keep\($0)" }, in: store)
         XCTAssertEqual(removed, 3)
         XCTAssertEqual(kept, ["keep3", "keep4"])
     }
@@ -265,5 +251,13 @@ final class TraceStoreTests: XCTestCase {
             kind: kind,
             scope: TraceScope(sessionID: "s1", modelID: modelID)
         )
+    }
+
+    private func existingTraceIDs(_ traceIDs: [String], in store: TraceStore) async throws -> [String] {
+        var existing: [String] = []
+        for traceID in traceIDs where !(try await store.events(forTrace: traceID)).isEmpty {
+            existing.append(traceID)
+        }
+        return existing.sorted()
     }
 }

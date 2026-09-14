@@ -174,7 +174,7 @@ struct TraceMessageRow: View {
 }
 
 struct TraceInheritedContextRow: View {
-    let messages: [ResolvedMessage]
+    let messages: [TraceMessageRef]
     let fromModelID: String?
 
     @State private var isExpanded = false

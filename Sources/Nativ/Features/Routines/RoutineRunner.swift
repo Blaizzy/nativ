@@ -422,7 +422,7 @@ final class RoutineRunner {
         TraceMessageRef(
             role: role,
             messageID: id,
-            contentHash: TraceHash.content(body)
+            body: body
         )
     }
 

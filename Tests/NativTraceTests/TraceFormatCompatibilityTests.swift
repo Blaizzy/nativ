@@ -15,21 +15,28 @@ final class TraceFormatCompatibilityTests: XCTestCase {
     }
 
     func testUnrecognisedPayloadFieldsSurviveRoundTrip() throws {
-        let payload: TraceJSON = [
-            "knownField": "a",
-            "fieldFromTheFuture": ["deeply": ["nested": 7]],
-        ]
+        let payload: TraceJSON = .object([
+            "knownField": .string("a"),
+            "fieldFromTheFuture": .object(["deeply": .object(["nested": .int(7)])])
+        ])
 
         let restored = try TraceJSON.decode(payload.canonicalString())
 
-        XCTAssertEqual(restored["fieldFromTheFuture"]?["deeply"]?["nested"]?.intValue, 7)
+        guard case .object(let root) = restored,
+              case .object(let future)? = root["fieldFromTheFuture"],
+              case .object(let nested)? = future["deeply"],
+              case .int(let value)? = nested["nested"]
+        else {
+            return XCTFail("nested value was not preserved")
+        }
+        XCTAssertEqual(value, 7)
     }
 
     func testTypedViewReadsKnownFieldsAndIgnoresTheRest() throws {
         let event = TraceEvent(
             traceID: "t", seq: 0, timestamp: Date(),
             kind: PartialView.kind,
-            payload: ["knownField": "a", "somethingElse": [1, 2, 3]]
+            payload: .object(["knownField": .string("a"), "somethingElse": .array([.int(1), .int(2), .int(3)])])
         )
 
         XCTAssertEqual(PartialView(event: event)?.knownField, "a")
@@ -39,7 +46,7 @@ final class TraceFormatCompatibilityTests: XCTestCase {
         let event = TraceEvent(
             traceID: "t", seq: 0, timestamp: Date(),
             kind: .toolCall,
-            payload: ["knownField": "a"]
+            payload: .object(["knownField": .string("a")])
         )
 
         XCTAssertNil(PartialView(event: event))

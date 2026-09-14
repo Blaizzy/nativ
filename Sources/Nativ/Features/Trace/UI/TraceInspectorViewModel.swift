@@ -7,8 +7,8 @@ struct TraceCall: Identifiable, Hashable {
     let requestID: String?
     let title: String
     let timestamp: Date
+    let exposure: RequestComposedPayload
     let diff: TraceExposureDiff
-    let exposure: ResolvedExposure
 
     var toolCount: Int { exposure.tools.count }
     var advertisesTools: Bool { exposure.advertisesTools }
@@ -16,14 +16,20 @@ struct TraceCall: Identifiable, Hashable {
 
 struct TraceInstance: Identifiable, Hashable {
     let id: String
-    let modelID: String?
+    let modelIDs: [String]
     let eventCount: Int
     let blocks: [TraceDisplayBlock]
     let calls: [TraceCall]
-    let inheritedContext: [ResolvedMessage]
+    let inheritedContext: [TraceMessageRef]
     let precedingModelID: String?
 
-    var modelLabel: String { modelID ?? "Unknown model" }
+    var modelLabel: String {
+        switch modelIDs.count {
+        case 0: "Unknown model"
+        case 1: modelIDs[0]
+        default: "\(modelIDs.count) models used"
+        }
+    }
 }
 
 @MainActor
@@ -61,7 +67,8 @@ final class TraceInspectorViewModel: ObservableObject {
 
     func loadSession(_ sessionID: UUID) async {
         await load { store in
-            Self.grouped(try await store.events(forSession: sessionID.uuidString))
+            let events = try await store.events(forSession: sessionID.uuidString)
+            return events.isEmpty ? [] : [events]
         }
     }
 
@@ -69,18 +76,12 @@ final class TraceInspectorViewModel: ObservableObject {
         pendingRequestSelection = requestID
         await load { store in
             guard let event = try await store.events(forRequest: requestID).first else { return [] }
+            if let sessionID = event.scope.sessionID {
+                let events = try await store.events(forSession: sessionID)
+                return events.isEmpty ? [] : [events]
+            }
             return [try await store.events(forTrace: event.traceID)]
         }
-    }
-
-    private static func grouped(_ events: [TraceEvent]) -> [[TraceEvent]] {
-        var order: [String] = []
-        var byTrace: [String: [TraceEvent]] = [:]
-        for event in events {
-            if byTrace[event.traceID] == nil { order.append(event.traceID) }
-            byTrace[event.traceID, default: []].append(event)
-        }
-        return order.compactMap { byTrace[$0] }
     }
 
     private func load(_ fetch: (TraceStore) async throws -> [[TraceEvent]]) async {
@@ -102,8 +103,6 @@ final class TraceInspectorViewModel: ObservableObject {
 
     private func apply(_ traces: [[TraceEvent]]) {
         let itemsByTrace = traces.map(TraceReducer.items(for:))
-        let index = TraceExposureIndex(items: itemsByTrace.flatMap { $0 })
-
         let folded = traces.indices.map { offset -> TraceInstance in
             let events = traces[offset]
             let items = itemsByTrace[offset]
@@ -119,8 +118,8 @@ final class TraceInspectorViewModel: ObservableObject {
                     requestID: item.scope.requestID,
                     title: TraceCallLabel.title(index: position + 1, round: item.scope.roundIndex),
                     timestamp: item.timestamp,
-                    diff: .between(position > 0 ? exposures[position - 1].1 : nil, and: payload),
-                    exposure: index.resolve(payload)
+                    exposure: payload,
+                    diff: .between(position > 0 ? exposures[position - 1].1 : nil, and: payload)
                 )
             }
 
@@ -133,11 +132,10 @@ final class TraceInspectorViewModel: ObservableObject {
             })
             let inherited = (exposures.first?.1.messages ?? [])
                 .filter { !produced.contains($0.messageID) }
-                .map { index.resolve($0) }
 
             return TraceInstance(
                 id: events.first?.traceID ?? "",
-                modelID: events.first?.scope.modelID,
+                modelIDs: Array(Set(events.compactMap { $0.scope.modelID })).sorted(),
                 eventCount: events.count,
                 blocks: TraceGrouping.blocks(for: items),
                 calls: calls,

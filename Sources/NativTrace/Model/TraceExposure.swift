@@ -115,22 +115,21 @@ public struct TraceRole: RawRepresentable, Hashable, Sendable, Codable {
     public static let tool = TraceRole(rawValue: "tool")
 }
 
-public struct TraceMessageRef: Sendable, Hashable, Codable {
+public struct TraceMessageRef: Sendable, Hashable, Codable, Identifiable {
     public var role: TraceRole
     public var messageID: String
-    public var contentHash: String
-    public var inlineBody: String?
+    public var body: String
+
+    public var id: String { messageID }
 
     public init(
         role: TraceRole,
         messageID: String,
-        contentHash: String,
-        inlineBody: String? = nil
+        body: String
     ) {
         self.role = role
         self.messageID = messageID
-        self.contentHash = contentHash
-        self.inlineBody = inlineBody
+        self.body = body
     }
 }
 

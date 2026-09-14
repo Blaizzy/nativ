@@ -3,21 +3,9 @@ import NativTrace
 
 @MainActor
 final class ChatTraceProducer {
-    private struct OpenTrace {
-        let traceID: String
-        let modelID: String?
-    }
-
-    private struct TurnContext {
-        let turn: ChatTraceTurn
-        let messageID: UUID
-        let text: String
-        var recordedIn: Set<String> = []
-    }
-
     private let queue: TraceEventQueue
-    private var openTraceBySession: [UUID: OpenTrace] = [:]
-    private var turnContextBySession: [UUID: TurnContext] = [:]
+    private var observedSessions = Set<UUID>()
+    private var modelIDBySession: [UUID: String] = [:]
 
     init(recorder: TraceRecorder) {
         queue = TraceEventQueue(recorder: recorder)
@@ -30,40 +18,39 @@ final class ChatTraceProducer {
         attachmentSummaries: [String] = [],
         modelID: String?
     ) {
-        let traceID = openTrace(session: turn.sessionID, modelID: modelID)
-        turnContextBySession[turn.sessionID] = TurnContext(
-            turn: turn, messageID: messageID, text: text, recordedIn: [traceID]
-        )
-        record(
+        let traceID = traceID(for: turn.sessionID, modelID: modelID)
+        queue.record(
             TurnStartedPayload(
                 messageID: messageID.uuidString,
                 text: text,
                 attachmentSummaries: attachmentSummaries.isEmpty ? nil : attachmentSummaries
             ),
-            turn: turn,
-            modelID: modelID
+            traceID: traceID,
+            scope: turn.scope(modelID: modelID)
         )
     }
 
     func turnEnded(_ turn: ChatTraceTurn, status: TraceTurnStatus, roundCount: Int) {
-        record(TurnEndedPayload(status: status, roundCount: roundCount), turn: turn)
-        turnContextBySession[turn.sessionID] = nil
+        queue.record(
+            TurnEndedPayload(status: status, roundCount: roundCount),
+            traceID: turn.sessionID.uuidString,
+            scope: turn.scope()
+        )
     }
 
     func requestComposed(_ exposure: RequestComposedPayload, in call: ChatTraceCall) {
         queue.record(
             exposure,
-            traceID: openTrace(session: call.sessionID, modelID: call.modelID),
+            traceID: traceID(for: call.sessionID, modelID: call.modelID),
             scope: call.scope()
         )
     }
 
     func delta(content: String?, reasoning: String?, in call: ChatTraceCall) {
-        guard let traceID = currentTraceID(session: call.sessionID) else { return }
         queue.delta(
             content: content,
             reasoning: reasoning,
-            traceID: traceID,
+            traceID: call.sessionID.uuidString,
             scope: call.scope()
         )
     }
@@ -76,9 +63,7 @@ final class ChatTraceProducer {
         finishReason: String?,
         in call: ChatTraceCall
     ) {
-        if let traceID = currentTraceID(session: call.sessionID) {
-            queue.discardPartial(traceID: traceID, scope: call.scope())
-        }
+        queue.discardPartial(traceID: call.sessionID.uuidString, scope: call.scope())
         record(
             ResponseCompletedPayload(
                 messageID: messageID.uuidString,
@@ -141,62 +126,31 @@ final class ChatTraceProducer {
         await queue.drain()
     }
 
-    private func openTrace(session sessionID: UUID, modelID: String?) -> String {
-        if let open = openTraceBySession[sessionID], open.modelID == modelID {
-            return open.traceID
-        }
-
-        let previous = openTraceBySession[sessionID]
-        let traceID = "\(sessionID.uuidString)/\(UUID().uuidString.prefix(8))"
-        openTraceBySession[sessionID] = OpenTrace(traceID: traceID, modelID: modelID)
-
-        if let previous {
+    private func traceID(for sessionID: UUID, modelID: String?) -> String {
+        if !observedSessions.insert(sessionID).inserted,
+           modelIDBySession[sessionID] != modelID {
             queue.record(
-                ModelSwitchedPayload(from: previous.modelID, to: modelID ?? "unknown"),
-                traceID: traceID,
+                ModelSwitchedPayload(from: modelIDBySession[sessionID], to: modelID ?? "unknown"),
+                traceID: sessionID.uuidString,
                 scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
             )
+        }
+        if let modelID {
+            modelIDBySession[sessionID] = modelID
         } else {
-            queue.record(
-                SessionStartedPayload(title: nil, modelID: modelID),
-                traceID: traceID,
-                scope: TraceScope(sessionID: sessionID.uuidString, modelID: modelID)
-            )
+            modelIDBySession.removeValue(forKey: sessionID)
         }
-
-        if var context = turnContextBySession[sessionID], !context.recordedIn.contains(traceID) {
-            context.recordedIn.insert(traceID)
-            turnContextBySession[sessionID] = context
-            queue.record(
-                TurnStartedPayload(messageID: context.messageID.uuidString, text: context.text),
-                traceID: traceID,
-                scope: context.turn.scope(modelID: modelID)
-            )
-        }
-        return traceID
-    }
-
-    private func currentTraceID(session sessionID: UUID) -> String? {
-        openTraceBySession[sessionID]?.traceID
+        return sessionID.uuidString
     }
 
     private func record<Payload: TracePayloadView & Encodable>(
         _ payload: Payload,
         call: ChatTraceCall
     ) {
-        guard let traceID = currentTraceID(session: call.sessionID) else { return }
-        queue.record(payload, traceID: traceID, scope: call.scope())
-    }
-
-    private func record<Payload: TracePayloadView & Encodable>(
-        _ payload: Payload,
-        turn: ChatTraceTurn,
-        modelID: String? = nil
-    ) {
-        guard let traceID = modelID == nil
-            ? currentTraceID(session: turn.sessionID)
-            : openTrace(session: turn.sessionID, modelID: modelID)
-        else { return }
-        queue.record(payload, traceID: traceID, scope: turn.scope(modelID: modelID))
+        queue.record(
+            payload,
+            traceID: traceID(for: call.sessionID, modelID: call.modelID),
+            scope: call.scope()
+        )
     }
 }

@@ -34,14 +34,6 @@ enum Main {
             }
         }
 
-        if CommandLine.arguments.contains("--trace-smoke-test") {
-            Task { @MainActor in
-                let passed = await runTraceSmokeTest()
-                exit(passed ? EXIT_SUCCESS : EXIT_FAILURE)
-            }
-            dispatchMain()
-        }
-
         if CommandLine.arguments.contains("--lifecycle-smoke-test") {
             let server = NativProcessController()
             server.onOutput = { text in

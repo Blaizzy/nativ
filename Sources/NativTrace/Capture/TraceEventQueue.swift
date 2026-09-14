@@ -26,17 +26,6 @@ public final class TraceEventQueue: Sendable {
         continuation.finish()
     }
 
-    public func record(
-        kind: TraceEventKind,
-        payload: TraceJSON,
-        traceID: String,
-        scope: TraceScope
-    ) {
-        continuation.yield(.run {
-            await $0.record(kind: kind, json: payload, traceID: traceID, scope: scope)
-        })
-    }
-
     public func record<Payload: TracePayloadView & Encodable>(
         _ payload: Payload,
         traceID: String,

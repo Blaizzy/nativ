@@ -71,17 +71,6 @@ final class TraceRecorderTests: XCTestCase {
         XCTAssertEqual(Set(bodies), ["one", "two"])
     }
 
-    func testPartialResponseIsReadableBeforeItIsSealed() async throws {
-        let recorder = TraceRecorder(store: try makeStore())
-
-        await recorder.appendDelta(content: "Pa", traceID: "t1", scope: scope)
-        await recorder.appendDelta(content: "ris", traceID: "t1", scope: scope)
-
-        let partial = await recorder.partialResponse(traceID: "t1", scope: scope)
-
-        XCTAssertEqual(partial?.content, "Paris")
-    }
-
     func testSequenceNumbersAreContiguousAcrossRecordings() async throws {
         let store = try makeStore()
         let recorder = TraceRecorder(store: store)

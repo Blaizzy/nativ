@@ -25,7 +25,7 @@ enum TraceToolChange {
 struct TraceDisclosureSection<Content: View>: View {
     let title: String
     let subtitle: String?
-    let content: Content
+    let content: () -> Content
 
     @State private var isExpanded: Bool
 
@@ -33,11 +33,11 @@ struct TraceDisclosureSection<Content: View>: View {
         title: String,
         subtitle: String?,
         startsExpanded: Bool = false,
-        @ViewBuilder content: () -> Content
+        @ViewBuilder content: @escaping () -> Content
     ) {
         self.title = title
         self.subtitle = subtitle
-        self.content = content()
+        self.content = content
         _isExpanded = State(initialValue: startsExpanded)
     }
 
@@ -65,7 +65,7 @@ struct TraceDisclosureSection<Content: View>: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                content.padding(.leading, 16)
+                content().padding(.leading, 16)
             }
         }
     }
@@ -183,25 +183,15 @@ struct TraceToolDescriptorRow: View {
 }
 
 struct TraceResolvedMessageRow: View {
-    let message: ResolvedMessage
+    let message: TraceMessageRef
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            TraceOriginChip(label: message.reference.role.rawValue, tone: .secondary)
-            if let text = message.text {
-                Text(text)
-                    .font(.callout)
-                    .lineLimit(2)
-                    .foregroundStyle(message.isVerified ? .primary : .secondary)
-            } else {
-                Text("content not retained")
-                    .font(.callout.italic())
-                    .foregroundStyle(.tertiary)
-            }
+            TraceOriginChip(label: message.role.rawValue, tone: .secondary)
+            Text(message.body)
+                .font(.callout)
+                .lineLimit(2)
             Spacer(minLength: 4)
-            if message.text != nil, !message.isVerified {
-                TraceOriginChip(label: "edited since", tone: .warning)
-            }
         }
     }
 }

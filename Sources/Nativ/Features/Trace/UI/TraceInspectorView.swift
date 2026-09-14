@@ -69,15 +69,6 @@ struct TraceInspectorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
-            if model.instances.count > 1 {
-                Picker("Model", selection: $model.selectedInstanceID) {
-                    ForEach(model.instances) { instance in
-                        Text(instance.modelLabel).tag(Optional(instance.id))
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 240)
-            }
             Button {
                 Task { await load() }
             } label: {
@@ -93,9 +84,7 @@ struct TraceInspectorView: View {
     private var subtitle: String {
         let calls = model.calls.count
         var parts = ["\(model.eventCount) events", "\(calls) \(calls == 1 ? "model call" : "model calls")"]
-        if model.instances.count > 1 {
-            parts.append("\(model.instances.count) models in this chat")
-        } else if let label = model.selectedInstance?.modelLabel {
+        if let label = model.selectedInstance?.modelLabel {
             parts.insert(label, at: 0)
         }
         return parts.joined(separator: " · ")
@@ -136,9 +125,6 @@ struct TraceCallSidebar: View {
                     : "no tools offered")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if !call.diff.isEmpty {
-                    TraceDiffBadges(diff: call.diff)
-                }
             }
             .padding(.vertical, 3)
         }
