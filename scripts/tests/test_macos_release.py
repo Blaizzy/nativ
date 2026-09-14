@@ -279,7 +279,7 @@ class FakePreviewGitHub(FakeGitHub):
                         "draft": False, "immutable": False, "assets": []}
         return self.release("preview")
 
-    def upload_preview_asset(self, release_id, name, data):
+    def upload_appcast_asset(self, release_id, name, data):
         assert release_id == 42
         asset = {"id": max(self.contents, default=0) + 1, "name": name, "state": "uploaded", "size": len(data)}
         self.preview["assets"].append(asset)
@@ -386,6 +386,228 @@ class BumpVersionTests(unittest.TestCase):
                 self.assertFalse((self.root / "generated-project.yml").exists())
 
 
+class FakeReleaseGitHub(FakeGitHub):
+    def __init__(self, releases, feeds):
+        super().__init__(copy.deepcopy(releases), feeds)
+        self.contents = {}
+        self.events = []
+        for release_id, target in enumerate(self.data, 1):
+            target["id"] = release_id
+            assets, target["assets"] = target["assets"], []
+            for asset in assets:
+                data = feeds[target["tag_name"]] if asset["name"] == "appcast.xml" else b""
+                uploaded = self.upload_appcast_asset(release_id, asset["name"], data)
+                self.asset(uploaded["id"]).update({key: value for key, value in asset.items() if key != "id"})
+        self.events.clear()
+
+    def asset(self, asset_id):
+        return next(asset for target in self.data for asset in target["assets"] if asset["id"] == asset_id)
+
+    def upload_appcast_asset(self, release_id, name, data, *, label=None):
+        target = next(target for target in self.data if target["id"] == release_id)
+        assert all(asset["name"] != name for asset in target["assets"])
+        asset = {"id": max(self.contents, default=0) + 1, "name": name, "label": label,
+                 "state": "uploaded", "size": len(data)}
+        target["assets"].append(asset)
+        self.contents[asset["id"]] = data
+        self.events.append(("upload", name))
+        return copy.deepcopy(asset)
+
+    def rename_asset(self, asset_id, name):
+        target = next(target for target in self.data if self.asset(asset_id) in target["assets"])
+        assert all(asset["name"] != name for asset in target["assets"])
+        self.asset(asset_id)["name"] = name
+        self.events.append(("rename", asset_id, name))
+        return copy.deepcopy(self.asset(asset_id))
+
+    def delete_asset(self, asset_id):
+        for target in self.data:
+            target["assets"] = [asset for asset in target["assets"] if asset["id"] != asset_id]
+        self.contents.pop(asset_id)
+        self.events.append(("delete", asset_id))
+
+    def request(self, url, *, head=False):
+        tag, name = urllib.parse.urlparse(url).path.split("/")[-2:]
+        self.events.append(("head" if head else "read", tag, name))
+        asset = next(asset for asset in self.release(tag)["assets"] if asset["name"] == name)
+        return {} if head else self.contents[asset["id"]]
+
+    def asset_bytes(self, tag, name="appcast.xml"):
+        asset = next(asset for asset in self.release(tag)["assets"] if asset["name"] == name)
+        return self.contents[asset["id"]]
+
+
+class ReleasePublishingTests(unittest.TestCase):
+    tag = "v0.4.0"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.output = self.directory / "appcast.xml"
+        self.output.write_bytes(feed("0.4.0", build=400, channel=None))
+        target = metadata("0.4.0")
+        target["assets"] = []
+        self.github = FakeReleaseGitHub([metadata("0.3.9"), metadata(), target], {
+            "v0.3.9": feed("0.3.9", build=100, channel=None), "v0.4.0rc1": feed(),
+        })
+
+    def seed(self):
+        release.seed_appcast(self.github, self.tag)
+
+    def upload_archive(self):
+        self.github.upload_appcast_asset(self.github.release(self.tag)["id"], "Nativ-0.4.0.dmg", bytes(1234))
+
+    def publish(self):
+        release.publish_release_appcast(self.github, self.tag, self.output)
+
+    def test_upload_marks_placeholder_in_the_same_request(self):
+        client = release.GitHub(REPOSITORY)
+        with patch.object(client, "mutate", return_value={}) as mutate:
+            client.upload_appcast_asset(42, "appcast.xml", b"feed", label=release.TEMPORARY_APPCAST_LABEL + "v0.3.9")
+        args = mutate.call_args.args
+        self.assertEqual(args[0], "POST")
+        self.assertEqual(urllib.parse.parse_qs(urllib.parse.urlparse(args[1]).query), {
+            "name": ["appcast.xml"], "label": [release.TEMPORARY_APPCAST_LABEL + "v0.3.9"],
+        })
+        self.assertEqual(args[2], b"feed")
+
+    def test_seed_copies_previous_stable_bytes_and_is_idempotent(self):
+        self.seed()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+        current = self.github.release(self.tag)["assets"][0]
+        self.assertEqual(current["label"], release.TEMPORARY_APPCAST_LABEL + "v0.3.9")
+        self.assertIn(("head", "v0.3.9", "Nativ-0.3.9.dmg"), self.github.events)
+        self.github.events.clear()
+        self.seed()
+        self.assertFalse(self.github.events)
+
+    def test_seed_selects_highest_completed_older_stable_version(self):
+        target = metadata("0.4.0")
+        target["assets"] = []
+        unfinished = metadata("0.3.11")
+        unfinished["assets"][0]["label"] = release.TEMPORARY_APPCAST_LABEL + "v0.3.9"
+        versions = ["0.3.10", "0.4.1", "0.3.9", "0.4.0rc1"]
+        self.github = FakeReleaseGitHub([metadata(v) for v in versions] + [target, unfinished], {
+            **{"v" + v: feed(v, build=100 + i, channel="rc" if "rc" in v else None)
+               for i, v in enumerate(versions)},
+            "v0.3.11": feed("0.3.9", channel=None),
+        })
+        self.seed()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.10"))
+
+    def test_first_stable_rc_and_completed_releases_need_no_seed(self):
+        release.seed_appcast(self.github, "v0.4.0rc1")
+        release.seed_appcast(self.github, "v0.3.9")
+        self.github.data = [self.github.release(self.tag)]
+        self.seed()
+        self.assertFalse(self.github.events)
+
+    def test_preflight_and_preview_skip_temporary_feed_even_after_dmg_upload(self):
+        self.seed()
+        environment, notes = self.directory / "env", self.directory / "notes"
+        release.preflight(self.github, self.tag, environment, notes)
+        self.assertIn("RELEASE_VERSION=0.4.0\n", environment.read_text())
+        for archive_uploaded in [False, True]:
+            if archive_uploaded:
+                self.upload_archive()
+            records = release.release_items(self.github, self.github.releases(), check_downloads=True)
+            self.assertEqual(len(records), 2)
+            self.assertNotIn(release.version_info(self.tag)[3], [record[0] for record in records])
+        with self.assertRaisesRegex(ValueError, "already exist"):
+            release.preflight(self.github, self.tag, environment, notes)
+
+    def test_publication_requires_matching_available_dmg(self):
+        self.seed()
+        with self.assertRaisesRegex(ValueError, "matching DMG"):
+            self.publish()
+        self.upload_archive()
+        archive = self.github.release(self.tag)["assets"][-1]
+        archive["size"] = 1
+        with self.assertRaisesRegex(ValueError, "matching DMG"):
+            self.publish()
+        archive["size"] = 1234
+        with patch.object(self.github, "request", side_effect=OSError("DMG unavailable")):
+            with self.assertRaises(OSError):
+                self.publish()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+
+    def test_upload_and_verify_new_feed_before_replacing_placeholder(self):
+        self.seed()
+        self.upload_archive()
+        self.github.events.clear()
+        self.publish()
+        staged = next(event[1] for event in self.github.events if event[0] == "upload")
+        verify_index = self.github.events.index(("read", self.tag, staged))
+        rename_index = next(i for i, event in enumerate(self.github.events) if event[0] == "rename")
+        self.assertLess(verify_index, rename_index)
+        self.assertEqual(self.github.asset_bytes(self.tag), self.output.read_bytes())
+        self.assertEqual(self.github.asset_bytes(self.tag, "appcast-previous.xml"), self.github.asset_bytes("v0.3.9"))
+        self.assertEqual(len(release.release_items(self.github, self.github.releases())), 3)
+        self.github.events.clear()
+        self.publish()
+        self.assertTrue(all(event[0] in ("head", "read") for event in self.github.events))
+        self.output.write_bytes(feed("0.4.0", build=401, channel=None))
+        with self.assertRaisesRegex(ValueError, "completed release appcast"):
+            self.publish()
+
+    def test_publication_without_previous_stable_feed(self):
+        self.upload_archive()
+        self.publish()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.output.read_bytes())
+
+    def test_failed_upload_leaves_placeholder_available(self):
+        self.seed()
+        self.upload_archive()
+        with patch.object(self.github, "upload_appcast_asset", side_effect=OSError("Upload failed")):
+            with self.assertRaises(OSError):
+                self.publish()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+
+    def test_failed_promotion_restores_placeholder_and_can_retry(self):
+        self.seed()
+        self.upload_archive()
+        original = self.github.rename_asset
+        for committed in [False, True]:
+            with self.subTest(committed=committed):
+                def fail_promotion(asset_id, name):
+                    if name == "appcast.xml" and not release.is_temporary_appcast(self.github.asset(asset_id)):
+                        if committed:
+                            original(asset_id, name)
+                        raise OSError("Promotion failed")
+                    return original(asset_id, name)
+                with patch.object(self.github, "rename_asset", side_effect=fail_promotion):
+                    with self.assertRaises(OSError):
+                        self.publish()
+                self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+        self.publish()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.output.read_bytes())
+
+    def test_failed_public_verification_restores_placeholder(self):
+        self.seed()
+        self.upload_archive()
+        original = release.verify_appcast_download
+        def fail_live(client, tag, name, data):
+            if tag == self.tag and name == "appcast.xml":
+                raise ValueError("Public feed mismatch")
+            return original(client, tag, name, data)
+        with patch.object(release, "verify_appcast_download", side_effect=fail_live):
+            with self.assertRaises(ValueError):
+                self.publish()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+
+    def test_seed_recovers_interrupted_swap_and_incomplete_upload(self):
+        self.seed()
+        asset = self.github.release(self.tag)["assets"][0]
+        self.github.rename_asset(asset["id"], "appcast-previous.xml")
+        self.seed()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+        asset["state"] = "starter"
+        self.seed()
+        self.assertEqual(self.github.asset_bytes(self.tag), self.github.asset_bytes("v0.3.9"))
+        self.assertEqual(self.github.release(self.tag)["assets"][0]["state"], "uploaded")
+
+
 class PreviewPublishingTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -395,7 +617,7 @@ class PreviewPublishingTests(unittest.TestCase):
     def existing_preview(self, *, backup=False):
         github = FakePreviewGitHub()
         github.create_preview()
-        github.upload_preview_asset(42, "appcast-previous.xml" if backup else "appcast.xml", b"previous feed")
+        github.upload_appcast_asset(42, "appcast-previous.xml" if backup else "appcast.xml", b"previous feed")
         github.events.clear()
         return github
 
@@ -434,7 +656,7 @@ class PreviewPublishingTests(unittest.TestCase):
 
     def test_failed_upload_leaves_current_feed_untouched(self):
         github = self.existing_preview()
-        with patch.object(github, "upload_preview_asset", side_effect=OSError("Upload failed")):
+        with patch.object(github, "upload_appcast_asset", side_effect=OSError("Upload failed")):
             with self.assertRaises(OSError):
                 release.publish_preview(github, self.output)
         self.assertEqual(github.asset_bytes("appcast.xml"), b"previous feed")
@@ -461,12 +683,12 @@ class PreviewPublishingTests(unittest.TestCase):
 
     def test_failed_public_verification_restores_old_feed(self):
         github = self.existing_preview()
-        original = release.verify_preview_download
-        def fail_live(client, name, data):
+        original = release.verify_appcast_download
+        def fail_live(client, tag, name, data):
             if name == "appcast.xml":
                 raise ValueError("Public feed mismatch")
-            return original(client, name, data)
-        with patch.object(release, "verify_preview_download", side_effect=fail_live):
+            return original(client, tag, name, data)
+        with patch.object(release, "verify_appcast_download", side_effect=fail_live):
             with self.assertRaises(ValueError):
                 release.publish_preview(github, self.output)
         self.assertEqual(github.asset_bytes("appcast.xml"), b"previous feed")
