@@ -149,7 +149,7 @@ struct SettingsView: View {
 
                 settingsRow(
                     title: "Personalization",
-                    description: "Manage your profile and remembered information.",
+                    description: "Manage your profile and response preferences.",
                     systemImage: "person.crop.circle"
                 ) {
                     Button("Manage…") {
@@ -436,12 +436,10 @@ struct PersonalizationView: View {
     let model: NativModel
     @Environment(\.dismiss) private var dismiss
     @State private var profile: NativPersonalization.Profile
-    @State private var collectionEnabled: Bool
 
     init(model: NativModel) {
         self.model = model
         _profile = State(initialValue: model.settings.personalization.profile)
-        _collectionEnabled = State(initialValue: model.settings.personalization.collectionEnabled)
     }
 
     var body: some View {
@@ -501,44 +499,6 @@ struct PersonalizationView: View {
                 } footer: {
                     Text("Choose how much emoji and formatting Nativ uses. Changes apply to new chats.")
                 }
-
-                Section {
-                    Toggle("Remember information from chats", isOn: $collectionEnabled)
-                        .toggleStyle(.switch)
-                } header: {
-                    Text("Memory")
-                } footer: {
-                    Text("Allow Nativ to remember facts you share over time. It keeps the latest \(NativPersonalization.rollingMemoryLimit) memories. Turning this off keeps existing memories.")
-                }
-
-                Section {
-                    if model.settings.personalization.rollingMemories.isEmpty {
-                        Text("No saved memories yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(Array(model.settings.personalization.rollingMemories.enumerated()), id: \.offset) { index, memory in
-                            HStack(alignment: .top, spacing: 12) {
-                                Text(memory)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .textSelection(.enabled)
-                                Button("Remove memory", systemImage: "trash") {
-                                    model.settings.personalization.removeMemory(at: index)
-                                }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.borderless)
-                                .help("Remove this memory")
-                                .accessibilityLabel("Remove memory: \(memory)")
-                            }
-                        }
-                        Button("Clear all memories", role: .destructive) {
-                            model.settings.personalization.removeAllMemories()
-                        }
-                    }
-                } header: {
-                    Text("Saved memories")
-                } footer: {
-                    Text("Removing memories takes effect immediately for new chats. Existing chats keep their original personalization.")
-                }
             }
             .formStyle(.grouped)
 
@@ -597,7 +557,6 @@ struct PersonalizationView: View {
     private func save() {
         profile.limitFieldLengths()
         model.settings.personalization.profile = profile
-        model.settings.personalization.collectionEnabled = collectionEnabled
         dismiss()
     }
 

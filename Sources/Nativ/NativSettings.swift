@@ -584,27 +584,7 @@ struct NativPersonalization: Codable, Equatable {
         }
     }
 
-    static let rollingMemoryLimit = 20
-
     var profile = Profile()
-    var collectionEnabled = false
-    private(set) var rollingMemories: [String] = []
-
-    mutating func appendMemory(_ text: String) {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard collectionEnabled, !text.isEmpty else { return }
-        rollingMemories.append(text)
-        rollingMemories = Array(rollingMemories.suffix(Self.rollingMemoryLimit))
-    }
-
-    mutating func removeAllMemories() {
-        rollingMemories.removeAll()
-    }
-
-    mutating func removeMemory(at index: Int) {
-        guard rollingMemories.indices.contains(index) else { return }
-        rollingMemories.remove(at: index)
-    }
 
     var systemPrompt: String {
         let fields = [
@@ -628,9 +608,6 @@ struct NativPersonalization: Codable, Equatable {
         }
         if !profile.markdownUsage.systemPrompt.isEmpty {
             sections.append("Markdown usage:\n" + profile.markdownUsage.systemPrompt)
-        }
-        if !rollingMemories.isEmpty {
-            sections.append("Remembered information about the user:\n" + rollingMemories.joined(separator: "\n"))
         }
         return sections.joined(separator: "\n\n")
     }

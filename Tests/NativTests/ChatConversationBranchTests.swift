@@ -7,8 +7,7 @@ final class ChatConversationBranchTests: XCTestCase {
         personalization.profile.conversationStyle = .concise
         personalization.profile.emojiUsage = .none
         personalization.profile.markdownUsage = .minimal
-        personalization.collectionEnabled = true
-        personalization.appendMemory("Lives in Paris")
+        personalization.profile.aboutYou = "Lives in Paris"
         var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
         session.capturePersonalization(personalization)
         let snapshot = try XCTUnwrap(session.personalizationSnapshot)
@@ -23,7 +22,7 @@ final class ChatConversationBranchTests: XCTestCase {
         personalization.profile.conversationStyle = .detailed
         personalization.profile.emojiUsage = .more
         personalization.profile.markdownUsage = .structured
-        personalization.removeAllMemories()
+        personalization.profile.aboutYou = ""
         session = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
         session.capturePersonalization(personalization)
         XCTAssertEqual(session.personalizationSnapshot, snapshot)
