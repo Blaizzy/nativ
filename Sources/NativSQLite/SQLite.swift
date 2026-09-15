@@ -25,7 +25,6 @@ public enum SQLiteError: Error, CustomStringConvertible {
         }
     }
 }
-
 public final class SQLiteConnection {
     private let handle: OpaquePointer
     private var cache: [String: SQLiteStatement] = [:]
@@ -285,4 +284,3 @@ public final class SQLiteStatement {
         isNull(index) ? nil : int(index)
     }
 }
-
