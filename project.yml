@@ -186,6 +186,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
+      - path: Sources/NativSQLite
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
