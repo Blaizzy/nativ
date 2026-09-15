@@ -39,7 +39,7 @@ struct TraceInspectorView: View {
             unavailable(
                 "No trace recorded",
                 systemImage: "text.magnifyingglass",
-                message: "Nothing has been recorded here yet. Recording can be turned off in Settings."
+                message: "Nothing has been recorded here yet."
             )
         } else {
             TraceTranscriptView(model: model, onOpenArtifact: onOpenArtifact)
@@ -71,8 +71,13 @@ struct TraceInspectorView: View {
     private var subtitle: String {
         let calls = model.calls.count
         var parts = ["\(model.eventCount) events", "\(calls) \(calls == 1 ? "model call" : "model calls")"]
-        if let label = model.selectedInstance?.modelLabel {
-            parts.insert(label, at: 0)
+        switch model.modelIDs.count {
+        case 1:
+            parts.insert(model.modelIDs[0], at: 0)
+        case let count where count > 1:
+            parts.insert("\(count) models used", at: 0)
+        default:
+            break
         }
         return parts.joined(separator: " · ")
     }
