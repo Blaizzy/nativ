@@ -141,6 +141,7 @@ struct AudioView: View {
     @StateObject private var localLibrary = LocalModelLibrary()
     @StateObject private var inputDevices = AudioInputDevicePreferences.shared
     @StateObject private var inputLevelMonitor = AudioInputLevelMonitor()
+    @ObservedObject private var microphoneActivity = MicrophoneCaptureActivity.shared
     @StateObject private var inputVolume = AudioInputVolumeController()
     @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
@@ -206,24 +207,30 @@ struct AudioView: View {
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            Task {
-                await inputLevelMonitor.start(
-                    deviceUniqueID: inputDevices.effectiveDeviceID
-                )
-            }
         }
         .onChange(of: captureLibrary.phase) { _, phase in
-            if phase == .idle {
-                startInputMonitoringIfNeeded()
-            } else {
-                inputLevelMonitor.stop()
+            if phase != .idle {
+                inputLevelMonitor.cancel()
             }
         }
         .onChange(of: destination) { _, destination in
             handleDestinationChange(destination)
         }
+        .onChange(of: microphoneActivity.isRecording) { _, isRecording in
+            if isRecording {
+                inputLevelMonitor.cancel()
+            }
+        }
+        .task(id: microphonePreviewDeviceID) {
+            guard !Task.isCancelled else { return }
+            if let deviceID = microphonePreviewDeviceID {
+                await inputLevelMonitor.start(deviceUniqueID: deviceID.isEmpty ? nil : deviceID)
+            } else {
+                await inputLevelMonitor.stop()
+            }
+        }
         .onDisappear {
-            inputLevelMonitor.stop()
+            inputLevelMonitor.cancel()
         }
         .sheet(item: $editingShortcut) { kind in
             ShortcutCaptureSheet(
@@ -1275,7 +1282,7 @@ struct AudioView: View {
                 Spacer(minLength: 16)
 
                 Button {
-                    inputLevelMonitor.stop()
+                    inputLevelMonitor.cancel()
                     Task {
                         await captureLibrary.start(
                             .meeting,
@@ -1440,8 +1447,10 @@ struct AudioView: View {
                 "Unavailable"
             } else if inputLevelMonitor.isMonitoring {
                 "Input active"
-            } else {
+            } else if inputLevelMonitor.isStarting {
                 "Connecting"
+            } else {
+                "Ready"
             }
         }
     }
@@ -2786,7 +2795,6 @@ struct AudioView: View {
             refreshLocalModels()
             inputDevices.refresh()
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            startInputMonitoringIfNeeded()
         case .model:
             refreshLocalModels()
         case .overview, .history:
@@ -2797,19 +2805,17 @@ struct AudioView: View {
     }
 
     private func handleDestinationChange(_ destination: AudioDestination) {
+        inputLevelMonitor.cancel()
         switch destination {
         case .record:
             refreshLocalModels()
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            startInputMonitoringIfNeeded()
         case .model:
             refreshLocalModels()
-            inputLevelMonitor.stop()
         case .overview, .history:
             importExistingTranscripts()
-            inputLevelMonitor.stop()
         case .animation, .shortcuts:
-            inputLevelMonitor.stop()
+            break
         }
     }
 
@@ -2817,15 +2823,10 @@ struct AudioView: View {
         localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
     }
 
-    private func startInputMonitoringIfNeeded() {
-        guard destination == .record, captureLibrary.phase == .idle else {
-            return
-        }
-        Task {
-            await inputLevelMonitor.start(
-                deviceUniqueID: inputDevices.effectiveDeviceID
-            )
-        }
+    private var microphonePreviewDeviceID: String? {
+        guard destination == .record, captureLibrary.phase == .idle,
+              !microphoneActivity.isRecording else { return nil }
+        return inputDevices.effectiveDeviceID ?? ""
     }
 
     private func importExistingTranscripts() {

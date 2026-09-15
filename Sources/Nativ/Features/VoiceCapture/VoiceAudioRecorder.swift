@@ -146,6 +146,16 @@ final class VoiceAudioRecorder {
     private var recordingURL: URL?
     private var realtimeMeter: RealtimeAudioMeter?
     private var meterPublisherTask: Task<Void, Never>?
+    private var operation = UUID()
+    private var finishTask: Task<FinishedRecording, Never>?
+    private var lastFinishedRecordingID: UUID?
+
+    private struct FinishedRecording: Sendable {
+        let id: UUID
+        let url: URL?
+        let duration: TimeInterval?
+        let error: Error?
+    }
 
     init(inputSession: AudioInputEngineSession = AudioInputEngineSession()) {
         self.inputSession = inputSession
@@ -174,11 +184,21 @@ final class VoiceAudioRecorder {
     func start(
         outputURL requestedOutputURL: URL? = nil,
         deviceUniqueID: String? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
+        try Task.checkCancellation()
         if let recordingURL, isRecording {
             return recordingURL
         }
 
+        guard recordingID == nil else { throw VoiceAudioRecorderError.couldNotStart }
+        let request = UUID()
+        operation = request
+        if let finishTask { _ = await finishTask.value }
+        guard operation == request else { throw CancellationError() }
+        try Task.checkCancellation()
+        self.finishTask = nil
+        guard recordingID == nil else { throw VoiceAudioRecorderError.couldNotStart }
+        lastFinishedRecordingID = nil
         let outputURL = try requestedOutputURL ?? Self.makeOutputURL()
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
@@ -186,34 +206,38 @@ final class VoiceAudioRecorder {
         )
         try? FileManager.default.removeItem(at: outputURL)
 
-        let id = UUID()
+        let id = request
         recordingID = id
         lastRecordingError = nil
         let writer = VoiceAudioRecordingWriter(outputURL: outputURL) { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.recordingID == id else { return }
-                self.recordingFailed(error)
+                await self.recordingFailed(error)
             }
         }
         let realtimeMeter = RealtimeAudioMeter(profile: .recording)
+        recordingWriter = writer
+        recordingURL = outputURL
         do {
-            try inputSession.start(
+            await MicrophoneCaptureActivity.shared.acquire(id)
+            try Task.checkCancellation()
+            guard recordingID == id else { throw CancellationError() }
+            try await inputSession.start(
                 deviceUniqueID: deviceUniqueID,
                 tap: Self.makeTap(writer: writer, realtimeMeter: realtimeMeter)
             ) { [weak self] error in
-                guard let self, self.recordingID == id else { return }
-                self.recordingFailed(error)
+                Task { [weak self] in
+                    guard let self, self.recordingID == id else { return }
+                    await self.recordingFailed(error)
+                }
             }
+            try Task.checkCancellation()
+            guard recordingID == id else { throw CancellationError() }
         } catch {
-            recordingID = nil
-            inputSession.stop()
-            writer.finish()
-            try? FileManager.default.removeItem(at: outputURL)
+            if recordingID == id { await discard() }
             throw error
         }
 
-        recordingWriter = writer
-        recordingURL = outputURL
         isRecording = true
         lastRecordingDuration = nil
         startMeterPublisher(realtimeMeter: realtimeMeter)
@@ -221,42 +245,73 @@ final class VoiceAudioRecorder {
     }
 
     @discardableResult
-    func stop() -> URL? {
-        guard let recordingWriter, let recordingURL else {
-            return nil
+    func stop() async -> URL? {
+        operation = UUID()
+        let stopOperation = operation
+        let finisher: Task<FinishedRecording, Never>
+        if let finishTask {
+            finisher = finishTask
+        } else {
+            guard let recordingWriter, let recordingURL, let id = recordingID else { return nil }
+            recordingID = nil
+            self.recordingWriter = nil
+            self.recordingURL = nil
+            isRecording = false
+            stopMeterPublisher()
+            let retirement = inputSession.cancel()
+            finisher = Task {
+                await retirement.value
+                recordingWriter.finish()
+                MicrophoneCaptureActivity.shared.release(id)
+                let error = recordingWriter.error
+                let duration = recordingWriter.duration
+                guard duration > 0 else {
+                    try? FileManager.default.removeItem(at: recordingURL)
+                    return FinishedRecording(id: id, url: nil, duration: nil, error: error)
+                }
+                return FinishedRecording(id: id, url: recordingURL, duration: duration, error: error)
+            }
+            finishTask = finisher
         }
+        let result = await finisher.value
+        if operation == stopOperation {
+            finishTask = nil
+            lastFinishedRecordingID = result.id
+            lastRecordingError = result.error
+            lastRecordingDuration = result.duration
+            onMeterUpdate?(0, result.duration ?? 0)
+        }
+        return result.url
+    }
 
-        recordingID = nil
-        inputSession.stop()
-        recordingWriter.finish()
-        lastRecordingError = recordingWriter.error
-        let duration = recordingWriter.duration
-        stopMeterPublisher()
-        self.recordingWriter = nil
-        self.recordingURL = nil
-        isRecording = false
-        lastRecordingDuration = duration
-        onMeterUpdate?(0, duration)
-
-        guard duration > 0 else {
+    func discard() async {
+        if let url = await stop(), recordingURL != url {
+            try? FileManager.default.removeItem(at: url)
+        }
+        if recordingID == nil {
             lastRecordingDuration = nil
-            try? FileManager.default.removeItem(at: recordingURL)
-            return nil
+            lastRecordingError = nil
         }
-        return recordingURL
     }
 
-    func discard() {
-        if let recordingURL = stop() {
-            try? FileManager.default.removeItem(at: recordingURL)
-        }
-        lastRecordingDuration = nil
-    }
-
-    private func recordingFailed(_ error: Error) {
-        let savedURL = stop()
+    private func recordingFailed(_ error: Error) async {
+        let id = recordingID
+        let savedURL = await stop()
+        guard lastFinishedRecordingID == id, recordingID == nil else { return }
         lastRecordingError = error
         onRecordingFailure?(error, savedURL)
+    }
+
+    isolated deinit {
+        meterPublisherTask?.cancel()
+        let id = recordingID
+        let writer = recordingWriter
+        let session = inputSession
+        Task {
+            await session.stop()
+            writer?.finish()
+            if let id { MicrophoneCaptureActivity.shared.release(id) }
+        }
     }
 
     private func startMeterPublisher(realtimeMeter: RealtimeAudioMeter) {

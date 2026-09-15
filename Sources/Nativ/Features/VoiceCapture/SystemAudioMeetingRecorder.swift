@@ -35,6 +35,7 @@ final class SystemAudioMeetingRecorder: NSObject {
     var onMicrophoneLevelUpdate: ((Float) -> Void)?
 
     private var stream: SCStream?
+    private var microphoneActivityID: UUID?
     private var temporaryAudioURL: URL?
     private var destinationAudioURL: URL?
     private nonisolated let audioWriter = MeetingAudioWriter()
@@ -50,10 +51,12 @@ final class SystemAudioMeetingRecorder: NSObject {
             return
         }
 
+        try Task.checkCancellation()
         let availableContent = try await SCShareableContent.excludingDesktopWindows(
             false,
             onScreenWindowsOnly: true
         )
+        try Task.checkCancellation()
         guard let display = availableContent.displays.first else {
             throw SystemAudioMeetingRecorderError.noDisplayAvailable
         }
@@ -102,8 +105,13 @@ final class SystemAudioMeetingRecorder: NSObject {
                 type: .microphone,
                 sampleHandlerQueue: audioWriter.sampleQueue
             )
+            let activityID = UUID()
+            microphoneActivityID = activityID
+            await MicrophoneCaptureActivity.shared.acquire(activityID)
+            try Task.checkCancellation()
             try await stream.startCapture()
         } catch {
+            releaseMicrophoneActivity()
             audioWriter.cancel()
             try? FileManager.default.removeItem(at: temporaryURL)
             throw error
@@ -126,6 +134,7 @@ final class SystemAudioMeetingRecorder: NSObject {
         isRecording = false
         do {
             try await stream.stopCapture()
+            releaseMicrophoneActivity()
         } catch {
             audioWriter.cancel()
             reset()
@@ -176,7 +185,15 @@ final class SystemAudioMeetingRecorder: NSObject {
         reset()
     }
 
+    private func releaseMicrophoneActivity() {
+        if let microphoneActivityID {
+            MicrophoneCaptureActivity.shared.release(microphoneActivityID)
+            self.microphoneActivityID = nil
+        }
+    }
+
     private func reset() {
+        releaseMicrophoneActivity()
         stream = nil
         temporaryAudioURL = nil
         destinationAudioURL = nil
