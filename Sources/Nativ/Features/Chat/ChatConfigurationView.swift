@@ -171,6 +171,8 @@ struct ModelConfigurationLayoutContent<Content: View, Auxiliary: View>: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 4)
