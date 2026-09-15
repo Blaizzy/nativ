@@ -3,13 +3,15 @@ import NativServerKit
 import XCTest
 
 final class ChatArchiveTests: XCTestCase {
-    func testArchiveRoundTrip() throws {
+    func testArchiveRoundTripWithPersonalizationExplicitlyIncluded() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
-        let session = makeSession(date: date)
+        var session = makeSession(date: date)
+        session.personalizationSnapshot = "User profile:\nPreferred name: Alex"
         let archive = ChatArchive(
             chat: session,
             modelRepositoryID: "mlx-community/Qwen3-4B",
             systemPrompt: "Be concise.",
+            includePersonalization: true,
             exportedAt: date
         )
 
@@ -17,6 +19,91 @@ final class ChatArchiveTests: XCTestCase {
         let decoded = try ChatArchiveCodec.decode(data)
 
         XCTAssertEqual(decoded, archive)
+        XCTAssertEqual(decoded.chat.personalizationSnapshot, session.personalizationSnapshot)
+        let imported = try ChatArchiveCodec.importedSession(from: decoded)
+        XCTAssertEqual(imported.personalizationSnapshot, session.personalizationSnapshot)
+    }
+
+    func testExportExcludesPersonalizationByDefaultWithoutChangingTheChat() throws {
+        var session = makeSession()
+        session.personalizationSnapshot = "User profile:\nPreferred name: PrivateExportMarker\nOccupation: PrivateOccupationMarker"
+        let original = session
+        let archive = ChatArchive(
+            chat: session,
+            modelRepositoryID: "test/model",
+            systemPrompt: "Be concise."
+        )
+        let data = try ChatArchiveCodec.encode(archive)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let conversation = try XCTUnwrap(object["chat"] as? [String: Any])
+
+        XCTAssertNil(conversation["personalizationSnapshot"])
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("PrivateExportMarker"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("PrivateOccupationMarker"))
+        XCTAssertEqual(archive.chat.messages, original.messages)
+        XCTAssertEqual(archive.systemPrompt, "Be concise.")
+        XCTAssertEqual(session, original)
+
+        let localCopy = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(localCopy.personalizationSnapshot, original.personalizationSnapshot)
+        let imported = try ChatArchiveCodec.importedSession(from: ChatArchiveCodec.decode(data))
+        XCTAssertEqual(imported.personalizationSnapshot, "")
+    }
+
+    func testExportChoiceIncludesOrExcludesOnlyPersonalization() throws {
+        var session = makeSession()
+        session.personalizationSnapshot = "User profile:\nPreferred name: Alex"
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        var exportedObjects: [[String: Any]] = []
+        for includePersonalization in [true, false] {
+            let archive = ChatArchive(
+                chat: session,
+                modelRepositoryID: "test/model",
+                systemPrompt: "Be concise.",
+                includePersonalization: includePersonalization,
+                exportedAt: date
+            )
+            var object = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: ChatArchiveCodec.encode(archive)) as? [String: Any])
+            var conversation = try XCTUnwrap(object["chat"] as? [String: Any])
+            XCTAssertEqual(conversation["personalizationSnapshot"] as? String,
+                           includePersonalization ? session.personalizationSnapshot : nil)
+            conversation.removeValue(forKey: "personalizationSnapshot")
+            object["chat"] = conversation
+            exportedObjects.append(object)
+        }
+        XCTAssertTrue(NSDictionary(dictionary: exportedObjects[0]).isEqual(to: exportedObjects[1]))
+    }
+
+    func testOlderPersonalizedArchiveImportsButReexportDefaultsToExcludingProfile() throws {
+        let archive = ChatArchive(chat: makeSession(), modelRepositoryID: "test/model", systemPrompt: "")
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: ChatArchiveCodec.encode(archive)) as? [String: Any])
+        var conversation = try XCTUnwrap(object["chat"] as? [String: Any])
+        let snapshot = "User profile:\nPreferred name: LegacyPrivateMarker"
+        conversation["personalizationSnapshot"] = snapshot
+        object["chat"] = conversation
+
+        let decoded = try ChatArchiveCodec.decode(JSONSerialization.data(withJSONObject: object))
+        let imported = try ChatArchiveCodec.importedSession(from: decoded)
+        XCTAssertEqual(imported.personalizationSnapshot, snapshot)
+        let reexport = ChatArchive(chat: imported, modelRepositoryID: decoded.modelRepositoryID,
+                                   systemPrompt: decoded.systemPrompt)
+        XCTAssertNil(reexport.chat.personalizationSnapshot)
+        XCTAssertFalse(String(decoding: try ChatArchiveCodec.encode(reexport), as: UTF8.self)
+            .contains("LegacyPrivateMarker"))
+    }
+
+    func testImportedEmptyChatWithoutProfileDoesNotCaptureRecipientsPersonalization() throws {
+        var session = makeSession()
+        session.messages = []
+        session.personalizationSnapshot = "User profile:\nPreferred name: OriginalUser"
+        let archive = ChatArchive(chat: session, modelRepositoryID: "test/model", systemPrompt: "")
+        var imported = try ChatArchiveCodec.importedSession(from: archive)
+        var recipient = NativPersonalization()
+        recipient.profile.preferredName = "Recipient"
+        imported.capturePersonalization(recipient)
+        XCTAssertEqual(imported.personalizationSnapshot, "")
     }
 
     func testImportAssignsNewLocalIDsAndPreservesToolCallLinks() throws {
