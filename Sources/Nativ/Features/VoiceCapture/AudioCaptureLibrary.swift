@@ -120,6 +120,10 @@ final class AudioCaptureLibrary: ObservableObject {
     private var shouldSummarizeCurrentCapture = false
     private var activeBackend: ActiveAudioCaptureBackend?
     private var activeTask: Task<Void, Never>?
+    private var captureStartupTask: Task<Void, Never>?
+    private var isStartingCapture = false
+    private var isShuttingDown = false
+    private var isDiscardingCapture = false
     private var lastMeterPublishAt = Date.distantPast
 
     init(analytics: AudioAnalyticsStore? = nil) {
@@ -213,19 +217,42 @@ final class AudioCaptureLibrary: ObservableObject {
         automaticallySummarize: Bool,
         includeSystemAudio: Bool = true
     ) async {
-        guard phase == .idle, kind != .dictation else {
+        guard !Task.isCancelled, !isShuttingDown, !isDiscardingCapture, !isStartingCapture,
+              phase == .idle, kind != .dictation else {
             return
         }
 
+        isStartingCapture = true
+        defer { isStartingCapture = false }
+        phase = .preparing
+        let startup = Task {
+            await prepareCapture(kind, automaticallySummarize: automaticallySummarize,
+                                 includeSystemAudio: includeSystemAudio)
+        }
+        captureStartupTask = startup
+        await withTaskCancellationHandler {
+            await startup.value
+        } onCancel: {
+            startup.cancel()
+        }
+    }
+
+    private func prepareCapture(
+        _ kind: AudioRecordKind,
+        automaticallySummarize: Bool,
+        includeSystemAudio: Bool
+    ) async {
+        guard !Task.isCancelled else { resetCaptureState(); return }
         clearLastError()
         activeKind = kind
-        phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
         activeIncludesSystemAudio = kind == .meeting && includeSystemAudio
         meterState.update(0)
         lastMeterPublishAt = .distantPast
 
-        guard await NativSystemPermissionController.requestMicrophone() else {
+        let microphoneAllowed = await NativSystemPermissionController.requestMicrophone()
+        guard !Task.isCancelled else { resetCaptureState(); return }
+        guard microphoneAllowed else {
             fail(AudioCaptureLibraryError.microphonePermissionRequired)
             return
         }
@@ -246,7 +273,7 @@ final class AudioCaptureLibrary: ObservableObject {
             let microphoneDeviceID = AudioInputDevicePreferences.shared.effectiveDeviceID
             switch kind {
             case .voiceNote:
-                try voiceRecorder.start(
+                try await voiceRecorder.start(
                     outputURL: outputURL,
                     deviceUniqueID: microphoneDeviceID
                 )
@@ -259,7 +286,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .systemAndMicrophone
                 } else {
-                    try voiceRecorder.start(
+                    try await voiceRecorder.start(
                         outputURL: outputURL,
                         deviceUniqueID: microphoneDeviceID
                     )
@@ -268,6 +295,7 @@ final class AudioCaptureLibrary: ObservableObject {
             case .dictation:
                 return
             }
+            try Task.checkCancellation()
             captureStartedAt = Date()
             elapsed = 0
             phase = .recording
@@ -275,6 +303,12 @@ final class AudioCaptureLibrary: ObservableObject {
             recordingOverlay.didStartRecording()
             startElapsedUpdates()
         } catch {
+            await voiceRecorder.discard()
+            await meetingRecorder.cancel()
+            if Task.isCancelled || error is CancellationError {
+                resetCaptureState()
+                return
+            }
             if Self.isScreenCapturePermissionError(error) {
                 // ScreenCaptureKit presents the native permission dialog itself.
                 // Do not stack a second Nativ alert underneath it.
@@ -318,7 +352,7 @@ final class AudioCaptureLibrary: ObservableObject {
             let recordingURL: URL
             switch activeBackend {
             case .microphone:
-                let savedURL = voiceRecorder.stop()
+                let savedURL = await voiceRecorder.stop()
                 if let error = voiceRecorder.lastRecordingError {
                     microphoneRecordingInterrupted(error, savedURL: savedURL)
                     return
@@ -587,15 +621,17 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func shutdown() {
+        isShuttingDown = true
+        captureStartupTask?.cancel()
+        let startup = captureStartupTask
         meetingJoinMonitor.stop()
         meetingSuggestion.dismiss()
         activeTask?.cancel()
         activeTask = nil
         stopElapsedUpdates()
-        if let unfinishedVoiceNote = voiceRecorder.stop() {
-            try? FileManager.default.removeItem(at: unfinishedVoiceNote)
-        }
-        Task { [meetingRecorder] in
+        Task { [voiceRecorder, meetingRecorder] in
+            await startup?.value
+            await voiceRecorder.discard()
             await meetingRecorder.cancel()
         }
         resetCaptureState()
@@ -841,6 +877,11 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     private func discardCurrentCapture(hideOverlay: Bool) async {
+        guard !isDiscardingCapture else { return }
+        isDiscardingCapture = true
+        defer { isDiscardingCapture = false }
+        captureStartupTask?.cancel()
+        await captureStartupTask?.value
         guard let activeBackend else {
             resetCaptureState(hideOverlay: hideOverlay)
             return
@@ -850,7 +891,7 @@ final class AudioCaptureLibrary: ObservableObject {
         stopElapsedUpdates()
         switch activeBackend {
         case .microphone:
-            if let recordingURL = voiceRecorder.stop() {
+            if let recordingURL = await voiceRecorder.stop() {
                 try? FileManager.default.removeItem(at: recordingURL)
             }
         case .systemAndMicrophone:

@@ -23,6 +23,9 @@ final class VoiceCaptureCoordinator {
     private let overlay = VoiceCaptureOverlayController()
     private let analytics = AudioAnalyticsStore.shared
     private var permissionTask: Task<Void, Never>?
+    private var finishingCaptureTask: Task<Void, Never>?
+    private var captureOperation = UUID()
+    private var isEnabled = false
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
     private var insertionTarget: VoiceTranscriptInsertionTarget?
@@ -46,11 +49,13 @@ final class VoiceCaptureCoordinator {
             self?.overlay.update(level: level, elapsed: elapsed)
         }
         recorder.onRecordingFailure = { [weak self] error, savedURL in
-            self?.recordingInterrupted(error, savedURL: savedURL)
+            guard let self, self.isShortcutHeld else { return }
+            self.recordingInterrupted(error, savedURL: savedURL)
         }
     }
 
     func start() {
+        isEnabled = true
         scheduleExistingAudioDeletion()
         if let directory = try? VoiceAudioRecorder.recordingsDirectory {
             analytics.importTranscripts(in: directory)
@@ -59,6 +64,8 @@ final class VoiceCaptureCoordinator {
     }
 
     func stop() {
+        isEnabled = false
+        captureOperation = UUID()
         permissionTask?.cancel()
         permissionTask = nil
         transcriptionTasks.values.forEach { $0.cancel() }
@@ -66,9 +73,13 @@ final class VoiceCaptureCoordinator {
         audioDeletionTasks.values.forEach { $0.cancel() }
         audioDeletionTasks.removeAll()
         shortcutMonitor.stop()
-        recorder.stop()
-        if let directory = try? VoiceAudioRecorder.recordingsDirectory {
-            VoiceAudioRetention.removeAllAudioFiles(in: directory)
+        let previousFinish = finishingCaptureTask
+        finishingCaptureTask = Task { [recorder] in
+            await previousFinish?.value
+            await recorder.discard()
+            if let directory = try? VoiceAudioRecorder.recordingsDirectory {
+                VoiceAudioRetention.removeAllAudioFiles(in: directory)
+            }
         }
         overlay.hide()
         activeOverlayTranscriptionID = nil
@@ -116,16 +127,19 @@ final class VoiceCaptureCoordinator {
     }
 
     private func beginCapture() {
+        guard isEnabled else { return }
+        let request = UUID()
+        captureOperation = request
         permissionTask?.cancel()
         activeOverlayTranscriptionID = nil
         insertionTarget = VoiceTranscriptInserter.captureTarget()
         overlay.show(at: NSEvent.mouseLocation)
+        let previousFinish = finishingCaptureTask
         permissionTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
+            await previousFinish?.value
+            guard let self, self.captureOperation == request, !Task.isCancelled else { return }
             let granted = await NativSystemPermissionController.requestMicrophone()
-            guard !Task.isCancelled, self.isShortcutHeld else {
+            guard !Task.isCancelled, self.isShortcutHeld, self.captureOperation == request else {
                 return
             }
             guard granted else {
@@ -135,11 +149,15 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                try self.recorder.start(
+                try await self.recorder.start(
                     deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
                 )
+                guard !Task.isCancelled, self.isShortcutHeld, self.captureOperation == request else { return }
                 self.overlay.didStartRecording()
+            } catch is CancellationError {
+                return
             } catch {
+                guard self.captureOperation == request, self.isShortcutHeld else { return }
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.overlay.showFailure()
             }
@@ -159,35 +177,46 @@ final class VoiceCaptureCoordinator {
     private func endCapture() {
         permissionTask?.cancel()
         permissionTask = nil
+        let request = captureOperation
         let target = insertionTarget
         insertionTarget = nil
-        let savedURL = recorder.stop()
-        if let error = recorder.lastRecordingError {
-            recordingInterrupted(error, savedURL: savedURL)
-            return
+        let previousFinish = finishingCaptureTask
+        finishingCaptureTask = Task { [weak self, recorder] in
+            await previousFinish?.value
+            let savedURL = await recorder.stop()
+            guard let self, self.isEnabled else { return }
+            let ownsOverlay = self.captureOperation == request
+            if let error = recorder.lastRecordingError {
+                if ownsOverlay { self.recordingInterrupted(error, savedURL: savedURL) }
+                else if let savedURL { self.scheduleAudioDeletion(savedURL) }
+                return
+            }
+            if let recordingURL = savedURL {
+                self.scheduleAudioDeletion(recordingURL)
+                let transcriptionID = UUID()
+                if ownsOverlay {
+                    self.activeOverlayTranscriptionID = transcriptionID
+                    self.overlay.waitForTranscription()
+                }
+                self.transcribe(recordingURL, target: target,
+                                durationSeconds: recorder.lastRecordingDuration,
+                                overlayTranscriptionID: transcriptionID)
+            } else if ownsOverlay {
+                self.activeOverlayTranscriptionID = nil
+                self.overlay.hide()
+            }
         }
-        if let recordingURL = savedURL {
-            NSLog("Nativ saved voice recording to %@", recordingURL.path)
-            scheduleAudioDeletion(recordingURL)
-            let overlayTranscriptionID = UUID()
-            activeOverlayTranscriptionID = overlayTranscriptionID
-            overlay.waitForTranscription()
-            transcribe(
-                recordingURL,
-                target: target,
-                durationSeconds: recorder.lastRecordingDuration,
-                overlayTranscriptionID: overlayTranscriptionID
-            )
-            return
-        }
-        activeOverlayTranscriptionID = nil
-        overlay.hide()
     }
 
     private func cancelCapture() {
+        captureOperation = UUID()
         permissionTask?.cancel()
         permissionTask = nil
-        recorder.discard()
+        let previousFinish = finishingCaptureTask
+        finishingCaptureTask = Task { [recorder] in
+            await previousFinish?.value
+            await recorder.discard()
+        }
         activeOverlayTranscriptionID = nil
         insertionTarget = nil
         isShortcutHeld = false

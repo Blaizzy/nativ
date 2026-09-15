@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 
 @MainActor
@@ -11,61 +12,112 @@ final class AudioInputLevelState: ObservableObject {
 }
 
 @MainActor
+final class MicrophoneCaptureActivity: ObservableObject {
+    static let shared = MicrophoneCaptureActivity()
+    @Published private(set) var isRecording = false
+    private var recordings = Set<UUID>()
+    weak var preview: AudioInputLevelMonitor?
+
+    func acquire(_ id: UUID) async {
+        recordings.insert(id)
+        isRecording = true
+        await preview?.stop()
+    }
+
+    func release(_ id: UUID) {
+        recordings.remove(id)
+        isRecording = !recordings.isEmpty
+    }
+}
+
+@MainActor
 final class AudioInputLevelMonitor: ObservableObject {
     let meterState = AudioInputLevelState()
     @Published private(set) var isMonitoring = false
+    @Published private(set) var isStarting = false
     @Published private(set) var errorMessage: String?
 
     private let inputSession = AudioInputEngineSession()
+    private var generation = UUID()
     private var realtimeMeter: RealtimeAudioMeter?
     private var meterPublisherTask: Task<Void, Never>?
 
     func start(deviceUniqueID: String?) async {
-        stop()
-        errorMessage = nil
-
+        guard !Task.isCancelled else { return }
+        let request = UUID()
+        generation = request
+        await reset(resetError: true)
+        guard generation == request, !Task.isCancelled,
+              !MicrophoneCaptureActivity.shared.isRecording else { return }
         guard Self.hasMicrophoneAccess() else {
             errorMessage = "Microphone access is required to test this input."
             return
         }
-
+        isStarting = true
+        MicrophoneCaptureActivity.shared.preview = self
         do {
             let realtimeMeter = RealtimeAudioMeter(profile: .inputMonitor)
-            try inputSession.start(
+            try await inputSession.start(
                 deviceUniqueID: deviceUniqueID,
                 tap: Self.makeTap(realtimeMeter: realtimeMeter)
             ) { [weak self] error in
-                self?.errorMessage = error.localizedDescription
-                self?.stop(resetError: false)
+                Task { [weak self] in
+                    guard let self, self.generation == request else { return }
+                    self.errorMessage = error.localizedDescription
+                    await self.reset(resetError: false)
+                }
             }
+            guard generation == request else { return }
+            try Task.checkCancellation()
+            isStarting = false
             isMonitoring = true
             startMeterPublisher(realtimeMeter: realtimeMeter)
         } catch {
-            errorMessage = error.localizedDescription
-            stop(resetError: false)
+            guard generation == request else { return }
+            if !(error is CancellationError) { errorMessage = error.localizedDescription }
+            await reset(resetError: false)
         }
     }
 
-    func restart(deviceUniqueID: String?) async {
-        guard isMonitoring else {
-            return
+    func stop() async {
+        generation = UUID()
+        await reset(resetError: true)
+    }
+
+    func cancel() {
+        generation = UUID()
+        isStarting = false
+        isMonitoring = false
+        errorMessage = nil
+        stopMeterPublisher()
+        meterState.update(0)
+        let request = generation
+        let retirement = inputSession.cancel()
+        Task { [weak self] in
+            await retirement.value
+            guard let self, self.generation == request else { return }
+            self.releasePreview()
         }
-        await start(deviceUniqueID: deviceUniqueID)
     }
 
-    func stop() {
-        stop(resetError: true)
-    }
-
-    private func stop(resetError: Bool) {
-        inputSession.stop()
+    private func reset(resetError: Bool) async {
+        isStarting = false
         isMonitoring = false
         stopMeterPublisher()
         meterState.update(0)
-        if resetError {
-            errorMessage = nil
+        if resetError { errorMessage = nil }
+        let request = generation
+        await inputSession.stop()
+        if generation == request { releasePreview() }
+    }
+
+    private func releasePreview() {
+        if MicrophoneCaptureActivity.shared.preview === self {
+            MicrophoneCaptureActivity.shared.preview = nil
         }
     }
+
+    isolated deinit { meterPublisherTask?.cancel() }
 
     private func startMeterPublisher(realtimeMeter: RealtimeAudioMeter) {
         self.realtimeMeter = realtimeMeter
@@ -129,158 +181,4 @@ final class AudioInputLevelMonitor: ObservableObject {
     private static func hasMicrophoneAccess() -> Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
-}
-
-@MainActor
-protocol AudioInputEngineDriving: AnyObject {
-    var isRunning: Bool { get }
-    var onConfigurationChange: (() -> Void)? { get set }
-    func start(
-        deviceUniqueID: String?,
-        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
-    ) throws
-    func stop()
-}
-
-@MainActor
-final class AudioInputEngineSession {
-    private let makeEngine: () -> any AudioInputEngineDriving
-    private let retryDelays: [Duration]
-    private var engine: (any AudioInputEngineDriving)?
-    private var recoveryTask: Task<Void, Never>?
-    private var generation = UUID()
-
-    init(
-        retryDelays: [Duration] = [.milliseconds(100), .milliseconds(250), .milliseconds(500)],
-        makeEngine: @escaping () -> any AudioInputEngineDriving = { SystemAudioInputEngine() }
-    ) {
-        self.retryDelays = retryDelays
-        self.makeEngine = makeEngine
-    }
-
-    func start(
-        deviceUniqueID: String?,
-        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void,
-        onFailure: @escaping (Error) -> Void
-    ) throws {
-        stop()
-        try startEngine(deviceUniqueID: deviceUniqueID, tap: tap, onFailure: onFailure)
-    }
-
-    func stop() {
-        generation = UUID()
-        recoveryTask?.cancel()
-        recoveryTask = nil
-        engine?.onConfigurationChange = nil
-        engine?.stop()
-        engine = nil
-    }
-
-    isolated deinit {
-        recoveryTask?.cancel()
-        engine?.stop()
-    }
-
-    private func startEngine(
-        deviceUniqueID: String?,
-        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void,
-        onFailure: @escaping (Error) -> Void
-    ) throws {
-        let nextEngine = makeEngine()
-        let expectedGeneration = generation
-        nextEngine.onConfigurationChange = { [weak self, weak nextEngine] in
-            guard let self, let nextEngine,
-                self.generation == expectedGeneration,
-                self.engine === nextEngine,
-                !nextEngine.isRunning,
-                self.recoveryTask == nil
-            else { return }
-            nextEngine.onConfigurationChange = nil
-            nextEngine.stop()
-            self.engine = nil
-            self.recoveryTask = Task { [weak self] in
-                var failure: Error = VoiceAudioRecorderError.couldNotStart
-                for delay in self?.retryDelays ?? [] {
-                    do { try await Task.sleep(for: delay) }
-                    catch { return }
-                    guard !Task.isCancelled, let self,
-                        self.generation == expectedGeneration
-                    else { return }
-                    do {
-                        try self.startEngine(
-                            deviceUniqueID: deviceUniqueID, tap: tap, onFailure: onFailure
-                        )
-                        self.recoveryTask = nil
-                        return
-                    } catch {
-                        failure = error
-                    }
-                }
-                guard let self, self.generation == expectedGeneration,
-                    !Task.isCancelled
-                else { return }
-                self.stop()
-                onFailure(failure)
-            }
-        }
-        engine = nextEngine
-        do {
-            try nextEngine.start(deviceUniqueID: deviceUniqueID, tap: tap)
-        } catch {
-            nextEngine.onConfigurationChange = nil
-            nextEngine.stop()
-            engine = nil
-            throw error
-        }
-    }
-}
-
-@MainActor
-private final class SystemAudioInputEngine: AudioInputEngineDriving {
-    var onConfigurationChange: (() -> Void)?
-    private let engine = AVAudioEngine()
-    private var observer: NSObjectProtocol?
-    private var hasTap = false
-
-    var isRunning: Bool { engine.isRunning }
-
-    func start(
-        deviceUniqueID: String?,
-        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
-    ) throws {
-        let input = engine.inputNode
-        // An unavailable selected device falls back to the current system default.
-        if let deviceUniqueID,
-            let deviceID = AudioInputDeviceResolver.coreAudioDeviceID(for: deviceUniqueID)
-        {
-            try input.auAudioUnit.setDeviceID(deviceID)
-        }
-        let format = input.inputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-            throw VoiceAudioRecorderError.couldNotStart
-        }
-        input.installTap(onBus: 0, bufferSize: 1_024, format: nil, block: tap)
-        hasTap = true
-        observer = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            // Engine teardown must happen outside AVFAudio's notification queue.
-            Task { @MainActor [weak self] in
-                guard let self, self.observer != nil else { return }
-                self.onConfigurationChange?()
-            }
-        }
-        engine.prepare()
-        try engine.start()
-    }
-
-    func stop() {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        observer = nil
-        if hasTap { engine.inputNode.removeTap(onBus: 0) }
-        hasTap = false
-        engine.stop()
-    }
-
-    isolated deinit { stop() }
 }
