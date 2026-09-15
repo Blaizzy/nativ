@@ -224,8 +224,11 @@ struct AudioView: View {
         }
         .onDisappear {
             inputLevelMonitor.stop()
+            shortcuts.isCapturingShortcut = false
         }
-        .sheet(item: $editingShortcut) { kind in
+        .sheet(item: $editingShortcut, onDismiss: {
+            shortcuts.isCapturingShortcut = false
+        }) { kind in
             ShortcutCaptureSheet(
                 kind: kind,
                 conflictMessage: shortcutConflict,
@@ -2640,6 +2643,7 @@ struct AudioView: View {
             Spacer()
             Button("Change") {
                 shortcutConflict = nil
+                shortcuts.isCapturingShortcut = true
                 editingShortcut = kind
             }
             .buttonStyle(.bordered)
