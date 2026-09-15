@@ -1,4 +1,3 @@
-import NativTrace
 import XCTest
 
 final class TraceTests: XCTestCase {

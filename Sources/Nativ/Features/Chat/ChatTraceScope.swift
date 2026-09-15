@@ -1,5 +1,4 @@
 import Foundation
-import NativTrace
 
 struct ChatTraceTurn: Hashable {
     let sessionID: UUID

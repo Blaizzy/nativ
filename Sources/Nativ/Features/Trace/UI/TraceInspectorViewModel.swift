@@ -1,5 +1,4 @@
 import Foundation
-import NativTrace
 import SwiftUI
 
 struct TraceCall: Identifiable, Hashable {
@@ -7,7 +6,6 @@ struct TraceCall: Identifiable, Hashable {
     let title: String
     let timestamp: Date
     let exposure: RequestComposedPayload
-    let diff: TraceExposureDiff
 
     var toolCount: Int { exposure.tools.count }
     var advertisesTools: Bool { exposure.advertisesTools }
@@ -19,7 +17,6 @@ struct TraceInstance: Identifiable, Hashable {
     let eventCount: Int
     let blocks: [TraceDisplayBlock]
     let calls: [TraceCall]
-    let inheritedContext: [TraceMessageRef]
 
     var modelLabel: String {
         switch modelIDs.count {
@@ -102,28 +99,16 @@ final class TraceInspectorViewModel: ObservableObject {
                     id: item.id,
                     title: TraceCallLabel.title(index: position + 1, round: item.scope.roundIndex),
                     timestamp: item.timestamp,
-                    exposure: payload,
-                    diff: .between(position > 0 ? exposures[position - 1].1 : nil, and: payload)
+                    exposure: payload
                 )
             }
-
-            let produced = Set(items.compactMap { item -> String? in
-                switch item.body {
-                case .message(let message): message.messageID
-                case .tool(let tool): tool.callID
-                default: nil
-                }
-            })
-            let inherited = (exposures.first?.1.messages ?? [])
-                .filter { !produced.contains($0.messageID) }
 
             return TraceInstance(
                 id: events.first?.traceID ?? "",
                 modelIDs: Array(Set(events.compactMap { $0.scope.modelID })).sorted(),
                 eventCount: events.count,
                 blocks: TraceGrouping.blocks(for: items),
-                calls: calls,
-                inheritedContext: inherited
+                calls: calls
             )
         }
 

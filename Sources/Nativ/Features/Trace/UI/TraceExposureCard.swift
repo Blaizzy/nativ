@@ -1,9 +1,7 @@
-import NativTrace
 import SwiftUI
 
 struct TraceExposureCard: View {
     let exposure: RequestComposedPayload
-    let diff: TraceExposureDiff
     let label: String
     let modelID: String?
     var isHighlighted = false
@@ -48,8 +46,6 @@ struct TraceExposureCard: View {
 
                 Spacer(minLength: 8)
 
-                TraceDiffBadges(diff: diff)
-
                 if let modelID {
                     Text(modelID)
                         .font(.caption.monospaced())
@@ -80,7 +76,7 @@ struct TraceExposureCard: View {
         ) {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(Array(exposure.systemSections.enumerated()), id: \.offset) { _, section in
-                    TraceSectionRow(section: section, isEdited: diff.editedSections.contains(section))
+                    TraceSectionRow(section: section)
                 }
             }
         }
@@ -99,7 +95,7 @@ struct TraceExposureCard: View {
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     ForEach(exposure.tools, id: \.name) { tool in
-                        TraceToolDescriptorRow(tool: tool, change: change(for: tool))
+                        TraceToolDescriptorRow(tool: tool)
                     }
                 }
             }
@@ -135,12 +131,6 @@ struct TraceExposureCard: View {
         TraceDisclosureSection(title: "Sampling", subtitle: nil) {
             TraceParameterGrid(parameters: exposure.parameters)
         }
-    }
-
-    private func change(for tool: ToolDescriptor) -> TraceToolChange {
-        if diff.addedTools.contains(where: { $0.name == tool.name }) { return .added }
-        if diff.redefinedTools.contains(where: { $0.name == tool.name }) { return .redefined }
-        return .unchanged
     }
 
 }

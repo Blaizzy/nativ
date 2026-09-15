@@ -1,6 +1,5 @@
 import Foundation
 import NativServerKit
-import NativTrace
 
 @MainActor
 final class RoutineRunner {
@@ -148,7 +147,6 @@ final class RoutineRunner {
         do {
             let result = try await complete(
                 routine: routine,
-                sessionID: sessionID,
                 settings: settings,
                 capabilities: capabilities,
                 baseURL: baseURL
@@ -197,44 +195,17 @@ final class RoutineRunner {
 
     private func complete(
         routine: Routine,
-        sessionID: UUID,
         settings: NativSettings,
         capabilities: ResolvedCapabilities,
         baseURL: URL
     ) async throws -> ScheduledExecutionResult {
         let client = NativChatClient(baseURL: baseURL, apiKey: settings.serverAPIKey)
         var requestMessages: [MLXChatMessage] = []
-        var sentRefs: [TraceMessageRef] = []
         let systemPrompt = Self.systemPrompt(for: capabilities)
         if !systemPrompt.isEmpty {
             requestMessages.append(MLXChatMessage(role: "system", content: systemPrompt))
         }
         requestMessages.append(MLXChatMessage(role: "user", content: routine.instructions))
-
-        let tracer = await TraceServices.shared.producer(
-            enabled: settings.traceRecordingEnabled
-        )
-        let turn = ChatTraceTurn(sessionID: sessionID, turnID: UUID())
-        let userMessageID = UUID()
-        sentRefs.append(Self.messageRef(role: .user, id: userMessageID.uuidString, body: routine.instructions))
-        await tracer?.turnStarted(
-            turn,
-            messageID: userMessageID,
-            text: routine.instructions,
-            modelID: routine.modelID
-        )
-
-        var outcome = TraceTurnStatus.completed
-        var recordedRounds = 0
-        defer {
-            let producer = tracer
-            let endedTurn = turn
-            let status = outcome
-            let rounds = recordedRounds
-            Task { @MainActor in
-                producer?.turnEnded(endedTurn, status: status, roundCount: rounds)
-            }
-        }
 
         var transcript = [ChatTranscriptMessage(role: .user, content: routine.instructions)]
         var toolRound = 0
@@ -242,10 +213,8 @@ final class RoutineRunner {
         let fileSearchTracker = ChatSearchFilesTracker()
         let fileOperationRunID = UUID()
 
-        do {
         while true {
             try Task.checkCancellation()
-            recordedRounds = toolRound + 1
             let advertisesTools =
                 !capabilities.tools.isEmpty
                 && ChatToolRoundGate.advertisesTools(atRound: toolRound)
@@ -276,53 +245,12 @@ final class RoutineRunner {
                 tools: toolDefinitions,
                 toolChoice: toolDefinitions == nil ? nil : "auto"
             )
-            let call = ChatTraceCall(
-                turn: turn,
-                requestID: UUID(),
-                round: toolRound,
-                modelID: routine.modelID
-            )
-            await tracer?.requestComposed(
-                Self.exposure(
-                    request: request,
-                    capabilities: capabilities,
-                    advertisesTools: advertisesTools,
-                    toolDefinitions: toolDefinitions,
-                    messages: sentRefs
-                ),
-                in: call
-            )
-
             let completion: MLXChatCompletion
             do {
                 completion = try await client.completeChat(request)
             } catch {
-                await tracer?.responseFailed(
-                    message: String(describing: error),
-                    isCancellation: ChatIsCancellation(error),
-                    in: call
-                )
                 throw ScheduledCompletionFailure(underlying: error, transcript: transcript)
             }
-            let assistantMessageID = UUID()
-            sentRefs.append(
-                Self.messageRef(
-                    role: .assistant,
-                    id: assistantMessageID.uuidString,
-                    body: completion.content
-                )
-            )
-            await tracer?.responseCompleted(
-                messageID: assistantMessageID,
-                content: completion.content,
-                reasoning: completion.reasoningContent,
-                usage: TraceUsage(
-                    promptTokens: completion.usage?.promptTokens,
-                    completionTokens: completion.usage?.completionTokens
-                ),
-                finishReason: completion.finishReason,
-                in: call
-            )
             let toolCalls = Self.normalizedToolCalls(completion.toolCalls)
 
             guard advertisesTools, !toolCalls.isEmpty else {
@@ -355,19 +283,10 @@ final class RoutineRunner {
                     toolCalls: toolCalls
                 ))
 
-            for toolCall in toolCalls {
+            for call in toolCalls {
                 try Task.checkCancellation()
-                let traceCallID = toolCall.id ?? UUID().uuidString
-                if let name = toolCall.function?.name {
-                    await tracer?.toolCall(
-                        callID: traceCallID,
-                        name: name,
-                        argumentsJSON: toolCall.function?.arguments,
-                        in: call
-                    )
-                }
                 let result = try await executeTool(
-                    toolCall,
+                    call,
                     capabilities: capabilities,
                     settings: settings,
                     baseURL: baseURL,
@@ -375,52 +294,26 @@ final class RoutineRunner {
                     fileSearchTracker: fileSearchTracker,
                     fileOperationRunID: fileOperationRunID
                 )
-                await tracer?.toolResult(
-                    callID: traceCallID,
-                    name: toolCall.function?.name,
-                    output: result.content,
-                    isError: !result.succeeded,
-                    in: call
-                )
-                sentRefs.append(
-                    Self.messageRef(role: .tool, id: traceCallID, body: result.content)
-                )
                 requestMessages.append(
                     MLXChatMessage(
                         role: "tool",
                         content: result.content,
-                        toolCallID: toolCall.id,
-                        name: toolCall.function?.name
+                        toolCallID: call.id,
+                        name: call.function?.name
                     ))
                 transcript.append(
                     ChatTranscriptMessage(
                         role: .tool,
                         content: result.content,
                         imageAttachments: result.attachments,
-                        toolCallID: toolCall.id,
-                        toolName: toolCall.function?.name,
+                        toolCallID: call.id,
+                        toolName: call.function?.name,
                         toolStatus: result.succeeded ? .succeeded : .failed,
-                        toolArguments: toolCall.function?.arguments
+                        toolArguments: call.function?.arguments
                     ))
             }
             toolRound += 1
         }
-        } catch {
-            outcome = ChatIsCancellation(error) ? .cancelled : .failed
-            throw error
-        }
-    }
-
-    private static func messageRef(
-        role: TraceRole,
-        id: String,
-        body: String
-    ) -> TraceMessageRef {
-        TraceMessageRef(
-            role: role,
-            messageID: id,
-            body: body
-        )
     }
 
     private func executeTool(
@@ -566,56 +459,6 @@ final class RoutineRunner {
             return response is HTTPURLResponse
         } catch {
             return false
-        }
-    }
-
-    private static func exposure(
-        request: MLXChatCompletionRequest,
-        capabilities: ResolvedCapabilities,
-        advertisesTools: Bool,
-        toolDefinitions: [MLXChatToolDefinition]?,
-        messages: [TraceMessageRef]
-    ) -> RequestComposedPayload {
-        var sections: [PromptSection] = []
-        if !capabilities.tools.isEmpty {
-            sections.append(PromptSection(
-                origin: .toolGuide,
-                label: NativSkill.builtInToolGuide.name,
-                body: NativSkill.builtInToolGuide.instructions
-            ))
-        }
-        for skill in capabilities.skills where !skill.instructions.isEmpty {
-            sections.append(PromptSection(
-                origin: .skill, label: skill.name, body: skill.instructions
-            ))
-        }
-
-        let origins = Dictionary(
-            capabilities.tools.map { ($0.definition.function.name, $0.provider) },
-            uniquingKeysWith: { first, _ in first }
-        )
-
-        return RequestComposedPayload(
-            systemSections: sections,
-            tools: (toolDefinitions ?? []).map { definition in
-                ToolDescriptor(
-                    name: definition.function.name,
-                    origin: traceOrigin(for: origins[definition.function.name]),
-                    summary: definition.function.description,
-                    parameters: try? TraceJSON(encoding: definition.function.parameters)
-                )
-            },
-            parameters: SamplingParameters(request),
-            messages: messages,
-            advertisesTools: advertisesTools
-        )
-    }
-
-    private static func traceOrigin(for provider: ScheduledTool.Provider?) -> ToolOrigin {
-        switch provider {
-        case .custom: .custom
-        case .mcp: .mcp
-        case .builtIn, nil: .builtIn
         }
     }
 

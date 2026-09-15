@@ -1,5 +1,4 @@
 import Foundation
-import NativTrace
 
 @MainActor
 final class ChatTraceProducer {

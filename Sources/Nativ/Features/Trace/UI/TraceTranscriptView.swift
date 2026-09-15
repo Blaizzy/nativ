@@ -1,4 +1,3 @@
-import NativTrace
 import SwiftUI
 
 struct TraceTranscriptView: View {
@@ -8,12 +7,6 @@ struct TraceTranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if let instance = model.selectedInstance, !instance.inheritedContext.isEmpty {
-                        TraceInheritedContextRow(
-                            messages: instance.inheritedContext
-                        )
-                    }
-
                     ForEach(model.blocks) { block in
                         switch block {
                         case .boundary(let item):
@@ -58,7 +51,6 @@ struct TraceTranscriptView: View {
             if let call = model.call(for: item.id) {
                 TraceExposureCard(
                     exposure: call.exposure,
-                    diff: call.diff,
                     label: call.title,
                     modelID: item.scope.modelID,
                     isHighlighted: model.selectedCallID == item.id
@@ -169,52 +161,6 @@ struct TraceMessageRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct TraceInheritedContextRow: View {
-    let messages: [TraceMessageRef]
-
-    @State private var isExpanded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(.easeOut(duration: 0.14)) { isExpanded.toggle() }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Context sent to this call")
-                        .font(.callout)
-                    Text("\(messages.count) messages")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.right")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(messages) { message in
-                        TraceResolvedMessageRow(message: message)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .nativPanelStyle(cornerRadius: .compact)
     }
 }
 

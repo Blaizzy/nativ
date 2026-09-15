@@ -1,4 +1,3 @@
-import NativTrace
 import SwiftUI
 
 struct TraceToolRow: View {

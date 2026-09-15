@@ -1,5 +1,4 @@
 import Foundation
-import NativSQLite
 
 enum NativAnalyticsRange: CaseIterable {
     case last24Hours

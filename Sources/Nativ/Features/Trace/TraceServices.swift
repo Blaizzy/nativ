@@ -1,5 +1,4 @@
 import Foundation
-import NativTrace
 import os
 
 @MainActor

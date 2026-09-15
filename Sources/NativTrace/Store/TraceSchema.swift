@@ -1,5 +1,4 @@
 import Foundation
-import NativSQLite
 
 enum TraceSchema {
     static let baseSQL = """

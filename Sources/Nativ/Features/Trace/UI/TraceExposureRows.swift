@@ -1,4 +1,3 @@
-import NativTrace
 import SwiftUI
 
 enum TracePalette {
@@ -14,12 +13,6 @@ enum TraceCallLabel {
         guard let round, round > 0 else { return "Call \(index)" }
         return "Call \(index) · round \(round + 1)"
     }
-}
-
-enum TraceToolChange {
-    case added
-    case redefined
-    case unchanged
 }
 
 struct TraceDisclosureSection<Content: View>: View {
@@ -73,7 +66,6 @@ struct TraceDisclosureSection<Content: View>: View {
 
 struct TraceSectionRow: View {
     let section: PromptSection
-    let isEdited: Bool
 
     @State private var isExpanded = false
 
@@ -87,9 +79,6 @@ struct TraceSectionRow: View {
                     Text(section.label)
                         .font(.callout)
                         .lineLimit(1)
-                    if isEdited {
-                        TraceOriginChip(label: "edited", tone: .warning)
-                    }
                     Spacer(minLength: 4)
                     Text("\(section.body.count) chars")
                         .font(.caption.monospacedDigit())
@@ -125,7 +114,6 @@ struct TraceSectionRow: View {
 
 struct TraceToolDescriptorRow: View {
     let tool: ToolDescriptor
-    let change: TraceToolChange
 
     @State private var isExpanded = false
 
@@ -139,11 +127,6 @@ struct TraceToolDescriptorRow: View {
                         .font(.callout.monospaced())
                         .lineLimit(1)
                     TraceOriginChip(label: originLabel, tone: .secondary)
-                    switch change {
-                    case .added: TraceOriginChip(label: "added", tone: .positive)
-                    case .redefined: TraceOriginChip(label: "schema changed", tone: .warning)
-                    case .unchanged: EmptyView()
-                    }
                     Spacer(minLength: 4)
                 }
                 .contentShape(Rectangle())
@@ -264,27 +247,5 @@ struct TraceOriginChip: View {
         case .warning: TracePalette.changed
         case .negative: TracePalette.removed
         }
-    }
-}
-
-struct TraceDiffBadges: View {
-    let diff: TraceExposureDiff
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if !diff.addedTools.isEmpty {
-                TraceOriginChip(label: "+\(diff.addedTools.count)", tone: .positive)
-            }
-            if !diff.removedTools.isEmpty {
-                TraceOriginChip(label: "−\(diff.removedTools.count)", tone: .negative)
-            }
-            if !diff.redefinedTools.isEmpty {
-                TraceOriginChip(label: "~\(diff.redefinedTools.count)", tone: .warning)
-            }
-            if !diff.editedSections.isEmpty || !diff.addedSections.isEmpty {
-                TraceOriginChip(label: "prompt changed", tone: .warning)
-            }
-        }
-        .help("How this call's exposure differs from the previous one")
     }
 }

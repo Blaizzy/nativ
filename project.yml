@@ -64,40 +64,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_EXTENSION_SDK_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: YES
         SKIP_INSTALL: YES
-  NativSQLite:
-    type: framework
-    platform: macOS
-    configFiles:
-      Debug: Configuration/Signing.xcconfig
-      Release: Configuration/Signing.xcconfig
-    sources:
-      - path: Sources/NativSQLite
-    settings:
-      base:
-        ARCHS: arm64
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
-        CODE_SIGN_IDENTITY: ""
-        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_SQLITE_BUNDLE_IDENTIFIER)
-        GENERATE_INFOPLIST_FILE: YES
-        SKIP_INSTALL: YES
-  NativTrace:
-    type: framework
-    platform: macOS
-    configFiles:
-      Debug: Configuration/Signing.xcconfig
-      Release: Configuration/Signing.xcconfig
-    sources:
-      - path: Sources/NativTrace
-    dependencies:
-      - target: NativSQLite
-    settings:
-      base:
-        ARCHS: arm64
-        MACOSX_DEPLOYMENT_TARGET: "26.0"
-        CODE_SIGN_IDENTITY: ""
-        PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_TRACE_BUNDLE_IDENTIFIER)
-        GENERATE_INFOPLIST_FILE: YES
-        SKIP_INSTALL: YES
   NativServerKit:
     type: framework
     platform: macOS
@@ -141,6 +107,8 @@ targets:
       - path: Sources/Nativ
         excludes:
           - ModelProviderIcons
+      - path: Sources/NativSQLite
+      - path: Sources/NativTrace
       - path: Sources/Nativ/ModelProviderIcons
         type: folder
         buildPhase: resources
@@ -152,8 +120,6 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
-      - target: NativTrace
-      - target: NativSQLite
       - target: VoiceDictationExtensionRuntime
         embed: true
       - package: Sparkle
@@ -218,6 +184,8 @@ targets:
     sources:
       - path: Tests/NativTests
       - path: Tests/NativTraceTests
+      - path: Sources/NativSQLite
+      - path: Sources/NativTrace
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
@@ -341,8 +309,7 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
-      - target: NativTrace
-      - target: NativSQLite
+      - target: Nativ
       - package: ZIPFoundation
         product: ZIPFoundation
       - package: MarkdownUI

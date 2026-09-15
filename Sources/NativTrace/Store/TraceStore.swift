@@ -1,5 +1,4 @@
 import Foundation
-import NativSQLite
 
 public enum TraceStoreError: Error, CustomStringConvertible {
     case unsupportedPayloadEncoding(String)

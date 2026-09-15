@@ -1,9 +1,4 @@
-import NativTrace
 import SwiftUI
-
-extension Notification.Name {
-    static let showModelTrace = Notification.Name("ShowModelTrace")
-}
 
 struct TraceInspectorView: View {
     enum Source: Hashable {

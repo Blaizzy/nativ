@@ -156,11 +156,6 @@ struct ModelConfigurationLayoutContent<Content: View, Auxiliary: View>: View {
             .padding(.top, isFullScreen ? ModelConfigurationLayoutMetrics.topInset : 0)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .showModelTrace)) { _ in
-            guard auxiliary != nil else { return }
-            showsAuxiliary = true
-            isConfigurationVisible = true
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .leading) {
             configurationResizeHandle

@@ -1,5 +1,4 @@
 import NativServerKit
-import NativTrace
 
 struct ComposedChatRequest {
     let request: MLXChatCompletionRequest

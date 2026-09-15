@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import Foundation
 import NativServerKit
-import NativTrace
 import Observation
 import UniformTypeIdentifiers
 
