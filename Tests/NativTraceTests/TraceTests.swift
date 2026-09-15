@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 
 final class TraceTests: XCTestCase {
@@ -148,6 +149,22 @@ final class TraceTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(TraceEventKind.self, from: Data(#""future""#.utf8)).rawValue, "future")
     }
 
+    func testMessageAttachmentsRoundTripAndDefaultForExistingTraces() throws {
+        let attachment = TraceAttachmentRef(
+            id: UUID(), filename: "notes.pdf", mimeType: "application/pdf"
+        )
+        let message = TraceMessageRef(
+            role: .user, messageID: "u", body: "Read this", attachments: [attachment]
+        )
+        let encoded = try JSONEncoder().encode(message)
+        XCTAssertEqual(try JSONDecoder().decode(TraceMessageRef.self, from: encoded).attachments, [attachment])
+
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "attachments")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        XCTAssertEqual(try JSONDecoder().decode(TraceMessageRef.self, from: legacyData).attachments, [])
+    }
+
     private func makeStore() throws -> TraceStore {
         try TraceStore(url: directory.appendingPathComponent("Traces.sqlite3"))
     }
@@ -160,4 +177,3 @@ final class TraceTests: XCTestCase {
         )
     }
 }
-
