@@ -160,6 +160,10 @@ struct ChatPastedTextDraft: Equatable {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    var traceProducer: ChatTraceProducer?
+    private var activeTraceCall: ChatTraceCall?
+    private var activeTurnRounds = 0
+    @Published private(set) var completedTurnCount = 0
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
     private struct QueuedChatRequest {
@@ -1746,6 +1750,33 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
+        let turn = ChatTraceTurn(sessionID: queuedRequest.sessionID, turnID: queuedRequest.id)
+        traceProducer?.turnStarted(
+            turn,
+            messageID: queuedRequest.userMessageID,
+            text: message(queuedRequest.userMessageID, in: queuedRequest.sessionID)?.content ?? "",
+            modelID: queuedRequest.settings.languageModelID
+        )
+        var outcome = TraceTurnStatus.completed
+        activeTurnRounds = 0
+        defer {
+            activeTraceCall = nil
+            traceProducer?.turnEnded(turn, status: outcome, roundCount: activeTurnRounds)
+            completedTurnCount += 1
+        }
+
+        do {
+            try await runTurn(queuedRequest, turn: turn)
+        } catch {
+            outcome = ChatIsCancellation(error) ? .cancelled : .failed
+            throw error
+        }
+    }
+
+    private func runTurn(
+        _ queuedRequest: QueuedChatRequest,
+        turn: ChatTraceTurn
+    ) async throws {
         let client = NativChatClient(
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey
@@ -1797,7 +1828,7 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest.sessionID
             )
             guard
-                let request = makeCompletionRequest(
+                let composed = makeCompletionRequest(
                     for: queuedRequest,
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
@@ -1806,6 +1837,18 @@ final class ChatViewModel: ObservableObject {
                 )
             else {
                 throw NativChatError.invalidResponse
+            }
+            let request = composed.request
+            let call = ChatTraceCall(
+                turn: turn,
+                requestID: UUID(),
+                round: toolRounds,
+                modelID: activeSettings.languageModelID
+            )
+            activeTraceCall = call
+            activeTurnRounds = toolRounds + 1
+            if let exposure = composed.exposure {
+                traceProducer?.requestComposed(exposure, in: call)
             }
 
             let streamingMessageID = assistantMessageID
@@ -1816,6 +1859,11 @@ final class ChatViewModel: ObservableObject {
                     event: event,
                     to: streamingMessageID,
                     in: streamingSessionID
+                )
+                self?.traceProducer?.delta(
+                    content: event.content,
+                    reasoning: event.reasoningContent,
+                    in: call
                 )
             }
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
@@ -1829,8 +1877,24 @@ final class ChatViewModel: ObservableObject {
                 await eventRelay.finish()
             } catch {
                 await eventRelay.cancel()
+                traceProducer?.responseFailed(
+                    message: String(describing: error),
+                    isCancellation: ChatIsCancellation(error),
+                    in: call
+                )
                 throw error
             }
+            traceProducer?.responseCompleted(
+                messageID: assistantMessageID,
+                content: completion.content,
+                reasoning: completion.reasoningContent,
+                usage: TraceUsage(
+                    promptTokens: completion.usage?.promptTokens,
+                    completionTokens: completion.usage?.completionTokens
+                ),
+                finishReason: completion.finishReason,
+                in: call
+            )
             let toolCalls = normalizedToolCalls(completion.toolCalls)
             finishAssistantMessage(
                 assistantMessageID,
@@ -2295,10 +2359,10 @@ final class ChatViewModel: ObservableObject {
                         documentContexts: prepared.result.contexts
                     )
                 else { return prepared }
-                let promptTokens = try await client.countPromptTokens(for: request).inputTokens
+                let promptTokens = try await client.countPromptTokens(for: request.request).inputTokens
                 let promptLimit = max(
                     0,
-                    effectiveContextLimit - request.maxTokens - ChatDocumentTokenBudget.safetyMargin
+                    effectiveContextLimit - request.request.maxTokens - ChatDocumentTokenBudget.safetyMargin
                 )
                 guard promptTokens > promptLimit else { return prepared }
 
@@ -2313,7 +2377,7 @@ final class ChatViewModel: ObservableObject {
                         )
                     else { return prepared }
                     measuredBasePromptTokens = try await client.countPromptTokens(
-                        for: baseRequest
+                        for: baseRequest.request
                     ).inputTokens
                 }
                 guard let basePromptTokens = measuredBasePromptTokens else { return prepared }
@@ -2322,7 +2386,7 @@ final class ChatViewModel: ObservableObject {
                     basePromptTokens: basePromptTokens,
                     documentPromptTokens: promptTokens,
                     contextLimit: effectiveContextLimit,
-                    maximumOutputTokens: request.maxTokens
+                    maximumOutputTokens: request.request.maxTokens
                 )
                 if nextLimit >= prepared.characterLimit {
                     nextLimit = max(0, prepared.characterLimit - 1)
@@ -2359,7 +2423,7 @@ final class ChatViewModel: ObservableObject {
         advertisesTools: Bool,
         settings: NativSettings,
         documentContexts: [UUID: String]
-    ) -> MLXChatCompletionRequest? {
+    ) -> ComposedChatRequest? {
         guard let modelID = settings.languageModelID,
             let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
             let assistantIndex = sessionMessages.firstIndex(where: { $0.id == assistantMessageID })
@@ -2368,10 +2432,25 @@ final class ChatViewModel: ObservableObject {
         }
 
         let precedingMessages = sessionMessages[..<assistantIndex]
-        var requestMessages = precedingMessages.compactMap { message in
-            message.apiMessage(
+        var requestMessages: [MLXChatMessage] = []
+        var sentMessageRefs: [TraceMessageRef] = []
+        for message in precedingMessages {
+            guard let apiMessage = message.apiMessage(
                 documentContext: documentContexts[message.id],
                 includesImages: queuedRequest.languageModelSupportsVision
+            ) else { continue }
+            requestMessages.append(apiMessage)
+
+            let sentBody = apiMessage.content?.plainText ?? ""
+            sentMessageRefs.append(
+                TraceMessageRef(
+                    role: TraceRole(rawValue: apiMessage.role),
+                    messageID: message.toolCallID ?? message.id.uuidString,
+                    body: sentBody,
+                    attachments: (message.role == .user ? message.imageAttachments : []).map {
+                        TraceAttachmentRef(id: $0.id, filename: $0.filename, mimeType: $0.mimeType)
+                    }
+                )
             )
         }
 
@@ -2384,9 +2463,22 @@ final class ChatViewModel: ObservableObject {
                 }
             )
             : []
+        var toolOrigins: [String: (origin: ToolOrigin, detail: String?)] = [:]
+        for definition in toolDefinitions {
+            toolOrigins[definition.function.name] = (.builtIn, nil)
+        }
         if advertisesToolsForModel {
-            toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            let customDefinitions = settings.customTools.compactMap { try? $0.definition() }
+            for definition in customDefinitions {
+                toolOrigins[definition.function.name] = (.custom, nil)
+            }
+            toolDefinitions += customDefinitions
+            let mcpDefinitions = mcpHost?.toolDefinitions() ?? []
+            let mcpServers = mcpHost?.toolServerNames() ?? [:]
+            for definition in mcpDefinitions {
+                toolOrigins[definition.function.name] = (.mcp, mcpServers[definition.function.name])
+            }
+            toolDefinitions += mcpDefinitions
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
@@ -2419,18 +2511,35 @@ final class ChatViewModel: ObservableObject {
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
         var systemParts: [String] = []
+        var systemSections: [PromptSection] = []
         if !settings.systemPrompt.isEmpty {
             systemParts.append(settings.systemPrompt)
+            systemSections.append(PromptSection(
+                origin: .userSystemPrompt, label: "System prompt", body: settings.systemPrompt
+            ))
         }
         if let projectPrompt = queuedRequest.toolScope.systemPrompt {
             systemParts.append(projectPrompt)
+            systemSections.append(PromptSection(
+                origin: .project,
+                label: queuedRequest.toolScope.projectName ?? "Project",
+                body: projectPrompt
+            ))
         }
         // Inject the built-in tool-use skill when tools are available.
         if !toolDefinitions.isEmpty {
             systemParts.append(NativSkill.builtInToolGuide.instructions)
+            systemSections.append(PromptSection(
+                origin: .toolGuide,
+                label: NativSkill.builtInToolGuide.name,
+                body: NativSkill.builtInToolGuide.instructions
+            ))
         }
         for skill in settings.skills where skill.isEnabled && !skill.instructions.isEmpty {
             systemParts.append(skill.instructions)
+            systemSections.append(PromptSection(
+                origin: .skill, label: skill.name, body: skill.instructions
+            ))
         }
         if !systemParts.isEmpty {
             requestMessages.insert(
@@ -2438,7 +2547,7 @@ final class ChatViewModel: ObservableObject {
                 at: 0
             )
         }
-        return MLXChatCompletionRequest(
+        let wireRequest = MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
             maxTokens: settings.maxTokens,
@@ -2460,6 +2569,35 @@ final class ChatViewModel: ObservableObject {
             toolChoice: tools == nil ? nil : "auto",
             stream: true
         )
+
+        guard traceProducer != nil else {
+            return ComposedChatRequest(request: wireRequest, exposure: nil)
+        }
+
+        let exposure = RequestComposedPayload(
+            systemSections: systemSections,
+            tools: (tools ?? []).map { definition in
+                let origin = toolOrigins[definition.function.name]
+                return ToolDescriptor(
+                    name: definition.function.name,
+                    origin: origin?.origin ?? .builtIn,
+                    originDetail: origin?.detail,
+                    summary: definition.function.description,
+                    parameters: try? TraceJSON(encoding: definition.function.parameters)
+                )
+            },
+            parameters: SamplingParameters(wireRequest),
+            messages: sentMessageRefs,
+            omissions: (documentOmissionsBySessionID[queuedRequest.sessionID] ?? []).map {
+                TraceOmission(
+                    subject: $0.filename,
+                    reason: $0.reason == .contextLimit ? "context limit" : "unreadable"
+                )
+            },
+            advertisesTools: advertisesToolsForModel
+        )
+
+        return ComposedChatRequest(request: wireRequest, exposure: exposure)
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {
@@ -2498,7 +2636,15 @@ final class ChatViewModel: ObservableObject {
         in sessionID: UUID,
         status: ChatTranscriptMessage.ToolStatus = .running
     ) -> Bool {
-        insertMessage(
+        if let name = call.function?.name, let traceCall = activeTraceCall {
+            traceProducer?.toolCall(
+                callID: call.id ?? id.uuidString,
+                name: name,
+                argumentsJSON: call.function?.arguments,
+                in: traceCall
+            )
+        }
+        return insertMessage(
             ChatTranscriptMessage(
                 id: id,
                 role: .tool,
@@ -2512,6 +2658,43 @@ final class ChatViewModel: ObservableObject {
             after: messageID,
             in: sessionID
         )
+    }
+
+    private func recordToolOutcome(
+        _ id: UUID,
+        in sessionID: UUID,
+        status: ChatTranscriptMessage.ToolStatus,
+        content: String
+    ) {
+        guard let traceCall = activeTraceCall, let message = message(id, in: sessionID) else {
+            return
+        }
+        let callID = message.toolCallID ?? id.uuidString
+
+        switch status {
+        case .awaitingConsent:
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: .requested, in: traceCall
+            )
+        case .declined:
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: .denied, in: traceCall
+            )
+        case .running where message.toolStatus == .awaitingConsent:
+            traceProducer?.toolConsent(
+                callID: callID, name: message.toolName, decision: .approved, in: traceCall
+            )
+        case .succeeded, .failed, .cancelled:
+            traceProducer?.toolResult(
+                callID: callID,
+                name: message.toolName,
+                output: content,
+                isError: status != .succeeded,
+                in: traceCall
+            )
+        case .preparing, .awaitingImageModelSelection, .running:
+            break
+        }
     }
 
     private func insertMessage(
@@ -2580,6 +2763,7 @@ final class ChatViewModel: ObservableObject {
         content: String,
         attachments: [ChatImageAttachment]
     ) {
+        recordToolOutcome(id, in: sessionID, status: status, content: content)
         updateMessage(id, in: sessionID) { message in
             message.content = content
             message.imageAttachments = attachments
