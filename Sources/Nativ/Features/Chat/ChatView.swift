@@ -68,18 +68,12 @@ struct ChatView: View {
         }
         .onAppear {
             chat.mcpHost = mcpHost
-            syncTraceRecording()
+            chat.traceProducer = TraceServices.shared.start()
             mcpHost.reload(servers: model.settings.mcpServers)
             chat.refreshPendingImageModelSelections()
         }
         .onChange(of: model.settings.mcpServers) { _, servers in
             mcpHost.reload(servers: servers)
-        }
-        .onChange(of: model.settings.traceRecordingEnabled) { _, _ in
-            syncTraceRecording()
-        }
-        .onChange(of: model.settings.traceRetentionWindow) { _, window in
-            TraceServices.shared.applyRetention(window)
         }
         .onReceive(NotificationCenter.default.publisher(for: .routineDidSaveChatSession)) { _ in
             chat.reloadPersistedSessions()
@@ -88,13 +82,6 @@ struct ChatView: View {
             chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
-    }
-
-    private func syncTraceRecording() {
-        chat.traceProducer = TraceServices.shared.producer(
-            enabled: model.settings.traceRecordingEnabled
-        )
-        TraceServices.shared.applyRetention(model.settings.traceRetentionWindow)
     }
 
     @ViewBuilder

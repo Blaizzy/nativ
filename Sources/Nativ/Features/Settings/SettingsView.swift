@@ -58,7 +58,6 @@ struct SettingsView: View {
                 pageHeader
                 generalSettings
                 projectSettings
-                traceSettings
                 permissionSettings
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -195,15 +194,6 @@ struct SettingsView: View {
         }
     }
 
-    private var traceSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Model traces")
-                .font(.headline)
-
-            TraceRecordingCard(settings: traceSettingsBinding)
-        }
-    }
-
     private var permissionSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Permissions")
@@ -248,13 +238,6 @@ struct SettingsView: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
         }
-    }
-
-    private var traceSettingsBinding: Binding<NativSettings> {
-        Binding(
-            get: { model.settings },
-            set: { model.settings = $0.normalized() }
-        )
     }
 
     private var projectToolsEnabledBinding: Binding<Bool> {

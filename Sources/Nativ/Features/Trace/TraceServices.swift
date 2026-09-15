@@ -9,7 +9,6 @@ final class TraceServices {
     private let makeStore: () throws -> TraceStore
     private var store: TraceStore?
     private(set) var producer: ChatTraceProducer?
-    private var lastAppliedRetention: TraceRetentionWindow?
 
     init(makeStore: @escaping () throws -> TraceStore = { try TraceStore() }) {
         self.makeStore = makeStore
@@ -20,20 +19,11 @@ final class TraceServices {
         if let producer { return producer }
 
         guard let store = openStore() else { return nil }
+        Task { try? await store.prune(retaining: .default) }
         let recorder = TraceRecorder(store: store)
         let producer = ChatTraceProducer(recorder: recorder)
         self.producer = producer
         return producer
-    }
-
-    func producer(enabled: Bool) -> ChatTraceProducer? {
-        enabled ? start() : nil
-    }
-
-    func applyRetention(_ window: TraceRetentionWindow) {
-        guard window != lastAppliedRetention, let store = openStore() else { return }
-        lastAppliedRetention = window
-        Task { try? await store.prune(retaining: window) }
     }
 
     private func openStore() -> TraceStore? {
@@ -67,15 +57,5 @@ final class TraceServices {
     func stop() {
         producer = nil
         store = nil
-    }
-}
-
-extension NativSettings {
-    var traceRetentionWindow: TraceRetentionWindow {
-        guard traceRecordingEnabled else { return .clearAll }
-        return TraceRetentionWindow(
-            days: traceRetentionDays == 0 ? nil : traceRetentionDays,
-            maximumTraces: traceMaximumTraces == 0 ? nil : traceMaximumTraces
-        )
     }
 }
