@@ -700,6 +700,111 @@ final class AudioInputEngineSessionTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
     }
 
+    func testCanceledStartupKeepsCapturedAudioForStop() async throws {
+        for stopFirst in [false, true] {
+            for lateDeviceError in [false, true] {
+                let directory = try temporaryDirectory()
+                let url = directory.appendingPathComponent("recording.wav")
+                let entered = expectation(description: "Audio arrived during startup")
+                let gate = AudioInputTestGate()
+                let engine = AudioInputEngineProbe()
+                engine.beforeReady = { [weak engine] in
+                    engine?.deliver(sampleRate: 48_000, channels: 1, frames: 480)
+                    entered.fulfill()
+                    await gate.wait()
+                    if lateDeviceError { throw VoiceAudioRecorderError.inputDeviceUnavailable }
+                    try Task.checkCancellation()
+                }
+                let recorder = VoiceAudioRecorder(inputSession: AudioInputEngineSession(retryDelays: []) { engine })
+                recorder.onRecordingFailure = { _, _ in XCTFail("Cancellation reported a recording failure") }
+                let startup = Task { try await recorder.start(outputURL: url) }
+                await fulfillment(of: [entered], timeout: 2)
+                startup.cancel()
+                let savedURL: URL?
+                if stopFirst {
+                    savedURL = await recorder.stop()
+                    gate.open()
+                } else {
+                    gate.open()
+                    _ = await startup.result
+                    XCTAssertFalse(engine.isRunning)
+                    savedURL = await recorder.stop()
+                }
+                do { _ = try await startup.value; XCTFail("Canceled startup succeeded") }
+                catch { XCTAssertTrue(error is CancellationError) }
+                XCTAssertEqual(savedURL, url)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+                if FileManager.default.fileExists(atPath: url.path) {
+                    XCTAssertEqual(try AVAudioFile(forReading: url).length, 480)
+                }
+                XCTAssertNil(recorder.lastRecordingError)
+                XCTAssertEqual(recorder.lastRecordingDuration ?? 0, 0.01, accuracy: 0.0001)
+                XCTAssertFalse(recorder.isRecording)
+                XCTAssertEqual(engine.stopCount, 1)
+                XCTAssertFalse(MicrophoneCaptureActivity.shared.isRecording)
+            }
+        }
+    }
+
+    func testFinishingCanceledEmptyStartupReturnsNoRecording() async throws {
+        let directory = try temporaryDirectory()
+        let url = directory.appendingPathComponent("empty.wav")
+        let entered = expectation(description: "Startup has no audio yet")
+        let gate = AudioInputTestGate()
+        let engine = AudioInputEngineProbe()
+        engine.beforeReady = {
+            entered.fulfill()
+            await gate.wait()
+            try Task.checkCancellation()
+        }
+        let recorder = VoiceAudioRecorder(inputSession: AudioInputEngineSession(retryDelays: []) { engine })
+        recorder.onRecordingFailure = { _, _ in XCTFail("Empty cancellation reported a failure") }
+        let startup = Task { try await recorder.start(outputURL: url) }
+        await fulfillment(of: [entered], timeout: 2)
+        startup.cancel()
+        gate.open()
+        _ = await startup.result
+        let savedURL = await recorder.stop()
+        XCTAssertNil(savedURL)
+        XCTAssertNil(recorder.lastRecordingError)
+        XCTAssertNil(recorder.lastRecordingDuration)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertFalse(engine.isRunning)
+        XCTAssertFalse(MicrophoneCaptureActivity.shared.isRecording)
+    }
+
+    func testExplicitDiscardRemovesAudioFromCanceledStartup() async throws {
+        for discardFirst in [false, true] {
+            let directory = try temporaryDirectory()
+            let url = directory.appendingPathComponent("discarded.wav")
+            let entered = expectation(description: "Audio arrived before discard")
+            let gate = AudioInputTestGate()
+            let engine = AudioInputEngineProbe()
+            engine.beforeReady = { [weak engine] in
+                engine?.deliver(sampleRate: 48_000, channels: 1, frames: 480)
+                entered.fulfill()
+                await gate.wait()
+                try Task.checkCancellation()
+            }
+            let recorder = VoiceAudioRecorder(inputSession: AudioInputEngineSession(retryDelays: []) { engine })
+            let startup = Task { try await recorder.start(outputURL: url) }
+            await fulfillment(of: [entered], timeout: 2)
+            startup.cancel()
+            if discardFirst {
+                await recorder.discard()
+                gate.open()
+            } else {
+                gate.open()
+                _ = await startup.result
+                await recorder.discard()
+            }
+            _ = await startup.result
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+            XCTAssertFalse(engine.isRunning)
+            XCTAssertFalse(MicrophoneCaptureActivity.shared.isRecording)
+        }
+    }
+
     func testRecordingActivityRequiresAllOwnersToRelease() async {
         let activity = MicrophoneCaptureActivity()
         let first = UUID(), second = UUID()
@@ -727,6 +832,7 @@ private final class AudioInputEngineProbe: AudioInputEngineDriving {
     var onConfigurationChange: (() -> Void)?
     var onStart: (() -> Void)?
     var beforeStart: (() async -> Void)?
+    var beforeReady: (() async throws -> Void)?
     var beforeStop: (() async -> Void)?
     private var generation = UUID()
     var stopCount = 0
@@ -747,6 +853,8 @@ private final class AudioInputEngineProbe: AudioInputEngineDriving {
         if failsToStart { throw VoiceAudioRecorderError.inputDeviceUnavailable }
         self.deviceUniqueID = deviceUniqueID
         self.tap = tap
+        try await beforeReady?()
+        guard generation == request else { throw CancellationError() }
         isRunning = true
         onStart?()
     }

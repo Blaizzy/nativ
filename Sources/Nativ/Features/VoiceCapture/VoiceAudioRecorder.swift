@@ -234,6 +234,10 @@ final class VoiceAudioRecorder {
             try Task.checkCancellation()
             guard recordingID == id else { throw CancellationError() }
         } catch {
+            if Task.isCancelled || error is CancellationError {
+                if recordingID == id { await inputSession.stop() }
+                throw CancellationError()
+            }
             if recordingID == id { await discard() }
             throw error
         }
