@@ -5,6 +5,7 @@ struct TraceExposureCard: View {
     let label: String
     let modelID: String?
     var isHighlighted = false
+    let onOpenArtifact: (UUID) -> Void
 
     @State private var isExpanded = false
 
@@ -109,7 +110,7 @@ struct TraceExposureCard: View {
         ) {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(exposure.messages) { message in
-                    TraceResolvedMessageRow(message: message)
+                    TraceResolvedMessageRow(message: message, onOpenArtifact: onOpenArtifact)
                 }
             }
         }

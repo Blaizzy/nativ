@@ -14,6 +14,7 @@ struct ChatView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
+    let onOpenArtifact: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
     @State private var isDropTargeted = false
@@ -89,7 +90,8 @@ struct ChatView: View {
         if let sessionID = chat.currentSessionID {
             TraceInspectorView(
                 source: .session(sessionID),
-                reloadToken: chat.completedTurnCount
+                reloadToken: chat.completedTurnCount,
+                onOpenArtifact: onOpenArtifact
             )
         } else {
             ContentUnavailableView(
@@ -2183,6 +2185,7 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
+        onOpenArtifact: { _ in },
         onExploreImageModels: { _ in },
         onFindDraftModels: { _ in }
     )

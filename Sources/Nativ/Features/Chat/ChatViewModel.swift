@@ -2446,7 +2446,10 @@ final class ChatViewModel: ObservableObject {
                 TraceMessageRef(
                     role: TraceRole(rawValue: apiMessage.role),
                     messageID: message.toolCallID ?? message.id.uuidString,
-                    body: sentBody
+                    body: sentBody,
+                    attachments: (message.role == .user ? message.imageAttachments : []).map {
+                        TraceAttachmentRef(id: $0.id, filename: $0.filename, mimeType: $0.mimeType)
+                    }
                 )
             )
         }

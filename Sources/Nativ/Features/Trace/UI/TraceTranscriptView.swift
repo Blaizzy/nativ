@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TraceTranscriptView: View {
     @ObservedObject var model: TraceInspectorViewModel
+    let onOpenArtifact: (UUID) -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -53,7 +54,8 @@ struct TraceTranscriptView: View {
                     exposure: call.exposure,
                     label: call.title,
                     modelID: item.scope.modelID,
-                    isHighlighted: model.selectedCallID == item.id
+                    isHighlighted: model.selectedCallID == item.id,
+                    onOpenArtifact: onOpenArtifact
                 )
                 .id(item.id)
             } else {

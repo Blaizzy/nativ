@@ -12,6 +12,7 @@ struct TraceInspectorView: View {
 
     let source: Source
     var reloadToken: AnyHashable?
+    let onOpenArtifact: (UUID) -> Void
 
     @StateObject private var model = TraceInspectorViewModel()
 
@@ -41,7 +42,7 @@ struct TraceInspectorView: View {
                 message: "Nothing has been recorded here yet. Recording can be turned off in Settings."
             )
         } else {
-            TraceTranscriptView(model: model)
+            TraceTranscriptView(model: model, onOpenArtifact: onOpenArtifact)
         }
     }
 

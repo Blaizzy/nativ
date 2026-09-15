@@ -167,14 +167,35 @@ struct TraceToolDescriptorRow: View {
 
 struct TraceResolvedMessageRow: View {
     let message: TraceMessageRef
+    let onOpenArtifact: (UUID) -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            TraceOriginChip(label: message.role.rawValue, tone: .secondary)
-            Text(message.body)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer(minLength: 4)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                TraceOriginChip(label: message.role.rawValue, tone: .secondary)
+                Text(message.body)
+                    .font(.callout)
+                    .lineLimit(2)
+                Spacer(minLength: 4)
+            }
+
+            ForEach(message.attachments) { attachment in
+                Button {
+                    onOpenArtifact(attachment.id)
+                } label: {
+                    HStack(spacing: 6) {
+                        FileTypeIcon(fileExtension: attachment.fileExtension, size: 16)
+                        Text(attachment.filename)
+                            .lineLimit(1)
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption2)
+                    }
+                    .font(.callout)
+                }
+                .buttonStyle(.plain)
+                .help("Open \(attachment.filename) in Artifacts")
+                .accessibilityLabel("Open \(attachment.filename) in Artifacts")
+            }
         }
     }
 }

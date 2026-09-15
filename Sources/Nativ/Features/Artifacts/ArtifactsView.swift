@@ -71,6 +71,8 @@ struct ArtifactsView: View {
     @ObservedObject var store: ArtifactStore
     let semanticSearch: ArtifactSemanticSearchConfig?
     var titleLeadingInset: CGFloat = 0
+    var requestedPreviewID: Artifact.ID?
+    let onPreviewOpened: (Artifact.ID) -> Void
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
     let onUseAsReference: (Artifact) -> Void
@@ -479,6 +481,10 @@ struct ArtifactsView: View {
         .onKeyPress(action: handleKey)
         .task {
             warmSemanticIndex()
+            openRequestedPreview(requestedPreviewID)
+        }
+        .onChange(of: requestedPreviewID) { _, id in
+            openRequestedPreview(id)
         }
         .onChange(of: search) { _, _ in
             scheduleSemanticSearch()
@@ -489,6 +495,7 @@ struct ArtifactsView: View {
         }
         .onChange(of: store.artifacts.count) { _, _ in
             warmSemanticIndex()
+            openRequestedPreview(requestedPreviewID)
         }
         .onChange(of: searchIndex.indexedCount) { _, _ in
             scheduleSemanticSearch()
@@ -1073,6 +1080,18 @@ struct ArtifactsView: View {
         } else {
             previewID = artifact.id
         }
+    }
+
+    private func openRequestedPreview(_ id: Artifact.ID?) {
+        guard let id, store.artifacts.contains(where: { $0.id == id }) else { return }
+        search = ""
+        kindFilter = nil
+        sourceFilter = nil
+        favoritesOnly = false
+        dateFilter = .all
+        groupByChat = false
+        previewID = id
+        onPreviewOpened(id)
     }
 
     private static func bucketTitle(for date: Date) -> String {
