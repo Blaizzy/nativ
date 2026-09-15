@@ -14,6 +14,7 @@ struct ChatView: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     @Binding var showsConfiguration: Bool
+    let onOpenArtifact: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
     @State private var isDropTargeted = false
@@ -23,7 +24,13 @@ struct ChatView: View {
         let project = chat.currentProjectID.flatMap { projects.project(withID: $0) }
         ModelConfigurationLayout(
             model: model,
-            isConfigurationVisible: $showsConfiguration
+            isConfigurationVisible: $showsConfiguration,
+            auxiliary: ModelConfigurationAuxiliaryPane(
+                title: "Trace",
+                systemImage: "text.magnifyingglass"
+            ) {
+                traceInspector
+            }
         ) {
             ChatTranscriptView(
                 model: model,
@@ -76,6 +83,23 @@ struct ChatView: View {
             chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
+    }
+
+    @ViewBuilder
+    private var traceInspector: some View {
+        if let sessionID = chat.currentSessionID {
+            TraceInspectorView(
+                source: .session(sessionID),
+                reloadToken: chat.completedTurnCount,
+                onOpenArtifact: onOpenArtifact
+            )
+        } else {
+            ContentUnavailableView(
+                "No chat selected",
+                systemImage: "text.magnifyingglass",
+                description: Text("Open a chat to see what its model calls were shown.")
+            )
+        }
     }
 
     private var dropOverlay: some View {
@@ -2161,6 +2185,7 @@ private struct ChatEmptyTranscriptView: View {
         workspaceMode: .chat,
         onSelectWorkspaceMode: { _ in },
         showsConfiguration: .constant(true),
+        onOpenArtifact: { _ in },
         onExploreImageModels: { _ in },
         onFindDraftModels: { _ in }
     )
