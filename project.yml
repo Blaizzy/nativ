@@ -108,6 +108,7 @@ targets:
         excludes:
           - ModelProviderIcons
       - path: Sources/NativSQLite
+      - path: Sources/NativTrace
       - path: Sources/Nativ/ModelProviderIcons
         type: folder
         buildPhase: resources
@@ -186,6 +187,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
+      - path: Tests/NativTraceTests
+      - path: Sources/NativSQLite
+      - path: Sources/NativTrace
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
@@ -317,6 +321,7 @@ targets:
     dependencies:
       - target: NativServerKit
       - target: NativExtensionSDK
+      - target: Nativ
       - package: ZIPFoundation
         product: ZIPFoundation
       - package: Sparkle
