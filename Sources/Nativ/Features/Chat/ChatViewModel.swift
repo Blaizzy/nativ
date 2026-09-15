@@ -1268,6 +1268,48 @@ final class ChatViewModel: ObservableObject {
         imageModelSelectionRequests[toolMessageID]
     }
 
+    private var visibleImageModelSelectionID: UUID? {
+        ChatPendingDecisionScope.soleID(
+            in: imageModelSelectionRequests,
+            matching: currentSessionID
+        ) { $0.sessionID }
+    }
+
+    private var visibleToolConsentID: UUID? {
+        ChatPendingDecisionScope.soleID(
+            in: toolConsentGate.pendingSessions,
+            matching: currentSessionID
+        ) { $0 }
+    }
+
+    func highlightImageModel(_ modelID: String) {
+        guard let toolMessageID = visibleImageModelSelectionID,
+            imageModelSelectionRequests[toolMessageID]?.offers(modelID) == true
+        else {
+            return
+        }
+        imageModelSelectionRequests[toolMessageID]?.highlightedModelID = modelID
+    }
+
+    func moveImageModelHighlight(by offset: Int) -> Bool {
+        guard let toolMessageID = visibleImageModelSelectionID,
+            let request = imageModelSelectionRequests[toolMessageID],
+            request.canMoveHighlight
+        else {
+            return false
+        }
+        imageModelSelectionRequests[toolMessageID] = request.movingHighlight(by: offset)
+        return true
+    }
+
+    func cancelPendingToolDecision() {
+        if let toolMessageID = visibleToolConsentID {
+            denyToolConsent(toolMessageID)
+        } else if let toolMessageID = visibleImageModelSelectionID {
+            cancelImageModelSelection(toolMessageID)
+        }
+    }
+
     func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
         guard let request = imageModelSelectionRequests[toolMessageID],
             let selectedModel = ChatImageModelSelection.selectedModel(
@@ -1368,11 +1410,7 @@ final class ChatViewModel: ObservableObject {
                     else {
                         continue
                     }
-                    self?.imageModelSelectionRequests[toolMessageID] =
-                        ChatImageModelSelectionRequest(
-                            operation: operation,
-                            models: models
-                        )
+                    self?.imageModelSelectionRequests[toolMessageID]?.models = models
                 } catch is CancellationError {
                     return
                 } catch {
@@ -1383,8 +1421,11 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
-        await toolConsentGate.awaitDecision(for: toolMessageID)
+    private func awaitToolConsent(
+        for toolMessageID: UUID,
+        in sessionID: UUID
+    ) async -> Bool {
+        await toolConsentGate.awaitDecision(for: toolMessageID, inSession: sessionID)
     }
 
     func cancel() {
@@ -1883,7 +1924,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved, isCancelled: Task.isCancelled)
                     {
@@ -1948,7 +1989,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved,
                         isCancelled: Task.isCancelled
@@ -1999,7 +2040,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved,
                         isCancelled: Task.isCancelled
@@ -2042,7 +2083,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved, isCancelled: Task.isCancelled)
                     {
@@ -2165,6 +2206,8 @@ final class ChatViewModel: ObservableObject {
                                 )
                             }
 
+                            var request = request
+                            request.sessionID = queuedRequest.sessionID
                             let selectedModelID = await self.imageModelSelectionGate
                                 .awaitSelection(for: toolMessageID) {
                                     self.imageModelSelectionRequests[toolMessageID] = request
