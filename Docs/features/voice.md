@@ -28,6 +28,29 @@ the transcript without pressing Return.
 
 ## Shortcuts and modes
 
+### “Hey Nativ” wake word
+
+Enable **Audio → Shortcuts → Hey Nativ** to start dictation by saying **“hey nativ”**.
+Wait for the recording indicator, then speak. Two seconds of silence finishes the recording
+and inserts the transcript through the normal dictation flow. You can also use the record
+shortcut to finish or the overlay's cancel button to discard it. The wake phrase is heard
+before recording starts, so it is not included in the transcript. Wake-started recordings
+cancel after ten seconds without speech and finish after at most two minutes.
+
+The setting is off by default and independent of the keyboard's hands-free mode. When enabled,
+it keeps the selected microphone active while the Audio extension is running. Wake recognition
+uses macOS's on-device English speech model (which may download on first use), independently
+of the selected dictation language or local server. Background audio stays in memory and is
+never saved. The recognizer also accepts the equivalent spoken spelling “hey native”.
+
+Listening pauses during dictation and transcription, meeting/voice-note capture, audio-library
+playback, and system sleep or an inactive login session. Pausing playback resumes wake-word
+listening; resuming playback pauses it again. Listening resumes automatically after other audio activity.
+Turning the setting off or disabling the Audio extension stops listening. The settings panel
+shows preparation, listening, and error status with **Try Again** for recovery.
+
+### Keyboard shortcuts
+
 | Action | Default | Behavior |
 |---|---|---|
 | Record | `Control + Option + Command` | Two capture modes (below). |
