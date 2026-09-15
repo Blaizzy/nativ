@@ -293,7 +293,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         XCTAssertNil(model.drafterKind)
     }
 
-    func testGGUFTaggedSafetensorsRepositoryRemainsVisible() throws {
+    func testGGUFTaggedSafetensorsRepositoryIsIdentifiedAsGGUF() throws {
         let model = try decodeModel(
             id: "test/model-GGUF",
             pipelineTag: "text-generation",
@@ -301,9 +301,38 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             safetensors: ["parameters": ["F16": 1_000]]
         )
 
-        XCTAssertTrue(
-            HuggingFaceCapabilityFilter.matches(model, capabilities: [.text])
+        XCTAssertTrue(model.isGGUF)
+    }
+
+    func testGGUFIdentificationChecksEachMetadataFieldIgnoringCase() throws {
+        let models = [
+            try decodeModel(id: "test/model-GgUf", pipelineTag: "text-generation"),
+            try decodeModel(pipelineTag: "text-generation", libraryName: "GGUF"),
+            try decodeModel(pipelineTag: "text-generation", tags: ["safetensors", "gguf"]),
+        ]
+
+        for model in models {
+            XCTAssertTrue(model.isGGUF, "Expected GGUF metadata to exclude \(model.id)")
+        }
+    }
+
+    func testSafetensorsRepositoryWithoutGGUFMetadataIsNotExcluded() throws {
+        let model = try decodeModel(
+            id: "mlx-community/model-4bit",
+            pipelineTag: "text-generation",
+            libraryName: "mlx",
+            tags: ["safetensors", "4-bit"],
+            safetensors: ["parameters": ["F16": 1_000]]
         )
+
+        XCTAssertFalse(model.isGGUF)
+        XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
+    }
+
+    func testMissingOptionalMetadataDoesNotIdentifyRepositoryAsGGUF() throws {
+        let model = try decodeModel(pipelineTag: "text-generation")
+
+        XCTAssertFalse(model.isGGUF)
     }
 
     func testGGUFArtifactsAreExcludedFromSnapshotDownloads() {
@@ -328,6 +357,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
     private func decodeModel(
         id: String = "test/model",
         pipelineTag: String,
+        libraryName: String? = nil,
         tags: [String] = [],
         safetensors: [String: Any]? = nil,
         config: [String: Any]? = nil
@@ -337,6 +367,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             "pipeline_tag": pipelineTag,
             "tags": tags,
         ]
+        payload["library_name"] = libraryName
         payload["safetensors"] = safetensors
         payload["config"] = config
         let data = try JSONSerialization.data(withJSONObject: payload)

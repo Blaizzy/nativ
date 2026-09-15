@@ -650,6 +650,7 @@ public final class NativMetricsClient: @unchecked Sendable {
 
 public final class NativProcessController: @unchecked Sendable {
     public typealias OutputHandler = @Sendable (String) -> Void
+    public typealias PrefillHandler = @Sendable ([NativPrefillEvent]) -> Void
     public typealias TerminationHandler = @Sendable (Int32) -> Void
 
     private let lock = NSLock()
@@ -657,6 +658,7 @@ public final class NativProcessController: @unchecked Sendable {
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
     private var outputHandler: OutputHandler?
+    private var prefillHandler: PrefillHandler?
     private var terminationHandler: TerminationHandler?
 
     public var onOutput: OutputHandler? {
@@ -667,6 +669,11 @@ public final class NativProcessController: @unchecked Sendable {
     public var onTermination: TerminationHandler? {
         get { lock.withLock { terminationHandler } }
         set { lock.withLock { terminationHandler = newValue } }
+    }
+
+    public var onPrefillProgress: PrefillHandler? {
+        get { lock.withLock { prefillHandler } }
+        set { lock.withLock { prefillHandler = newValue } }
     }
 
     public init() {}
@@ -757,11 +764,16 @@ public final class NativProcessController: @unchecked Sendable {
 
     private func observe(pipe: Pipe) {
         let handle = pipe.fileHandleForReading
+        let prefillParser = NativPrefillOutputParser()
         handle.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
                 handle.readabilityHandler = nil
                 return
+            }
+            let events = prefillParser.consume(data)
+            if !events.isEmpty {
+                self?.onPrefillProgress?(events)
             }
             self?.onOutput?(String(decoding: data, as: UTF8.self))
         }

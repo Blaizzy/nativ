@@ -11,6 +11,14 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
   it renders in a collapsible panel separate from the final answer.
 - Per-response metrics (time to first token, decode speed, token counts) are recorded and
   surfaced from the analytics store.
+- During prefill, a “Reading prompt” status pill with a circular progress ring and
+  percentage appears next to the model's name above the active assistant response,
+  including responses that use tools. Hover over the pill for processed/total tokens.
+  This shared server activity includes requests from other windows and API clients.
+  Progress starts at 0%, advances with processed tokens
+  (including cached tokens), briefly holds at 100%, then fades out. Animations respect
+  Reduce Motion. Runtimes that report only prefill start/end advance directly from 0% to
+  100% when prefill completes.
 - Image attachments accompany a user message for vision-capable models.
 - The active model is chosen from the model picker; only language-capable models are
   selectable as the conversation model.

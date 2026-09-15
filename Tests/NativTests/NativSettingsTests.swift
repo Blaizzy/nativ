@@ -220,6 +220,57 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
     }
 
+    func testCachedModelDiscoveryDefaultsToServedForNewAndLegacySettings() throws {
+        let legacyData = try PropertyListSerialization.data(
+            fromPropertyList: ["serverPort": 8080],
+            format: .xml,
+            options: 0
+        )
+        let legacy = try PropertyListDecoder().decode(NativSettings.self, from: legacyData)
+
+        for settings in [NativSettings(), legacy] {
+            XCTAssertFalse(settings.cachedModelDiscoveryEnabled)
+            XCTAssertEqual(settings.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"], "served")
+        }
+    }
+
+    func testCachedModelDiscoveryRoundTripsAndUsesConfiguredCache() throws {
+        for enabled in [false, true] {
+            let settings = NativSettings(
+                modelSearchPath: "~/custom-hf-cache",
+                cachedModelDiscoveryEnabled: enabled
+            )
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self,
+                from: PropertyListEncoder().encode(settings)
+            )
+
+            XCTAssertEqual(decoded.cachedModelDiscoveryEnabled, enabled)
+            XCTAssertEqual(
+                decoded.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"],
+                enabled ? "hf-cache" : "served"
+            )
+            XCTAssertEqual(
+                decoded.launchEnvironment["HF_HUB_CACHE"],
+                NSString(string: "~/custom-hf-cache").expandingTildeInPath
+            )
+            XCTAssertFalse(decoded.launchArguments.contains("--model"))
+        }
+    }
+
+    func testCachedModelDiscoveryRequiresRestartInBothDirectionsAndCanBeReverted() {
+        for enabled in [false, true] {
+            let original = NativSettings(cachedModelDiscoveryEnabled: enabled)
+            var changed = original
+            changed.cachedModelDiscoveryEnabled.toggle()
+
+            XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
+
+            changed.cachedModelDiscoveryEnabled = enabled
+            XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
+        }
+    }
+
     func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {
         let settings = NativSettings(serverAPIKey: "  nativ_1234567890abcdef\n")
         let normalized = settings.normalized()

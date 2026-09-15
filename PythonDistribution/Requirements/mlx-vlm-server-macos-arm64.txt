@@ -29,7 +29,8 @@ mdurl==0.1.2
 miniaudio==1.71
 mlx-audio>=0.5.0
 mlx-metal>=0.32.0
-mlx-vlm>=0.6.10
+# Model discovery must support explicit served / hf-cache modes.
+mlx-vlm>=0.7.0
 mlx>=0.32.0
 multidict==6.7.1
 numpy==2.4.4

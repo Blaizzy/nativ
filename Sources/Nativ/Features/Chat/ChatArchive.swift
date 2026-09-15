@@ -48,6 +48,7 @@ enum ChatArchiveError: Error, Equatable, LocalizedError {
     case invalidFormat
     case unsupportedVersion(Int)
     case missingModelRepositoryID
+    case duplicateMessageIDs
     case invalidAttachment(String)
 
     var errorDescription: String? {
@@ -58,6 +59,8 @@ enum ChatArchiveError: Error, Equatable, LocalizedError {
             "This chat export uses unsupported version \(version)."
         case .missingModelRepositoryID:
             "The chat export does not identify its model."
+        case .duplicateMessageIDs:
+            "The chat export contains duplicate message identifiers."
         case let .invalidAttachment(filename):
             "The attachment “\(filename)” contains invalid data."
         }
@@ -89,8 +92,10 @@ enum ChatArchiveCodec {
     static func importedSession(from archive: ChatArchive, now: Date = .now) throws -> ChatSession {
         try validate(archive)
 
+        let messageIDs = Dictionary(uniqueKeysWithValues: archive.chat.messages.map { ($0.id, UUID()) })
         let messages = archive.chat.messages.map { message in
-            ChatTranscriptMessage(
+            var imported = ChatTranscriptMessage(
+                id: messageIDs[message.id] ?? UUID(),
                 role: message.role,
                 content: message.content,
                 reasoningContent: message.reasoningContent,
@@ -112,6 +117,12 @@ enum ChatArchiveCodec {
                 toolStatus: historicalStatus(message.toolStatus),
                 toolArguments: message.toolArguments
             )
+            imported.annotations = message.annotations.map { annotation in
+                var annotation = annotation
+                annotation.sourceMessageID = messageIDs[annotation.sourceMessageID] ?? annotation.sourceMessageID
+                return annotation
+            }
+            return imported
         }
 
         return ChatSession(
@@ -169,6 +180,9 @@ enum ChatArchiveCodec {
         }
         guard !archive.modelRepositoryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ChatArchiveError.missingModelRepositoryID
+        }
+        guard Set(archive.chat.messages.map(\.id)).count == archive.chat.messages.count else {
+            throw ChatArchiveError.duplicateMessageIDs
         }
 
         for attachment in archive.chat.messages.flatMap(\.imageAttachments) {

@@ -15,9 +15,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
-  MarkdownUI:
-    url: https://github.com/gonzalezreal/swift-markdown-ui
-    exactVersion: 2.4.1
+  SwiftCMark:
+    url: https://github.com/swiftlang/swift-cmark
+    exactVersion: 0.8.0
   Highlightr:
     url: https://github.com/raspu/Highlightr
     exactVersion: 2.3.0
@@ -124,8 +124,10 @@ targets:
         embed: true
       - package: Sparkle
         product: Sparkle
-      - package: MarkdownUI
-        product: MarkdownUI
+      - package: SwiftCMark
+        product: cmark-gfm
+      - package: SwiftCMark
+        product: cmark-gfm-extensions
       - package: Highlightr
         product: Highlightr
       - package: SwaTex
@@ -145,6 +147,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
+        PRODUCT_NAME: $(NATIV_PRODUCT_NAME)
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_BUNDLE_IDENTIFIER)
         CODE_SIGN_ENTITLEMENTS: Configuration/Nativ.entitlements
         GENERATE_INFOPLIST_FILE: NO
@@ -152,8 +155,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.7
-        CURRENT_PROJECT_VERSION: 12
+        MARKETING_VERSION: 0.3.8
+        NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
+        CURRENT_PROJECT_VERSION: 14
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -174,8 +178,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.7
-        CURRENT_PROJECT_VERSION: 12
+        MARKETING_VERSION: 0.3.8
+        CURRENT_PROJECT_VERSION: 14
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -187,6 +191,8 @@ targets:
       - path: Sources/NativSQLite
       - path: Sources/NativTrace
       - path: Sources/Nativ/NativSettings.swift
+      - path: Sources/Nativ/ReleaseVersion.swift
+      - path: Sources/Nativ/SoftwareUpdater.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
       - path: Sources/Nativ/Features/Extensions/NativKitLibrary.swift
@@ -202,6 +208,8 @@ targets:
       - path: Sources/Nativ/Features/Models/HuggingFaceCache.swift
       - path: Sources/Nativ/Features/Models/ExternalModelCacheReference.swift
       - path: Sources/Nativ/Features/Models/HubModelSizeResolver.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceDownloadPreflight.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceDownloadCapacity.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
@@ -214,6 +222,7 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAudioRecorder.swift
       - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceDictationTranscript.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
@@ -276,11 +285,17 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatAnnotation.swift
+      - path: Sources/Nativ/Features/Chat/ChatAnnotationActions.swift
       - path: Sources/Nativ/Features/Chat/ChatArchive.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentKind.swift
       - path: Sources/Nativ/Features/Chat/ChatAttachmentValidator.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentExtractionCache.swift
       - path: Sources/Nativ/Features/Chat/ChatDocumentContextBuilder.swift
+      - path: Sources/Nativ/Features/Chat/ChatTextSearch.swift
+      - path: Sources/Nativ/Features/Chat/ChatSearch.swift
+      - path: Sources/Nativ/Features/Chat/ChatSearchStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatLibrarySearch.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift
@@ -300,6 +315,7 @@ targets:
       - path: Sources/Nativ/Features/Shared/PersistedDataChangeHub.swift
       - path: Sources/Nativ/Features/Shared/InferenceActivityCoordinator.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceHub.swift
+      - path: Sources/Nativ/Features/Models/HuggingFaceModelSupport.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
       - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
@@ -312,8 +328,12 @@ targets:
       - target: Nativ
       - package: ZIPFoundation
         product: ZIPFoundation
-      - package: MarkdownUI
-        product: MarkdownUI
+      - package: Sparkle
+        product: Sparkle
+      - package: SwiftCMark
+        product: cmark-gfm
+      - package: SwiftCMark
+        product: cmark-gfm-extensions
       - package: Highlightr
         product: Highlightr
       - package: SwaTex

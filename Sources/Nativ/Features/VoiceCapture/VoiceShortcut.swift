@@ -150,11 +150,25 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var isHandsFreeEnabled: Bool {
         didSet { preferencesDidChange() }
     }
+    // Spoken command edits do not require re-registering global keyboard shortcuts.
+    @Published var isReturnCommandEnabled: Bool {
+        didSet { persistCurrent() }
+    }
+    @Published var returnCommandTrigger: String {
+        didSet { persistCurrent() }
+    }
+
+    var activeReturnCommandTrigger: String? {
+        let trigger = returnCommandTrigger.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isReturnCommandEnabled && !trigger.isEmpty ? trigger : nil
+    }
 
     private struct Payload: Codable {
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
         let isHandsFreeEnabled: Bool?
+        let isReturnCommandEnabled: Bool?
+        let returnCommandTrigger: String?
     }
 
     private let defaults: UserDefaults
@@ -174,10 +188,15 @@ final class VoiceShortcutPreferences: ObservableObject {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
             isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
+            isReturnCommandEnabled = payload.isReturnCommandEnabled ?? true
+            returnCommandTrigger = payload.returnCommandTrigger
+                ?? VoiceDictationTranscript.defaultReturnCommandTrigger
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
             isHandsFreeEnabled = true
+            isReturnCommandEnabled = true
+            returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
         }
     }
 
@@ -193,7 +212,9 @@ final class VoiceShortcutPreferences: ObservableObject {
         let payload = Payload(
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
-            isHandsFreeEnabled: isHandsFreeEnabled
+            isHandsFreeEnabled: isHandsFreeEnabled,
+            isReturnCommandEnabled: isReturnCommandEnabled,
+            returnCommandTrigger: returnCommandTrigger
         )
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: storageKey)

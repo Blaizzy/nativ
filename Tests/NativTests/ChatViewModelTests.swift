@@ -1,8 +1,29 @@
 import AppKit
+import Observation
 import XCTest
 
 @MainActor
 final class ChatViewModelTests: XCTestCase {
+    func testDraftChangesNotifyComposerReadersWithoutPublishingTranscriptChanges() {
+        let subject = ChatViewModel()
+        var transcriptNotifications = 0
+        let subscription = subject.objectWillChange.sink { transcriptNotifications += 1 }
+        defer { subscription.cancel() }
+        let composerChange = expectation(description: "Composer observes the draft")
+        withObservationTracking {
+            _ = subject.draft
+            _ = subject.canSend(isRunning: true, selectedModelID: "model")
+        } onChange: {
+            composerChange.fulfill()
+        }
+
+        subject.draft = "Hello"
+
+        XCTAssertEqual(transcriptNotifications, 0, "Typing must not invalidate transcript observers")
+        XCTAssertTrue(subject.canSend(isRunning: true, selectedModelID: "model"))
+        wait(for: [composerChange], timeout: 0.1)
+    }
+
     func testInitialComposerAndRequestStateIsIdle() {
         let subject = ChatViewModel()
 

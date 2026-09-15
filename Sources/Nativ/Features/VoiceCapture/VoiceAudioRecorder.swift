@@ -5,6 +5,7 @@ import Foundation
 enum VoiceAudioRecorderError: LocalizedError {
     case couldNotStart
     case inputDeviceUnavailable
+    case couldNotConvert
 
     var errorDescription: String? {
         switch self {
@@ -12,6 +13,8 @@ enum VoiceAudioRecorderError: LocalizedError {
             "Nativ could not start audio recording."
         case .inputDeviceUnavailable:
             "The selected microphone is no longer available. Choose another input device or use System Default."
+        case .couldNotConvert:
+            "Nativ could not convert audio from the microphone’s current format."
         }
     }
 }
@@ -131,14 +134,22 @@ protocol VoiceAudioBufferWriting: Sendable {
 @MainActor
 final class VoiceAudioRecorder {
     var onMeterUpdate: (@MainActor @Sendable (Float, TimeInterval) -> Void)?
+    var onRecordingFailure: (@MainActor @Sendable (Error, URL?) -> Void)?
 
     private(set) var isRecording = false
     private(set) var lastRecordingDuration: TimeInterval?
-    private var audioEngine: AVAudioEngine?
+    private(set) var lastRecordingError: Error?
+
+    private let inputSession: AudioInputEngineSession
+    private var recordingID: UUID?
     private var recordingWriter: VoiceAudioRecordingWriter?
     private var recordingURL: URL?
     private var realtimeMeter: RealtimeAudioMeter?
     private var meterPublisherTask: Task<Void, Never>?
+
+    init(inputSession: AudioInputEngineSession = AudioInputEngineSession()) {
+        self.inputSession = inputSession
+    }
 
     static var recordingsDirectory: URL {
         get throws {
@@ -175,51 +186,32 @@ final class VoiceAudioRecorder {
         )
         try? FileManager.default.removeItem(at: outputURL)
 
-        let audioEngine = AVAudioEngine()
-        let inputNode = audioEngine.inputNode
-        if let deviceUniqueID {
-            guard let deviceID = AudioInputDeviceResolver.coreAudioDeviceID(
-                for: deviceUniqueID
-            ) else {
-                throw VoiceAudioRecorderError.inputDeviceUnavailable
+        let id = UUID()
+        recordingID = id
+        lastRecordingError = nil
+        let writer = VoiceAudioRecordingWriter(outputURL: outputURL) { [weak self] error in
+            Task { @MainActor [weak self] in
+                guard let self, self.recordingID == id else { return }
+                self.recordingFailed(error)
             }
-            try inputNode.auAudioUnit.setDeviceID(deviceID)
         }
-
-        // Device selection can leave the node's output format on the previous device's rate.
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
-            throw VoiceAudioRecorderError.couldNotStart
-        }
-        let audioFile = try AVAudioFile(
-            forWriting: outputURL,
-            settings: inputFormat.settings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
-        let writer = VoiceAudioRecordingWriter(
-            audioFile: audioFile,
-            sampleRate: inputFormat.sampleRate
-        )
         let realtimeMeter = RealtimeAudioMeter(profile: .recording)
-        let tap = Self.makeTap(writer: writer, realtimeMeter: realtimeMeter)
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 1_024,
-            format: inputFormat,
-            block: tap
-        )
-
         do {
-            audioEngine.prepare()
-            try audioEngine.start()
+            try inputSession.start(
+                deviceUniqueID: deviceUniqueID,
+                tap: Self.makeTap(writer: writer, realtimeMeter: realtimeMeter)
+            ) { [weak self] error in
+                guard let self, self.recordingID == id else { return }
+                self.recordingFailed(error)
+            }
         } catch {
-            inputNode.removeTap(onBus: 0)
+            recordingID = nil
+            inputSession.stop()
+            writer.finish()
             try? FileManager.default.removeItem(at: outputURL)
             throw error
         }
 
-        self.audioEngine = audioEngine
         recordingWriter = writer
         recordingURL = outputURL
         isRecording = true
@@ -230,15 +222,16 @@ final class VoiceAudioRecorder {
 
     @discardableResult
     func stop() -> URL? {
-        guard let audioEngine, let recordingWriter, let recordingURL else {
+        guard let recordingWriter, let recordingURL else {
             return nil
         }
 
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
+        recordingID = nil
+        inputSession.stop()
+        recordingWriter.finish()
+        lastRecordingError = recordingWriter.error
         let duration = recordingWriter.duration
         stopMeterPublisher()
-        self.audioEngine = nil
         self.recordingWriter = nil
         self.recordingURL = nil
         isRecording = false
@@ -258,6 +251,12 @@ final class VoiceAudioRecorder {
             try? FileManager.default.removeItem(at: recordingURL)
         }
         lastRecordingDuration = nil
+    }
+
+    private func recordingFailed(_ error: Error) {
+        let savedURL = stop()
+        lastRecordingError = error
+        onRecordingFailure?(error, savedURL)
     }
 
     private func startMeterPublisher(realtimeMeter: RealtimeAudioMeter) {
@@ -306,32 +305,58 @@ final class VoiceAudioRecorder {
 }
 
 final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Sendable {
-    private let audioFile: AVAudioFile
-    private let sampleRate: Double
+    private let outputURL: URL
+    private var audioFile: AVAudioFile?
     private let lock = NSLock()
     private var writtenFrames: AVAudioFramePosition = 0
+    private var isFinished = false
+    private let onFailure: @Sendable (Error) -> Void
+    private var failure: Error?
+    private var converter: AVAudioConverter?
+    private var conversionOutput: AVAudioPCMBuffer?
+    private var pendingConversionBuffer: AVAudioPCMBuffer?
 
-    init(audioFile: AVAudioFile, sampleRate: Double) {
-        self.audioFile = audioFile
-        self.sampleRate = sampleRate
+    init(outputURL: URL, onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+        self.outputURL = outputURL
+        self.onFailure = onFailure
     }
 
     var duration: TimeInterval {
         lock.withLock {
-            guard sampleRate > 0 else {
+            guard let sampleRate = audioFile?.processingFormat.sampleRate,
+                sampleRate > 0
+            else {
                 return 0
             }
             return Double(writtenFrames) / sampleRate
         }
     }
 
+    var error: Error? {
+        lock.withLock { failure }
+    }
+
+    func finish() {
+        let newFailure = lock.withLock { () -> Error? in
+            guard !isFinished else { return nil }
+            let hadFailure = failure != nil
+            isFinished = true
+            if failure == nil {
+                do { try flushConverter() }
+                catch { reportFailure(error) }
+            }
+            audioFile?.close()
+            return hadFailure ? nil : failure
+        }
+        if let newFailure { onFailure(newFailure) }
+    }
+
     func append(_ buffer: AVAudioPCMBuffer) -> VoiceAudioBufferMeasurement {
-        lock.withLock {
-            do {
-                try audioFile.write(from: buffer)
-                writtenFrames += AVAudioFramePosition(buffer.frameLength)
-            } catch {
-                NSLog("Nativ could not write microphone audio: %@", error.localizedDescription)
+        let (measurement, newFailure) = lock.withLock {
+            let hadFailure = failure != nil
+            if !isFinished, failure == nil, buffer.frameLength > 0 {
+                do { try write(buffer) }
+                catch { reportFailure(error) }
             }
 
             var peak: Float = 0
@@ -341,15 +366,98 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
                 for channel in 0..<channelCount {
                     let samples = channelData[channel]
                     for frame in 0..<frameCount {
-                        peak = max(peak, abs(samples[frame]))
+                        peak = max(peak, abs(samples[frame * buffer.stride]))
                     }
                 }
             }
+            let sampleRate = audioFile?.processingFormat.sampleRate ?? 0
             let elapsed = sampleRate > 0 ? Double(writtenFrames) / sampleRate : 0
-            return VoiceAudioBufferMeasurement(
-                level: min(1, peak * 3.5),
-                duration: elapsed
+            return (
+                VoiceAudioBufferMeasurement(level: min(1, peak * 3.5), duration: elapsed),
+                hadFailure ? nil : failure
             )
         }
+        if let newFailure { onFailure(newFailure) }
+        return measurement
     }
+
+    private func reportFailure(_ error: Error) {
+        guard failure == nil else { return }
+        failure = error
+        NSLog("Nativ could not write microphone audio: %@", error.localizedDescription)
+    }
+
+    private func write(_ buffer: AVAudioPCMBuffer) throws {
+        if audioFile == nil {
+            // The first delivered buffer establishes the recording's file format.
+            let format = buffer.format
+            audioFile = try AVAudioFile(
+                forWriting: outputURL,
+                settings: format.settings,
+                commonFormat: format.commonFormat,
+                interleaved: format.isInterleaved
+            )
+        }
+        guard let audioFile else { return }
+        if converter?.inputFormat != buffer.format {
+            try flushConverter()
+        }
+        if buffer.format == audioFile.processingFormat {
+            try audioFile.write(from: buffer)
+            writtenFrames += AVAudioFramePosition(buffer.frameLength)
+            return
+        }
+        if converter == nil {
+            guard let converter = AVAudioConverter(
+                from: buffer.format, to: audioFile.processingFormat
+            ), let output = AVAudioPCMBuffer(
+                pcmFormat: audioFile.processingFormat, frameCapacity: 4_096
+            ) else {
+                throw VoiceAudioRecorderError.couldNotConvert
+            }
+            converter.downmix = true
+            self.converter = converter
+            conversionOutput = output
+        }
+        try convertAndWrite(buffer)
+    }
+
+    private func flushConverter() throws {
+        guard converter != nil else { return }
+        defer {
+            converter = nil
+            conversionOutput = nil
+        }
+        try convertAndWrite(nil)
+    }
+
+    private func convertAndWrite(_ buffer: AVAudioPCMBuffer?) throws {
+        guard let converter, let output = conversionOutput, let audioFile else { return }
+        pendingConversionBuffer = buffer
+        defer { pendingConversionBuffer = nil }
+        let isEndOfStream = buffer == nil
+        while true {
+            output.frameLength = 0
+            var error: NSError?
+            // The converter calls its input block synchronously under the writer's lock.
+            let status = converter.convert(to: output, error: &error) { [self] _, status in
+                if let pending = pendingConversionBuffer {
+                    pendingConversionBuffer = nil
+                    status.pointee = .haveData
+                    return pending
+                }
+                status.pointee = isEndOfStream ? .endOfStream : .noDataNow
+                return nil
+            }
+            if status == .error {
+                throw error ?? VoiceAudioRecorderError.couldNotConvert as NSError
+            }
+            if output.frameLength > 0 {
+                try audioFile.write(from: output)
+                writtenFrames += AVAudioFramePosition(output.frameLength)
+            }
+            if status != .haveData { return }
+        }
+    }
+
 }

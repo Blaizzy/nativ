@@ -110,7 +110,7 @@ struct IntegrationProfileManager {
         case .codex, .hermes, .aider, .qwenCode, .continueDev, .openInterpreter:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             return false
         case .cline:
             return false
@@ -162,7 +162,7 @@ struct IntegrationProfileManager {
             try configureContinue(selectedModelID: selectedModelID, models: models)
         case .openInterpreter:
             try configureOpenInterpreter(selectedModelID: selectedModelID)
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             break
         case .cline:
             break
@@ -312,6 +312,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("buzz-guided.json")
         case .openInterpreter:
             return integrationsSupportURL.appendingPathComponent("openinterpreter/config.toml")
+        case .dsh:
+            return integrationsSupportURL.appendingPathComponent("dsh-guided.json")
         }
     }
 
@@ -747,7 +749,7 @@ struct IntegrationProfileManager {
                     "NATIV_API_KEY": apiKey
                 ]
             )
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             return ([], [:])
         case .cline:
             return ([], [:])

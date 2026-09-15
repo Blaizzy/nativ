@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing release tag to (re)build and attach the signed appcast to"
+        description: "Published stable/RC tag without macOS assets, or preview to refresh only the rolling feed"
         required: true
 
 permissions:
@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-notarize-publish:
-    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    if: ${{ (github.event.release.tag_name || inputs.tag) != 'preview' }}
     runs-on: macos-26
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -37,6 +37,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Keep the previous stable appcast available during the build
+        run: |
+          python3 scripts/macos_release.py seed-appcast \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
 
       - name: Validate release configuration
         env:
@@ -59,10 +64,9 @@ jobs:
               exit 1
             fi
           done
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+([.][0-9]+){1,2}$ ]]; then
-            echo "::error::Release tag must be vMAJOR.MINOR[.PATCH], got $RELEASE_TAG"
-            exit 1
-          fi
+          python3 scripts/macos_release.py preflight \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --environment "$GITHUB_ENV" --notes "$RUNNER_TEMP/release-notes.md"
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -112,15 +116,6 @@ jobs:
           chmod 600 "$NOTARY_KEY_PATH"
           echo "NOTARY_KEY_PATH=$NOTARY_KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Read release metadata
-        run: |
-          set -euo pipefail
-          version="${RELEASE_TAG#v}"
-          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
-          echo "RELEASE_BUILD_NUMBER=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json body --jq '.body // ""' > "$RUNNER_TEMP/release-notes.md"
-
       - name: Build, sign, notarize, and create appcast
         run: |
           scripts/release_macos.sh \
@@ -128,9 +123,11 @@ jobs:
             --release-notes "$RUNNER_TEMP/release-notes.md" \
             "$RELEASE_VERSION"
 
-      - name: Upload notarized app and appcast to GitHub Release
+      - name: Upload notarized app to GitHub Release
         run: |
           set -euo pipefail
+          python3 scripts/macos_release.py validate-release \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"
           release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.id')"
           upload_url="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.upload_url')"
           upload_url="${upload_url%%\{*}"
@@ -141,7 +138,6 @@ jobs:
 
           assets=(
             "dist/release/Nativ-${RELEASE_VERSION}.dmg|application/x-apple-diskimage"
-            "dist/release/appcast.xml|application/xml"
           )
           for asset in "${assets[@]}"; do
             IFS='|' read -r asset_path content_type <<< "$asset"
@@ -149,7 +145,8 @@ jobs:
             existing_asset_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
               --jq ".[] | select(.name == \"$asset_name\") | .id")"
             if [[ -n "$existing_asset_id" ]]; then
-              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id/assets/$existing_asset_id"
+              echo "::error::Refusing to replace a signed release asset: $asset_name"
+              exit 1
             fi
             response_path="$RUNNER_TEMP/release-upload-${asset_name}.json"
             curl \
@@ -171,6 +168,12 @@ jobs:
             jq -r '"Uploaded \(.name): \(.browser_download_url)"' "$response_path"
           done
 
+      - name: Replace the temporary appcast with the new release feed
+        run: |
+          python3 scripts/macos_release.py publish-appcast \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --path dist/release/appcast.xml
+
       - name: Verify published appcast
         run: |
           archive_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/Nativ-${RELEASE_VERSION}.dmg"
@@ -180,7 +183,31 @@ jobs:
             "$release_appcast_url" \
             "$archive_url" \
             dist/release/appcast.xml
-          scripts/verify_macos_appcast.sh \
-            "$latest_appcast_url" \
-            "$archive_url" \
-            dist/release/appcast.xml
+          if [[ "$RELEASE_CHANNEL" == stable ]]; then
+            latest_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')"
+            if [[ "$latest_tag" == "$RELEASE_TAG" ]]; then
+              scripts/verify_macos_appcast.sh \
+                "$latest_appcast_url" \
+                "$archive_url" \
+                dist/release/appcast.xml
+            fi
+          fi
+
+  publish-preview:
+    needs: build-notarize-publish
+    if: >-
+      ${{ !cancelled() && (needs.build-notarize-publish.result == 'success' ||
+          (github.event_name == 'workflow_dispatch' && inputs.tag == 'preview')) }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out current release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Refresh and verify the fixed preview release
+        run: |
+          python3 scripts/macos_release.py publish-preview \
+            --repository "$GITHUB_REPOSITORY"

@@ -45,6 +45,9 @@ final class VoiceCaptureCoordinator {
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             self?.overlay.update(level: level, elapsed: elapsed)
         }
+        recorder.onRecordingFailure = { [weak self] error, savedURL in
+            self?.recordingInterrupted(error, savedURL: savedURL)
+        }
     }
 
     func start() {
@@ -143,12 +146,27 @@ final class VoiceCaptureCoordinator {
         }
     }
 
+    private func recordingInterrupted(_ error: Error, savedURL: URL?) {
+        isShortcutHeld = false
+        isHandsFreeMode = false
+        insertionTarget = nil
+        activeOverlayTranscriptionID = nil
+        if let savedURL { scheduleAudioDeletion(savedURL) }
+        NSLog("Nativ voice recording interrupted: %@", error.localizedDescription)
+        overlay.showFailure()
+    }
+
     private func endCapture() {
         permissionTask?.cancel()
         permissionTask = nil
         let target = insertionTarget
         insertionTarget = nil
-        if let recordingURL = recorder.stop() {
+        let savedURL = recorder.stop()
+        if let error = recorder.lastRecordingError {
+            recordingInterrupted(error, savedURL: savedURL)
+            return
+        }
+        if let recordingURL = savedURL {
             NSLog("Nativ saved voice recording to %@", recordingURL.path)
             scheduleAudioDeletion(recordingURL)
             let overlayTranscriptionID = UUID()
@@ -316,14 +334,18 @@ final class VoiceCaptureCoordinator {
                     return
                 }
 
-                let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !transcript.isEmpty else {
+                let dictation = VoiceDictationTranscript(
+                    result.text,
+                    returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
+                )
+                guard !dictation.isEmpty else {
                     self.handleEmptyTranscription(
                         recordingURL,
                         overlayTranscriptionID: overlayTranscriptionID
                     )
                     return
                 }
+                let transcript = dictation.text
                 let transcriptURL = recordingURL
                     .deletingPathExtension()
                     .appendingPathExtension("txt")
@@ -338,7 +360,8 @@ final class VoiceCaptureCoordinator {
 
                 let insertedAtCursor = await VoiceTranscriptInserter.insertAtCursor(
                     transcript,
-                    target: target
+                    target: target,
+                    pressReturn: dictation.pressReturn
                 )
                 guard !Task.isCancelled else {
                     return
@@ -428,22 +451,33 @@ final class VoiceCaptureCoordinator {
             return
         }
 
+        guard !Task.isCancelled else {
+            return
+        }
+        let dictation = VoiceDictationTranscript(
+            transcript,
+            returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
+        )
         let transcriptURL = recordingURL
             .deletingPathExtension()
             .appendingPathExtension("txt")
-        try? transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try? dictation.text.write(to: transcriptURL, atomically: true, encoding: .utf8)
         analytics.upsertTranscription(
             recordingURL: recordingURL,
-            transcript: transcript,
+            transcript: dictation.text,
             durationSeconds: durationSeconds,
             modelID: AppleSpeechTranscriber.modelIdentifier,
             applicationName: target?.applicationName
         )
 
         let insertedAtCursor = await VoiceTranscriptInserter.insertAtCursor(
-            transcript,
-            target: target
+            dictation.text,
+            target: target,
+            pressReturn: dictation.pressReturn
         )
+        guard !Task.isCancelled else {
+            return
+        }
         NSLog(
             "Nativ saved voice transcript to %@ using the on-device system recognizer",
             transcriptURL.path

@@ -166,6 +166,9 @@ final class AudioCaptureLibrary: ObservableObject {
             }
             self.publishMeter(level: level, elapsed: elapsed)
         }
+        voiceRecorder.onRecordingFailure = { [weak self] error, savedURL in
+            self?.microphoneRecordingInterrupted(error, savedURL: savedURL)
+        }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
             guard let self else {
                 return
@@ -306,7 +309,7 @@ final class AudioCaptureLibrary: ObservableObject {
         phase = .processing
         recordingOverlay.waitForTranscription()
         stopElapsedUpdates()
-        let duration = max(
+        var duration = max(
             elapsed,
             captureStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         )
@@ -315,10 +318,16 @@ final class AudioCaptureLibrary: ObservableObject {
             let recordingURL: URL
             switch activeBackend {
             case .microphone:
-                guard let url = voiceRecorder.stop() else {
+                let savedURL = voiceRecorder.stop()
+                if let error = voiceRecorder.lastRecordingError {
+                    microphoneRecordingInterrupted(error, savedURL: savedURL)
+                    return
+                }
+                guard let savedURL else {
                     throw AudioCaptureLibraryError.recordingUnavailable
                 }
-                recordingURL = url
+                recordingURL = savedURL
+                duration = voiceRecorder.lastRecordingDuration ?? duration
             case .systemAndMicrophone:
                 recordingURL = try await meetingRecorder.stop()
             }
@@ -788,6 +797,18 @@ final class AudioCaptureLibrary: ObservableObject {
             .appendingPathComponent(recordID)
             .appendingPathExtension("summary.txt")
         try? FileManager.default.removeItem(at: summaryURL)
+    }
+
+    private func microphoneRecordingInterrupted(_ error: Error, savedURL: URL?) {
+        if let savedURL, let kind = activeKind {
+            analytics.addCapture(
+                recordingURL: savedURL,
+                kind: kind,
+                title: Self.defaultTitle(for: kind, date: captureStartedAt ?? Date()),
+                durationSeconds: voiceRecorder.lastRecordingDuration ?? 0
+            )
+        }
+        fail(error)
     }
 
     private func fail(_ error: Error) {

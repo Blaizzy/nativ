@@ -27,6 +27,14 @@ extension ControlPanelView {
                 Text("Nativ")
                     .legacyTextStyle(.brandTitle)
                     .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Button("Search chats", systemImage: "magnifyingglass") { chatLibrarySearch.present() }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .contentShape(.rect)
+                    .help("Search all chats")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: ControlPanelLayout.sidebarBrandHeight)
@@ -166,9 +174,9 @@ extension ControlPanelView {
         }
     }
 
-    var resizableSidebar: some View {
+    func resizableSidebar(width: CGFloat, maximumWidth: CGFloat) -> some View {
         sidebar
-            .frame(width: sidebarWidth)
+            .frame(width: width)
             .background {
                 ControlPanelSidebarMaterial()
                     .overlay {
@@ -178,12 +186,12 @@ extension ControlPanelView {
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
-                sidebarResizeHandle
+                sidebarResizeHandle(width: width, maximumWidth: maximumWidth)
             }
             .zIndex(1)
     }
 
-    var sidebarResizeHandle: some View {
+    func sidebarResizeHandle(width: CGFloat, maximumWidth: CGFloat) -> some View {
         ZStack {
             Color.clear
 
@@ -201,14 +209,14 @@ extension ControlPanelView {
             DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if sidebarDragStartWidth == nil {
-                        sidebarDragStartWidth = sidebarWidth
+                        sidebarDragStartWidth = width
                     }
 
-                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let startWidth = sidebarDragStartWidth ?? width
                     let proposedWidth = startWidth + value.translation.width
                     sidebarWidth = min(
                         max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
-                        ControlPanelLayout.sidebarMaximumWidth
+                        maximumWidth
                     )
                 }
                 .onEnded { _ in

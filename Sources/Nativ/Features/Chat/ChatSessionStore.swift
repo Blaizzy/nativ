@@ -165,6 +165,63 @@ struct ChatFolder: Identifiable, Equatable, Codable {
     }
 }
 
+/// Presentation metadata only. `ChatTranscriptMessage.content` remains the request's source of truth.
+struct ChatPastedText: Identifiable, Equatable, Codable {
+    static let minimumCharacterCount = 2_000
+
+    var id = UUID()
+    var location: Int
+    var length: Int
+    let text: String
+
+    var range: NSRange { NSRange(location: location, length: length) }
+
+    var lineCount: Int {
+        text.reduce(into: 1) { count, character in
+            if character.isNewline { count += 1 }
+        }
+    }
+
+    static func shouldCollapse(_ text: String) -> Bool {
+        text.count >= minimumCharacterCount
+    }
+
+    /// Invalid or overlapping metadata must never hide ordinary message content.
+    static func validated(_ items: [Self], in content: String) -> [Self] {
+        var end = 0
+        return items.sorted { $0.location < $1.location }.filter { item in
+            guard item.location >= end, item.length > 0,
+                  item.location <= content.utf16.count,
+                  item.length <= content.utf16.count - item.location,
+                  let range = Range(item.range, in: content),
+                  content[range].trimmingCharacters(in: .whitespacesAndNewlines)
+                    == item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            else { return false }
+            end = NSMaxRange(item.range)
+            return true
+        }
+    }
+
+    /// Match the existing send-time trimming without changing a single request character.
+    /// Keep the original paste for the raw viewer, including its boundary whitespace.
+    static func afterTrimming(_ items: [Self], draft: String) -> [Self] {
+        let source = draft as NSString
+        let nonWhitespace = CharacterSet.whitespacesAndNewlines.inverted
+        let first = source.rangeOfCharacter(from: nonWhitespace)
+        guard first.location != NSNotFound else { return [] }
+        let last = source.rangeOfCharacter(from: nonWhitespace, options: .backwards)
+        let retained = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+        return validated(items, in: draft).compactMap { item in
+            let intersection = NSIntersectionRange(item.range, retained)
+            guard intersection.length > 0 else { return nil }
+            var result = item
+            result.location = intersection.location - retained.location
+            result.length = intersection.length
+            return result
+        }
+    }
+}
+
 struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     enum Role: String, Equatable, Codable {
         case user
@@ -200,6 +257,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolName: String?
     var toolStatus: ToolStatus?
     var toolArguments: String?
+    var annotations: [ChatAnnotation] = []
+    var pastedTexts: [ChatPastedText] = []
 
     init(
         id: UUID = UUID(),
@@ -254,6 +313,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolName
         case toolStatus
         case toolArguments
+        case annotations
+        case pastedTexts
     }
 
     init(from decoder: Decoder) throws {
@@ -280,6 +341,11 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
+        annotations = try container.decodeIfPresent([ChatAnnotation].self, forKey: .annotations) ?? []
+        pastedTexts = ChatPastedText.validated(
+            try container.decodeIfPresent([ChatPastedText].self, forKey: .pastedTexts) ?? [],
+            in: content
+        )
 
         if role == .error,
             content == NativChatError.missingAssistantContent.localizedDescription,
@@ -308,6 +374,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
         try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
+        if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
+        if !pastedTexts.isEmpty { try container.encode(pastedTexts, forKey: .pastedTexts) }
     }
 
     var apiMessage: MLXChatMessage? {
@@ -320,7 +388,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let requestContent = [content, documentContext ?? ""]
+            let requestContent = [ChatAnnotation.prompt(annotations, request: content), documentContext ?? ""]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
             let imageParts =
