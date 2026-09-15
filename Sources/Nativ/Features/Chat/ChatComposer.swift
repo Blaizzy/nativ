@@ -317,9 +317,12 @@ struct ChatComposer: View {
                         },
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
-                        allowsDefaultActionWhenEmpty: viewModel.pendingImageAttachments.isEmpty
+                        forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
+                            .isEmpty
                             && viewModel.pendingPastedTexts.isEmpty
                             && viewModel.promptEditContext == nil,
+                        onNavigatePendingSelection: viewModel.moveImageModelHighlight,
+                        onCancelPendingDecision: viewModel.cancelPendingToolDecision,
                         onPasteText: viewModel.attachPastedText,
                         onTextEdit: viewModel.editComposerText,
                         onTextCommit: viewModel.commitComposerText,
@@ -2510,7 +2513,9 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let onContentHeightChange: (CGFloat) -> Void
     var fontScale: Double = 1.0
     var focusToken: Int = 0
-    var allowsDefaultActionWhenEmpty = false
+    var forwardsKeysToPendingDecision = false
+    var onNavigatePendingSelection: ((Int) -> Bool)?
+    var onCancelPendingDecision: (() -> Void)?
     var onPasteText: ((String, NSRange, UndoManager?) -> Void)?
     var onTextEdit: ((NSRange, String, UndoManager?) -> Void)?
     var onTextCommit: ((String, UndoManager?) -> Void)?
@@ -2536,7 +2541,9 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.onRecallPrevious = context.coordinator.handleRecallPrevious
         textView.onPasteImage = context.coordinator.handlePasteImage
         textView.onPasteText = context.coordinator.handlePasteText
-        textView.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
+        textView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
+        textView.onNavigatePendingSelection = onNavigatePendingSelection
+        textView.onCancelPendingDecision = onCancelPendingDecision
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
@@ -2587,7 +2594,11 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
-        (textView as? ChatComposerNSTextView)?.allowsDefaultActionWhenEmpty = allowsDefaultActionWhenEmpty
+        if let composerTextView = textView as? ChatComposerNSTextView {
+            composerTextView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
+            composerTextView.onNavigatePendingSelection = onNavigatePendingSelection
+            composerTextView.onCancelPendingDecision = onCancelPendingDecision
+        }
         (textView as? ChatComposerNSTextView)?.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
 
         if !textView.hasMarkedText(), textView.string != text {
@@ -2684,8 +2695,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             onSubmit()
         }
 
-        func handleCancel() {
-            onCancel?()
+        func handleCancel() -> Bool {
+            guard let onCancel else { return false }
+            onCancel()
+            return true
         }
 
         func handleRecallPrevious() -> Bool {
@@ -2776,9 +2789,11 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     var onSubmit: (() -> Void)?
-    var onCancel: (() -> Void)?
+    var onCancel: (() -> Bool)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
-    var allowsDefaultActionWhenEmpty = false
+    var forwardsKeysToPendingDecision = false
+    var onNavigatePendingSelection: ((Int) -> Bool)?
+    var onCancelPendingDecision: (() -> Void)?
     var onPasteText: ((String, NSRange) -> Bool)?
     /// Returns whether the recall happened, so an Up key that recalls nothing
     /// still moves the caret.
@@ -2793,22 +2808,30 @@ private final class ChatComposerNSTextView: NSTextView {
             return
         }
 
-        if event.keyCode == 53, onCancel != nil {
-            onCancel?()
+        if event.keyCode == 53 {
+            if onCancel?() != true {
+                onCancelPendingDecision?()
+            }
+            return
+        }
+
+        let arrow = string.isEmpty ? ComposerArrowKey(event) : nil
+
+        if forwardsKeysToPendingDecision, let arrow,
+            onNavigatePendingSelection?(arrow.offset) == true {
             return
         }
 
         // Up in an empty composer recalls the last prompt. Guarded on empty
         // rather than on caret position so that Up never stops being Up while
         // there is text to move through.
-        if ComposerRecallGesture.isRecall(event, isEmpty: string.isEmpty),
-            onRecallPrevious?() == true {
+        if arrow == .up, onRecallPrevious?() == true {
             return
         }
 
         switch ComposerReturnBehavior.resolve(for: event) {
         case .submit:
-            if allowsDefaultActionWhenEmpty, string.isEmpty,
+            if forwardsKeysToPendingDecision, string.isEmpty,
                 window?.performKeyEquivalent(with: event) == true
             {
                 return
@@ -2847,18 +2870,27 @@ private final class ChatComposerNSTextView: NSTextView {
 }
 
 /// Whether an Up key should recall the previous prompt.
-enum ComposerRecallGesture {
-    static func isRecall(_ event: NSEvent, isEmpty: Bool) -> Bool {
-        guard isEmpty, isUpArrow(event) else { return false }
-        // Any modifier means the user is asking for a selection or a jump, not
-        // for history.
-        return event.modifierFlags
-            .intersection(.deviceIndependentFlagsMask)
-            .isDisjoint(with: [.command, .option, .control, .shift])
+private enum ComposerArrowKey {
+    case up
+    case down
+
+    init?(_ event: NSEvent) {
+        guard
+            event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .isDisjoint(with: [.command, .option, .control, .shift])
+        else {
+            return nil
+        }
+        switch event.keyCode {
+        case 126: self = .up
+        case 125: self = .down
+        default: return nil
+        }
     }
 
-    private static func isUpArrow(_ event: NSEvent) -> Bool {
-        event.keyCode == 126
+    var offset: Int {
+        self == .up ? -1 : 1
     }
 }
 

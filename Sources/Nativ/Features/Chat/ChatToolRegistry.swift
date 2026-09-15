@@ -475,31 +475,56 @@ enum ChatToolDispatcher {
     }
 }
 
+enum ChatPendingDecisionScope {
+    static func soleID<Decision>(
+        in pending: [UUID: Decision],
+        matching sessionID: UUID?,
+        session: (Decision) -> UUID?
+    ) -> UUID? {
+        guard let sessionID else { return nil }
+        let scoped = pending.filter { session($0.value) == sessionID }
+        return scoped.count == 1 ? scoped.keys.first : nil
+    }
+}
+
 @MainActor
 final class ChatToolConsentGate {
     private var pending: [UUID: CheckedContinuation<Bool, Never>] = [:]
+    private var sessions: [UUID: UUID] = [:]
 
     var pendingCount: Int {
         pending.count
     }
 
+    var pendingSessions: [UUID: UUID] {
+        sessions.filter { pending[$0.key] != nil }
+    }
+
     func confirm(_ id: UUID) {
-        pending.removeValue(forKey: id)?.resume(returning: true)
+        resolve(id, approved: true)
     }
 
     func deny(_ id: UUID) {
-        pending.removeValue(forKey: id)?.resume(returning: false)
+        resolve(id, approved: false)
     }
 
-    func awaitDecision(for id: UUID) async -> Bool {
+    private func resolve(_ id: UUID, approved: Bool) {
+        sessions.removeValue(forKey: id)
+        pending.removeValue(forKey: id)?.resume(returning: approved)
+    }
+
+    func awaitDecision(for id: UUID, inSession sessionID: UUID? = nil) async -> Bool {
         let denyRequest: @MainActor @Sendable () -> Void = { [weak self] in
             self?.deny(id)
         }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                 pending[id] = continuation
+                if let sessionID {
+                    sessions[id] = sessionID
+                }
                 if Task.isCancelled {
-                    pending.removeValue(forKey: id)?.resume(returning: false)
+                    resolve(id, approved: false)
                 }
             }
         } onCancel: {
