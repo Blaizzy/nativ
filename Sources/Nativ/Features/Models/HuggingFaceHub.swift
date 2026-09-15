@@ -258,7 +258,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             architectures: supportConfiguration?.architectures ?? []
         )
         revision = try container.decodeIfPresent(String.self, forKey: .revision)
-        sizeBytes = safetensors?.sizeBytes
+        let quantizationBits = LocalModelDiscovery.quantizationBits(from: id)
+        sizeBytes = safetensors?.sizeBytes(quantizationBits: quantizationBits)
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
                 for: modelConfiguration
@@ -273,6 +274,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             repoID: id,
             safetensors: safetensors,
             sizeBytes: sizeBytes,
+            quantizationBits: quantizationBits,
             capabilities: capabilities
         )
     }
@@ -281,6 +283,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         repoID: String,
         safetensors: HuggingFaceSafetensors?,
         sizeBytes: Int64?,
+        quantizationBits: Int?,
         capabilities: Set<LocalModelCapability>
     ) -> LocalModelMemoryEstimate? {
         guard let safetensors,
@@ -291,21 +294,12 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             return nil
         }
 
-        let parameterCount = LocalModelDiscovery.parameterCount(from: repoID)
-        let quantizationBits = LocalModelDiscovery.quantizationBits(from: repoID)
         var estimatedModelBytes = Double(sizeBytes)
 
-        // Packed integer summaries and explicitly quantized repositories need a
-        // second, independent signal before we present a compatibility label.
-        if quantizationBits != nil || safetensors.hasPotentiallyPackedWeights {
-            guard let parameterCount,
-                  let quantizationBits
-            else {
-                return nil
-            }
-
-            let bytesPerParameter = Double(quantizationBits) / 8 + (4 / 64)
-            let parameterEstimate = Double(parameterCount) * bytesPerParameter
+        if let quantizationBits,
+           let parameterCount = LocalModelDiscovery.parameterCount(from: repoID) {
+            let parameterEstimate = Double(parameterCount)
+                * HuggingFaceSafetensors.quantizedBytesPerParameter(bits: quantizationBits)
             let metadataRatio = estimatedModelBytes / parameterEstimate
             guard metadataRatio.isFinite,
                   (0.65...1.75).contains(metadataRatio)
@@ -315,23 +309,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             estimatedModelBytes = max(estimatedModelBytes, parameterEstimate)
         }
 
-        let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
-        guard totalMemoryBytes > 0,
-              estimatedModelBytes.isFinite,
-              estimatedModelBytes > 0,
-              estimatedModelBytes <= Double(Int64.max)
-        else {
-            return nil
-        }
-
-        let memoryBudgetBytes = UInt64(
-            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
-                .rounded(.down)
-        )
         return LocalModelMemoryEstimate(
-            estimatedModelBytes: UInt64(estimatedModelBytes.rounded(.up)),
-            memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes,
+            modelBytes: estimatedModelBytes,
             activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
         )
     }
@@ -442,6 +421,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
 struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
     let parameters: [String: Int64]
 
+    private static let packedDataTypes: Set<String> = ["I32", "U32"]
+
     private static let knownDataTypes: Set<String> = [
         "F64", "I64", "U64", "F32", "I32", "U32", "F16", "BF16", "I16", "U16",
         "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL", "F6_E2M3", "F6_E3M2", "F4",
@@ -463,7 +444,7 @@ struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
             return false
         }
         let packedCount = parameters.reduce(Int64(0)) { partialResult, entry in
-            guard ["I32", "U32"].contains(entry.key.uppercased()) else {
+            guard Self.packedDataTypes.contains(entry.key.uppercased()) else {
                 return partialResult
             }
             return partialResult.addingReportingOverflow(entry.value).overflow
@@ -473,11 +454,26 @@ struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
         return Double(packedCount) / Double(totalCount) >= 0.10
     }
 
-    var sizeBytes: Int64? {
+    static func quantizedBytesPerParameter(bits: Int) -> Double {
+        Double(bits) / 8 + (4 / 64)
+    }
+
+    func sizeBytes(quantizationBits: Int?) -> Int64? {
         guard !parameters.isEmpty else { return nil }
 
+        let packedBytesPerParameter: Double
+        if hasPotentiallyPackedWeights {
+            guard let quantizationBits else { return nil }
+            packedBytesPerParameter = Self.quantizedBytesPerParameter(bits: quantizationBits)
+        } else {
+            packedBytesPerParameter = 4
+        }
+
         let byteCount = parameters.reduce(0.0) { result, entry in
-            result + (Double(entry.value) * bitsPerParameter(for: entry.key) / 8)
+            let bytesPerParameter = Self.packedDataTypes.contains(entry.key.uppercased())
+                ? packedBytesPerParameter
+                : bitsPerParameter(for: entry.key) / 8
+            return result + (Double(entry.value) * bytesPerParameter)
         }
         guard byteCount.isFinite, byteCount > 0, byteCount <= Double(Int64.max) else {
             return nil
