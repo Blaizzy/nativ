@@ -73,4 +73,3 @@ extension TraceJSON {
         self = try TraceJSON.decode(data)
     }
 }
-

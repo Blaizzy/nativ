@@ -225,4 +225,3 @@ public struct TraceUsage: Sendable, Hashable, Codable {
         self.completionTokens = completionTokens
     }
 }
-

@@ -34,4 +34,3 @@ enum TraceSchema {
         try connection.execute(baseSQL)
     }
 }
-

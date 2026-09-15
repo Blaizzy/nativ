@@ -43,4 +43,3 @@ extension TraceEventKind {
 extension TraceEventKind: CustomStringConvertible {
     public var description: String { rawValue }
 }
-

@@ -17,4 +17,3 @@ public struct TraceRetentionWindow: Sendable, Hashable {
         return reference.addingTimeInterval(-Double(days) * 24 * 60 * 60)
     }
 }
-

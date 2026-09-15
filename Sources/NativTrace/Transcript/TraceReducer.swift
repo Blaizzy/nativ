@@ -273,4 +273,3 @@ public struct TraceReducer: Sendable {
         append(event, body: .unknown(kind: event.kind, payload: event.payload))
     }
 }
-

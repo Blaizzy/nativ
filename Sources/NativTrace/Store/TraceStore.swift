@@ -225,4 +225,3 @@ public actor TraceStore {
         return traceIDs.sorted()
     }
 }
-

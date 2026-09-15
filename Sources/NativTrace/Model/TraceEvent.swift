@@ -51,4 +51,3 @@ extension TracePayloadView {
         self.init(payload: event.payload)
     }
 }
-

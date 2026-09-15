@@ -110,4 +110,3 @@ public actor TraceRecorder {
         scope.requestID.map { "r:\($0)" } ?? "t:\(traceID):\(scope.turnID ?? "-")"
     }
 }
-

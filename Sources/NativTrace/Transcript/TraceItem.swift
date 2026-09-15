@@ -110,4 +110,3 @@ public struct TraceLifecycleBody: Sendable, Hashable {
         self.detail = detail
     }
 }
-

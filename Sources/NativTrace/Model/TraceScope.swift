@@ -21,4 +21,3 @@ public struct TraceScope: Sendable, Hashable, Codable {
         self.modelID = modelID
     }
 }
-

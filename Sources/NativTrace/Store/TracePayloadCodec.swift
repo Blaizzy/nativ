@@ -70,4 +70,3 @@ public enum TracePayloadCodec {
         return output
     }
 }
-
