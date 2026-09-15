@@ -60,6 +60,7 @@ final class ControlPanelNavigation: ObservableObject {
     @Published private(set) var requestedTab: ControlPanelTab?
     @Published private(set) var requestedExtensionPageID: String?
     @Published private(set) var requestedChatSessionID: UUID?
+    @Published private(set) var requestedArtifactID: UUID?
     @Published private(set) var newChatRequest = 0
     @Published private(set) var toggleSidebarRequest = 0
     @Published private(set) var speechModelDiscoveryRequest = 0
@@ -78,7 +79,20 @@ final class ControlPanelNavigation: ObservableObject {
     func open(_ tab: ControlPanelTab) {
         requestedExtensionPageID = nil
         requestedChatSessionID = nil
+        requestedArtifactID = nil
         requestedTab = tab
+    }
+
+    func openArtifact(_ id: UUID) {
+        requestedExtensionPageID = nil
+        requestedChatSessionID = nil
+        requestedArtifactID = id
+        requestedTab = .artifacts
+    }
+
+    func consumeArtifactRequest(_ id: UUID) {
+        guard requestedArtifactID == id else { return }
+        requestedArtifactID = nil
     }
 
     func openChatSession(_ sessionID: UUID) {
