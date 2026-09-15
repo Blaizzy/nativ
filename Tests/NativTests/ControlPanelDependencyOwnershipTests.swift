@@ -166,3 +166,80 @@ final class TokenUsageModelPageTests: XCTestCase {
               generatedTokensTotal: tokens, decodeTokensTotal: tokens, decodeTimeTotalMilliseconds: 1_000)
     }
 }
+
+final class DashboardModelFilterTests: XCTestCase {
+    @MainActor
+    func testRemovedModelsAreLimitedToTheSelectedPeriodInMostRecentOrder() async throws {
+        let directory = try makeDatabase(lastUsedHoursAgo: [
+            "org/recent": 1, "org/earlier-today": 5, "org/last-week": 5 * 24,
+        ])
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let dashboard = DashboardViewModel(analyticsDatabaseURL: directory.appendingPathComponent("Analytics.sqlite3"))
+        dashboard.reloadHistorical()
+        try await waitUntil { !dashboard.isLoadingHistory }
+        XCTAssertFalse(dashboard.isLoadingHistory)
+
+        XCTAssertEqual(dashboard.previouslyUsedModels.map(\.id), ["org/recent", "org/earlier-today"])
+        XCTAssertEqual(dashboard.hiddenPreviouslyUsedModelCount, 1)
+
+        dashboard.selectedRange = .last7Days
+        XCTAssertEqual(dashboard.previouslyUsedModels.map(\.id), ["org/recent", "org/earlier-today", "org/last-week"])
+        XCTAssertEqual(dashboard.hiddenPreviouslyUsedModelCount, 0)
+        try await waitUntil { !dashboard.isLoadingHistory }
+    }
+
+    @MainActor
+    func testChangingThePeriodKeepsASelectedModelThatWasUsedEarlier() async throws {
+        let directory = try makeDatabase(lastUsedHoursAgo: ["org/recent": 1, "org/last-week": 5 * 24])
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let dashboard = DashboardViewModel(analyticsDatabaseURL: directory.appendingPathComponent("Analytics.sqlite3"))
+        dashboard.selectedRange = .allTime
+        try await waitUntil { !dashboard.isLoadingHistory }
+        dashboard.selectedModelID = "org/last-week"
+        try await waitUntil { dashboard.appliedModelID == "org/last-week" && !dashboard.isLoadingHistory }
+        XCTAssertEqual(dashboard.appliedModelID, "org/last-week")
+
+        dashboard.selectedRange = .last24Hours
+        try await waitUntil { !dashboard.isLoadingHistory }
+        XCTAssertFalse(dashboard.isLoadingHistory)
+
+        XCTAssertEqual(dashboard.selectedModelID, "org/last-week")
+        XCTAssertEqual(dashboard.previouslyUsedModels.map(\.id), ["org/recent", "org/last-week"])
+        XCTAssertEqual(dashboard.hiddenPreviouslyUsedModelCount, 0)
+    }
+
+    private func makeDatabase(lastUsedHoursAgo: [String: Double]) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let databaseURL = directory.appendingPathComponent("Analytics.sqlite3")
+        _ = NativAnalyticsStore(databaseURL: databaseURL)
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &database), SQLITE_OK)
+        defer { sqlite3_close(database) }
+        let now = Date.now.timeIntervalSince1970
+        for (modelID, hoursAgo) in lastUsedHoursAgo {
+            let completedAt = now - hoursAgo * 3_600
+            let sql = """
+            INSERT INTO request_events (
+                request_id, started_at, completed_at, model_id, endpoint, status, streaming,
+                prompt_tokens, completion_tokens, generated_tokens, image_count, audio_count,
+                structured_output, thinking_enabled, tool_calls, created_at
+            ) VALUES (
+                '\(UUID().uuidString)', \(completedAt), \(completedAt), '\(modelID)', '/v1/chat/completions',
+                'completed', 0, 1, 1, 1, 0, 0, 0, 0, 0, \(completedAt)
+            );
+            """
+            XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        }
+        return directory
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+}
