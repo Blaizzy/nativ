@@ -54,7 +54,7 @@ final class TraceInspectorViewModel: ObservableObject {
     }
 
     var blocks: [TraceDisplayBlock] { selectedInstance?.blocks ?? [] }
-    var calls: [TraceCall] { selectedInstance?.calls ?? [] }
+    var calls: [TraceCall] { Array((selectedInstance?.calls ?? []).reversed()) }
     var eventCount: Int { selectedInstance?.eventCount ?? 0 }
 
     func call(for itemID: String) -> TraceCall? { callsByItemID[itemID] }
@@ -127,6 +127,6 @@ final class TraceInspectorViewModel: ObservableObject {
     private func selectLastCallIfStale() {
         let calls = selectedInstance?.calls ?? []
         guard !calls.contains(where: { $0.id == selectedCallID }) else { return }
-        selectedCallID = calls.last?.id
+        selectedCallID = calls.first?.id
     }
 }
