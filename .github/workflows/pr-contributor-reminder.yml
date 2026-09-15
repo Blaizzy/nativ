@@ -1,0 +1,279 @@
+name: PR contributor reminder
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  workflow_run:
+    workflows: [Dev Build, Verify MCP Catalog]
+    types: [completed]
+
+permissions:
+  contents: read
+
+# GitHub usernames that should not receive the reminder, one per line.
+env:
+  PR_REMINDER_EXCLUDED_USERS: |
+    Lazarus-931
+    Blaizzy
+    lucasnewman
+
+# These jobs use GitHub's API only; never check out or execute PR code here.
+jobs:
+  signed-commit-reminder:
+    name: Check commit signatures
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pr-signature-reminder-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Update signed-commit reminder
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const excludedUsers = new Set(
+              process.env.PR_REMINDER_EXCLUDED_USERS
+                .split("\n")
+                .map((username) => username.trim().toLowerCase())
+                .filter(Boolean)
+            );
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issue_number,
+            });
+            if (pullRequest.state !== "open") return;
+
+            const author = pullRequest.user.login;
+            const marker = "<!-- nativ-unverified-commits -->";
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+
+            async function removeExistingReminder() {
+              if (!existing) return;
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+              });
+            }
+
+            if (excludedUsers.has(author.toLowerCase())) {
+              core.info(`Skipping reminder for excluded user @${author}.`);
+              await removeExistingReminder();
+              return;
+            }
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner,
+              repo,
+              pull_number: issue_number,
+              per_page: 100,
+            });
+            const unverified = commits.filter(
+              (commit) => commit.commit.verification?.verified !== true
+            );
+
+            if (unverified.length === 0) {
+              core.info("Every commit is verified; no reminder is needed.");
+              await removeExistingReminder();
+              return;
+            }
+
+            const commitWord = unverified.length === 1 ? "commit" : "commits";
+            const body = `${marker}
+            ⚠️ GitHub does not mark **${unverified.length} ${commitWord}** in this PR as **Verified**.
+
+            Please sign every commit, then update the PR. You can review the commits on the [commits tab](${pullRequest.html_url}/commits) and follow [GitHub's commit-signing guide](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits) if needed.`;
+
+            if (existing && existing.body !== body) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else if (!existing) {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              });
+            }
+
+  ci-failure-reminders:
+    name: Check build and test results
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pr-ci-reminder-${{ github.event.workflow_run.workflow_id }}-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Update CI failure reminder
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const excludedUsers = new Set(
+              process.env.PR_REMINDER_EXCLUDED_USERS
+                .split("\n")
+                .map((username) => username.trim().toLowerCase())
+                .filter(Boolean)
+            );
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const workflows = {
+              "Dev Build": {
+                marker: "<!-- nativ-dev-build-failure -->",
+                instructions: `On a Mac with Apple silicon, macOS 26, and Xcode with the macOS 26 SDK, run these checks from the repository root:
+
+            \`\`\`shell
+            brew install xcodegen
+            python3 -m unittest discover -s scripts/tests -p 'test_macos_release.py'
+            make xcode-build
+            xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \\
+              -derivedDataPath build/NativDevelopmentDerivedData \\
+              CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \\
+              -only-testing:NativTests/SoftwareUpdaterTests test
+            \`\`\``,
+              },
+              "Verify MCP Catalog": {
+                marker: "<!-- nativ-mcp-catalog-failure -->",
+                instructions: `With Node.js 20, uv, and Python 3.12 installed, run these checks from the repository root:
+
+            \`\`\`shell
+            python3 -m pip install "mcp>=1.0"
+            ./scripts/install_github_mcp_server.sh /tmp/nativ-mcp-servers
+            python3 scripts/verify_mcp_catalog.py --bundled-directory /tmp/nativ-mcp-servers
+            \`\`\``,
+              },
+            };
+            const workflow = workflows[run.name];
+            if (!workflow) return;
+
+            // A rerun may already have superseded this completion event.
+            const { data: currentRun } = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: run.id,
+            });
+            if (currentRun.run_attempt !== run.run_attempt || currentRun.status !== "completed") {
+              core.info("Ignoring a superseded workflow attempt.");
+              return;
+            }
+
+            let pullRequestSummary = run.pull_requests?.find(
+              (pullRequest) =>
+                pullRequest.base?.repo?.full_name === `${owner}/${repo}` &&
+                pullRequest.head?.sha === run.head_sha
+            );
+
+            // Fork workflow runs may not include a pull_requests entry.
+            if (!pullRequestSummary) {
+              const headOwner = run.head_repository?.owner?.login;
+              if (!headOwner || !run.head_branch) {
+                core.info("The workflow run's head repository or branch is unavailable.");
+                return;
+              }
+
+              const candidates = await github.paginate(github.rest.pulls.list, {
+                owner,
+                repo,
+                state: "open",
+                head: `${headOwner}:${run.head_branch}`,
+                per_page: 100,
+              });
+              pullRequestSummary = candidates.find(
+                (pullRequest) =>
+                  pullRequest.base.repo.full_name === `${owner}/${repo}` &&
+                  pullRequest.head.sha === run.head_sha
+              );
+            }
+
+            if (!pullRequestSummary) {
+              core.info("This workflow run is not associated with an open pull request.");
+              return;
+            }
+
+            const issue_number = pullRequestSummary.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issue_number,
+            });
+            if (pullRequest.state !== "open" || pullRequest.head.sha !== run.head_sha) {
+              core.info("Ignoring a completed workflow run for a closed PR or outdated revision.");
+              return;
+            }
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(workflow.marker)
+            );
+            const author = pullRequest.user.login;
+            if (excludedUsers.has(author.toLowerCase()) || run.conclusion === "success") {
+              core.info("The author is excluded or CI passed; no reminder is needed.");
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              }
+              return;
+            }
+
+            if (run.conclusion !== "failure") {
+              core.info(`CI concluded with ${run.conclusion}; leaving its reminder unchanged.`);
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: run.workflow_id,
+              branch: pullRequest.base.ref,
+              head_sha: pullRequest.base.sha,
+              event: "push",
+              status: "completed",
+              per_page: 100,
+            });
+            const baseline = data.workflow_runs.find(
+              (candidate) => candidate.head_sha === pullRequest.base.sha
+            );
+            let comparison = "The bot could not compare this result with a completed run on the current base-branch commit. Review the CI output to determine whether the failure is related to this PR.";
+            if (baseline?.conclusion === "failure") {
+              comparison = `This workflow is also failing on [the current base-branch commit](${baseline.html_url}). Compare the failing output before attributing the failure to this PR; it may be a baseline or dependency issue.`;
+            } else if (baseline?.conclusion === "success") {
+              comparison = `This workflow is passing on [the current base-branch commit](${baseline.html_url}). If the failure is caused by this PR, fix it and push the changes. If it is unrelated, leave a note for the maintainers.`;
+            }
+
+            const body = `${workflow.marker}
+            ⚠️ **${run.name} failed** in [CI](${run.html_url}).
+
+            ${comparison}
+
+            ${workflow.instructions}`;
+
+            if (existing && existing.body !== body) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else if (!existing) {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
