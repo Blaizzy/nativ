@@ -425,6 +425,7 @@
 		D98918D5585ACF5F132ADEDF /* ServerPrefillProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA514DE3EB0DC5E1C622E78A /* ServerPrefillProgressView.swift */; };
 		D9CA77A603AF02C2C70BC9FF /* MCPServerCatalogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1DC9B27547E82B74589D6B5 /* MCPServerCatalogTests.swift */; };
 		DC1ED6C1A11081FB70F1F019 /* NativImageClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FDFD79A8E1B8AA56AB21FE3 /* NativImageClient.swift */; };
+		DC6B32C16A180FF94D09EE62 /* SQLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7C6CB0853EDDAF0E252010 /* SQLite.swift */; };
 		DCE3BC508CE2CAD3059580F7 /* VoiceDictationTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6B4F745A6B4910276482015 /* VoiceDictationTranscriptTests.swift */; };
 		DD9CAC7451574C4B05DF1EDB /* Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 677360D86DDAFAB194A995E7 /* Main.swift */; };
 		DE62F002578F2CB0176F5ECE /* ScheduledTaskChatLinker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DCD9D4118F0B3580590998F /* ScheduledTaskChatLinker.swift */; };
@@ -586,6 +587,7 @@
 		0990D460FC714AC74F1565B3 /* SearXNG.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SearXNG.png; sourceTree = "<group>"; };
 		09AB8D039C4CF399216CCA31 /* NativPrefillProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativPrefillProgress.swift; sourceTree = "<group>"; };
 		0DBC23C0369758C056A8182D /* ScheduledTaskChatLinkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledTaskChatLinkerTests.swift; sourceTree = "<group>"; };
+		0E7C6CB0853EDDAF0E252010 /* SQLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SQLite.swift; sourceTree = "<group>"; };
 		0F5BF52CED5DE873DD6BF02B /* CodexCLIProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexCLIProfile.swift; sourceTree = "<group>"; };
 		141A3E7402D8AE90971C374B /* ModelPrimaryTaskResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolver.swift; sourceTree = "<group>"; };
 		1450610DDB81712B1F7F02B6 /* NativApplicationCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativApplicationCommands.swift; sourceTree = "<group>"; };
@@ -1239,6 +1241,14 @@
 			path = Tests;
 			sourceTree = "<group>";
 		};
+		70EB479161505716BB92F914 /* NativSQLite */ = {
+			isa = PBXGroup;
+			children = (
+				0E7C6CB0853EDDAF0E252010 /* SQLite.swift */,
+			);
+			path = NativSQLite;
+			sourceTree = "<group>";
+		};
 		77A07388D57B3CE845A0773B /* AudioCues */ = {
 			isa = PBXGroup;
 			children = (
@@ -1378,6 +1388,7 @@
 				17C190606A42E8E7B7B1018F /* Nativ */,
 				48CAA1897C8D0C4181EE17E9 /* NativExtensionSDK */,
 				2D909FD10E461D70DFB098BB /* NativServerKit */,
+				70EB479161505716BB92F914 /* NativSQLite */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -2089,6 +2100,7 @@
 				66745D5BB4D1454479FF6C9C /* RoutineScheduler.swift in Sources */,
 				326C969CB7D0F41F38467DFE /* RoutineStore.swift in Sources */,
 				ED6BDF238125ABAB48A4227D /* RoutineSupport.swift in Sources */,
+				DC6B32C16A180FF94D09EE62 /* SQLite.swift in Sources */,
 				AA4FD64FCA38FCA61BC4A490 /* SafeLocalFileReader.swift in Sources */,
 				25A5064ED5552EA7DC8A562F /* SafeLocalFileWriter.swift in Sources */,
 				2A099D183B49ADF6E1170D4B /* ScheduledTaskChatLinker.swift in Sources */,
