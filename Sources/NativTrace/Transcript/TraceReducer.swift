@@ -62,8 +62,7 @@ public struct TraceReducer: Sendable {
         append(event, body: .message(TraceMessageBody(
             role: .user,
             messageID: payload.messageID,
-            text: payload.text,
-            attachmentSummaries: payload.attachmentSummaries ?? []
+            text: payload.text
         )))
     }
 

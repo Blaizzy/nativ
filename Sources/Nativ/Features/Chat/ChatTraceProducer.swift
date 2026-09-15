@@ -14,15 +14,13 @@ final class ChatTraceProducer {
         _ turn: ChatTraceTurn,
         messageID: UUID,
         text: String,
-        attachmentSummaries: [String] = [],
         modelID: String?
     ) {
         let traceID = traceID(for: turn.sessionID, modelID: modelID)
         queue.record(
             TurnStartedPayload(
                 messageID: messageID.uuidString,
-                text: text,
-                attachmentSummaries: attachmentSummaries.isEmpty ? nil : attachmentSummaries
+                text: text
             ),
             traceID: traceID,
             scope: turn.scope(modelID: modelID)

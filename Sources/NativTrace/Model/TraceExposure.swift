@@ -58,11 +58,6 @@ public struct ToolDescriptor: Sendable, Hashable, Codable {
         self.summary = summary
         self.parameters = parameters
     }
-
-    public var fingerprint: String {
-        let schema = parameters.flatMap { try? $0.canonicalString() } ?? ""
-        return "\(name)|\(origin.rawValue)|\(originDetail ?? "")|\(schema)"
-    }
 }
 
 public struct SamplingParameters: Sendable, Hashable, Codable {

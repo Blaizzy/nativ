@@ -6,7 +6,6 @@ public struct TraceRetentionWindow: Sendable, Hashable {
 
     public static let `default` = TraceRetentionWindow(days: 30, maximumTraces: 500)
     public static let clearAll = TraceRetentionWindow(days: 0, maximumTraces: 0)
-    public static let unlimited = TraceRetentionWindow(days: nil, maximumTraces: nil)
 
     public init(days: Int?, maximumTraces: Int?) {
         self.days = days

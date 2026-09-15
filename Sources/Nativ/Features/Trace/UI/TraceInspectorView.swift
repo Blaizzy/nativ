@@ -11,7 +11,6 @@ struct TraceInspectorView: View {
     }
 
     let source: Source
-    var showsCallSidebar = true
     var reloadToken: AnyHashable?
 
     @StateObject private var model = TraceInspectorViewModel()
@@ -41,13 +40,6 @@ struct TraceInspectorView: View {
                 systemImage: "text.magnifyingglass",
                 message: "Nothing has been recorded here yet. Recording can be turned off in Settings."
             )
-        } else if showsCallSidebar && !model.calls.isEmpty {
-            HSplitView {
-                TraceCallSidebar(model: model)
-                    .frame(minWidth: 190, idealWidth: 230, maxWidth: 320)
-                TraceTranscriptView(model: model)
-                    .frame(minWidth: 420)
-            }
         } else {
             TraceTranscriptView(model: model)
         }
@@ -97,30 +89,5 @@ struct TraceInspectorView: View {
         switch source {
         case .session(let id): await model.loadSession(id)
         }
-    }
-}
-
-struct TraceCallSidebar: View {
-    @ObservedObject var model: TraceInspectorViewModel
-
-    var body: some View {
-        List(model.calls, selection: $model.selectedCallID) { call in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(call.title).font(.callout.weight(.medium))
-                    Spacer(minLength: 4)
-                    Text(call.timestamp.formatted(date: .omitted, time: .shortened))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                Text(call.advertisesTools
-                    ? "\(call.toolCount) \(call.toolCount == 1 ? "tool" : "tools")"
-                    : "no tools offered")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.vertical, 3)
-        }
-        .listStyle(.sidebar)
     }
 }

@@ -32,12 +32,10 @@ public struct TurnStartedPayload: TracePayloadView, Codable, Hashable {
 
     public var messageID: String
     public var text: String
-    public var attachmentSummaries: [String]?
 
-    public init(messageID: String, text: String, attachmentSummaries: [String]? = nil) {
+    public init(messageID: String, text: String) {
         self.messageID = messageID
         self.text = text
-        self.attachmentSummaries = attachmentSummaries
     }
 }
 

@@ -102,7 +102,6 @@ struct ChatView: View {
         if let sessionID = chat.currentSessionID {
             TraceInspectorView(
                 source: .session(sessionID),
-                showsCallSidebar: false,
                 reloadToken: chat.completedTurnCount
             )
         } else {

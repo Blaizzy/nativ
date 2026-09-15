@@ -30,7 +30,6 @@ public struct TraceMessageBody: Sendable, Hashable {
     public var isStreaming: Bool
     public var usage: TraceUsage?
     public var finishReason: String?
-    public var attachmentSummaries: [String]
 
     public init(
         role: TraceRole,
@@ -39,8 +38,7 @@ public struct TraceMessageBody: Sendable, Hashable {
         reasoning: String? = nil,
         isStreaming: Bool = false,
         usage: TraceUsage? = nil,
-        finishReason: String? = nil,
-        attachmentSummaries: [String] = []
+        finishReason: String? = nil
     ) {
         self.role = role
         self.messageID = messageID
@@ -49,7 +47,6 @@ public struct TraceMessageBody: Sendable, Hashable {
         self.isStreaming = isStreaming
         self.usage = usage
         self.finishReason = finishReason
-        self.attachmentSummaries = attachmentSummaries
     }
 }
 

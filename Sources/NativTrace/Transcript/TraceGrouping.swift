@@ -4,7 +4,6 @@ public struct TraceTurn: Sendable, Hashable, Identifiable {
     public let id: String
     public let prompt: TraceItem?
     public let segments: [TraceItem]
-    public let startedAt: Date
 }
 
 public enum TraceDisplayBlock: Sendable, Hashable, Identifiable {
@@ -31,8 +30,7 @@ public enum TraceGrouping {
             blocks.append(.turn(TraceTurn(
                 id: currentTurnID ?? currentPrompt?.id ?? currentSegments.first?.id ?? UUID().uuidString,
                 prompt: currentPrompt,
-                segments: currentSegments,
-                startedAt: currentPrompt?.timestamp ?? currentSegments.first?.timestamp ?? .distantPast
+                segments: currentSegments
             )))
             currentTurnID = nil
             currentPrompt = nil
