@@ -178,17 +178,14 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let tags: [String]
     let isPrivate: Bool
     let isGated: Bool
-    let safetensors: HuggingFaceSafetensors?
     let supportConfiguration: HuggingFaceModelSupportConfiguration?
     let support: HuggingFaceModelSupport
     // These values are used by every visible row. Resolve them once while the
     // response is decoded instead of repeating string parsing, provider lookup,
     // and memory estimation during every SwiftUI body pass while scrolling.
     let provider: LocalModelProvider?
-    let sizeBytes: Int64?
     let revision: String?
     let capabilities: Set<LocalModelCapability>
-    let memoryEstimate: LocalModelMemoryEstimate?
     let drafterKind: String?
 
     var isGGUF: Bool {
@@ -208,7 +205,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case tags
         case isPrivate = "private"
         case gated
-        case safetensors
         case revision = "sha"
         case modelConfiguration = "config"
     }
@@ -229,7 +225,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         libraryName = try container.decodeIfPresent(String.self, forKey: .libraryName)
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
-        safetensors = try container.decodeIfPresent(HuggingFaceSafetensors.self, forKey: .safetensors)
         supportConfiguration = try? container.decode(
             HuggingFaceModelSupportConfiguration.self,
             forKey: .modelConfiguration
@@ -258,7 +253,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             architectures: supportConfiguration?.architectures ?? []
         )
         revision = try container.decodeIfPresent(String.self, forKey: .revision)
-        sizeBytes = safetensors?.sizeBytes
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
                 for: modelConfiguration
@@ -268,71 +262,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             libraryName: libraryName,
             tags: tags,
             configIdentifiesDrafter: drafterKind != nil
-        )
-        memoryEstimate = Self.resolveMemoryEstimate(
-            repoID: id,
-            safetensors: safetensors,
-            sizeBytes: sizeBytes,
-            capabilities: capabilities
-        )
-    }
-
-    private static func resolveMemoryEstimate(
-        repoID: String,
-        safetensors: HuggingFaceSafetensors?,
-        sizeBytes: Int64?,
-        capabilities: Set<LocalModelCapability>
-    ) -> LocalModelMemoryEstimate? {
-        guard let safetensors,
-              safetensors.hasOnlyKnownDataTypes,
-              let sizeBytes,
-              sizeBytes > 0
-        else {
-            return nil
-        }
-
-        let parameterCount = LocalModelDiscovery.parameterCount(from: repoID)
-        let quantizationBits = LocalModelDiscovery.quantizationBits(from: repoID)
-        var estimatedModelBytes = Double(sizeBytes)
-
-        // Packed integer summaries and explicitly quantized repositories need a
-        // second, independent signal before we present a compatibility label.
-        if quantizationBits != nil || safetensors.hasPotentiallyPackedWeights {
-            guard let parameterCount,
-                  let quantizationBits
-            else {
-                return nil
-            }
-
-            let bytesPerParameter = Double(quantizationBits) / 8 + (4 / 64)
-            let parameterEstimate = Double(parameterCount) * bytesPerParameter
-            let metadataRatio = estimatedModelBytes / parameterEstimate
-            guard metadataRatio.isFinite,
-                  (0.65...1.75).contains(metadataRatio)
-            else {
-                return nil
-            }
-            estimatedModelBytes = max(estimatedModelBytes, parameterEstimate)
-        }
-
-        let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
-        guard totalMemoryBytes > 0,
-              estimatedModelBytes.isFinite,
-              estimatedModelBytes > 0,
-              estimatedModelBytes <= Double(Int64.max)
-        else {
-            return nil
-        }
-
-        let memoryBudgetBytes = UInt64(
-            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
-                .rounded(.down)
-        )
-        return LocalModelMemoryEstimate(
-            estimatedModelBytes: UInt64(estimatedModelBytes.rounded(.up)),
-            memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes,
-            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
         )
     }
 
@@ -436,74 +365,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             result.insert(.drafter)
         }
         return result
-    }
-}
-
-struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
-    let parameters: [String: Int64]
-
-    private static let knownDataTypes: Set<String> = [
-        "F64", "I64", "U64", "F32", "I32", "U32", "F16", "BF16", "I16", "U16",
-        "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL", "F6_E2M3", "F6_E3M2", "F4",
-        "I4", "U4", "I2", "U2"
-    ]
-
-    var hasOnlyKnownDataTypes: Bool {
-        !parameters.isEmpty
-            && parameters.keys.allSatisfy { Self.knownDataTypes.contains($0.uppercased()) }
-    }
-
-    var hasPotentiallyPackedWeights: Bool {
-        let totalCount = parameters.values.reduce(Int64(0)) { partialResult, count in
-            partialResult.addingReportingOverflow(count).overflow
-                ? Int64.max
-                : partialResult + count
-        }
-        guard totalCount > 0 else {
-            return false
-        }
-        let packedCount = parameters.reduce(Int64(0)) { partialResult, entry in
-            guard ["I32", "U32"].contains(entry.key.uppercased()) else {
-                return partialResult
-            }
-            return partialResult.addingReportingOverflow(entry.value).overflow
-                ? Int64.max
-                : partialResult + entry.value
-        }
-        return Double(packedCount) / Double(totalCount) >= 0.10
-    }
-
-    var sizeBytes: Int64? {
-        guard !parameters.isEmpty else { return nil }
-
-        let byteCount = parameters.reduce(0.0) { result, entry in
-            result + (Double(entry.value) * bitsPerParameter(for: entry.key) / 8)
-        }
-        guard byteCount.isFinite, byteCount > 0, byteCount <= Double(Int64.max) else {
-            return nil
-        }
-        return Int64(byteCount.rounded(.up))
-    }
-
-    private func bitsPerParameter(for dataType: String) -> Double {
-        switch dataType.uppercased() {
-        case "F64", "I64", "U64":
-            64
-        case "F32", "I32", "U32":
-            32
-        case "F16", "BF16", "I16", "U16":
-            16
-        case "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL":
-            8
-        case "F6_E2M3", "F6_E3M2":
-            6
-        case "F4", "I4", "U4":
-            4
-        case "I2", "U2":
-            2
-        default:
-            16
-        }
     }
 }
 
@@ -705,7 +566,7 @@ private struct HuggingFaceHubClient: Sendable {
 
     private static let expandedFields = [
         "downloads", "likes", "trendingScore", "lastModified", "pipeline_tag",
-        "library_name", "tags", "private", "gated", "safetensors", "config", "sha",
+        "library_name", "tags", "private", "gated", "config", "sha",
     ]
 }
 
@@ -817,7 +678,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURLs: [URL] = []
-    private var resolvedDownloadSizes: [String: Int64] = [:]
+    @Published private(set) var resolvedDownloadSizes: [String: Int64] = [:]
     private let pageSize = 24
     private let maximumPageCount = 5
     private let maximumFillFetches = 8
@@ -869,20 +730,9 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 }
                 try Task.checkCancellation()
                 if sort.sortsBySize {
-                    let candidates = self.buffer.filter(predicate)
-                    let sizes = await withTaskGroup(of: (String, Int64?).self) { group in
-                        for model in candidates {
-                            group.addTask {
-                                let bytes = await HubModelSizeResolver.shared.resolveSize(
-                                    for: model.id, revision: model.revision, token: token
-                                )
-                                return (model.id, bytes)
-                            }
-                        }
-                        var result: [String: Int64] = [:]
-                        for await (id, bytes) in group { result[id] = bytes }
-                        return result
-                    }
+                    let sizes = await Self.downloadSizes(
+                        for: self.buffer.filter(predicate), token: token
+                    )
                     try Task.checkCancellation()
                     self.resolvedDownloadSizes = sizes
                 }
@@ -927,6 +777,28 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 ? HuggingFaceHubError.invalidResponse.errorDescription
                 : nil
             self.isSearching = false
+            let sizes = await Self.downloadSizes(for: ordered, token: token)
+            guard !Task.isCancelled else { return }
+            self.resolvedDownloadSizes = sizes
+        }
+    }
+
+    private static func downloadSizes(
+        for models: [HuggingFaceModel],
+        token: String?
+    ) async -> [String: Int64] {
+        await withTaskGroup(of: (String, Int64?).self) { group in
+            for model in models {
+                group.addTask {
+                    let bytes = await HubModelSizeResolver.shared.resolveSize(
+                        for: model.id, revision: model.revision, token: token
+                    )
+                    return (model.id, bytes)
+                }
+            }
+            var result: [String: Int64] = [:]
+            for await (id, bytes) in group where bytes != nil { result[id] = bytes }
+            return result
         }
     }
 

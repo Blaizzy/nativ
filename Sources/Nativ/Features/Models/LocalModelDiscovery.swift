@@ -344,6 +344,26 @@ struct LocalModelMemoryEstimate: Equatable, Sendable {
     }
 }
 
+extension LocalModelMemoryEstimate {
+    init?(
+        downloadSizeBytes: Int64?,
+        capabilities: Set<LocalModelCapability>,
+        totalMemoryBytes: UInt64 = ProcessInfo.processInfo.physicalMemory
+    ) {
+        guard let downloadSizeBytes, downloadSizeBytes > 0, totalMemoryBytes > 0 else {
+            return nil
+        }
+        self.init(
+            estimatedModelBytes: UInt64(downloadSizeBytes),
+            memoryBudgetBytes: UInt64(
+                (Double(totalMemoryBytes) * (1 - Self.headroomFraction)).rounded(.down)
+            ),
+            totalMemoryBytes: totalMemoryBytes,
+            activationReserveBytes: Self.activationReserveBytes(for: capabilities)
+        )
+    }
+}
+
 struct LocalModelConfigurationMetadata: Equatable, Sendable {
     let contextSize: Int?
     let defaultSystemPrompt: String?
