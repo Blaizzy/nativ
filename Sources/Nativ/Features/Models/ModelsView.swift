@@ -3366,6 +3366,12 @@ extension LocalModelProvider {
             .primary
         case .meituanLongCat:
             .primary
+        case .huggingFace:
+            .primary
+        case .stepFun:
+            .primary
+        case .internLM:
+            .primary
         }
     }
 }

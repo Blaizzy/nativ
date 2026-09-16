@@ -137,6 +137,52 @@ final class LocalModelProviderTests: XCTestCase {
 
         XCTAssertEqual(provider, .blackForestLabs)
     }
+
+    func testHuggingFaceOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "HuggingFaceTB/SmolLM3-3B",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .huggingFace)
+        XCTAssertEqual(provider?.displayName, "Hugging Face")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-huggingface")
+    }
+
+    func testRepublishedSmolVLMModelResolvesToHuggingFace() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "mlx-community/SmolVLM2-2.2B-Instruct-4bit",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .huggingFace)
+    }
+
+    func testStepFunOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "stepfun-ai/step3",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .stepFun)
+        XCTAssertEqual(provider?.displayName, "StepFun")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-stepfun")
+    }
+
+    func testInternLMOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "internlm/internlm3-8b-instruct",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .internLM)
+        XCTAssertEqual(provider?.displayName, "InternLM")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-internlm")
+    }
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
