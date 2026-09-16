@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import ImageIO
 import QuickLookThumbnailing
@@ -33,6 +34,8 @@ final class ArtifactStore: ObservableObject {
         }
     }
 
+    typealias Rebuild = @Sendable (URL, URL, [Artifact]) -> [Artifact]
+
     typealias DeletionHandler = (Artifact) -> Bool
 
     @Published private(set) var artifacts: [Artifact] = []
@@ -41,6 +44,9 @@ final class ArtifactStore: ObservableObject {
     @Published private(set) var favoriteIDs: Set<UUID> = []
     @Published private(set) var displayNames: [UUID: String] = [:]
 
+    private let rebuildIndex: Rebuild
+    private var persistedDataChangeCancellable: AnyCancellable?
+    private var refreshPending = false
     private let deletionHandler: DeletionHandler
     private let indexURL: URL
     private let cacheDirectory: URL
@@ -51,8 +57,11 @@ final class ArtifactStore: ObservableObject {
     init(
         storage: StorageLocations = .application,
         refreshesAutomatically: Bool = true,
+        persistedDataChanges: PersistedDataChangeHub? = nil,
+        rebuild: Rebuild? = nil,
         deletionHandler: @escaping DeletionHandler = { _ in true }
     ) {
+        rebuildIndex = rebuild ?? Self.rebuild
         self.deletionHandler = deletionHandler
         indexURL = storage.indexURL
         cacheDirectory = storage.cacheDirectory
@@ -63,6 +72,15 @@ final class ArtifactStore: ObservableObject {
         favoriteIDs = Self.loadFavorites(favoritesURL)
         displayNames = Self.loadNames(displayNamesURL)
         artifacts = Self.loadIndex(indexURL)
+        persistedDataChangeCancellable = persistedDataChanges?.changes
+            .sink { [weak self] change in
+                switch change.kind {
+                case .chatSession, .imageGenerationSession:
+                    self?.refresh()
+                case .chatFolders:
+                    break
+                }
+            }
         if refreshesAutomatically {
             refresh()
         }
@@ -165,17 +183,23 @@ final class ArtifactStore: ObservableObject {
 
     func refresh() {
         guard !isRefreshing else {
+            refreshPending = true
             return
         }
         isRefreshing = true
         let cache = cacheDirectory
         let index = indexURL
         let known = artifacts
+        let rebuild = rebuildIndex
         Task.detached(priority: .utility) {
-            let rebuilt = Self.rebuild(cacheDirectory: cache, indexURL: index, known: known)
+            let rebuilt = rebuild(cache, index, known)
             await MainActor.run {
                 self.artifacts = rebuilt
                 self.isRefreshing = false
+                if self.refreshPending {
+                    self.refreshPending = false
+                    self.refresh()
+                }
             }
         }
     }

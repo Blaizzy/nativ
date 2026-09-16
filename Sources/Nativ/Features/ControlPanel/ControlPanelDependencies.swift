@@ -34,7 +34,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity
     )
-    lazy var artifacts = ArtifactStore { [weak self] artifact in
+    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, deletionHandler: { [weak self] artifact in
         guard let self else {
             return false
         }
@@ -52,7 +52,7 @@ final class ControlPanelDependencies: ObservableObject {
                 outputID: artifact.id
             )
         }
-    }
+    })
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
