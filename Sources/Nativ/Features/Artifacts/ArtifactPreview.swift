@@ -6,6 +6,7 @@ struct ArtifactPreview: View {
     let artifacts: [Artifact]
     @Binding var selectedID: Artifact.ID?
     let fileURL: (Artifact) -> URL
+    let displayName: (Artifact) -> String
     let onClose: () -> Void
     let onOpenChat: (Artifact) -> Void
 
@@ -56,7 +57,7 @@ struct ArtifactPreview: View {
                     .foregroundStyle(.white.opacity(0.7))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(artifact.filename)
+                Text(displayName(artifact))
                     .legacyTextStyle(.compactCardTitle)
                     .foregroundStyle(.white)
                     .lineLimit(1)

@@ -94,6 +94,36 @@ final class ArtifactRefreshTests: XCTestCase {
         XCTAssertEqual(source.state.withLock { $0.scans }, 0)
     }
 
+    func testRenamePersistsAndSearchIncludesNamesOutsideSemanticResults() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = PersistedDataChangeHub()
+        let source = Source()
+        let store = makeStore(directory: directory, hub: hub, source: source)
+        let renamed = makeArtifact()
+        let semantic = makeArtifact()
+        let excluded = makeArtifact()
+        store.rename(renamed, to: "  Amber cube  ")
+        store.rename(semantic, to: "Zebra")
+
+        let reloaded = makeStore(directory: directory, hub: hub, source: source)
+        XCTAssertEqual(reloaded.displayName(for: renamed), "Amber cube")
+        XCTAssertEqual(renamed.filename, "image.png")
+        XCTAssertEqual(reloaded.sortedByName([semantic, renamed]).map(\.id), [renamed.id, semantic.id])
+        XCTAssertEqual(reloaded.searchResults(in: [renamed], query: "AMBER", semanticMatches: nil).map(\.id), [renamed.id])
+        XCTAssertEqual(reloaded.searchResults(in: [renamed], query: "image.png", semanticMatches: nil).map(\.id), [renamed.id])
+        XCTAssertEqual(
+            reloaded.searchResults(
+                in: [semantic, renamed], query: "amber",
+                semanticMatches: [excluded.id, semantic.id, renamed.id, semantic.id]
+            ).map(\.id),
+            [renamed.id, semantic.id]
+        )
+        reloaded.rename(renamed, to: " ")
+        XCTAssertEqual(reloaded.displayName(for: renamed), renamed.filename)
+        XCTAssertTrue(reloaded.searchResults(in: [renamed], query: "amber", semanticMatches: []).isEmpty)
+    }
+
     private func makeStore(directory: URL, hub: PersistedDataChangeHub, source: Source) -> ArtifactStore {
         ArtifactStore(
             storage: .init(
