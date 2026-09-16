@@ -461,12 +461,14 @@ private struct WelcomeView: View {
     private func downloadRow(for hubModel: HuggingFaceModel) -> some View {
         WelcomeDownloadModelRow(
             model: hubModel,
+            downloadSizeBytes: downloadSize(for: hubModel),
+            memoryEstimate: memoryEstimate(for: hubModel),
             isDownloaded: isInstalled(hubModel.id),
             isSelected: selectedModelID == hubModel.id,
             isDownloading: downloadManager.isDownloading(hubModel.id),
             downloadProgress: downloadManager.progress(for: hubModel.id),
             downloadBlockedReason: downloadManager.capacityBlocker(
-                sizeBytes: hubModel.sizeBytes,
+                sizeBytes: downloadSize(for: hubModel),
                 cachePath: model.settings.modelSearchPath
             ),
             downloadError: downloadManager.errorByModelID[hubModel.id]?.localizedDescription,
@@ -720,7 +722,18 @@ private struct WelcomeView: View {
     }
 
     private var recommendedFitCount: Int {
-        recommendedModels.filter { $0.memoryEstimate?.isUsable ?? true }.count
+        recommendedModels.filter { memoryEstimate(for: $0)?.isUsable ?? true }.count
+    }
+
+    private func downloadSize(for hubModel: HuggingFaceModel) -> Int64? {
+        hubLibrary.resolvedDownloadSizes[hubModel.id]
+    }
+
+    private func memoryEstimate(for hubModel: HuggingFaceModel) -> LocalModelMemoryEstimate? {
+        LocalModelMemoryEstimate(
+            downloadSizeBytes: downloadSize(for: hubModel),
+            capabilities: hubModel.capabilities
+        )
     }
 
     private var deviceMemoryLabel: String {
@@ -788,7 +801,7 @@ private struct WelcomeView: View {
     private func downloadRecommendedModel(_ hubModel: HuggingFaceModel) {
         downloadManager.download(
             repoID: hubModel.id,
-            sizeBytes: hubModel.sizeBytes,
+            sizeBytes: downloadSize(for: hubModel),
             cachePath: model.settings.modelSearchPath,
             volumeIdentifier: model.settings.externalModelCache?.volumeIdentifier,
             token: model.effectiveHuggingFaceToken
@@ -980,6 +993,8 @@ private struct WelcomeModelPickerRow: View {
 
 private struct WelcomeDownloadModelRow: View {
     let model: HuggingFaceModel
+    let downloadSizeBytes: Int64?
+    let memoryEstimate: LocalModelMemoryEstimate?
     let isDownloaded: Bool
     let isSelected: Bool
     let isDownloading: Bool
@@ -1002,8 +1017,7 @@ private struct WelcomeDownloadModelRow: View {
                             .lineLimit(1)
                             .layoutPriority(1)
 
-                        if let memoryEstimate = model.memoryEstimate,
-                           !memoryEstimate.isUsable {
+                        if let memoryEstimate, !memoryEstimate.isUsable {
                             WelcomeMemoryFitBadge(estimate: memoryEstimate)
                         }
                     }
@@ -1097,8 +1111,10 @@ private struct WelcomeDownloadModelRow: View {
         if let provider = model.provider {
             details.append(provider.displayName)
         }
-        if let sizeBytes = model.sizeBytes {
-            details.append(ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file))
+        if let downloadSizeBytes {
+            details.append(
+                ByteCountFormatter.string(fromByteCount: downloadSizeBytes, countStyle: .file)
+            )
         }
         details.append("\(NativFormatting.compactCount(model.downloads).display) downloads")
         return details.joined(separator: " · ")
