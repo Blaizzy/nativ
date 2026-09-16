@@ -481,9 +481,9 @@ struct NativPersonalization: Codable, Equatable {
             switch self {
             case .none:
                 """
-                Do not add emojis or decorative pictographs to your responses. Express tone through \
-                words and punctuation. Preserve emojis when quoting user-provided text or when they \
-                are necessary to explain the topic. Follow explicit requests to include particular emojis.
+                Write without emojis, emoticons, or decorative symbols. Use words for tone and emphasis. \
+                Include emojis only when the user explicitly requests them or when quoting or explaining \
+                them.
                 """
             case .default:
                 ""
@@ -516,20 +516,17 @@ struct NativPersonalization: Codable, Equatable {
             switch self {
             case .minimal:
                 """
-                Prefer plain paragraphs and simple punctuation. Avoid decorative headings, bold emphasis, \
-                tables, and unnecessary lists. Use formatting when it materially improves readability \
-                or preserves meaning, such as code blocks for code and numbered steps for procedures. \
-                Keep short answers especially simple. Follow the user's explicit formatting requests.
+                Write in plain-text paragraphs separated by blank lines. Do not add headings, bold, \
+                italics, tables, or bullet lists. Explain steps in sentences. Use fenced code blocks for \
+                code. Follow the user’s explicit formatting requests.
                 """
             case .default:
                 ""
             case .structured:
                 """
-                Use Markdown to make substantial responses easy to scan. Group related information under \
-                descriptive headings, use lists for steps or parallel points, and use tables when they \
-                make comparisons clearer. Apply bold emphasis sparingly to key conclusions. Keep short \
-                answers compact, and avoid redundant headings or excessive nesting. Follow the user's \
-                explicit formatting requests.
+                For multi-point answers, start with a short ## heading. Use bullet lists for related \
+                points or numbered lists for steps, and bold the key takeaway. Keep one-sentence answers \
+                unformatted. Follow explicit user format requests.
                 """
             }
         }
