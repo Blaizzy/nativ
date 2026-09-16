@@ -302,6 +302,7 @@ final class ArtifactStore: ObservableObject {
             id: artifact.id, filename: artifact.filename, mimeType: artifact.mimeType, asset: asset
         )
         attachment.generation = artifact.generation
+        attachment.origin = artifact.source
         return attachment
     }
 
@@ -331,7 +332,7 @@ final class ArtifactStore: ObservableObject {
 
         let chats = ChatSessionStore()
         let images = ImageGenerationSessionStore()
-        let fingerprint = "unified-v1#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
+        let fingerprint = "unified-v2#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
         let fingerprintFile = fingerprintURL(indexURL: indexURL)
         if !known.isEmpty,
            let previous = try? String(contentsOf: fingerprintFile, encoding: .utf8),

@@ -1428,6 +1428,7 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
                 base64Data: imageData.base64EncodedString()
             )
         }
+        attachment.origin = .generated
         attachment.generation = ArtifactGeneration(
             prompt: revisedPrompt, seed: seed, width: width, height: height
         )

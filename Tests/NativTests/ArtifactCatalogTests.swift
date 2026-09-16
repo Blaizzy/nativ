@@ -1,10 +1,70 @@
 import XCTest
 
 final class ArtifactCatalogTests: XCTestCase {
+    func testMissingProvenanceIsUnknownRegardlessOfRoleOrFilename() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        var attachment = try fixture.attachment(filename: "image-12345.png", mimeType: "image/png")
+        attachment.origin = nil
+        for role in [ChatTranscriptMessage.Role.user, .assistant, .tool] {
+            let message = ChatTranscriptMessage(role: role, content: "", modelID: "some/model", imageAttachments: [attachment])
+            let session = fixture.chat(messages: [message])
+            XCTAssertTrue(fixture.chats.saveSession(session))
+            let reloaded = try XCTUnwrap(fixture.chats.loadSession(id: session.id))
+            let artifact = try XCTUnwrap(ArtifactCatalog.artifacts(chats: [reloaded], images: []).first)
+            XCTAssertEqual(artifact.source, .unknown)
+            XCTAssertNil(reloaded.messages[0].imageAttachments[0].origin)
+        }
+    }
+
+    func testExplicitUploadOriginSurvivesPersistenceAndReuse() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let attachment = try fixture.attachment(filename: "image-12345.png", mimeType: "image/png")
+        let session = fixture.chat(messages: [ChatTranscriptMessage(role: .user, content: "", imageAttachments: [attachment])])
+        XCTAssertTrue(fixture.chats.saveSession(session))
+        let reloaded = try XCTUnwrap(fixture.chats.loadSession(id: session.id))
+        XCTAssertEqual(reloaded.messages[0].imageAttachments[0].origin, .uploaded)
+        XCTAssertEqual(ArtifactCatalog.artifacts(chats: [reloaded], images: []).first?.source, .uploaded)
+    }
+
+    func testConflictingRecordedOriginsRemainUnknown() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let upload = try fixture.attachment(filename: "image.png", mimeType: "image/png")
+        var generated = upload
+        generated.origin = .generated
+        let chats = [upload, generated].map {
+            fixture.chat(messages: [ChatTranscriptMessage(role: .user, content: "", imageAttachments: [$0])])
+        }
+        let artifacts = ArtifactCatalog.artifacts(chats: chats, images: [])
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(artifacts.first?.source, .unknown)
+    }
+
+    @MainActor
+    func testUnknownOriginSurvivesGalleryReuseAndArchiveImport() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        var attachment = try fixture.attachment(filename: "legacy.png", mimeType: "image/png")
+        attachment.origin = nil
+        let session = fixture.chat(messages: [ChatTranscriptMessage(role: .assistant, content: "", imageAttachments: [attachment])])
+        let artifact = try XCTUnwrap(ArtifactCatalog.artifacts(chats: [session], images: []).first)
+        let store = ArtifactStore(storage: fixture.storage, refreshesAutomatically: false, mediaStore: fixture.media)
+        let reused = try XCTUnwrap(store.chatAttachment(for: artifact))
+        XCTAssertEqual(reused.origin, .unknown)
+        var inline = ChatImageAttachment(filename: reused.filename, mimeType: reused.mimeType, base64Data: Data([1, 2, 3]).base64EncodedString())
+        inline.origin = reused.origin
+        let chat = fixture.chat(messages: [ChatTranscriptMessage(role: .user, content: "reuse", imageAttachments: [inline])])
+        let imported = try ChatArchiveCodec.importedSession(from: ChatArchive(chat: chat, modelRepositoryID: "text/model", systemPrompt: ""))
+        XCTAssertEqual(imported.messages[0].imageAttachments[0].origin, .unknown)
+    }
+
     func testLegacyChatGenerationKeepsOriginAndChatOwnership() throws {
         let fixture = Fixture()
         defer { fixture.remove() }
-        let attachment = try fixture.attachment(filename: "generated.png", mimeType: "image/png")
+        var attachment = try fixture.attachment(filename: "generated.png", mimeType: "image/png")
+        attachment.origin = nil
         let message = ChatTranscriptMessage(
             role: .tool, content: "{}", imageAttachments: [attachment],
             toolName: "generate_image", toolArguments: #"{"prompt":"A red fox"}"#
@@ -186,9 +246,11 @@ final class ArtifactCatalogTests: XCTestCase {
         }
 
         func attachment(filename: String, mimeType: String) throws -> ChatImageAttachment {
-            let id = UUID()
-            let asset = try media.store(Data([1, 2, 3]), id: id, mimeType: mimeType, filename: filename)
-            return ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+            let directory = root.appendingPathComponent("Inputs/\(UUID())")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let file = directory.appendingPathComponent(filename)
+            try Data([1, 2, 3]).write(to: file)
+            return try ChatImageAttachment(contentsOf: file, mediaStore: media)
         }
 
         func output() -> GeneratedImage {

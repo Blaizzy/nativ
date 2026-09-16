@@ -62,6 +62,7 @@ enum ArtifactKind: String, CaseIterable, Codable, Identifiable {
 enum ArtifactSource: String, CaseIterable, Codable, Identifiable, Sendable {
     case uploaded
     case generated
+    case unknown
 
     var id: String { rawValue }
 
@@ -71,6 +72,8 @@ enum ArtifactSource: String, CaseIterable, Codable, Identifiable, Sendable {
             "Uploaded"
         case .generated:
             "Generated"
+        case .unknown:
+            "Unknown"
         }
     }
 
@@ -80,6 +83,8 @@ enum ArtifactSource: String, CaseIterable, Codable, Identifiable, Sendable {
             "square.and.arrow.up"
         case .generated:
             "sparkles"
+        case .unknown:
+            "questionmark.circle"
         }
     }
 }
@@ -108,7 +113,7 @@ struct ArtifactUsage: Codable, Equatable, Hashable, Sendable {
 struct Artifact: Identifiable, Codable, Equatable {
     let id: UUID
     let kind: ArtifactKind
-    let source: ArtifactSource
+    var source: ArtifactSource
     let sessionID: UUID
     let messageID: UUID
     let filename: String

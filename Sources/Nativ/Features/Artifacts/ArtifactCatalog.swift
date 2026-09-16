@@ -53,6 +53,9 @@ enum ArtifactCatalog {
         let groups = Dictionary(grouping: entries, by: \.id)
         return groups.values.compactMap { group in
             let ordered = group.sorted {
+                if ($0.source != .unknown) != ($1.source != .unknown) {
+                    return $0.source != .unknown
+                }
                 if ($0.generation != nil) != ($1.generation != nil) {
                     return $0.generation != nil
                 }
@@ -66,6 +69,8 @@ enum ArtifactCatalog {
                 return $0.sessionID.uuidString < $1.sessionID.uuidString
             }
             guard var artifact = ordered.first else { return nil }
+            let origins = Set(group.map(\.source).filter { $0 != .unknown })
+            if origins.count > 1 { artifact.source = .unknown }
             var seen: Set<ArtifactUsage> = []
             artifact.usages = ordered.flatMap(\.locations).filter { seen.insert($0).inserted }
             return artifact
@@ -83,7 +88,7 @@ enum ArtifactCatalog {
         entries.append(Artifact(
             id: attachment.assetID,
             kind: ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename),
-            source: generation == nil ? .uploaded : .generated,
+            source: attachment.origin ?? (generation == nil ? .unknown : .generated),
             sessionID: usage.sessionID, messageID: usage.messageID ?? usage.sessionID,
             filename: attachment.filename, mimeType: attachment.mimeType,
             relativePath: asset.relativePath, byteSize: asset.byteCount, createdAt: date,

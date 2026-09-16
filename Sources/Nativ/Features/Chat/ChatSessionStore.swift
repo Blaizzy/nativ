@@ -618,11 +618,12 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     private var inlineBase64Data: String?
     private(set) var asset: MediaAssetReference?
     var generation: ArtifactGeneration? = nil
+    var origin: ArtifactSource? = nil
 
     var assetID: UUID { asset?.id ?? id }
 
     enum CodingKeys: String, CodingKey {
-        case id, filename, mimeType, base64Data, asset, generation
+        case id, filename, mimeType, base64Data, asset, generation, origin
     }
 
     var base64Data: String {
@@ -636,23 +637,25 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
-    init(id: UUID = UUID(), filename: String, mimeType: String, base64Data: String) {
+    init(id: UUID = UUID(), filename: String, mimeType: String, base64Data: String, origin: ArtifactSource? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.inlineBase64Data = base64Data
         self.asset = nil
+        self.origin = origin
     }
 
-    init(id: UUID, filename: String, mimeType: String, asset: MediaAssetReference) {
+    init(id: UUID, filename: String, mimeType: String, asset: MediaAssetReference, origin: ArtifactSource? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.inlineBase64Data = nil
         self.asset = asset
+        self.origin = origin
     }
 
-    init(contentsOf url: URL) throws {
+    init(contentsOf url: URL, mediaStore: MediaAssetStore = .shared) throws {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess {
@@ -664,13 +667,13 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         let type = UTType(filenameExtension: url.pathExtension)
         let id = UUID()
         let mimeType = type?.preferredMIMEType ?? "application/octet-stream"
-        let asset = try MediaAssetStore.shared.store(
+        let asset = try mediaStore.store(
             data,
             id: id,
             mimeType: mimeType,
             filename: url.lastPathComponent
         )
-        self.init(id: id, filename: url.lastPathComponent, mimeType: mimeType, asset: asset)
+        self.init(id: id, filename: url.lastPathComponent, mimeType: mimeType, asset: asset, origin: .uploaded)
     }
 
     var dataURL: String {
@@ -703,6 +706,7 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         mimeType = try container.decode(String.self, forKey: .mimeType)
         asset = try container.decodeIfPresent(MediaAssetReference.self, forKey: .asset)
         generation = try container.decodeIfPresent(ArtifactGeneration.self, forKey: .generation)
+        origin = try container.decodeIfPresent(ArtifactSource.self, forKey: .origin)
         inlineBase64Data = try container.decodeIfPresent(String.self, forKey: .base64Data)
     }
 
@@ -713,6 +717,7 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         try container.encode(mimeType, forKey: .mimeType)
         try container.encodeIfPresent(asset, forKey: .asset)
         try container.encodeIfPresent(generation, forKey: .generation)
+        try container.encodeIfPresent(origin, forKey: .origin)
         if asset == nil { try container.encodeIfPresent(inlineBase64Data, forKey: .base64Data) }
     }
 
@@ -758,7 +763,7 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
             mimeType: "image/png",
             filename: filename
         ) else { return nil }
-        return ChatImageAttachment(id: id, filename: filename, mimeType: "image/png", asset: asset)
+        return ChatImageAttachment(id: id, filename: filename, mimeType: "image/png", asset: asset, origin: .uploaded)
     }
 
     private static func isImageURL(_ url: URL) -> Bool {
@@ -1106,6 +1111,11 @@ private extension ChatSession {
                 if attachment.generation == nil,
                    let generation = messages[messageIndex].artifactGeneration(for: attachment) {
                     messages[messageIndex].imageAttachments[attachmentIndex].generation = generation
+                    changed = true
+                }
+                if messages[messageIndex].imageAttachments[attachmentIndex].origin == nil,
+                   messages[messageIndex].imageAttachments[attachmentIndex].generation != nil {
+                    messages[messageIndex].imageAttachments[attachmentIndex].origin = .generated
                     changed = true
                 }
                 changed = try messages[messageIndex].imageAttachments[attachmentIndex]

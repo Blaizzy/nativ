@@ -113,6 +113,7 @@ enum ChatArchiveCodec {
                         base64Data: attachment.base64Data
                     )
                     imported.generation = message.artifactGeneration(for: attachment)
+                    imported.origin = attachment.origin ?? (imported.generation == nil ? nil : .generated)
                     return imported
                 },
                 responseMetrics: message.responseMetrics,
