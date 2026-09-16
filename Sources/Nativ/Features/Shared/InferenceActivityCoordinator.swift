@@ -38,6 +38,10 @@ final class InferenceActivityCoordinator {
         activityByResource[resource] = nil
     }
 
+    func isActive(_ resource: Resource) -> Bool {
+        activityByResource[resource] != nil
+    }
+
     func isOwnedByAnotherWindow(_ resource: Resource, windowID: UUID) -> Bool {
         guard let activity = activityByResource[resource] else {
             return false
