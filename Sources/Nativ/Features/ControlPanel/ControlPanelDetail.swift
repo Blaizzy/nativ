@@ -84,7 +84,7 @@ extension ControlPanelView {
                 onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
                     switch artifact.source {
-                    case .uploaded:
+                    case .uploaded, .unknown:
                         applySidebarSelection(.chat(artifact.sessionID))
                         chat.scrollTargetMessageID = artifact.messageID
                     case .generated:
