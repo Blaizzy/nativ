@@ -339,7 +339,8 @@ private struct DashboardContentView: View, @MainActor Equatable {
             ModelPerformanceTable(
                 rows: dashboard.modelPerformance,
                 modelColorDomain: chartModelColorDomain,
-                searchFocus: $isModelSearchFocused
+                searchFocus: $isModelSearchFocused,
+                isFilteredToModel: dashboard.appliedModelID != DashboardViewModel.ModelOption.allID
             )
 
             if let localModelError = dashboard.localModelError {
@@ -425,11 +426,32 @@ private struct DashboardContentView: View, @MainActor Equatable {
     private var modelFilter: some View {
         DashboardPickerContainer(title: "Model") {
             Picker("Model", selection: $dashboard.selectedModelID) {
-                ForEach(dashboard.availableModels) { option in
-                    Text(option.displayTitle).tag(option.id)
+                Text(DashboardViewModel.ModelOption.all.displayTitle)
+                    .tag(DashboardViewModel.ModelOption.allID)
+                if !dashboard.installedModels.isEmpty {
+                    Section("Installed") {
+                        ForEach(dashboard.installedModels) { option in
+                            Text(option.displayTitle).tag(option.id)
+                        }
+                    }
+                }
+                if !dashboard.previouslyUsedModels.isEmpty || dashboard.hiddenPreviouslyUsedModelCount > 0 {
+                    Section(
+                        dashboard.selectedRange.usageWindowTitle.map { "Previously used · \($0)" }
+                            ?? "Previously used"
+                    ) {
+                        ForEach(dashboard.previouslyUsedModels) { option in
+                            Text(option.displayTitle).tag(option.id)
+                        }
+                        if dashboard.hiddenPreviouslyUsedModelCount > 0 {
+                            Text("\(dashboard.hiddenPreviouslyUsedModelCount) more used earlier — choose a longer period")
+                                .selectionDisabled()
+                        }
+                    }
                 }
             }
             .pickerStyle(.menu)
+            .help("Removed models are listed only if they were used in the selected period.")
             .labelsHidden()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -3816,6 +3838,7 @@ private struct ModelPerformanceTable: View {
     let rows: [DashboardViewModel.ModelPerformance]
     let modelColorDomain: [String]
     let searchFocus: FocusState<Bool>.Binding
+    let isFilteredToModel: Bool
 
     @State private var searchText = ""
     @State private var sortColumn: SortColumn = .tokens
@@ -3828,7 +3851,9 @@ private struct ModelPerformanceTable: View {
                 ContentUnavailableView(
                     "No model activity",
                     systemImage: "cpu",
-                    description: Text("Model performance will appear after requests are processed.")
+                    description: isFilteredToModel
+                        ? Text("This model has no requests in the selected period.")
+                        : Text("Model performance will appear after requests are processed.")
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
             } else {
