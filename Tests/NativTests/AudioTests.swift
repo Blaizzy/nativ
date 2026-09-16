@@ -1,4 +1,5 @@
 import AVFoundation
+import Carbon.HIToolbox
 import Foundation
 import XCTest
 @testable import NativServerKit
@@ -465,6 +466,106 @@ final class AudioAnalyticsStoreTests: XCTestCase {
 
 @MainActor
 final class FnControlShortcutMonitorTests: XCTestCase {
+    func testShortcutCaptureSuppressesPollingAndWaitsForReleaseBeforeResuming() async throws {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = []
+        var changes: [Bool] = []
+        var retries = 0
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.onRetry = { retries += 1 }
+        monitor.start()
+        defer { monitor.stop() }
+
+        for handsFree in [false, true] {
+            preferences.isHandsFreeEnabled = handsFree
+            preferences.isCapturingShortcut = true
+            modifiers = [.function, .control, .option]
+            try await Task.sleep(for: .milliseconds(75))
+            modifiers = []
+            try await Task.sleep(for: .milliseconds(75))
+            XCTAssertEqual(changes, [])
+            XCTAssertEqual(retries, 0)
+        }
+
+        preferences.isHandsFreeEnabled = false
+        modifiers = [.function, .control, .option]
+        preferences.isCapturingShortcut = false
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = []
+        try await Task.sleep(for: .milliseconds(75))
+        let resumed = expectation(description: "A fresh dictation shortcut works after setup")
+        monitor.onChange = { held in
+            changes.append(held)
+            if held { resumed.fulfill() }
+        }
+        modifiers = [.function, .control]
+        await fulfillment(of: [resumed], timeout: 2)
+        XCTAssertEqual(changes, [true])
+
+        let retried = expectation(description: "Retry works after setup")
+        monitor.onRetry = { retried.fulfill() }
+        modifiers = [.option]
+        await fulfillment(of: [retried], timeout: 2)
+    }
+
+    func testShortcutCaptureSuppressesHotKeysThroughPreferenceChanges() {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = []
+        var changes: [Bool] = []
+        var retries = 0
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.onRetry = { retries += 1 }
+        monitor.start()
+        defer { monitor.stop() }
+
+        preferences.isCapturingShortcut = true
+        preferences.isHandsFreeEnabled = true
+        for id: UInt32 in [1, 2] {
+            monitor.consumeHotKeyEvent(id: id, kind: UInt32(kEventHotKeyPressed))
+            monitor.consumeHotKeyEvent(id: id, kind: UInt32(kEventHotKeyReleased))
+        }
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = [.command]
+        preferences.isCapturingShortcut = false
+        monitor.consumeHotKeyEvent(id: 1, kind: UInt32(kEventHotKeyPressed))
+        monitor.consumeHotKeyEvent(id: 2, kind: UInt32(kEventHotKeyPressed))
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = []
+        monitor.resynchronizeAfterModalInteraction()
+        monitor.consumeHotKeyEvent(id: 1, kind: UInt32(kEventHotKeyPressed))
+        monitor.consumeHotKeyEvent(id: 2, kind: UInt32(kEventHotKeyPressed))
+        XCTAssertEqual(changes, [true])
+        XCTAssertEqual(retries, 1)
+    }
+
+    func testMonitorStartedDuringShortcutCaptureWaitsForRelease() {
+        let preferences = makePreferences()
+        preferences.isCapturingShortcut = true
+        var modifiers: VoiceShortcutModifiers = [.function, .control]
+        var changes: [Bool] = []
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.start()
+        defer { monitor.stop() }
+
+        preferences.isCapturingShortcut = false
+        XCTAssertEqual(changes, [])
+        modifiers = []
+        monitor.resynchronizeAfterModalInteraction()
+        modifiers = [.function, .control]
+        monitor.resynchronizeAfterModalInteraction()
+        XCTAssertEqual(changes, [true])
+    }
+
     func testPollingDeliversPressAndReleaseThenStops() async throws {
         let preferences = makePreferences()
         var modifiers: VoiceShortcutModifiers = [.function, .control]
