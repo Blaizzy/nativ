@@ -19,6 +19,24 @@ final class ChatArchiveTests: XCTestCase {
         XCTAssertEqual(decoded, archive)
     }
 
+    func testImportPreservesSharedAssetIdentityAndGenerationMetadata() throws {
+        var attachment = ChatImageAttachment(filename: "image.png", mimeType: "image/png", base64Data: Data([1, 2, 3]).base64EncodedString())
+        attachment.generation = ArtifactGeneration(prompt: "A fox", modelID: "image/model", seed: 42)
+        let session = ChatSession(
+            id: UUID(), title: "Reuse", createdAt: .now, updatedAt: .now,
+            messages: [
+                ChatTranscriptMessage(role: .tool, content: "{}", imageAttachments: [attachment], toolName: "generate_image"),
+                ChatTranscriptMessage(role: .user, content: "Edit this", imageAttachments: [attachment]),
+            ]
+        )
+        let archive = ChatArchive(chat: session, modelRepositoryID: "text/model", systemPrompt: "")
+        let imported = try ChatArchiveCodec.importedSession(from: archive)
+        let attachments = imported.messages.flatMap(\.imageAttachments)
+        XCTAssertEqual(Set(attachments.map(\.id)).count, 1)
+        XCTAssertNotEqual(attachments[0].id, attachment.id)
+        XCTAssertTrue(attachments.allSatisfy { $0.generation == attachment.generation })
+    }
+
     func testImportAssignsNewLocalIDsAndPreservesToolCallLinks() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         let source = makeSession(date: date, isStreaming: true)

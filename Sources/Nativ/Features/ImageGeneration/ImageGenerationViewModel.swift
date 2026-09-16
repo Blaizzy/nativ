@@ -766,6 +766,33 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     @discardableResult
+    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
+        guard !inferenceActivity.isActive(.imageGeneration(sessionID)) else { return false }
+        if sessionID == currentSessionID {
+            let previousTurns = turns
+            let previousReference = activeReference
+            for index in turns.indices {
+                turns[index].referenceImages.removeAll { $0.assetID == assetID }
+                turns[index].outputs.removeAll { ($0.asset?.id ?? $0.id) == assetID }
+            }
+            if activeReference?.assetID == assetID { activeReference = nil }
+            guard persistCurrentSession(updateTimestamp: false) else {
+                turns = previousTurns
+                activeReference = previousReference
+                return false
+            }
+            pendingImageAttachments.removeAll { $0.assetID == assetID }
+            return true
+        }
+        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
+        session.removeArtifact(assetID)
+        guard saveSession(session) else { return false }
+        upsertStoredSession(session)
+        refreshSessionList()
+        return true
+    }
+
+    @discardableResult
     func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) -> Bool {
         guard canModifySession(sessionID) else {
             return false
@@ -1392,58 +1419,25 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
     }
 
     var attachment: ChatImageAttachment {
+        var attachment: ChatImageAttachment
         if let asset {
-            return ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+            attachment = ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+        } else {
+            attachment = ChatImageAttachment(
+                id: id, filename: filename, mimeType: mimeType,
+                base64Data: imageData.base64EncodedString()
+            )
         }
-        return ChatImageAttachment(
-            id: id,
-            filename: filename,
-            mimeType: mimeType,
-            base64Data: imageData.base64EncodedString()
+        attachment.generation = ArtifactGeneration(
+            prompt: revisedPrompt, seed: seed, width: width, height: height
         )
+        return attachment
     }
+
 }
 
 private extension String {
     var nonEmpty: String? {
         isEmpty ? nil : self
-    }
-}
-
-struct GeneratedArtifactRecord: Sendable {
-    let id: UUID
-    let sessionID: UUID
-    let turnID: UUID
-    let prompt: String?
-    let asset: MediaAssetReference
-    let mimeType: String
-    let createdAt: Date
-    let sessionTitle: String
-}
-
-enum ImageGenerationArtifactCatalog {
-    static func fingerprint() -> String {
-        ImageGenerationSessionStore().fingerprint()
-    }
-
-    static func generatedRecords() -> [GeneratedArtifactRecord] {
-        let store = ImageGenerationSessionStore()
-        return store.loadSessions().flatMap { session in
-            session.turns.flatMap { turn in
-                turn.outputs.compactMap { output in
-                    guard let asset = output.asset else { return nil }
-                    return GeneratedArtifactRecord(
-                        id: output.id,
-                        sessionID: session.id,
-                        turnID: turn.id,
-                        prompt: output.revisedPrompt ?? (turn.prompt.isEmpty ? nil : turn.prompt),
-                        asset: asset,
-                        mimeType: output.mimeType,
-                        createdAt: turn.createdAt,
-                        sessionTitle: session.displayTitle
-                    )
-                }
-            }
-        }
     }
 }

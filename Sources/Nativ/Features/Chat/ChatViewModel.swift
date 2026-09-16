@@ -700,7 +700,31 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stageAttachment(_ attachment: ChatImageAttachment) {
+        guard !pendingImageAttachments.contains(where: { $0.assetID == attachment.assetID }) else { return }
         pendingImageAttachments.append(attachment)
+    }
+
+    @discardableResult
+    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
+        guard !inferenceActivity.isActive(.chat(sessionID)) else { return false }
+        if sessionID == currentSessionID {
+            let previous = messages
+            for index in messages.indices {
+                messages[index].imageAttachments.removeAll { $0.assetID == assetID }
+            }
+            guard persistCurrentSession(updateTimestamp: false) else {
+                messages = previous
+                return false
+            }
+            pendingImageAttachments.removeAll { $0.assetID == assetID }
+            return true
+        }
+        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
+        session.removeArtifact(assetID)
+        guard saveSession(session) else { return false }
+        upsertStoredSession(session)
+        refreshSessionList()
+        return true
     }
 
     @discardableResult
