@@ -220,6 +220,8 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceDictationTranscript.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioCaptureSleepMonitor.swift
+      - path: Sources/Nativ/Features/VoiceCapture/SystemAudioMeetingRecorder.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
       - path: Sources/Nativ/Features/Extensions/NativExtensionStateStore.swift
       - path: Sources/Nativ/Features/MCP/MCPServerCatalog.swift

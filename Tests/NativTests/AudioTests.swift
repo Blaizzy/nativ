@@ -339,6 +339,38 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.records.map(\.id), ["meeting"])
     }
 
+    func testUntranscribedMeetingSurvivesReloadAndCanBeTranscribedInPlace() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("sleep-meeting.wav")
+        try Data([0x00]).write(to: recordingURL)
+        store.addCapture(
+            recordingURL: recordingURL,
+            kind: .meeting,
+            title: "Interrupted meeting",
+            durationSeconds: 60
+        )
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        let saved = try XCTUnwrap(reloaded.records.first)
+        XCTAssertEqual(saved.transcript, "")
+        XCTAssertEqual(saved.audioFileName, recordingURL.lastPathComponent)
+        XCTAssertEqual(saved.resolvedKind, .meeting)
+        XCTAssertNil(saved.summary)
+
+        reloaded.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "Audio captured before sleep.",
+            durationSeconds: 60,
+            modelID: "local-asr",
+            applicationName: nil
+        )
+        XCTAssertEqual(reloaded.records.count, 1)
+        XCTAssertEqual(reloaded.records.first?.id, saved.id)
+        XCTAssertEqual(reloaded.records.first?.audioFileName, saved.audioFileName)
+        XCTAssertEqual(reloaded.records.first?.transcript, "Audio captured before sleep.")
+    }
+
     func testPersistsMeetingAudioTranscriptAndSummaryMetadata() throws {
         let recordingURL = temporaryDirectory.appendingPathComponent("meeting.m4a")
         try Data([0x00]).write(to: recordingURL)
