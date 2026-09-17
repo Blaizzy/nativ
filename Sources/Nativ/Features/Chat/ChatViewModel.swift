@@ -21,7 +21,7 @@ private struct ChatSessionBootstrap {
 }
 
 enum ChatStreamingRenderPolicy {
-    static let updatesPerSecond: Double = 20
+    static let updatesPerSecond: Double = 60
     static let flushInterval: Duration = .seconds(1 / updatesPerSecond)
 }
 
