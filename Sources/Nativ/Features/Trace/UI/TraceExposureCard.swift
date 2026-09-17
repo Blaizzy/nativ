@@ -1,0 +1,137 @@
+import SwiftUI
+
+struct TraceExposureCard: View {
+    let exposure: RequestComposedPayload
+    let label: String
+    let modelID: String?
+    var isHighlighted = false
+    let onOpenArtifact: (UUID) -> Void
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if isExpanded {
+                Divider().overlay(TracePalette.stroke)
+                VStack(alignment: .leading, spacing: 14) {
+                    systemPrompt
+                    tools
+                    if !exposure.messages.isEmpty { messages }
+                    if !exposure.omissions.isEmpty { omissions }
+                    parameters
+                }
+                .padding(14)
+            }
+        }
+        .nativPanelStyle(cornerRadius: .large, isHighlighted: isHighlighted)
+    }
+
+    private var header: some View {
+        Button {
+            isExpanded.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .animation(.easeOut(duration: 0.16), value: isExpanded)
+
+                Text(label)
+                    .font(.callout.weight(.semibold))
+
+                Text("\(exposure.systemSections.count) prompt \(exposure.systemSections.count == 1 ? "section" : "sections") · \(toolSummary)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if let modelID {
+                    Text(modelID)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 180, alignment: .trailing)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(isExpanded ? "Hide what this call showed the model" : "Show what this call showed the model")
+    }
+
+    private var toolSummary: String {
+        guard exposure.advertisesTools else { return "no tools offered" }
+        return "\(exposure.tools.count) \(exposure.tools.count == 1 ? "tool" : "tools")"
+    }
+
+    private var systemPrompt: some View {
+        TraceDisclosureSection(
+            title: "System prompt",
+            subtitle: "\(exposure.systemSections.count) sections",
+            startsExpanded: false
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(exposure.systemSections.enumerated()), id: \.offset) { _, section in
+                    TraceSectionRow(section: section)
+                }
+            }
+        }
+    }
+
+    private var tools: some View {
+        TraceDisclosureSection(
+            title: "Tools exposed",
+            subtitle: exposure.advertisesTools ? "\(exposure.tools.count)" : "withheld this round",
+            startsExpanded: false
+        ) {
+            if exposure.tools.isEmpty {
+                Text("No tools were advertised on this call.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(exposure.tools, id: \.name) { tool in
+                        TraceToolDescriptorRow(tool: tool)
+                    }
+                }
+            }
+        }
+    }
+
+    private var messages: some View {
+        TraceDisclosureSection(
+            title: "Conversation sent",
+            subtitle: "\(exposure.messages.count) messages"
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(exposure.messages) { message in
+                    TraceResolvedMessageRow(message: message, onOpenArtifact: onOpenArtifact)
+                }
+            }
+        }
+    }
+
+    private var omissions: some View {
+        TraceDisclosureSection(title: "Left out", subtitle: "\(exposure.omissions.count)") {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(exposure.omissions, id: \.subject) { omission in
+                    Text("\(omission.subject) — \(omission.reason)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var parameters: some View {
+        TraceDisclosureSection(title: "Sampling", subtitle: nil) {
+            TraceParameterGrid(parameters: exposure.parameters)
+        }
+    }
+
+}

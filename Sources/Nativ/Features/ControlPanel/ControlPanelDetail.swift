@@ -55,6 +55,7 @@ extension ControlPanelView {
                 imageGeneration: imageGeneration,
                 projects: projects,
                 showsConfiguration: $isModelConfigurationVisible,
+                onOpenArtifact: navigation.openArtifact,
                 onExploreImageModels: navigation.openImageModelDiscovery,
                 onFindDraftModels: navigation.openDrafterModelDiscovery
             )
@@ -81,6 +82,8 @@ extension ControlPanelView {
                 embeddingLibrary: embeddingLibrary,
                 settings: chromeState.artifactSettings,
                 titleLeadingInset: 0,
+                requestedPreviewID: navigation.requestedArtifactID,
+                onPreviewOpened: navigation.consumeArtifactRequest,
                 onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
                     switch artifact.source {
@@ -242,6 +245,7 @@ struct ChatWorkspaceView: View {
     let imageGeneration: ImageGenerationViewModel
     let projects: ChatProjectStore
     @Binding var showsConfiguration: Bool
+    let onOpenArtifact: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
 
@@ -258,6 +262,7 @@ struct ChatWorkspaceView: View {
                     workspaceMode: mode,
                     onSelectWorkspaceMode: onSelectMode,
                     showsConfiguration: $showsConfiguration,
+                    onOpenArtifact: onOpenArtifact,
                     onExploreImageModels: onExploreImageModels,
                     onFindDraftModels: onFindDraftModels
                 )
@@ -289,6 +294,8 @@ struct ArtifactsPageHost: View {
     @ObservedObject var embeddingLibrary: LocalModelLibrary
     let settings: ControlPanelChromeState.ArtifactSettings
     let titleLeadingInset: CGFloat
+    let requestedPreviewID: UUID?
+    let onPreviewOpened: (UUID) -> Void
     let onOpenModels: () -> Void
     let onOpenChat: (Artifact) -> Void
     let onUseInChat: (Artifact) -> Void
@@ -336,6 +343,8 @@ struct ArtifactsPageHost: View {
             store: store,
             semanticSearch: semanticSearch,
             titleLeadingInset: titleLeadingInset,
+            requestedPreviewID: requestedPreviewID,
+            onPreviewOpened: onPreviewOpened,
             onOpenChat: onOpenChat,
             onUseInChat: onUseInChat,
             onUseAsReference: onUseAsReference
