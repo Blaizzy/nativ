@@ -114,17 +114,48 @@ public struct TraceMessageRef: Sendable, Hashable, Codable, Identifiable {
     public var role: TraceRole
     public var messageID: String
     public var body: String
+    public var attachments: [TraceAttachmentRef]
 
     public var id: String { messageID }
 
     public init(
         role: TraceRole,
         messageID: String,
-        body: String
+        body: String,
+        attachments: [TraceAttachmentRef] = []
     ) {
         self.role = role
         self.messageID = messageID
         self.body = body
+        self.attachments = attachments
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role, messageID, body, attachments
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(TraceRole.self, forKey: .role)
+        messageID = try container.decode(String.self, forKey: .messageID)
+        body = try container.decode(String.self, forKey: .body)
+        attachments = try container.decodeIfPresent([TraceAttachmentRef].self, forKey: .attachments) ?? []
+    }
+}
+
+public struct TraceAttachmentRef: Sendable, Hashable, Codable, Identifiable {
+    public var id: UUID
+    public var filename: String
+    public var mimeType: String
+
+    public init(id: UUID, filename: String, mimeType: String) {
+        self.id = id
+        self.filename = filename
+        self.mimeType = mimeType
+    }
+
+    public var fileExtension: String {
+        URL(fileURLWithPath: filename).pathExtension
     }
 }
 
@@ -137,4 +168,3 @@ public struct TraceOmission: Sendable, Hashable, Codable {
         self.reason = reason
     }
 }
-

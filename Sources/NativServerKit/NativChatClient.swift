@@ -181,6 +181,15 @@ public enum MLXChatMessageContent: Codable, Equatable, Sendable {
     case text(String)
     case parts([MLXChatContentPart])
 
+    public var plainText: String {
+        switch self {
+        case .text(let text):
+            text
+        case .parts(let parts):
+            parts.compactMap(\.text).joined(separator: "\n")
+        }
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let text = try? container.decode(String.self) {
@@ -547,7 +556,6 @@ public final class NativChatClient: @unchecked Sendable {
     private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
-
 
     public static let defaultIdleTimeout: TimeInterval = 600
 
