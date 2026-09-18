@@ -357,6 +357,7 @@ class RequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         server.parse_responses_body = Mock(return_value=completion)
         server.StreamAccumulator = Mock()
         server.StreamAccumulator.return_value.finalize.return_value = completion
+        server.StreamAccumulator.return_value.failed = False
         server.merge_base_metrics = Mock(return_value=completion)
         server._BASE_METRICS_CAPTURE = contextvars.ContextVar("test-capture", default=None)
         server.install_metrics_overlay()

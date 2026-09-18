@@ -27,7 +27,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -p 'test_macos_release.py'
 
       - name: Test request diagnostics
-        run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics.py' -v
+        run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
 
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4

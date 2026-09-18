@@ -969,6 +969,7 @@ class StreamAccumulator:
         self.peak_memory_gb: float | None = None
         self.finish_reason: str | None = None
         self.tool_calls = False
+        self.failed = False
 
     def feed(self, block: str) -> None:
         lines = [line for line in block.splitlines() if line]
@@ -993,6 +994,18 @@ class StreamAccumulator:
         try:
             payload = json.loads(data_text)
         except json.JSONDecodeError:
+            return
+
+        if not isinstance(payload, dict):
+            return
+        response = payload.get("response")
+        if (
+            event_name in {"error", "response.failed"}
+            or payload.get("type") in {"error", "response.failed"}
+            or ("error" in payload and payload["error"] is not None)
+            or (isinstance(response, dict) and response.get("status") == "failed")
+        ):
+            self.failed = True
             return
 
         if self.kind == "chat":
@@ -1027,6 +1040,8 @@ class StreamAccumulator:
         choice = choices[0] or {}
         if choice.get("finish_reason"):
             self.finish_reason = choice["finish_reason"]
+            if self.finish_reason == "error":
+                self.failed = True
         delta = choice.get("delta") or {}
         if delta.get("tool_calls"):
             self.tool_calls = True
@@ -1319,6 +1334,9 @@ def install_metrics_overlay() -> None:
                             accumulator.feed(buffer)
                         except Exception as error:
                             base.logger.warning("metrics stream instrumentation failed: %s", error)
+                    if accumulator.failed:
+                        TRACKER.record_failed(observation, "runtime_error")
+                        return
                     try:
                         completion = merge_base_metrics(
                             accumulator.finalize(),
