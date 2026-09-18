@@ -8,9 +8,11 @@ enum NativFormatting { static let missingValue = "—" }
 struct SystemTelemetryHarness {
     @MainActor
     static func main() async throws {
-        let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let marker = directory.appendingPathComponent("system-enabled")
+        let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true).appendingPathComponent("fresh-history")
+        precondition(!FileManager.default.fileExists(atPath: directory.path))
+        precondition(SystemTelemetryRecorder.freeBytes(at: directory) != nil, "Missing history directory blocked the first write")
+        precondition(!FileManager.default.fileExists(atPath: directory.path), "Free-space probe created history")
+        precondition(SystemTelemetryRecorder.storageBudgetBytes == 1_000_000_000, "Default storage budget must be 1 GB")
         let recorder = SystemTelemetryRecorder(directory: directory, availableBytes: { _ in Int64.max })
         var s = SystemMonitorSnapshot()
         s.recordedAt = Date().addingTimeInterval(-120)
@@ -73,38 +75,34 @@ struct SystemTelemetryHarness {
         precondition(payload["disk_power_cycles"] as? Double == 180)
         precondition((payload["core_usage"] as? [Any])?[2] is NSNull)
         try await recorder.record(s)
-        precondition(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("SystemTelemetry.sqlite3").path), "Disabled recording wrote a database")
-        try Data("enabled\n".utf8).write(to: marker)
-        try await recorder.record(s)
+        precondition(FileManager.default.fileExists(atPath: directory.appendingPathComponent("SystemTelemetry.sqlite3").path), "Automatic recording did not create history")
         s.recordedAt = s.recordedAt.addingTimeInterval(10)
         try await recorder.record(s) // Throttled.
         try await SystemTelemetryRecorder(directory: directory, availableBytes: { _ in Int64.max }).record(s) // Restart is throttled too.
         s.recordedAt = s.recordedAt.addingTimeInterval(50)
         try await recorder.record(s)
-        try FileManager.default.removeItem(at: marker)
-        s.recordedAt = s.recordedAt.addingTimeInterval(60)
-        try await recorder.record(s) // Explicit opt-out.
         var db: OpaquePointer?
         precondition(sqlite3_open_v2(directory.appendingPathComponent("SystemTelemetry.sqlite3").path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK)
         defer { sqlite3_close(db) }
         var statement: OpaquePointer?
         precondition(sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM system_samples", -1, &statement, nil) == SQLITE_OK)
         defer { sqlite3_finalize(statement) }
-        precondition(sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) == 2, "Recorder throttle/opt-out failed")
+        precondition(sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) == 2, "Recorder throttle failed")
         try await verifyRetention(directory.appendingPathComponent("retention"))
         try await verifyStorageBudget(directory.appendingPathComponent("budget"))
         try await verifyLowSpace(directory.appendingPathComponent("low-space"))
         var policy = SystemMonitorObservationPolicy()
         let ui = UUID(), telemetry = UUID()
-        precondition(policy.begin(ui) && policy.pause())
-        precondition(!policy.begin(telemetry), "History recording overrode an explicit pause")
-        precondition(!policy.end(ui) && policy.resume(), "History observer was lost when the tab closed")
-        print("Native projection, opt-in, throttle, pause, opt-out and bounded retention passed.")
+        precondition(policy.begin(telemetry), "History did not start without a UI observer")
+        precondition(!policy.begin(telemetry), "Repeated startup created another sampling loop")
+        precondition(!policy.begin(ui) && !policy.end(ui), "Closing the tab stopped automatic history")
+        precondition(policy.pause(), "Automatic history did not pause")
+        precondition(!policy.begin(telemetry), "History startup overrode an explicit pause")
+        precondition(policy.resume(), "Automatic history did not resume")
+        print("Native projection, automatic startup, throttle, pause and bounded retention passed.")
     }
 
     static func verifyRetention(_ directory: URL) async throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data().write(to: directory.appendingPathComponent("system-enabled"))
         let recorder = SystemTelemetryRecorder(directory: directory, availableBytes: { _ in Int64.max })
         var sample = SystemMonitorSnapshot()
         sample.recordedAt = Date().addingTimeInterval(-8 * 86400)
@@ -132,8 +130,6 @@ struct SystemTelemetryHarness {
         precondition(count() == 10080, "Local sample count exceeded the bound")
     }
     static func verifyStorageBudget(_ directory: URL) async throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data().write(to: directory.appendingPathComponent("system-enabled"))
         // Exercise the actual page cap quickly using the same policy with a small budget.
         let budget = 512 * 1024
         let recorder = SystemTelemetryRecorder(directory: directory, storageBudgetBytes: budget, availableBytes: { _ in Int64.max })
@@ -181,8 +177,6 @@ struct SystemTelemetryHarness {
     }
 
     static func verifyLowSpace(_ directory: URL) async throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try Data().write(to: directory.appendingPathComponent("system-enabled"))
         let recorder = SystemTelemetryRecorder(directory: directory, availableBytes: { _ in SystemTelemetryRecorder.minimumFreeBytes - 1 })
         try await recorder.record(SystemMonitorSnapshot())
         precondition(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("SystemTelemetry.sqlite3").path), "Low disk space must skip writes")

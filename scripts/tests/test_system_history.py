@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @unittest.skipUnless(platform.system() == "Darwin", "Native hardware diagnostics requires macOS")
 class SystemHistoryTests(unittest.TestCase):
-    def test_projection_opt_in_retention_and_storage_budget(self):
+    def test_automatic_history_retention_and_storage_budget(self):
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             source = ROOT / "Sources/Nativ/Features/SystemMonitor"
@@ -26,7 +26,7 @@ class SystemHistoryTests(unittest.TestCase):
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             ran = subprocess.run([str(executable), str(folder)], capture_output=True, text=True, timeout=60)
             self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
-            database = folder / "SystemTelemetry.sqlite3"
+            database = folder / "fresh-history/SystemTelemetry.sqlite3"
             with sqlite3.connect(database) as db:
                 rows = db.execute("SELECT payload FROM system_samples").fetchall()
             self.assertEqual(len(rows), 2)

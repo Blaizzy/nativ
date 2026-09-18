@@ -11,7 +11,7 @@ final class ControlPanelSharedDependencies {
     let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
 
     init() {
-        systemMonitor.observeDiagnosticHistory()
+        systemMonitor.startDiagnosticHistory()
     }
 }
 

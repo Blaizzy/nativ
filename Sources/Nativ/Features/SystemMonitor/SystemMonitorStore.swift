@@ -239,26 +239,15 @@ final class SystemMonitorStore {
     private let historyLimit = 300
     private let telemetryRecorder = SystemTelemetryRecorder()
     private let telemetryObserverID = UUID()
-    private var telemetryTimer: Timer?
     private var hasSamplingBaseline = false
 
     isolated deinit {
         samplingTask?.cancel()
-        telemetryTimer?.invalidate()
     }
 
-    /// Enabled only on the app's shared store, never on transient tool-created stores.
-    func observeDiagnosticHistory() {
-        guard telemetryTimer == nil else { return }
-        updateDiagnosticHistory()
-        telemetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.updateDiagnosticHistory() }
-        }
-    }
-
-    private func updateDiagnosticHistory() {
-        if SystemTelemetryRecorder.isEnabled() { beginObservation(telemetryObserverID) }
-        else { endObservation(telemetryObserverID) }
+    /// Started by the app's shared dependencies; stays active when its tab closes.
+    func startDiagnosticHistory() {
+        beginObservation(telemetryObserverID)
     }
 
     func beginObservation(_ observerID: UUID) {

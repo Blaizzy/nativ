@@ -115,18 +115,15 @@ enum SystemTelemetryProjection {
     }
 }
 
-/// Opt-in local hardware history. This recorder performs no networking.
+/// Automatic local hardware history. This recorder performs no networking.
 actor SystemTelemetryRecorder {
     /// Reserve room for both the database and SQLite's temporary rollback journal.
-    /// A 96 MiB database leaves ample headroom within the 256 MiB storage budget.
-    nonisolated static let storageBudgetBytes = 256 * 1024 * 1024
+    /// A 375 MB database leaves ample headroom within the 1 GB storage budget.
+    nonisolated static let storageBudgetBytes = 1_000_000_000
     nonisolated static let minimumFreeBytes: Int64 = 1024 * 1024 * 1024
     nonisolated static var defaultDirectory: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Nativ/Diagnostics", isDirectory: true)
-    }
-    nonisolated static func isEnabled(at directory: URL = defaultDirectory) -> Bool {
-        FileManager.default.fileExists(atPath: directory.appendingPathComponent("system-enabled").path)
     }
 
     private let directory: URL
@@ -145,12 +142,19 @@ actor SystemTelemetryRecorder {
     }
 
     nonisolated static func freeBytes(at directory: URL) -> Int64? {
-        let values = try? directory.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        // On the first launch the history directory does not exist yet. Check its
+        // nearest existing ancestor so the first write can create it automatically.
+        var existingDirectory = directory
+        while !FileManager.default.fileExists(atPath: existingDirectory.path) {
+            let parent = existingDirectory.deletingLastPathComponent()
+            guard parent.path != existingDirectory.path else { return nil }
+            existingDirectory = parent
+        }
+        let values = try? existingDirectory.resourceValues(forKeys: [.volumeAvailableCapacityKey])
         return values?.volumeAvailableCapacity.map(Int64.init)
     }
 
     func record(_ snapshot: SystemMonitorSnapshot) throws {
-        guard Self.isEnabled(at: directory) else { return }
         if let lastAttemptAt, (0..<60).contains(snapshot.recordedAt.timeIntervalSince(lastAttemptAt)) { return }
         // Throttle failures too, so a full or busy disk does not trigger work every second.
         lastAttemptAt = snapshot.recordedAt
