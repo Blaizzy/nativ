@@ -121,6 +121,14 @@ final class AudioCaptureLibrary: ObservableObject {
     private var activeBackend: ActiveAudioCaptureBackend?
     private var activeTask: Task<Void, Never>?
     private var lastMeterPublishAt = Date.distantPast
+    private var stoppingTask: Task<Void, Never>?
+    private var saveWithoutTranscription = false
+    private static let interruptedRecordingKey = "audio.capture.sleepSavedRecording"
+    private var activationObservers: [NSObjectProtocol] = []
+    private var isShowingInterruptionNotice = false
+    private lazy var sleepMonitor = AudioCaptureSleepMonitor { [weak self] in
+        await self?.saveInterruptedRecording()
+    }
 
     init(analytics: AudioAnalyticsStore? = nil) {
         AudioCapturePreferences.registerDefaults()
@@ -169,6 +177,10 @@ final class AudioCaptureLibrary: ObservableObject {
         voiceRecorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.microphoneRecordingInterrupted(error, savedURL: savedURL)
         }
+        meetingRecorder.onInterruption = { [weak self] in
+            guard let self, self.markRecordingInterrupted() else { return }
+            Task { await self.stop() }
+        }
         meetingRecorder.onMicrophoneLevelUpdate = { [weak self] level in
             guard let self else {
                 return
@@ -179,6 +191,64 @@ final class AudioCaptureLibrary: ObservableObject {
 
     func start() {
         meetingJoinMonitor.start()
+        sleepMonitor.onWake = { [weak self] in
+            self?.presentInterruptedRecordingNotice()
+        }
+        sleepMonitor.start()
+        guard activationObservers.isEmpty else { return }
+        for name in [NSApplication.didBecomeActiveNotification, NSWindow.didBecomeMainNotification] {
+            activationObservers.append(NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.presentInterruptedRecordingNotice()
+                }
+            })
+        }
+        presentInterruptedRecordingNotice()
+    }
+
+    private func saveInterruptedRecording() async {
+        guard markRecordingInterrupted() else { return }
+        await stop()
+    }
+
+    private func markRecordingInterrupted() -> Bool {
+        guard phase == .recording || stoppingTask != nil else { return false }
+        saveWithoutTranscription = true
+        meetingRecorder.prepareForInterruption()
+        recordingOverlay.hide()
+        return true
+    }
+
+    private func presentInterruptedRecordingNotice() {
+        guard !sleepMonitor.isSleeping, !isShowingInterruptionNotice,
+              NSApp.isActive, let window = NSApp.mainWindow,
+              window.level == .normal, window.attachedSheet == nil,
+              let recordID = UserDefaults.standard.string(forKey: Self.interruptedRecordingKey)
+        else { return }
+        guard let record = analytics.record(withID: recordID),
+              record.transcript.isEmpty, audioURL(for: record) != nil
+        else {
+            UserDefaults.standard.removeObject(forKey: Self.interruptedRecordingKey)
+            return
+        }
+
+        isShowingInterruptionNotice = true
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Recording saved"
+        alert.informativeText = "Your recording was interrupted. The captured audio has been saved without a transcript. Open Audio → Library and select Transcribe to transcribe it manually."
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { [weak self] _ in
+            // Do not clear a newer notice if another recording was saved meanwhile.
+            if UserDefaults.standard.string(forKey: Self.interruptedRecordingKey) == recordID {
+                UserDefaults.standard.removeObject(forKey: Self.interruptedRecordingKey)
+            }
+            self?.isShowingInterruptionNotice = false
+        }
     }
 
     static var recordingsDirectory: URL {
@@ -299,15 +369,28 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func stop() async {
-        guard phase == .recording,
+        if let stoppingTask {
+            await stoppingTask.value
+            return
+        }
+        guard phase == .recording else { return }
+        phase = .processing
+        let task = Task { await finishRecording() }
+        stoppingTask = task
+        await task.value
+    }
+
+    private func finishRecording() async {
+        guard phase == .processing,
               let kind = activeKind,
               let activeBackend
         else {
             return
         }
 
-        phase = .processing
-        recordingOverlay.waitForTranscription()
+        if !saveWithoutTranscription {
+            recordingOverlay.waitForTranscription()
+        }
         stopElapsedUpdates()
         var duration = max(
             elapsed,
@@ -330,6 +413,9 @@ final class AudioCaptureLibrary: ObservableObject {
                 duration = voiceRecorder.lastRecordingDuration ?? duration
             case .systemAndMicrophone:
                 recordingURL = try await meetingRecorder.stop()
+                if saveWithoutTranscription {
+                    duration = try await AVURLAsset(url: recordingURL).load(.duration).seconds
+                }
             }
 
             let title = Self.defaultTitle(for: kind, date: captureStartedAt ?? Date())
@@ -340,6 +426,13 @@ final class AudioCaptureLibrary: ObservableObject {
                 durationSeconds: duration
             )
             let recordID = recordingURL.deletingPathExtension().lastPathComponent
+            stoppingTask = nil
+            if saveWithoutTranscription {
+                UserDefaults.standard.set(recordID, forKey: Self.interruptedRecordingKey)
+                resetCaptureState()
+                presentInterruptedRecordingNotice()
+                return
+            }
             processingRecordIDs.insert(recordID)
             let automaticallySummarize = shouldSummarizeCurrentCapture
             activeTask = Task { [weak self] in
@@ -587,6 +680,9 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func shutdown() {
+        sleepMonitor.stop()
+        activationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        activationObservers.removeAll()
         meetingJoinMonitor.stop()
         meetingSuggestion.dismiss()
         activeTask?.cancel()
@@ -874,6 +970,8 @@ final class AudioCaptureLibrary: ObservableObject {
         shouldSummarizeCurrentCapture = false
         lastMeterPublishAt = .distantPast
         activeTask = nil
+        stoppingTask = nil
+        saveWithoutTranscription = false
     }
 
     private func startElapsedUpdates() {

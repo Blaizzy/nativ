@@ -33,12 +33,14 @@ private enum MeetingAudioTrack {
 @MainActor
 final class SystemAudioMeetingRecorder: NSObject {
     var onMicrophoneLevelUpdate: ((Float) -> Void)?
+    var onInterruption: (() -> Void)?
 
     private var stream: SCStream?
     private var temporaryAudioURL: URL?
     private var destinationAudioURL: URL?
     private nonisolated let audioWriter = MeetingAudioWriter()
-    private nonisolated let captureFailure = MeetingCaptureFailure()
+    private var captureFailure: Error?
+    private var isSavingInterruptedAudio = false
 
     private(set) var isRecording = false
 
@@ -57,17 +59,6 @@ final class SystemAudioMeetingRecorder: NSObject {
         guard let display = availableContent.displays.first else {
             throw SystemAudioMeetingRecorderError.noDisplayAvailable
         }
-
-        try FileManager.default.createDirectory(
-            at: outputURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-
-        let temporaryURL = outputURL
-            .deletingPathExtension()
-            .appendingPathExtension("audio.mov")
-        try? FileManager.default.removeItem(at: temporaryURL)
-        try? FileManager.default.removeItem(at: outputURL)
 
         let excludedApplications = availableContent.applications.filter {
             $0.bundleIdentifier == Bundle.main.bundleIdentifier
@@ -89,8 +80,26 @@ final class SystemAudioMeetingRecorder: NSObject {
             configuration: configuration,
             delegate: self
         )
+        try await start(stream: stream, outputURL: outputURL)
+    }
+
+    func start(stream: SCStream, outputURL: URL) async throws {
+        guard self.stream == nil else { return }
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let temporaryURL = outputURL
+            .deletingPathExtension()
+            .appendingPathExtension("audio.mov")
+        try? FileManager.default.removeItem(at: temporaryURL)
+        try? FileManager.default.removeItem(at: outputURL)
+
         try audioWriter.prepare(outputURL: temporaryURL)
-        captureFailure.clear()
+        captureFailure = nil
+        // Recognize delegate failures while capture startup is suspended.
+        self.stream = stream
         do {
             try stream.addStreamOutput(
                 self,
@@ -103,16 +112,26 @@ final class SystemAudioMeetingRecorder: NSObject {
                 sampleHandlerQueue: audioWriter.sampleQueue
             )
             try await stream.startCapture()
+            if let captureFailure {
+                throw captureFailure
+            }
         } catch {
+            try? stream.removeStreamOutput(self, type: .audio)
+            try? stream.removeStreamOutput(self, type: .microphone)
             audioWriter.cancel()
             try? FileManager.default.removeItem(at: temporaryURL)
+            reset()
             throw error
         }
 
-        self.stream = stream
         temporaryAudioURL = temporaryURL
         destinationAudioURL = outputURL
         isRecording = true
+    }
+
+    func prepareForInterruption() {
+        guard stream != nil else { return }
+        isSavingInterruptedAudio = true
     }
 
     func stop() async throws -> URL {
@@ -124,23 +143,34 @@ final class SystemAudioMeetingRecorder: NSObject {
         }
 
         isRecording = false
+        if captureFailure != nil, !isSavingInterruptedAudio {
+            isSavingInterruptedAudio = true
+            onInterruption?()
+        }
         do {
-            try await stream.stopCapture()
+            if captureFailure == nil {
+                try await stream.stopCapture()
+            }
         } catch {
-            audioWriter.cancel()
-            reset()
-            try? FileManager.default.removeItem(at: temporaryAudioURL)
-            throw error
+            let streamError = error as NSError
+            let alreadyStopped = streamError.domain == SCStreamError.errorDomain
+                && streamError.code == SCStreamError.Code.attemptToStopStreamState.rawValue
+            if isSavingInterruptedAudio || alreadyStopped || captureFailure != nil {
+                if !isSavingInterruptedAudio {
+                    isSavingInterruptedAudio = true
+                    onInterruption?()
+                }
+            } else {
+                audioWriter.cancel()
+                if !isSavingInterruptedAudio {
+                    try? FileManager.default.removeItem(at: temporaryAudioURL)
+                }
+                reset()
+                throw error
+            }
         }
         try? stream.removeStreamOutput(self, type: .audio)
         try? stream.removeStreamOutput(self, type: .microphone)
-
-        if let failure = captureFailure.value {
-            audioWriter.cancel()
-            reset()
-            try? FileManager.default.removeItem(at: temporaryAudioURL)
-            throw failure
-        }
 
         do {
             try await audioWriter.finish()
@@ -153,7 +183,9 @@ final class SystemAudioMeetingRecorder: NSObject {
             return destinationAudioURL
         } catch {
             audioWriter.cancel()
-            try? FileManager.default.removeItem(at: temporaryAudioURL)
+            if !isSavingInterruptedAudio {
+                try? FileManager.default.removeItem(at: temporaryAudioURL)
+            }
             try? FileManager.default.removeItem(at: destinationAudioURL)
             reset()
             throw error
@@ -180,8 +212,9 @@ final class SystemAudioMeetingRecorder: NSObject {
         stream = nil
         temporaryAudioURL = nil
         destinationAudioURL = nil
-        captureFailure.clear()
+        captureFailure = nil
         isRecording = false
+        isSavingInterruptedAudio = false
     }
 
     private static func exportMixedAudio(
@@ -493,27 +526,16 @@ extension SystemAudioMeetingRecorder: SCStreamDelegate {
         _ stream: SCStream,
         didStopWithError error: any Error
     ) {
-        captureFailure.set(error)
-    }
-}
-
-private final class MeetingCaptureFailure: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storedError: Error?
-
-    var value: Error? {
-        lock.withLock { storedError }
-    }
-
-    func set(_ error: Error) {
-        lock.withLock {
-            storedError = error
-        }
-    }
-
-    func clear() {
-        lock.withLock {
-            storedError = nil
+        let streamID = ObjectIdentifier(stream)
+        Task { @MainActor [weak self] in
+            guard let self, let activeStream = self.stream,
+                  ObjectIdentifier(activeStream) == streamID
+            else { return }
+            self.captureFailure = error
+            guard self.isRecording else { return }
+            self.isRecording = false
+            self.isSavingInterruptedAudio = true
+            self.onInterruption?()
         }
     }
 }
