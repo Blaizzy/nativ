@@ -237,9 +237,28 @@ final class SystemMonitorStore {
     private var samplingTask: Task<Void, Never>?
     private var observationPolicy = SystemMonitorObservationPolicy()
     private let historyLimit = 300
+    private let telemetryRecorder = SystemTelemetryRecorder()
+    private let telemetryObserverID = UUID()
+    private var telemetryTimer: Timer?
+    private var hasSamplingBaseline = false
 
     isolated deinit {
         samplingTask?.cancel()
+        telemetryTimer?.invalidate()
+    }
+
+    /// Enabled only on the app's shared store, never on transient tool-created stores.
+    func observeDiagnosticHistory() {
+        guard telemetryTimer == nil else { return }
+        updateDiagnosticHistory()
+        telemetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.updateDiagnosticHistory() }
+        }
+    }
+
+    private func updateDiagnosticHistory() {
+        if SystemTelemetryRecorder.isEnabled() { beginObservation(telemetryObserverID) }
+        else { endObservation(telemetryObserverID) }
     }
 
     func beginObservation(_ observerID: UUID) {
@@ -264,6 +283,7 @@ final class SystemMonitorStore {
 
     private func startSampling() {
         guard samplingTask == nil else { return }
+        hasSamplingBaseline = false
         isSampling = true
         displayFPSSampler.start()
         aneSampler.start()
@@ -305,6 +325,10 @@ final class SystemMonitorStore {
 
     private func apply(_ nextSnapshot: SystemMonitorSnapshot) {
         snapshot = nextSnapshot
+        if isSampling && hasSamplingBaseline {
+            Task { try? await telemetryRecorder.record(nextSnapshot) }
+        }
+        hasSamplingBaseline = true
         append(nextSnapshot.cpu.totalUsage, at: nextSnapshot.recordedAt, to: &cpuHistory)
         append(nextSnapshot.memory.usage, at: nextSnapshot.recordedAt, to: &memoryHistory)
 
@@ -506,6 +530,7 @@ private final class SystemANEUtilizationSampler: @unchecked Sendable {
 
 private actor SystemMetricsCollector {
     private var identity: SystemMonitorIdentity?
+    private var lastDiskIdentityRefresh: Date?
     private var previousCPUTicks: [SystemCPUTicks] = []
     private var previousDiskCounters: SystemDiskCounters?
     private var previousDiskSampleDate: Date?
@@ -515,11 +540,18 @@ private actor SystemMetricsCollector {
     func collect() -> SystemMonitorSnapshot {
         let now = Date()
         let resolvedIdentity: SystemMonitorIdentity
-        if let identity {
-            resolvedIdentity = identity
+        if var cached = identity {
+            // SMART health and lifetime counters change while the app stays open.
+            if lastDiskIdentityRefresh.map({ now.timeIntervalSince($0) >= 60 }) ?? true {
+                cached.disk = Self.diskIdentity()
+                identity = cached
+                lastDiskIdentityRefresh = now
+            }
+            resolvedIdentity = cached
         } else {
             let capturedIdentity = Self.captureIdentity()
             identity = capturedIdentity
+            lastDiskIdentityRefresh = now
             resolvedIdentity = capturedIdentity
         }
 
