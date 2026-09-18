@@ -88,7 +88,7 @@ struct SystemTelemetryHarness {
         precondition(sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM system_samples", -1, &statement, nil) == SQLITE_OK)
         defer { sqlite3_finalize(statement) }
         precondition(sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int(statement, 0) == 2, "Recorder throttle failed")
-        try await verifyRetention(directory.appendingPathComponent("retention"))
+        try await verifyHistoryBelowBudget(directory.appendingPathComponent("retention"))
         try await verifyStorageBudget(directory.appendingPathComponent("budget"))
         try await verifyLowSpace(directory.appendingPathComponent("low-space"))
         var policy = SystemMonitorObservationPolicy()
@@ -102,7 +102,7 @@ struct SystemTelemetryHarness {
         print("Native projection, automatic startup, throttle, pause and bounded retention passed.")
     }
 
-    static func verifyRetention(_ directory: URL) async throws {
+    static func verifyHistoryBelowBudget(_ directory: URL) async throws {
         let recorder = SystemTelemetryRecorder(directory: directory, availableBytes: { _ in Int64.max })
         var sample = SystemMonitorSnapshot()
         sample.recordedAt = Date().addingTimeInterval(-8 * 86400)
@@ -119,7 +119,7 @@ struct SystemTelemetryHarness {
             precondition(sqlite3_step(query) == SQLITE_ROW)
             return sqlite3_column_int(query, 0)
         }
-        precondition(count() == 1, "Expired local samples were retained")
+        precondition(count() == 2, "History was deleted by age before reaching the storage limit")
         precondition(sqlite3_exec(db, """
             WITH RECURSIVE samples(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM samples WHERE n < 10080)
             INSERT INTO system_samples(sample_id, occurred_at, payload)
@@ -127,7 +127,7 @@ struct SystemTelemetryHarness {
             """, nil, nil, nil) == SQLITE_OK)
         sample.recordedAt = sample.recordedAt.addingTimeInterval(60)
         try await recorder.record(sample)
-        precondition(count() == 10080, "Local sample count exceeded the bound")
+        precondition(count() == 10083, "History was deleted by row count before reaching the storage limit")
     }
     static func verifyStorageBudget(_ directory: URL) async throws {
         // Exercise the actual page cap quickly using the same policy with a small budget.
@@ -158,7 +158,8 @@ struct SystemTelemetryHarness {
         precondition(sqlite3_column_int64(query, 1) > firstTime, "Oldest snapshots were not evicted")
         precondition(sqlite3_column_int64(query, 2) == firstTime + 159 * 60, "New snapshots stopped replacing old history")
         sqlite3_finalize(query)
-        precondition(peakSize <= budget / 8 * 3, "Database exceeded its page budget")
+        precondition(peakSize <= budget, "Database exceeded its page budget")
+        precondition(peakSize > budget * 9 / 10, "History was evicted before using the configured budget")
         precondition(!FileManager.default.fileExists(atPath: url.path + "-wal"), "A WAL can grow behind a long-lived reader")
 
         // Holding a reader must fail promptly and leave the previous history intact.

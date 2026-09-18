@@ -20,15 +20,16 @@ starts a new history automatically. No new settings UI is introduced by this cha
 ## Storage policy
 
 The database is `~/Library/Application Support/Nativ/Diagnostics/SystemTelemetry.sqlite3`,
-with owner-only permissions. The default per-device budget is **1 GB (1,000,000,000 bytes)**, including space
-reserved for SQLite's temporary files:
+with owner-only permissions. The saved-history database is capped at **1 GB (1,000,000,000 bytes)**
+per device. SQLite's temporary rollback journal uses additional working space during a write and
+is removed after the transaction:
 
 - At most one snapshot per minute, including across app restarts.
-- On each write, discard snapshots older than seven days and retain at most 10,080 rows.
-- Limit the database itself to 375 MB using SQLite's page limit. Evict the oldest rows before
-  inserting when space is tight; the byte limit can shorten the retained time window.
-- Use a rollback journal instead of a WAL, leaving room for a journal up to the database's
-  size plus bookkeeping. A long-lived reader can delay a write but cannot cause a growing WAL.
+- Keep history regardless of age or row count while it fits within the storage budget.
+- Limit the database itself to 1 GB using SQLite's page limit. Evict the oldest rows before
+  inserting only when another snapshot would exceed the available page budget.
+- Use a rollback journal instead of a WAL. A long-lived reader can delay a write but cannot
+  cause a growing WAL.
 - Reclaim free pages incrementally without creating a second full database copy.
 - Skip writes when less than 1 GiB of actual disk space is available, or capacity cannot be read.
 - Throttle retries on a full or busy disk to once per minute. Recording errors do not stop
@@ -46,5 +47,5 @@ python3 -m unittest discover -s scripts/tests -p 'test_system_history.py' -v
 ```
 
 This compiles the actual System collector and recorder and checks safe projection, automatic startup in a fresh directory,
-permissions, missing values, restart throttling, pause behavior, age/count eviction, a reduced
-byte budget, low-disk suppression and recovery after a reader blocks a commit.
+permissions, missing values, restart throttling, pause behavior, preserving older history and more than 10,080 rows below the budget,
+oldest-first eviction at a reduced byte budget, low-disk suppression and recovery after a reader blocks a commit.

@@ -112,8 +112,6 @@ enum SystemTelemetryProjection {
 }
 
 actor SystemTelemetryRecorder {
-    /// Reserve room for both the database and SQLite's temporary rollback journal.
-    /// A 375 MB database leaves ample headroom within the 1 GB storage budget.
     nonisolated static let storageBudgetBytes = 1_000_000_000
     nonisolated static let minimumFreeBytes: Int64 = 1024 * 1024 * 1024
     nonisolated static var defaultDirectory: URL {
@@ -132,7 +130,7 @@ actor SystemTelemetryRecorder {
         availableBytes: @escaping @Sendable (URL) -> Int64? = SystemTelemetryRecorder.freeBytes
     ) {
         self.directory = directory
-        self.databaseByteLimit = storageBudgetBytes / 8 * 3
+        self.databaseByteLimit = storageBudgetBytes
         self.availableBytes = availableBytes
     }
 
@@ -195,11 +193,6 @@ actor SystemTelemetryRecorder {
         let timestamp = Int(snapshot.recordedAt.timeIntervalSince1970)
         let latest = try integer(database, "SELECT COALESCE(MAX(occurred_at), 0) FROM system_samples")
         if latest > 0, (0..<60).contains(timestamp - latest) { return }
-        let cutoff = timestamp - 7 * 86400
-        try execute(database, """
-            DELETE FROM system_samples WHERE occurred_at < \(cutoff)
-                OR seq <= (SELECT COALESCE(MAX(seq), 0) - 10079 FROM system_samples);
-            """)
         // Reuse free pages before reaching SQLite's physical page limit. Keep extra
         // space for row/index splits so a large sensor snapshot can replace old rows.
         let neededPages = (payload.count + pageSize - 1) / pageSize + 8
