@@ -9,6 +9,10 @@ final class ControlPanelSharedDependencies {
     let inferenceActivity = InferenceActivityCoordinator()
     let projects = ChatProjectStore()
     let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
+
+    init() {
+        systemMonitor.startDiagnosticHistory()
+    }
 }
 
 @MainActor

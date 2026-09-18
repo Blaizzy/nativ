@@ -35,4 +35,19 @@ final class SystemMonitorObservationPolicyTests: XCTestCase {
         XCTAssertFalse(policy.end(observer))
         XCTAssertFalse(policy.resume())
     }
+
+    func testHistoryObserverKeepsSamplingWithoutAnOpenTabAndRespectsPause() {
+        var policy = SystemMonitorObservationPolicy()
+        let history = UUID()
+        let tab = UUID()
+
+        XCTAssertTrue(policy.begin(history))
+        XCTAssertFalse(policy.begin(history))
+        XCTAssertFalse(policy.begin(tab))
+        XCTAssertFalse(policy.end(tab))
+        XCTAssertTrue(policy.pause())
+        XCTAssertFalse(policy.begin(history))
+        XCTAssertTrue(policy.resume())
+    }
+
 }
