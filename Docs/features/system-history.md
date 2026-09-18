@@ -40,12 +40,19 @@ application logs and model downloads are separate.
 
 ## Validation
 
-On macOS with Swift 6.3 and the macOS SDK:
+The existing Dev Build workflow runs `SystemTelemetryTests` and
+`SystemMonitorObservationPolicyTests` in the `NativTests` target alongside the software-update tests.
+After building the app with `make xcode-build`, run the hardware-history checks locally with:
 
 ```sh
-python3 -m unittest discover -s scripts/tests -p 'test_system_history.py' -v
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
+  -derivedDataPath build/NativDevelopmentDerivedData \
+  CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
+  -only-testing:NativTests/SystemTelemetryTests \
+  -only-testing:NativTests/SystemMonitorObservationPolicyTests test
 ```
 
-This compiles the actual System collector and recorder and checks safe projection, automatic startup in a fresh directory,
-permissions, missing values, restart throttling, pause behavior, preserving older history and more than 10,080 rows below the budget,
-oldest-first eviction at a reduced byte budget, low-disk suppression and recovery after a reader blocks a commit.
+These tests exercise the production recorder, including automatic startup, permissions, missing
+values, throttling, pause behavior, retention below the budget, oldest-first eviction at the limit,
+low disk space and recovery after a reader blocks a commit.
