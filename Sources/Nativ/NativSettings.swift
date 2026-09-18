@@ -1401,6 +1401,9 @@ struct NativSettings: Codable, Equatable {
             "MLX_VLM_MODEL_DISCOVERY": settings.cachedModelDiscoveryEnabled ? "hf-cache" : "served"
         ]
 
+        if let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+            environment["NATIV_APP_VERSION"] = appVersion
+        }
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
         if let serverAPIKey = settings.serverAPIKey {
             environment["MLX_VLM_SERVER_API_KEY"] = serverAPIKey
