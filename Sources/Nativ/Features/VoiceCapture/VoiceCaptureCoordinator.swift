@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import NativServerKit
 
 struct VoiceTranscriptionConfiguration: Sendable {
@@ -22,6 +23,13 @@ final class VoiceCaptureCoordinator {
     private let recorder = VoiceAudioRecorder()
     private let overlay = VoiceCaptureOverlayController()
     private let analytics = AudioAnalyticsStore.shared
+    private let wakeWordMonitor = VoiceWakeWordMonitor.shared
+    private var wakeWordEndpoint: VoiceWakeWordEndpoint?
+    private var observations = Set<AnyCancellable>()
+    private var isActive = false
+    private var isOtherAudioBusy = false
+    private var isSystemSleeping = false
+    private var isSessionInactive = false
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
@@ -29,7 +37,9 @@ final class VoiceCaptureCoordinator {
     private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
     private var isHandsFreeMode = false
-    private var isPresentingAlert = false
+    private var isPresentingAlert = false {
+        didSet { updateWakeWordListening() }
+    }
     private var hasShownInsertionPermissionAlert = false
 
     init() {
@@ -43,22 +53,88 @@ final class VoiceCaptureCoordinator {
             self?.cancelCapture()
         }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
-            self?.overlay.update(level: level, elapsed: elapsed)
+            guard let self else { return }
+            self.overlay.update(level: level, elapsed: elapsed)
+            guard self.recorder.isRecording,
+                  let action = self.wakeWordEndpoint?.update(level: level, elapsed: elapsed)
+            else { return }
+            switch action {
+            case .finish:
+                self.isShortcutHeld = false
+                self.isHandsFreeMode = false
+                self.endCapture()
+            case .cancel:
+                self.cancelCapture()
+            }
         }
         recorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.recordingInterrupted(error, savedURL: savedURL)
         }
+        wakeWordMonitor.onWake = { [weak self] in
+            guard let self, self.canListenForWakeWord else { return }
+            self.isHandsFreeMode = true
+            self.isShortcutHeld = true
+            self.wakeWordEndpoint = VoiceWakeWordEndpoint()
+            self.beginCapture()
+        }
+        VoiceShortcutPreferences.shared.$isWakeWordEnabled
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                // @Published emits before the stored preference changes.
+                self?.updateWakeWordListening(enabled: enabled)
+            }
+            .store(in: &observations)
+        AudioInputDevicePreferences.shared.$selectedDeviceID
+            .combineLatest(AudioInputDevicePreferences.shared.$devices)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateWakeWordListening() }
+            .store(in: &observations)
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            workspace.publisher(for: name)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    guard let self else { return }
+                    if name == NSWorkspace.willSleepNotification {
+                        self.isSystemSleeping = true
+                    } else {
+                        self.isSessionInactive = true
+                    }
+                    if self.wakeWordEndpoint != nil { self.cancelCapture() }
+                    self.updateWakeWordListening()
+                }
+                .store(in: &observations)
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+            workspace.publisher(for: name)
+                .receive(on: RunLoop.main)
+                .sink { [weak self] _ in
+                    guard let self else { return }
+                    if name == NSWorkspace.didWakeNotification {
+                        self.isSystemSleeping = false
+                    } else {
+                        self.isSessionInactive = false
+                    }
+                    self.updateWakeWordListening()
+                }
+                .store(in: &observations)
+        }
     }
 
     func start() {
+        isActive = true
         scheduleExistingAudioDeletion()
         if let directory = try? VoiceAudioRecorder.recordingsDirectory {
             analytics.importTranscripts(in: directory)
         }
         shortcutMonitor.start()
+        updateWakeWordListening()
     }
 
     func stop() {
+        isActive = false
+        wakeWordEndpoint = nil
+        updateWakeWordListening()
         permissionTask?.cancel()
         permissionTask = nil
         transcriptionTasks.values.forEach { $0.cancel() }
@@ -75,6 +151,25 @@ final class VoiceCaptureCoordinator {
         insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
+    }
+
+    func setOtherAudioBusy(_ busy: Bool) {
+        isOtherAudioBusy = busy
+        if busy, wakeWordEndpoint != nil { cancelCapture() }
+        updateWakeWordListening()
+    }
+
+    private var canListenForWakeWord: Bool {
+        isActive && !isSystemSleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
+            && !isShortcutHeld && !recorder.isRecording && transcriptionTasks.isEmpty
+    }
+
+    private func updateWakeWordListening(enabled: Bool? = nil) {
+        wakeWordMonitor.configure(
+            enabled: isActive && (enabled ?? VoiceShortcutPreferences.shared.isWakeWordEnabled),
+            suspended: !canListenForWakeWord,
+            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID
+        )
     }
 
     func showRecordingsInFinder() {
@@ -116,6 +211,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func beginCapture() {
+        updateWakeWordListening()
         permissionTask?.cancel()
         activeOverlayTranscriptionID = nil
         insertionTarget = VoiceTranscriptInserter.captureTarget()
@@ -129,8 +225,10 @@ final class VoiceCaptureCoordinator {
                 return
             }
             guard granted else {
+                self.clearFailedCaptureState()
                 self.overlay.showFailure()
                 self.presentMicrophonePermissionAlert()
+                self.updateWakeWordListening()
                 return
             }
 
@@ -141,22 +239,32 @@ final class VoiceCaptureCoordinator {
                 self.overlay.didStartRecording()
             } catch {
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
+                self.clearFailedCaptureState()
                 self.overlay.showFailure()
+                self.updateWakeWordListening()
             }
         }
     }
 
-    private func recordingInterrupted(_ error: Error, savedURL: URL?) {
+    private func clearFailedCaptureState() {
+        wakeWordEndpoint = nil
         isShortcutHeld = false
         isHandsFreeMode = false
         insertionTarget = nil
         activeOverlayTranscriptionID = nil
+    }
+
+    private func recordingInterrupted(_ error: Error, savedURL: URL?) {
+        clearFailedCaptureState()
         if let savedURL { scheduleAudioDeletion(savedURL) }
         NSLog("Nativ voice recording interrupted: %@", error.localizedDescription)
         overlay.showFailure()
+        updateWakeWordListening()
     }
 
     private func endCapture() {
+        wakeWordEndpoint = nil
+        defer { updateWakeWordListening() }
         permissionTask?.cancel()
         permissionTask = nil
         let target = insertionTarget
@@ -185,6 +293,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func cancelCapture() {
+        wakeWordEndpoint = nil
         permissionTask?.cancel()
         permissionTask = nil
         recorder.discard()
@@ -193,6 +302,7 @@ final class VoiceCaptureCoordinator {
         isShortcutHeld = false
         isHandsFreeMode = false
         overlay.hide()
+        updateWakeWordListening()
     }
 
     private func retryLastTranscription() {
@@ -272,6 +382,7 @@ final class VoiceCaptureCoordinator {
             }
             defer {
                 self.transcriptionTasks[taskID] = nil
+                self.updateWakeWordListening()
             }
             guard let configuration = self.transcriptionConfigurationProvider?() else {
                 self.finishOverlayTranscription(overlayTranscriptionID)
@@ -394,6 +505,7 @@ final class VoiceCaptureCoordinator {
             }
         }
         transcriptionTasks[taskID] = task
+        updateWakeWordListening()
     }
 
     /// Why the bundled server could not be used for this recording.
