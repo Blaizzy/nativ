@@ -15,6 +15,7 @@ struct ChatArchive: Codable, Equatable {
         chat: ChatSession,
         modelRepositoryID: String,
         systemPrompt: String,
+        includePersonalization: Bool = false,
         exportedAt: Date = .now
     ) {
         format = Self.format
@@ -22,7 +23,7 @@ struct ChatArchive: Codable, Equatable {
         self.exportedAt = exportedAt
         self.modelRepositoryID = modelRepositoryID
         self.systemPrompt = systemPrompt
-        self.chat = ChatArchiveConversation(chat)
+        self.chat = ChatArchiveConversation(chat, includePersonalization: includePersonalization)
     }
 }
 
@@ -33,14 +34,16 @@ struct ChatArchiveConversation: Codable, Equatable {
     let updatedAt: Date
     let messages: [ChatTranscriptMessage]
     let imageGenerationModelID: String?
+    let personalizationSnapshot: String?
 
-    init(_ chat: ChatSession) {
+    init(_ chat: ChatSession, includePersonalization: Bool = false) {
         title = chat.title
         customTitle = chat.customTitle
         createdAt = chat.createdAt
         updatedAt = chat.updatedAt
         messages = chat.messages
         imageGenerationModelID = chat.imageGenerationModelID
+        personalizationSnapshot = includePersonalization ? chat.personalizationSnapshot : nil
     }
 }
 
@@ -134,7 +137,9 @@ enum ChatArchiveCodec {
             messages: messages,
             imageGenerationModelID: archive.chat.imageGenerationModelID,
             importedModelRepositoryID: archive.modelRepositoryID,
-            importedSystemPrompt: archive.systemPrompt
+            importedSystemPrompt: archive.systemPrompt,
+            // An omitted profile must not be replaced with the recipient's profile on the next send.
+            personalizationSnapshot: archive.chat.personalizationSnapshot ?? ""
         )
     }
 
