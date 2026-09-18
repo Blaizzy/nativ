@@ -497,7 +497,7 @@ struct NativPersonalization: Codable, Equatable {
                 ""
             case .more:
                 """
-                Use emojis naturally to add warmth, emphasis, or occasional visual cues when appropriate \
+                Use emojis to highlight points and make conversations warmer and engaging. Use them in every message. \
                 to the conversation. Keep them selective and relevant; avoid repeated symbols, emoji chains, \
                 or decorating every paragraph. Keep technical content and serious or sensitive discussions \
                 restrained. Follow the user's explicit requests about emoji use.
