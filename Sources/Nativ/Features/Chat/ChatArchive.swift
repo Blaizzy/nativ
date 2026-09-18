@@ -96,6 +96,8 @@ enum ChatArchiveCodec {
         try validate(archive)
 
         let messageIDs = Dictionary(uniqueKeysWithValues: archive.chat.messages.map { ($0.id, UUID()) })
+        let assetIDs = Set(archive.chat.messages.flatMap(\.imageAttachments).map(\.assetID))
+        let attachmentIDs = Dictionary(uniqueKeysWithValues: assetIDs.map { ($0, UUID()) })
         let messages = archive.chat.messages.map { message in
             var imported = ChatTranscriptMessage(
                 id: messageIDs[message.id] ?? UUID(),
@@ -106,12 +108,16 @@ enum ChatArchiveCodec {
                 createdAt: message.createdAt,
                 isThinkingEnabled: message.isThinkingEnabled,
                 thinkingDuration: message.thinkingDuration,
-                imageAttachments: message.imageAttachments.map {
-                    ChatImageAttachment(
-                        filename: $0.filename,
-                        mimeType: $0.mimeType,
-                        base64Data: $0.base64Data
+                imageAttachments: message.imageAttachments.map { attachment in
+                    var imported = ChatImageAttachment(
+                        id: attachmentIDs[attachment.assetID] ?? UUID(),
+                        filename: attachment.filename,
+                        mimeType: attachment.mimeType,
+                        base64Data: attachment.base64Data
                     )
+                    imported.generation = message.artifactGeneration(for: attachment)
+                    imported.origin = attachment.origin ?? (imported.generation == nil ? nil : .generated)
+                    return imported
                 },
                 responseMetrics: message.responseMetrics,
                 toolCalls: message.toolCalls,

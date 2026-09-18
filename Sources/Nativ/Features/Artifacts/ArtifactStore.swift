@@ -44,6 +44,8 @@ final class ArtifactStore: ObservableObject {
     @Published private(set) var favoriteIDs: Set<UUID> = []
     @Published private(set) var displayNames: [UUID: String] = [:]
 
+    private var mutationRevision = 0
+    private let mediaStore: MediaAssetStore
     private let rebuildIndex: Rebuild
     private var persistedDataChangeCancellable: AnyCancellable?
     private var refreshPending = false
@@ -59,8 +61,10 @@ final class ArtifactStore: ObservableObject {
         refreshesAutomatically: Bool = true,
         persistedDataChanges: PersistedDataChangeHub? = nil,
         rebuild: Rebuild? = nil,
+        mediaStore: MediaAssetStore = .shared,
         deletionHandler: @escaping DeletionHandler = { _ in true }
     ) {
+        self.mediaStore = mediaStore
         rebuildIndex = rebuild ?? Self.rebuild
         self.deletionHandler = deletionHandler
         indexURL = storage.indexURL
@@ -87,7 +91,8 @@ final class ArtifactStore: ObservableObject {
     }
 
     func fileURL(for artifact: Artifact) -> URL {
-        cacheDirectory.appendingPathComponent(artifact.relativePath)
+        if let asset = artifact.asset, let url = mediaStore.fileURL(for: asset) { return url }
+        return cacheDirectory.appendingPathComponent(artifact.relativePath)
     }
 
     // MARK: - Favorites & rename
@@ -111,6 +116,31 @@ final class ArtifactStore: ObservableObject {
             return custom
         }
         return artifact.filename
+    }
+
+    func sortedByName(_ artifacts: [Artifact]) -> [Artifact] {
+        artifacts.sorted {
+            let comparison = displayName(for: $0).localizedCaseInsensitiveCompare(displayName(for: $1))
+            return comparison == .orderedSame
+                ? $0.id.uuidString < $1.id.uuidString
+                : comparison == .orderedAscending
+        }
+    }
+
+    func searchResults(in artifacts: [Artifact], query: String, semanticMatches: [UUID]?) -> [Artifact] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return artifacts }
+        let directMatches = artifacts.filter {
+            displayName(for: $0).lowercased().contains(query) || $0.searchText.contains(query)
+        }
+        guard let semanticMatches else { return directMatches }
+        let directIDs = Set(directMatches.map(\.id))
+        let candidates = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = directIDs
+        return directMatches + semanticMatches.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return candidates[id]
+        }
     }
 
     func rename(_ artifact: Artifact, to name: String) {
@@ -190,11 +220,16 @@ final class ArtifactStore: ObservableObject {
         let cache = cacheDirectory
         let index = indexURL
         let known = artifacts
+        let revision = mutationRevision
         let rebuild = rebuildIndex
         Task.detached(priority: .utility) {
             let rebuilt = rebuild(cache, index, known)
             await MainActor.run {
-                self.artifacts = rebuilt
+                if revision == self.mutationRevision {
+                    self.artifacts = rebuilt
+                } else {
+                    self.refreshPending = true
+                }
                 self.isRefreshing = false
                 if self.refreshPending {
                     self.refreshPending = false
@@ -209,7 +244,10 @@ final class ArtifactStore: ObservableObject {
         guard deletionHandler(artifact) else {
             return false
         }
-        try? FileManager.default.removeItem(at: fileURL(for: artifact))
+        mutationRevision += 1
+        if artifact.asset == nil {
+            try? FileManager.default.removeItem(at: fileURL(for: artifact))
+        }
         artifacts.removeAll { $0.id == artifact.id }
         Self.writeIndex(artifacts, to: indexURL)
         return true
@@ -222,7 +260,10 @@ final class ArtifactStore: ObservableObject {
             guard !deletedIDs.contains(artifact.id), deletionHandler(artifact) else {
                 continue
             }
-            try? FileManager.default.removeItem(at: fileURL(for: artifact))
+            mutationRevision += 1
+            if artifact.asset == nil {
+                try? FileManager.default.removeItem(at: fileURL(for: artifact))
+            }
             deletedIDs.insert(artifact.id)
         }
         artifacts.removeAll { deletedIDs.contains($0.id) }
@@ -281,7 +322,13 @@ final class ArtifactStore: ObservableObject {
     }
 
     func chatAttachment(for artifact: Artifact) -> ChatImageAttachment? {
-        try? ChatImageAttachment(contentsOf: fileURL(for: artifact))
+        guard let asset = artifact.asset, mediaStore.fileURL(for: asset) != nil else { return nil }
+        var attachment = ChatImageAttachment(
+            id: artifact.id, filename: artifact.filename, mimeType: artifact.mimeType, asset: asset
+        )
+        attachment.generation = artifact.generation
+        attachment.origin = artifact.source
+        return attachment
     }
 
     func thumbnail(for artifact: Artifact, size: CGSize) async -> NSImage? {
@@ -308,178 +355,24 @@ final class ArtifactStore: ObservableObject {
     private nonisolated static func rebuild(cacheDirectory: URL, indexURL: URL, known: [Artifact]) -> [Artifact] {
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
 
-        let fingerprint = ChatSessionStore().sessionsFingerprint()
-            + "#" + ImageGenerationArtifactCatalog.fingerprint()
+        let chats = ChatSessionStore()
+        let images = ImageGenerationSessionStore()
+        let fingerprint = "unified-v2#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
         let fingerprintFile = fingerprintURL(indexURL: indexURL)
         if !known.isEmpty,
            let previous = try? String(contentsOf: fingerprintFile, encoding: .utf8),
            previous == fingerprint,
-           FileManager.default.fileExists(
-               atPath: cacheDirectory.appendingPathComponent(known[0].relativePath).path
-           ) {
+           known.allSatisfy({ artifact in
+               artifact.asset.flatMap(MediaAssetStore.shared.fileURL) != nil
+           }) {
             return known
         }
 
-        var byID = Dictionary(known.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var result: [Artifact] = []
-
-        for session in ChatSessionStore().loadSessions() {
-            for message in session.messages {
-                for attachment in message.imageAttachments {
-                    if let artifact = materialize(
-                        attachment,
-                        source: .uploaded,
-                        prompt: message.content.isEmpty ? nil : message.content,
-                        session: session,
-                        message: message,
-                        cacheDirectory: cacheDirectory,
-                        existing: byID[attachment.id]
-                    ) {
-                        result.append(artifact)
-                        byID[artifact.id] = artifact
-                    }
-                }
-            }
-        }
-
-        for record in ImageGenerationArtifactCatalog.generatedRecords() {
-            if let artifact = materializeGenerated(
-                record,
-                cacheDirectory: cacheDirectory,
-                existing: byID[record.id]
-            ) {
-                result.append(artifact)
-                byID[artifact.id] = artifact
-            }
-        }
-
-        let sorted = result.sorted { $0.createdAt > $1.createdAt }
-        writeIndex(sorted, to: indexURL)
-        pruneOrphans(cacheDirectory: cacheDirectory, keep: Set(sorted.map(\.relativePath)))
+        let artifacts = ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions())
+            .filter { $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
+        writeIndex(artifacts, to: indexURL)
         try? fingerprint.write(to: fingerprintFile, atomically: true, encoding: .utf8)
-        return sorted
-    }
-
-    private nonisolated static func pruneOrphans(cacheDirectory: URL, keep: Set<String>) {
-        let fileManager = FileManager.default
-        guard let enumerator = fileManager.enumerator(
-            at: cacheDirectory,
-            includingPropertiesForKeys: [.isRegularFileKey]
-        ) else {
-            return
-        }
-        let base = cacheDirectory.path.hasSuffix("/") ? cacheDirectory.path : cacheDirectory.path + "/"
-        for case let url as URL in enumerator {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else {
-                continue
-            }
-            let relative = url.path.hasPrefix(base) ? String(url.path.dropFirst(base.count)) : url.lastPathComponent
-            if !keep.contains(relative) {
-                try? fileManager.removeItem(at: url)
-            }
-        }
-    }
-
-    private nonisolated static func materialize(
-        _ attachment: ChatImageAttachment,
-        source: ArtifactSource,
-        prompt: String?,
-        session: ChatSession,
-        message: ChatTranscriptMessage,
-        cacheDirectory: URL,
-        existing: Artifact?
-    ) -> Artifact? {
-        let kind = ArtifactKind.resolve(mimeType: attachment.mimeType, filename: attachment.filename)
-        let relativePath = "\(kind.rawValue)/\(attachment.id.uuidString).\(fileExtension(for: attachment))"
-        let destination = cacheDirectory.appendingPathComponent(relativePath)
-        let fileManager = FileManager.default
-
-        if let existing, fileManager.fileExists(atPath: destination.path) {
-            return existing
-        }
-
-        guard let data = attachment.imageData else {
-            return nil
-        }
-
-        try? fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        guard (try? data.write(to: destination, options: .atomic)) != nil else {
-            return nil
-        }
-
-        return Artifact(
-            id: attachment.id,
-            kind: kind,
-            source: source,
-            sessionID: session.id,
-            messageID: message.id,
-            filename: attachment.filename,
-            mimeType: attachment.mimeType,
-            relativePath: relativePath,
-            byteSize: data.count,
-            createdAt: message.createdAt,
-            prompt: prompt,
-            sessionTitle: session.displayTitle
-        )
-    }
-
-    private nonisolated static func materializeGenerated(
-        _ record: GeneratedArtifactRecord,
-        cacheDirectory: URL,
-        existing: Artifact?
-    ) -> Artifact? {
-        let ext = UTType(mimeType: record.mimeType)?.preferredFilenameExtension ?? "png"
-        let filename = "image-\(record.id.uuidString.prefix(8)).\(ext)"
-        let kind = ArtifactKind.resolve(mimeType: record.mimeType, filename: filename)
-        let relativePath = "\(kind.rawValue)/\(record.id.uuidString).\(ext)"
-        let destination = cacheDirectory.appendingPathComponent(relativePath)
-        let fileManager = FileManager.default
-
-        if let existing, fileManager.fileExists(atPath: destination.path) {
-            return existing
-        }
-
-        try? fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        guard let source = MediaAssetStore.shared.fileURL(for: record.asset) else {
-            return nil
-        }
-        do {
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.copyItem(at: source, to: destination)
-        } catch {
-            return nil
-        }
-
-        return Artifact(
-            id: record.id,
-            kind: kind,
-            source: .generated,
-            sessionID: record.sessionID,
-            messageID: record.turnID,
-            filename: filename,
-            mimeType: record.mimeType,
-            relativePath: relativePath,
-            byteSize: record.asset.byteCount,
-            createdAt: record.createdAt,
-            prompt: record.prompt,
-            sessionTitle: record.sessionTitle
-        )
-    }
-
-    private nonisolated static func fileExtension(for attachment: ChatImageAttachment) -> String {
-        if let ext = UTType(mimeType: attachment.mimeType)?.preferredFilenameExtension {
-            return ext
-        }
-        let ext = (attachment.filename as NSString).pathExtension
-        return ext.isEmpty ? "dat" : ext
+        return artifacts
     }
 
     // MARK: - Thumbnails

@@ -57,6 +57,32 @@ final class ArtifactRefreshTests: XCTestCase {
         XCTAssertEqual(store.artifacts.map(\.id), [artifact.id])
     }
 
+    func testDeletionDuringScanDoesNotRepublishDeletedArtifact() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = PersistedDataChangeHub()
+        let artifact = makeArtifact()
+        let started = expectation(description: "Stale scan started")
+        let resume = DispatchSemaphore(value: 0)
+        defer { resume.signal() }
+        let source = Source(firstScanStarted: started, resumeFirstScan: resume)
+        source.state.withLock { $0.artifacts = [artifact] }
+        let store = makeStore(directory: directory, hub: hub, source: source)
+        store.refresh()
+        await fulfillment(of: [started], timeout: 5)
+        XCTAssertTrue(store.delete(artifact))
+        source.state.withLock { $0.artifacts = [] }
+        let updated = expectation(description: "Follow-up publishes remaining artifacts")
+        let subscription = store.$artifacts.dropFirst().sink { artifacts in
+            XCTAssertTrue(artifacts.isEmpty)
+            updated.fulfill()
+        }
+        resume.signal()
+        await fulfillment(of: [updated], timeout: 5)
+        subscription.cancel()
+        XCTAssertEqual(source.state.withLock { $0.scans }, 2)
+    }
+
     func testFolderChangesDoNotScanArtifacts() {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -66,6 +92,36 @@ final class ArtifactRefreshTests: XCTestCase {
         hub.send(.chatFolders, originWindowID: UUID())
         XCTAssertFalse(store.isRefreshing)
         XCTAssertEqual(source.state.withLock { $0.scans }, 0)
+    }
+
+    func testRenamePersistsAndSearchIncludesNamesOutsideSemanticResults() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = PersistedDataChangeHub()
+        let source = Source()
+        let store = makeStore(directory: directory, hub: hub, source: source)
+        let renamed = makeArtifact()
+        let semantic = makeArtifact()
+        let excluded = makeArtifact()
+        store.rename(renamed, to: "  Amber cube  ")
+        store.rename(semantic, to: "Zebra")
+
+        let reloaded = makeStore(directory: directory, hub: hub, source: source)
+        XCTAssertEqual(reloaded.displayName(for: renamed), "Amber cube")
+        XCTAssertEqual(renamed.filename, "image.png")
+        XCTAssertEqual(reloaded.sortedByName([semantic, renamed]).map(\.id), [renamed.id, semantic.id])
+        XCTAssertEqual(reloaded.searchResults(in: [renamed], query: "AMBER", semanticMatches: nil).map(\.id), [renamed.id])
+        XCTAssertEqual(reloaded.searchResults(in: [renamed], query: "image.png", semanticMatches: nil).map(\.id), [renamed.id])
+        XCTAssertEqual(
+            reloaded.searchResults(
+                in: [semantic, renamed], query: "amber",
+                semanticMatches: [excluded.id, semantic.id, renamed.id, semantic.id]
+            ).map(\.id),
+            [renamed.id, semantic.id]
+        )
+        reloaded.rename(renamed, to: " ")
+        XCTAssertEqual(reloaded.displayName(for: renamed), renamed.filename)
+        XCTAssertTrue(reloaded.searchResults(in: [renamed], query: "amber", semanticMatches: []).isEmpty)
     }
 
     private func makeStore(directory: URL, hub: PersistedDataChangeHub, source: Source) -> ArtifactStore {
