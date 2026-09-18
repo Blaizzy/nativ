@@ -233,10 +233,13 @@ Exercise the long-running process lifecycle and `/metrics` readiness:
 make xcode-lifecycle-smoke
 ```
 
-To generate a few real requests and compare metrics before and after:
+To generate a few real requests and compare metrics before and after
+(requires a running server):
 
 ```sh
-scripts/run_metrics_queries.py
+NATIV_LIVE_SMOKE=1 xcodebuild -project Nativ.xcodeproj -scheme Nativ \
+  -derivedDataPath build/NativDevelopmentDerivedData \
+  test -only-testing:NativTests/ServerMetricsSmokeTests
 ```
 
 The first request may take longer while its model downloads and loads.
