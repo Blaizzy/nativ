@@ -423,6 +423,10 @@ struct NativPersonalization: Codable, Equatable {
             }
         }
 
+        var pickerLabel: String {
+            self == .default ? title : description
+        }
+
         var systemPrompt: String {
             let instructions: String
             switch self {
@@ -477,6 +481,10 @@ struct NativPersonalization: Codable, Equatable {
             }
         }
 
+        var pickerLabel: String {
+            self == .default ? title : description
+        }
+
         var systemPrompt: String {
             switch self {
             case .none:
@@ -510,6 +518,10 @@ struct NativPersonalization: Codable, Equatable {
             case .default: "Model default"
             case .structured: "More headings and lists"
             }
+        }
+
+        var pickerLabel: String {
+            self == .default ? title : description
         }
 
         var systemPrompt: String {

@@ -470,7 +470,7 @@ struct PersonalizationView: View {
                 Section {
                     Picker("Style", selection: $profile.conversationStyle) {
                         ForEach(NativPersonalization.ConversationStyle.allCases) { style in
-                            Text("\(style.title) — \(style.description)").tag(style)
+                            Text(style.pickerLabel).tag(style)
                         }
                     }
                     .pickerStyle(.menu)
@@ -484,13 +484,13 @@ struct PersonalizationView: View {
                 Section {
                     Picker("Emoji usage", selection: $profile.emojiUsage) {
                         ForEach(NativPersonalization.EmojiUsage.allCases) { usage in
-                            Text("\(usage.title) — \(usage.description)").tag(usage)
+                            Text(usage.pickerLabel).tag(usage)
                         }
                     }
                     .pickerStyle(.menu)
                     Picker("Markdown usage", selection: $profile.markdownUsage) {
                         ForEach(NativPersonalization.MarkdownUsage.allCases) { usage in
-                            Text("\(usage.title) — \(usage.description)").tag(usage)
+                            Text(usage.pickerLabel).tag(usage)
                         }
                     }
                     .pickerStyle(.menu)
