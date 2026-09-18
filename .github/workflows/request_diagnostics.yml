@@ -1,0 +1,21 @@
+name: Request diagnostics
+
+on:
+  pull_request:
+    paths:
+      - "PythonDistribution/Overlay/nativ_server.py"
+      - "Sources/Nativ/NativSettings.swift"
+      - "scripts/tests/test_request_diagnostics.py"
+      - ".github/workflows/request_diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run focused regression tests
+        run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics.py' -v

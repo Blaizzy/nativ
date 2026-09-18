@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import atexit
+import asyncio
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -23,6 +25,31 @@ import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
+
+
+def safe_failure_code(error: BaseException | None = None, status: int | None = None) -> str:
+    """Classify types and HTTP status only; never inspect or store exception messages."""
+    if isinstance(error, MemoryError):
+        return "out_of_memory"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, NotImplementedError):
+        return "unsupported"
+    if isinstance(error, HTTPException):
+        return safe_failure_code(status=error.status_code)
+    if status in (408, 504):
+        return "timeout"
+    if status in (400, 422):
+        return "invalid_request"
+    if status == 501:
+        return "unsupported"
+    return "runtime_error" if error is not None or (isinstance(status, int) and status >= 500) else "unknown"
+
+
+def safe_diagnostic_version(value: Any) -> str | None:
+    if isinstance(value, str) and re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}(?:\.[0-9]{1,4})?", value):
+        return value
+    return None
 
 
 BACKEND_NAME = f"mlx_vlm/{base.__version__}"
@@ -337,6 +364,12 @@ class AnalyticsStore:
             """
         )
 
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(request_events)")}
+        for name in ("error_code", "app_version", "runtime_version"):
+            if name not in columns:
+                self._connection.execute(f"ALTER TABLE request_events ADD COLUMN {name} TEXT")
+        self._connection.commit()
+
     def _start_session(self) -> None:
         started_at = time.time()
         with self._lock:
@@ -462,6 +495,14 @@ class AnalyticsStore:
                 self._connection.commit()
                 return
 
+            code = event.get("error_code") if event.get("status") == "failed" else None
+            if code not in ("out_of_memory", "timeout", "model_load", "unsupported", "invalid_request", "runtime_error", "unknown"):
+                code = None
+            self._connection.execute(
+                "UPDATE request_events SET error_code = ?, app_version = ?, runtime_version = ? WHERE request_id = ?",
+                (code, safe_diagnostic_version(os.environ.get("NATIV_APP_VERSION")),
+                 safe_diagnostic_version(BACKEND_NAME.partition("/")[2]), str(event["request_id"])),
+            )
             request_elapsed_ms_total = int(event.get("request_elapsed_ms") or 0) if is_completed else 0
             decode_elapsed_ms_total = int(event.get("decode_elapsed_ms") or 0) if is_completed else 0
             peak_memory_bytes = event.get("peak_memory_bytes") if is_completed else None
@@ -566,7 +607,9 @@ class MetricsTracker:
             if observation.stream:
                 aggregate.streaming_requests += 1
 
-    def record_failed(self, observation: RequestObservation) -> None:
+    def record_failed(
+        self, observation: RequestObservation, error_code: str | None = None, *, cancelled: bool = False
+    ) -> None:
         completed_at = time.time()
         event = {
             "request_id": observation.request_id,
@@ -574,7 +617,8 @@ class MetricsTracker:
             "completed_at": completed_at,
             "model_id": observation.model or "Unknown",
             "endpoint": observation.endpoint,
-            "status": "failed",
+            "status": "cancelled" if cancelled else "failed",
+            "error_code": None if cancelled else error_code,
             "streaming": observation.stream,
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -596,7 +640,7 @@ class MetricsTracker:
             "structured_output": observation.structured_output,
             "thinking_enabled": observation.thinking_enabled,
             "tool_calls": False,
-            "finish_reason": None,
+            "finish_reason": "cancelled" if cancelled else "error",
             "backend": BACKEND_NAME,
         }
 
@@ -1232,14 +1276,17 @@ def install_metrics_overlay() -> None:
 
         try:
             response = await call_next(request)
-        except Exception:
-            TRACKER.record_failed(observation)
+        except asyncio.CancelledError:
+            TRACKER.record_failed(observation, cancelled=True)
+            raise
+        except Exception as error:
+            TRACKER.record_failed(observation, safe_failure_code(error))
             raise
         finally:
             _BASE_METRICS_CAPTURE.reset(capture_token)
 
         if response.status_code >= 400:
-            TRACKER.record_failed(observation)
+            TRACKER.record_failed(observation, safe_failure_code(status=response.status_code))
             return response
 
         content_type = response.headers.get("content-type", "")
@@ -1280,8 +1327,11 @@ def install_metrics_overlay() -> None:
                         TRACKER.record_completed(observation, completion)
                     except Exception as error:
                         base.logger.warning("metrics completion instrumentation failed: %s", error)
-                except Exception:
-                    TRACKER.record_failed(observation)
+                except asyncio.CancelledError:
+                    TRACKER.record_failed(observation, cancelled=True)
+                    raise
+                except Exception as error:
+                    TRACKER.record_failed(observation, safe_failure_code(error))
                     raise
 
             response.body_iterator = wrapped_iterator()
@@ -1289,6 +1339,14 @@ def install_metrics_overlay() -> None:
 
         try:
             response, response_body = await materialize_response(response)
+        except asyncio.CancelledError:
+            TRACKER.record_failed(observation, cancelled=True)
+            raise
+        except Exception as error:
+            TRACKER.record_failed(observation, safe_failure_code(error))
+            raise
+
+        try:
             if request.url.path.endswith("chat/completions"):
                 completion = parse_chat_response(response_body, observation)
             else:
