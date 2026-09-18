@@ -60,9 +60,7 @@ entry's `name`). Without one, the card shows the tinted `symbol` tile.
 ## Run the check locally
 
 ```sh
-NATIV_VERIFY_MCP_CATALOG=1 xcodebuild -project Nativ.xcodeproj -scheme Nativ \
-  -derivedDataPath build/NativDevelopmentDerivedData \
-  test -only-testing:NativTests/MCPServerCatalogLiveVerificationTests
-# Single entry, e.g. fetch:
-NATIV_VERIFY_MCP_CATALOG=1 NATIV_MCP_VERIFY_ONLY=fetch xcodebuild ...
+pip install "mcp>=1.0"
+python scripts/verify_mcp_catalog.py            # all entries
+python scripts/verify_mcp_catalog.py --only fetch
 ```

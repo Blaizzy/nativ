@@ -190,7 +190,6 @@
 		56D0E3D130B4DF4003811E6D /* VoiceDictationExtensionRuntime.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = 37408935D4EAA2CA89CC0A4C /* VoiceDictationExtensionRuntime.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		575DCB7EC96DAB35B415434C /* ImageGenerationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4B44C59153CB242FE92D3A /* ImageGenerationView.swift */; };
 		582B1E2A148EF3DEE78B11E2 /* ArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C2AB90FC12D1B83D6691F4 /* ArtifactStore.swift */; };
-		585BF36E7A5AEC84628BD847 /* MCPServerCatalogLiveVerificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5891646C1A1A3901CE3DC84 /* MCPServerCatalogLiveVerificationTests.swift */; };
 		589A3D1D88F2768F7D0FE974 /* NativExtensionManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD61E02ECEEF3C00ECF238A8 /* NativExtensionManifest.swift */; };
 		58AEDA213E27344F01AE5A6B /* NativServerKit.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 5FC09C3EB40E94FB3D4AA4D6 /* NativServerKit.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		59841D5E65EFAF5E513C502D /* SystemMonitorObservationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE94F230299FF8E794099BB4 /* SystemMonitorObservationPolicyTests.swift */; };
@@ -831,7 +830,6 @@
 		C3F46907258A26CF631CB3BD /* ReleaseVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseVersion.swift; sourceTree = "<group>"; };
 		C42683FE576BB34517A487B0 /* ChatAttachmentValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachmentValidatorTests.swift; sourceTree = "<group>"; };
 		C503D1550EDF250574853F25 /* LocalModelDiscoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelDiscoveryTests.swift; sourceTree = "<group>"; };
-		C5891646C1A1A3901CE3DC84 /* MCPServerCatalogLiveVerificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MCPServerCatalogLiveVerificationTests.swift; sourceTree = "<group>"; };
 		C5BBBE5DAD60FA5D2450B2CD /* ChatSwitchModelTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSwitchModelTool.swift; sourceTree = "<group>"; };
 		C6D53CFF2D565C0BFE3DE65E /* CustomTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomTool.swift; sourceTree = "<group>"; };
 		C7FEC99DBAD937331D69E847 /* MarkdownSearchText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSearchText.swift; sourceTree = "<group>"; };
@@ -1617,7 +1615,6 @@
 				57891442224B287BE8D82B18 /* MarkdownSelectionTests.swift */,
 				151A0F6AD81E505ADF4C8BE2 /* MarkdownTests.swift */,
 				45F373627C4A522AF78E2A17 /* MCPClientTests.swift */,
-				C5891646C1A1A3901CE3DC84 /* MCPServerCatalogLiveVerificationTests.swift */,
 				B1DC9B27547E82B74589D6B5 /* MCPServerCatalogTests.swift */,
 				3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */,
 				2BDBC269531FA6C6DA9F5DDC /* ModelPrimaryTaskResolverTests.swift */,
@@ -2275,7 +2272,6 @@
 				0394DEE40DF5A06244F72794 /* MCPClientTests.swift in Sources */,
 				3583BC09DCAFC37BBB94749D /* MCPHostManager.swift in Sources */,
 				2D445C948687EAF45C707C83 /* MCPServerCatalog.swift in Sources */,
-				585BF36E7A5AEC84628BD847 /* MCPServerCatalogLiveVerificationTests.swift in Sources */,
 				D9CA77A603AF02C2C70BC9FF /* MCPServerCatalogTests.swift in Sources */,
 				B2B154008527C6291C17AC93 /* MLXImageModelResolver.swift in Sources */,
 				EF3678F684519D8ADC625B20 /* MLXImageModelResolverTests.swift in Sources */,
