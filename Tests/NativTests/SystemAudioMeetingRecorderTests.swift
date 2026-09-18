@@ -12,6 +12,10 @@ final class SystemAudioMeetingRecorderTests: XCTestCase {
         try await verifySavedAudio(stopError: nil)
     }
 
+    func testMarkedInterruptionStillProducesPlayableAudioWhenStoppingFails() async throws {
+        try await verifySavedAudio(stopError: .failedToStopAudioCapture, prepareForInterruption: true)
+    }
+
     func testStreamDelegateInterruptionSavesWithoutStoppingStreamAgain() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -33,7 +37,10 @@ final class SystemAudioMeetingRecorderTests: XCTestCase {
         XCTAssertGreaterThan(try AVAudioFile(forReading: savedURL).length, 0)
     }
 
-    private func verifySavedAudio(stopError: SCStreamError.Code?) async throws {
+    private func verifySavedAudio(
+        stopError: SCStreamError.Code?,
+        prepareForInterruption: Bool = false
+    ) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let outputURL = directory.appendingPathComponent("recording.wav")
@@ -47,10 +54,14 @@ final class SystemAudioMeetingRecorderTests: XCTestCase {
 
         try await recorder.start(stream: stream, outputURL: outputURL)
         try stream.deliverAudio()
+        if prepareForInterruption {
+            recorder.prepareForInterruption()
+        }
         let savedURL = try await recorder.stop()
 
         XCTAssertEqual(savedURL, outputURL)
-        XCTAssertEqual(interruptions, stopError == nil ? 0 : 1)
+        XCTAssertEqual(stream.stopCallCount, 1)
+        XCTAssertEqual(interruptions, stopError == nil || prepareForInterruption ? 0 : 1)
         XCTAssertFalse(recorder.isRecording)
         let audio = try AVAudioFile(forReading: savedURL)
         XCTAssertGreaterThan(audio.length, 0)

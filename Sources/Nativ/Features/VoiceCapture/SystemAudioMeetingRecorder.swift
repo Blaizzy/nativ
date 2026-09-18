@@ -148,7 +148,7 @@ final class SystemAudioMeetingRecorder: NSObject {
             let streamError = error as NSError
             let alreadyStopped = streamError.domain == SCStreamError.errorDomain
                 && streamError.code == SCStreamError.Code.attemptToStopStreamState.rawValue
-            if alreadyStopped || captureFailure != nil {
+            if isSavingInterruptedAudio || alreadyStopped || captureFailure != nil {
                 if !isSavingInterruptedAudio {
                     isSavingInterruptedAudio = true
                     onInterruption?()
