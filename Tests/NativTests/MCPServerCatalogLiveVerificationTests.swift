@@ -1,13 +1,6 @@
 import XCTest
 @testable import NativServerKit
 
-/// Swift replacement for `scripts/verify_mcp_catalog.py` (deleted).
-/// Reuses the production `MCPClient` actor instead of the Python `mcp` package.
-/// Live test: spawns real catalog servers. Opt in with
-/// `NATIV_VERIFY_MCP_CATALOG=1`; skipped otherwise. Honors the same contract
-/// as the script: `ciSkip` opt-out, `requiresFolder` temp dir, placeholder
-/// values for `requiredEnv`/`verificationEnv`, `@bundled/` resolution via
-/// `NATIV_BUNDLED_DIRECTORY`, and a `GITHUB_STEP_SUMMARY` markdown table.
 final class MCPServerCatalogLiveVerificationTests: XCTestCase {
     private static let bundledPrefix = "@bundled/"
     private static let timeout: TimeInterval = 120

@@ -1,9 +1,6 @@
 import XCTest
 @testable import NativServerKit
 
-/// Swift replacement for `scripts/run_metrics_queries.py` (deleted).
-/// Live test: requires a running mlx-vlm server. Opt in with
-/// `NATIV_LIVE_SMOKE=1`; skipped otherwise so unit CI stays hermetic.
 final class ServerMetricsSmokeTests: XCTestCase {
     private static let defaultModel = "mlx-community/Qwen3.5-0.8B-8bit"
     private static let defaultPrompts = [
