@@ -98,6 +98,8 @@ final class SystemAudioMeetingRecorder: NSObject {
 
         try audioWriter.prepare(outputURL: temporaryURL)
         captureFailure = nil
+        // Recognize delegate failures while capture startup is suspended.
+        self.stream = stream
         do {
             try stream.addStreamOutput(
                 self,
@@ -110,13 +112,18 @@ final class SystemAudioMeetingRecorder: NSObject {
                 sampleHandlerQueue: audioWriter.sampleQueue
             )
             try await stream.startCapture()
+            if let captureFailure {
+                throw captureFailure
+            }
         } catch {
+            try? stream.removeStreamOutput(self, type: .audio)
+            try? stream.removeStreamOutput(self, type: .microphone)
             audioWriter.cancel()
             try? FileManager.default.removeItem(at: temporaryURL)
+            reset()
             throw error
         }
 
-        self.stream = stream
         temporaryAudioURL = temporaryURL
         destinationAudioURL = outputURL
         isRecording = true

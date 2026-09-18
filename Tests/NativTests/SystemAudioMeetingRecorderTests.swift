@@ -37,6 +37,42 @@ final class SystemAudioMeetingRecorderTests: XCTestCase {
         XCTAssertGreaterThan(try AVAudioFile(forReading: savedURL).length, 0)
     }
 
+    func testInterruptionDuringStartupThrowsAndAllowsAnotherRecording() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = SystemAudioMeetingRecorder()
+        let stream = StoppedMeetingTestStream(
+            filter: SCContentFilter(), configuration: SCStreamConfiguration(), delegate: recorder
+        )
+        let failure = NSError(domain: SCStreamError.errorDomain, code: -3805)
+        stream.beforeStartCompletion = { [weak stream] in
+            guard let stream else { return }
+            recorder.stream(stream, didStopWithError: failure)
+            // Keep framework startup pending while the delegate's main-actor task runs.
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        let outputURL = directory.appendingPathComponent("interrupted.wav")
+        do {
+            try await recorder.start(stream: stream, outputURL: outputURL)
+            XCTFail("Startup must report the interruption instead of entering the recording state")
+        } catch {
+            XCTAssertEqual(error as NSError, failure)
+        }
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outputURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("interrupted.audio.mov").path))
+        XCTAssertEqual(stream.removedOutputTypes, [.audio, .microphone])
+
+        let nextStream = StoppedMeetingTestStream(
+            filter: SCContentFilter(), configuration: SCStreamConfiguration(), delegate: recorder
+        )
+        try await recorder.start(stream: nextStream, outputURL: directory.appendingPathComponent("retry.wav"))
+        XCTAssertTrue(recorder.isRecording)
+        try nextStream.deliverAudio()
+        let savedURL = try await recorder.stop()
+        XCTAssertGreaterThan(try AVAudioFile(forReading: savedURL).length, 0)
+    }
+
     private func verifySavedAudio(
         stopError: SCStreamError.Code?,
         prepareForInterruption: Bool = false
@@ -72,7 +108,9 @@ final class SystemAudioMeetingRecorderTests: XCTestCase {
 /// Exercises the real writer/exporter without opening a display or microphone.
 private final class StoppedMeetingTestStream: SCStream, @unchecked Sendable {
     var stopError: NSError?
+    var beforeStartCompletion: (@Sendable () async -> Void)?
     private(set) var stopCallCount = 0
+    private(set) var removedOutputTypes: [SCStreamOutputType] = []
     private var audioOutput: (any SCStreamOutput)?
     private var audioQueue: DispatchQueue?
 
@@ -87,9 +125,18 @@ private final class StoppedMeetingTestStream: SCStream, @unchecked Sendable {
         }
     }
 
-    override func removeStreamOutput(_ output: any SCStreamOutput, type: SCStreamOutputType) throws {}
+    override func removeStreamOutput(_ output: any SCStreamOutput, type: SCStreamOutputType) throws {
+        removedOutputTypes.append(type)
+    }
 
     override func startCapture(completionHandler: (@Sendable ((any Error)?) -> Void)? = nil) {
+        if let beforeStartCompletion {
+            Task {
+                await beforeStartCompletion()
+                completionHandler?(nil)
+            }
+            return
+        }
         completionHandler?(nil)
     }
 
