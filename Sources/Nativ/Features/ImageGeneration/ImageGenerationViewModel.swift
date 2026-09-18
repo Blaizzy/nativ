@@ -1392,16 +1392,22 @@ struct GeneratedImage: Identifiable, Equatable, Codable, Sendable {
     }
 
     var attachment: ChatImageAttachment {
+        var attachment: ChatImageAttachment
         if let asset {
-            return ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+            attachment = ChatImageAttachment(id: id, filename: filename, mimeType: mimeType, asset: asset)
+        } else {
+            attachment = ChatImageAttachment(
+                id: id, filename: filename, mimeType: mimeType,
+                base64Data: imageData.base64EncodedString()
+            )
         }
-        return ChatImageAttachment(
-            id: id,
-            filename: filename,
-            mimeType: mimeType,
-            base64Data: imageData.base64EncodedString()
+        attachment.origin = .generated
+        attachment.generation = ArtifactGeneration(
+            prompt: revisedPrompt, seed: seed, width: width, height: height
         )
+        return attachment
     }
+
 }
 
 private extension String {

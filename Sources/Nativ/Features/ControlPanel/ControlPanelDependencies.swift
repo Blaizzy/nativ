@@ -39,7 +39,7 @@ final class ControlPanelDependencies: ObservableObject {
             return false
         }
         switch artifact.source {
-        case .uploaded:
+        case .uploaded, .unknown:
             return chat.removeAttachment(
                 sessionID: artifact.sessionID,
                 messageID: artifact.messageID,
