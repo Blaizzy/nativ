@@ -32,6 +32,10 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
     let tintName: String
     let requiredEnvironment: [String]
     let excludedEnvironment: [String]
+    let verificationEnvironment: [String]
+    let requiresFolder: Bool
+    let ciSkip: Bool
+    let ciSkipReason: String?
     let legacyLaunchConfigurations: [LegacyLaunchConfiguration]
     let sourceURL: String?
 
@@ -43,6 +47,8 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         case tintName = "tint"
         case requiredEnvironment = "requiredEnv"
         case excludedEnvironment = "excludedEnv"
+        case verificationEnvironment = "verificationEnv"
+        case requiresFolder, ciSkip, ciSkipReason
         case legacyLaunchConfigurations
     }
 
@@ -56,6 +62,10 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         tintName: String = "accent",
         requiredEnvironment: [String] = [],
         excludedEnvironment: [String] = [],
+        verificationEnvironment: [String] = [],
+        requiresFolder: Bool = false,
+        ciSkip: Bool = false,
+        ciSkipReason: String? = nil,
         legacyLaunchConfigurations: [LegacyLaunchConfiguration] = [],
         sourceURL: String? = nil
     ) {
@@ -68,6 +78,10 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         self.tintName = tintName
         self.requiredEnvironment = requiredEnvironment
         self.excludedEnvironment = excludedEnvironment
+        self.verificationEnvironment = verificationEnvironment
+        self.requiresFolder = requiresFolder
+        self.ciSkip = ciSkip
+        self.ciSkipReason = ciSkipReason
         self.legacyLaunchConfigurations = legacyLaunchConfigurations
         self.sourceURL = sourceURL
     }
@@ -89,6 +103,22 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
             [String].self,
             forKey: .excludedEnvironment
         ) ?? []
+        verificationEnvironment = try container.decodeIfPresent(
+            [String].self,
+            forKey: .verificationEnvironment
+        ) ?? []
+        requiresFolder = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .requiresFolder
+        ) ?? false
+        ciSkip = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .ciSkip
+        ) ?? false
+        ciSkipReason = try container.decodeIfPresent(
+            String.self,
+            forKey: .ciSkipReason
+        )
         legacyLaunchConfigurations = try container.decodeIfPresent(
             [LegacyLaunchConfiguration].self,
             forKey: .legacyLaunchConfigurations
