@@ -1,8 +1,6 @@
 import Foundation
 import SQLite3
 
-/// Explicit fields for local hardware diagnostics. Never encode the
-/// native identity wholesale: it contains names, serial numbers, volume names and paths.
 enum SystemTelemetryProjection {
     static func payload(_ s: SystemMonitorSnapshot) -> [String: Any] {
         var result: [String: Any] = [:]
@@ -20,7 +18,6 @@ enum SystemTelemetryProjection {
         let pattern = #"^(Mac|MacBookPro|MacBookAir|Macmini|iMac|MacPro)\d{1,2},\d{1,2}$"#
         result["model_identifier"] = identity.modelIdentifier.range(of: pattern, options: .regularExpression) != nil
             ? identity.modelIdentifier as Any : NSNull()
-        // Emit public chip generation/tier, never the original hardware string.
         let chip = identity.chipName.lowercased().split(separator: " ").map(String.init)
         let generation = chip.first(where: { $0.range(of: #"^m\d{1,2}$"#, options: .regularExpression) != nil })
             .flatMap { Int($0.dropFirst()) }
@@ -93,7 +90,6 @@ enum SystemTelemetryProjection {
         bytes("disk_lifetime_written_bytes", disk.lifetimeWrittenBytes)
         value("temperature_celsius", s.thermal.dieTemperatureCelsius, max: 200, min: -50)
         text("thermal_pressure", s.thermal.thermalPressureLabel.lowercased(), allowed: ["nominal", "fair", "serious", "critical"])
-        // Stable ordinal labels preserve every sensor reading without exporting raw sensor strings.
         let sensors = s.thermal.sensors.sorted { $0.name < $1.name }.prefix(128)
         var hottestIndex: Int?
         result["sensors"] = sensors.enumerated().compactMap { index, sensor -> [String: Any]? in
@@ -115,7 +111,6 @@ enum SystemTelemetryProjection {
     }
 }
 
-/// Automatic local hardware history. This recorder performs no networking.
 actor SystemTelemetryRecorder {
     /// Reserve room for both the database and SQLite's temporary rollback journal.
     /// A 375 MB database leaves ample headroom within the 1 GB storage budget.

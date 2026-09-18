@@ -245,7 +245,6 @@ final class SystemMonitorStore {
         samplingTask?.cancel()
     }
 
-    /// Started by the app's shared dependencies; stays active when its tab closes.
     func startDiagnosticHistory() {
         beginObservation(telemetryObserverID)
     }
