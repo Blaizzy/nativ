@@ -34,7 +34,12 @@ final class ArtifactStore: ObservableObject {
         }
     }
 
-    typealias Rebuild = @Sendable (URL, URL, [Artifact]) -> [Artifact]
+    struct CatalogSnapshot: Sendable {
+        let fingerprint: String?
+        let artifacts: [Artifact]
+    }
+
+    typealias Rebuild = @Sendable (URL, URL, CatalogSnapshot) -> CatalogSnapshot
 
     typealias DeletionHandler = (Artifact) -> Bool
 
@@ -45,6 +50,7 @@ final class ArtifactStore: ObservableObject {
     @Published private(set) var displayNames: [UUID: String] = [:]
 
     private var mutationRevision = 0
+    private var knownFingerprint: String?
     private let mediaStore: MediaAssetStore
     private let rebuildIndex: Rebuild
     private var persistedDataChangeCancellable: AnyCancellable?
@@ -75,7 +81,9 @@ final class ArtifactStore: ObservableObject {
         thumbnailCache.countLimit = 150
         favoriteIDs = Self.loadFavorites(favoritesURL)
         displayNames = Self.loadNames(displayNamesURL)
-        artifacts = Self.loadIndex(indexURL)
+        let stored = Self.loadIndex(indexURL)
+        artifacts = stored.artifacts
+        knownFingerprint = stored.fingerprint
         persistedDataChangeCancellable = persistedDataChanges?.changes
             .sink { [weak self] change in
                 switch change.kind {
@@ -194,14 +202,15 @@ final class ArtifactStore: ObservableObject {
         isRefreshing = true
         let cache = cacheDirectory
         let index = indexURL
-        let known = artifacts
+        let known = CatalogSnapshot(fingerprint: knownFingerprint, artifacts: artifacts)
         let revision = mutationRevision
         let rebuild = rebuildIndex
         Task.detached(priority: .utility) {
             let rebuilt = rebuild(cache, index, known)
             await MainActor.run {
                 if revision == self.mutationRevision {
-                    self.artifacts = rebuilt
+                    self.artifacts = rebuilt.artifacts
+                    self.knownFingerprint = rebuilt.fingerprint
                 } else {
                     self.refreshPending = true
                 }
@@ -220,11 +229,12 @@ final class ArtifactStore: ObservableObject {
             return false
         }
         mutationRevision += 1
+        knownFingerprint = nil
         if artifact.asset == nil {
             try? FileManager.default.removeItem(at: fileURL(for: artifact))
         }
         artifacts.removeAll { $0.id == artifact.id }
-        Self.writeIndex(artifacts, to: indexURL)
+        Self.writeIndex(artifacts, fingerprint: nil, to: indexURL)
         return true
     }
 
@@ -241,8 +251,11 @@ final class ArtifactStore: ObservableObject {
             }
             deletedIDs.insert(artifact.id)
         }
+        if !deletedIDs.isEmpty {
+            knownFingerprint = nil
+        }
         artifacts.removeAll { deletedIDs.contains($0.id) }
-        Self.writeIndex(artifacts, to: indexURL)
+        Self.writeIndex(artifacts, fingerprint: nil, to: indexURL)
         return deletedIDs
     }
 
@@ -323,10 +336,6 @@ final class ArtifactStore: ObservableObject {
 
     // MARK: - Scanning
 
-    private nonisolated static func fingerprintURL(indexURL: URL) -> URL {
-        indexURL.deletingLastPathComponent().appendingPathComponent("Artifacts Fingerprint.txt")
-    }
-
     nonisolated static func legacyCacheMarkerURL(indexURL: URL) -> URL {
         indexURL.deletingLastPathComponent()
             .appendingPathComponent("Artifacts Legacy Cache Removed.txt")
@@ -348,15 +357,15 @@ final class ArtifactStore: ObservableObject {
         return true
     }
 
-    private nonisolated static func rebuild(cacheDirectory: URL, indexURL: URL, known: [Artifact]) -> [Artifact] {
+    private nonisolated static func rebuild(
+        cacheDirectory: URL, indexURL: URL, known: CatalogSnapshot
+    ) -> CatalogSnapshot {
         let chats = ChatSessionStore()
         let images = ImageGenerationSessionStore()
         let fingerprint = "unified-v2#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
-        let fingerprintFile = fingerprintURL(indexURL: indexURL)
-        if !known.isEmpty,
-           let previous = try? String(contentsOf: fingerprintFile, encoding: .utf8),
-           previous == fingerprint,
-           known.allSatisfy({ artifact in
+        if !known.artifacts.isEmpty,
+           known.fingerprint == fingerprint,
+           known.artifacts.allSatisfy({ artifact in
                artifact.asset.flatMap(MediaAssetStore.shared.fileURL) != nil
            }) {
             return known
@@ -364,10 +373,9 @@ final class ArtifactStore: ObservableObject {
 
         let artifacts = ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions())
             .filter { $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
-        writeIndex(artifacts, to: indexURL)
-        try? fingerprint.write(to: fingerprintFile, atomically: true, encoding: .utf8)
+        writeIndex(artifacts, fingerprint: fingerprint, to: indexURL)
         removeLegacyCache(cacheDirectory: cacheDirectory, indexURL: indexURL)
-        return artifacts
+        return CatalogSnapshot(fingerprint: fingerprint, artifacts: artifacts)
     }
 
     // MARK: - Thumbnails
@@ -415,16 +423,27 @@ final class ArtifactStore: ObservableObject {
 
     // MARK: - Index
 
-    private nonisolated static func loadIndex(_ url: URL) -> [Artifact] {
+    private struct StoredIndex: Codable {
+        let fingerprint: String?
+        let artifacts: [Artifact]
+    }
+
+    nonisolated static func loadIndex(_ url: URL) -> CatalogSnapshot {
         guard let data = try? Data(contentsOf: url) else {
-            return []
+            return CatalogSnapshot(fingerprint: nil, artifacts: [])
         }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([Artifact].self, from: data)) ?? []
+        if let stored = try? decoder.decode(StoredIndex.self, from: data) {
+            return CatalogSnapshot(fingerprint: stored.fingerprint, artifacts: stored.artifacts)
+        }
+        let legacy = (try? decoder.decode([Artifact].self, from: data)) ?? []
+        return CatalogSnapshot(fingerprint: nil, artifacts: legacy)
     }
 
-    private nonisolated static func writeIndex(_ artifacts: [Artifact], to url: URL) {
+    nonisolated static func writeIndex(
+        _ artifacts: [Artifact], fingerprint: String?, to url: URL
+    ) {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -432,7 +451,8 @@ final class ArtifactStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(artifacts) else {
+        let stored = StoredIndex(fingerprint: fingerprint, artifacts: artifacts)
+        guard let data = try? encoder.encode(stored) else {
             return
         }
         try? data.write(to: url, options: .atomic)
