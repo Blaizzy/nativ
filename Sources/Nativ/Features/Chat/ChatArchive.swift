@@ -9,7 +9,7 @@ struct ChatArchive: Codable, Equatable {
     let exportedAt: Date
     let modelRepositoryID: String
     let systemPrompt: String
-    let chat: ChatArchiveConversation
+    var chat: ChatArchiveConversation
 
     init(
         chat: ChatSession,
@@ -32,7 +32,7 @@ struct ChatArchiveConversation: Codable, Equatable {
     let customTitle: String?
     let createdAt: Date
     let updatedAt: Date
-    let messages: [ChatTranscriptMessage]
+    var messages: [ChatTranscriptMessage]
     let imageGenerationModelID: String?
     let personalizationSnapshot: String?
 
@@ -65,7 +65,7 @@ enum ChatArchiveError: Error, Equatable, LocalizedError {
         case .duplicateMessageIDs:
             "The chat export contains duplicate message identifiers."
         case let .invalidAttachment(filename):
-            "The attachment “\(filename)” contains invalid data."
+            "The attachment “\(filename)” contains missing or invalid data."
         }
     }
 }
@@ -77,11 +77,33 @@ enum ChatContinuationAvailability: Equatable {
 }
 
 enum ChatArchiveCodec {
-    static func encode(_ archive: ChatArchive) throws -> Data {
+    static func encode(_ archive: ChatArchive, mediaStore: MediaAssetStore = .shared) throws -> Data {
+        var portable = archive
+        portable.chat.messages = try archive.chat.messages.map { message in
+            var exported = message
+            exported.imageAttachments = try message.imageAttachments.map { attachment in
+                let data: Data?
+                if let asset = attachment.asset {
+                    data = mediaStore.data(for: asset)
+                } else {
+                    data = attachment.imageData
+                }
+                guard let data else { throw ChatArchiveError.invalidAttachment(attachment.filename) }
+                var exported = ChatImageAttachment(
+                    id: attachment.assetID, filename: attachment.filename,
+                    mimeType: attachment.mimeType, base64Data: data.base64EncodedString(),
+                    origin: attachment.origin
+                )
+                exported.generation = message.artifactGeneration(for: attachment)
+                return exported
+            }
+            return exported
+        }
+        try validate(portable)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(archive)
+        return try encoder.encode(portable)
     }
 
     static func decode(_ data: Data) throws -> ChatArchive {
@@ -96,6 +118,8 @@ enum ChatArchiveCodec {
         try validate(archive)
 
         let messageIDs = Dictionary(uniqueKeysWithValues: archive.chat.messages.map { ($0.id, UUID()) })
+        let assetIDs = Set(archive.chat.messages.flatMap(\.imageAttachments).map(\.assetID))
+        let attachmentIDs = Dictionary(uniqueKeysWithValues: assetIDs.map { ($0, UUID()) })
         let messages = archive.chat.messages.map { message in
             var imported = ChatTranscriptMessage(
                 id: messageIDs[message.id] ?? UUID(),
@@ -106,12 +130,16 @@ enum ChatArchiveCodec {
                 createdAt: message.createdAt,
                 isThinkingEnabled: message.isThinkingEnabled,
                 thinkingDuration: message.thinkingDuration,
-                imageAttachments: message.imageAttachments.map {
-                    ChatImageAttachment(
-                        filename: $0.filename,
-                        mimeType: $0.mimeType,
-                        base64Data: $0.base64Data
+                imageAttachments: message.imageAttachments.map { attachment in
+                    var imported = ChatImageAttachment(
+                        id: attachmentIDs[attachment.assetID] ?? UUID(),
+                        filename: attachment.filename,
+                        mimeType: attachment.mimeType,
+                        base64Data: attachment.base64Data
                     )
+                    imported.generation = message.artifactGeneration(for: attachment)
+                    imported.origin = attachment.origin ?? (imported.generation == nil ? nil : .generated)
+                    return imported
                 },
                 responseMetrics: message.responseMetrics,
                 toolCalls: message.toolCalls,
@@ -190,10 +218,13 @@ enum ChatArchiveCodec {
             throw ChatArchiveError.duplicateMessageIDs
         }
 
+        var payloads: [UUID: Data] = [:]
         for attachment in archive.chat.messages.flatMap(\.imageAttachments) {
-            guard Data(base64Encoded: attachment.base64Data) != nil else {
+            guard attachment.asset == nil, let data = attachment.imageData,
+                  payloads[attachment.id].map({ $0 == data }) ?? true else {
                 throw ChatArchiveError.invalidAttachment(attachment.filename)
             }
+            payloads[attachment.id] = data
         }
     }
 

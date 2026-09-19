@@ -189,7 +189,12 @@ final class ChatAnnotationTests: XCTestCase {
         let source = ChatTranscriptMessage(role: .assistant, content: "Original")
         let session = ChatSession(id: UUID(), title: "Test", createdAt: .now, updatedAt: .now, messages: [source, source])
         let archive = ChatArchive(chat: session, modelRepositoryID: "test/model", systemPrompt: "")
-        let data = try ChatArchiveCodec.encode(archive)
+        XCTAssertThrowsError(try ChatArchiveCodec.encode(archive)) { error in
+            XCTAssertEqual(error as? ChatArchiveError, .duplicateMessageIDs)
+        }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(archive)
         XCTAssertThrowsError(try ChatArchiveCodec.decode(data)) { error in
             XCTAssertEqual(error as? ChatArchiveError, .duplicateMessageIDs)
         }
