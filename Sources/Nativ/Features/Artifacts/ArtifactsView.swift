@@ -92,6 +92,7 @@ struct ArtifactsView: View {
     @State private var artifactSelection = NativBulkSelection<Artifact.ID>()
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
+    @State private var showsDeletionFailure = false
     @State private var inspectorArtifact: Artifact?
     @State private var groupByChat = false
     @State private var albumSessionID: UUID?
@@ -513,6 +514,7 @@ struct ArtifactsView: View {
         .alert("Delete \(pendingDelete.count) \(pendingDelete.count == 1 ? "item" : "items")?", isPresented: $isConfirmingDelete) {
             Button("Delete", role: .destructive) {
                 let deletedIDs = store.delete(pendingDelete)
+                showsDeletionFailure = deletedIDs.count < Set(pendingDelete.map(\.id)).count
                 artifactSelection.remove(deletedIDs)
                 pendingDelete = []
                 if artifactSelection.isEmpty {
@@ -522,7 +524,12 @@ struct ArtifactsView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This removes the file from the artifact and from its chat history. It can’t be undone.")
+            Text("This removes each file from all linked chats and image sessions. It can’t be undone.")
+        }
+        .alert("Some files could not be removed", isPresented: $showsDeletionFailure) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("A linked session may be generating a response, or a history change could not be saved. The remaining files are still shown in Artifacts.")
         }
         .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
             Button("Remove Model", role: .destructive) {
@@ -1456,6 +1463,7 @@ struct ArtifactInspector: View {
                         detailRow("Name", artifact.filename)
                         detailRow("Type", artifact.typeLabel)
                         detailRow("Source", artifact.source.label)
+                        detailRow("Used in", "\(Set(artifact.locations.map(\.sessionID)).count) sessions")
                         detailRow("Size", Int64(artifact.byteSize).formatted(.byteCount(style: .file)))
                         detailRow("Created", artifact.createdAt.formatted(date: .abbreviated, time: .shortened))
                         if let prompt = artifact.prompt, !prompt.isEmpty {
@@ -1472,7 +1480,7 @@ struct ArtifactInspector: View {
 
                     VStack(spacing: 8) {
                         action("Open Preview", "arrow.up.left.and.arrow.down.right", onOpenPreview)
-                        action(artifact.source == .generated ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
+                        action(artifact.workspace == .imageGeneration ? "Go to Image Session" : "Go to Chat", "bubble.left.and.bubble.right", onGoToChat)
                         action("Reveal in Finder", "folder", { store.revealInFinder(artifact) })
                         action("Export…", "square.and.arrow.down", { store.export(artifact) })
                         action("Copy", "doc.on.doc", { store.copyToPasteboard(artifact) })
