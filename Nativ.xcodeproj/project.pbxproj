@@ -459,6 +459,7 @@
 		E752ED0A8DD58CB4B4D0BE7C /* WindowIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DAD1D95768722F427321CF5 /* WindowIntent.swift */; };
 		E77359B5F8F6AF656F2008C6 /* Exa.png in Resources */ = {isa = PBXBuildFile; fileRef = 995095FAF89C9D1DEC4158FB /* Exa.png */; };
 		E82F16B73372F51DA3767A67 /* MarkdownSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57891442224B287BE8D82B18 /* MarkdownSelectionTests.swift */; };
+		E8BDD43F4D1B93918BEA880F /* ArtifactLegacyCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58913D51CB2EC3FA8080E6A6 /* ArtifactLegacyCacheTests.swift */; };
 		E96652149FDCCF65899280A8 /* IntegrationsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41417C210BF817681A8C6D87 /* IntegrationsView.swift */; };
 		E9CD4ED9C227090EFE23EB03 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 7916EF3A0446EB624D66C33F /* ZIPFoundation */; };
 		EB19103900BE04518CBFF993 /* WebSearchSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E295CCB27C6CBD1025E62D11 /* WebSearchSettingsView.swift */; };
@@ -691,6 +692,7 @@
 		577B24B3B022E78F7664C76E /* NativNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativNotificationService.swift; sourceTree = "<group>"; };
 		57891442224B287BE8D82B18 /* MarkdownSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownSelectionTests.swift; sourceTree = "<group>"; };
 		586D3A7976823159DE5C00F9 /* NativExtensionHostBroker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativExtensionHostBroker.swift; sourceTree = "<group>"; };
+		58913D51CB2EC3FA8080E6A6 /* ArtifactLegacyCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactLegacyCacheTests.swift; sourceTree = "<group>"; };
 		5919AB4E9488642C73886266 /* ShellEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShellEnvironment.swift; sourceTree = "<group>"; };
 		594711E024396C78703CE05A /* NativSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativSettings.swift; sourceTree = "<group>"; };
 		5A8C02FD60255220A8DF3BE7 /* ServerProcessEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerProcessEnvironment.swift; sourceTree = "<group>"; };
@@ -1582,6 +1584,7 @@
 			children = (
 				2763077B30E27C9B7BB3E47F /* ArtifactCatalogTests.swift */,
 				FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */,
+				58913D51CB2EC3FA8080E6A6 /* ArtifactLegacyCacheTests.swift */,
 				B8F5045481C806F7F3478679 /* ArtifactProvenanceTests.swift */,
 				FD136B8C2C1F6B2B554064C5 /* ArtifactRefreshTests.swift */,
 				3B965B701714787B0A85AE6B /* AudioTests.swift */,
@@ -2171,6 +2174,7 @@
 				C7E82815819A49D1AA619711 /* ArtifactCatalog.swift in Sources */,
 				0BE40CBDC8E2F00EDED01E21 /* ArtifactCatalogTests.swift in Sources */,
 				4262747AC6425403FC1F2210 /* ArtifactDeletionTests.swift in Sources */,
+				E8BDD43F4D1B93918BEA880F /* ArtifactLegacyCacheTests.swift in Sources */,
 				43450E39C6229D137A927F99 /* ArtifactProvenanceTests.swift in Sources */,
 				3CFCC551774CD33CA71FE609 /* ArtifactRefreshTests.swift in Sources */,
 				3D96ED3F0E463F75A47071C6 /* ArtifactStore.swift in Sources */,

@@ -327,9 +327,28 @@ final class ArtifactStore: ObservableObject {
         indexURL.deletingLastPathComponent().appendingPathComponent("Artifacts Fingerprint.txt")
     }
 
-    private nonisolated static func rebuild(cacheDirectory: URL, indexURL: URL, known: [Artifact]) -> [Artifact] {
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    nonisolated static func legacyCacheMarkerURL(indexURL: URL) -> URL {
+        indexURL.deletingLastPathComponent()
+            .appendingPathComponent("Artifacts Legacy Cache Removed.txt")
+    }
 
+    @discardableResult
+    nonisolated static func removeLegacyCache(cacheDirectory: URL, indexURL: URL) -> Bool {
+        let fileManager = FileManager.default
+        let marker = legacyCacheMarkerURL(indexURL: indexURL)
+        guard !fileManager.fileExists(atPath: marker.path) else { return false }
+
+        try? fileManager.removeItem(at: cacheDirectory)
+        guard !fileManager.fileExists(atPath: cacheDirectory.path) else { return false }
+
+        try? fileManager.createDirectory(
+            at: marker.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? "unified-v2".write(to: marker, atomically: true, encoding: .utf8)
+        return true
+    }
+
+    private nonisolated static func rebuild(cacheDirectory: URL, indexURL: URL, known: [Artifact]) -> [Artifact] {
         let chats = ChatSessionStore()
         let images = ImageGenerationSessionStore()
         let fingerprint = "unified-v2#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
@@ -347,6 +366,7 @@ final class ArtifactStore: ObservableObject {
             .filter { $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
         writeIndex(artifacts, to: indexURL)
         try? fingerprint.write(to: fingerprintFile, atomically: true, encoding: .utf8)
+        removeLegacyCache(cacheDirectory: cacheDirectory, indexURL: indexURL)
         return artifacts
     }
 
