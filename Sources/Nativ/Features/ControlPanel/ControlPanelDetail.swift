@@ -83,11 +83,11 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
-                    switch artifact.source {
-                    case .uploaded, .unknown:
+                    switch artifact.workspace {
+                    case .chat:
                         applySidebarSelection(.chat(artifact.sessionID))
                         chat.scrollTargetMessageID = artifact.messageID
-                    case .generated:
+                    case .imageGeneration:
                         applySidebarSelection(.imageGeneration(artifact.sessionID))
                     }
                 },

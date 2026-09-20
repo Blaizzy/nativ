@@ -57,6 +57,32 @@ final class ArtifactRefreshTests: XCTestCase {
         XCTAssertEqual(store.artifacts.map(\.id), [artifact.id])
     }
 
+    func testDeletionDuringScanDoesNotRepublishDeletedArtifact() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hub = PersistedDataChangeHub()
+        let artifact = makeArtifact()
+        let started = expectation(description: "Stale scan started")
+        let resume = DispatchSemaphore(value: 0)
+        defer { resume.signal() }
+        let source = Source(firstScanStarted: started, resumeFirstScan: resume)
+        source.state.withLock { $0.artifacts = [artifact] }
+        let store = makeStore(directory: directory, hub: hub, source: source)
+        store.refresh()
+        await fulfillment(of: [started], timeout: 5)
+        XCTAssertTrue(store.delete(artifact))
+        source.state.withLock { $0.artifacts = [] }
+        let updated = expectation(description: "Follow-up publishes remaining artifacts")
+        let subscription = store.$artifacts.dropFirst().sink { artifacts in
+            XCTAssertTrue(artifacts.isEmpty)
+            updated.fulfill()
+        }
+        resume.signal()
+        await fulfillment(of: [updated], timeout: 5)
+        subscription.cancel()
+        XCTAssertEqual(source.state.withLock { $0.scans }, 2)
+    }
+
     func testFolderChangesDoNotScanArtifacts() {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -78,7 +104,7 @@ final class ArtifactRefreshTests: XCTestCase {
             ),
             refreshesAutomatically: false,
             persistedDataChanges: hub,
-            rebuild: { _, _, _ in source.scan() }
+            rebuild: { _, _, _ in ArtifactStore.CatalogSnapshot(fingerprint: nil, artifacts: source.scan()) }
         )
     }
 
