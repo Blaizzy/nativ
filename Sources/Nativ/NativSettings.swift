@@ -1381,7 +1381,7 @@ struct NativSettings: Codable, Equatable {
 
     var serverBaseURL: URL {
         let settings = normalized()
-        let host = Self.urlHost(settings.serverHost)
+        let host = Self.urlHost(Self.loopbackHost(settings.serverHost))
         return URL(string: "http://\(host):\(settings.serverPort)")!
     }
 
@@ -1615,6 +1615,14 @@ struct NativSettings: Codable, Equatable {
             return host
         }
         return "[\(host.replacingOccurrences(of: "%", with: "%25"))]"
+    }
+
+    private static func loopbackHost(_ host: String) -> String {
+        switch host {
+        case "0.0.0.0": return "127.0.0.1"
+        case "::", "0:0:0:0:0:0:0:0": return "::1"
+        default: return host
+        }
     }
 
     private static func nonEmpty(_ value: String, fallback: String) -> String {

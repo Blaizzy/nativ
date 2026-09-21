@@ -294,8 +294,16 @@ final class NativSettingsTests: XCTestCase {
         let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
 
         XCTAssertEqual(settings.normalized().serverHost, "0.0.0.0")
-        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://0.0.0.0:9001")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://127.0.0.1:9001")
         XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "0.0.0.0"))
+    }
+
+    func testWildcardIPv6HostConnectsOverLoopback() {
+        let settings = NativSettings(serverHost: "::", serverPort: 9_003)
+
+        XCTAssertEqual(settings.normalized().serverHost, "::")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9003")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::"))
     }
 
     func testIPv6ServerHostProducesValidBaseURL() {
