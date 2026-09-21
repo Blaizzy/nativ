@@ -60,6 +60,25 @@ pointer-following waveform or a camera-cutout pill with a reactive orb and timer
 shortcuts. When no speech-to-text model is installed, it links directly to filtered speech-model
 discovery in [Models](models.md).
 
+## Meeting summaries
+
+Recordings use the selected speech-to-text model for transcription and a separate installed
+language model for summaries. Summary prompts ask the language model to keep the transcript's
+predominant language, including headings and action items, rather than translate it into English.
+Long recordings use the same instructions for each section and the final combined notes.
+
+Open **Audio → Record → Summary settings** to choose a **Language** and edit the **LLM prompt**.
+The language dropdown defaults to **Auto**, which asks the model to infer the language from the
+transcript. Choose **Spanish**, for example, to always produce Spanish summaries instead. An
+explicit language selection overrides detection. The language dropdown takes precedence over
+language requests in the prompt.
+
+The prompt editor shows the actual summary instructions and lets you change the format, detail,
+or focus of your notes. Choose **Reset prompt**, or leave the editor empty, to use the default
+instructions. Language and prompt preferences save automatically and apply to automatic summaries
+and to **Generate summary** or **Regenerate summary** in the Audio library. Existing summaries
+change only when regenerated. Chat system instructions are separate from these summary settings.
+
 ## Permissions
 
 - **Microphone** — requested on first capture; required to record.

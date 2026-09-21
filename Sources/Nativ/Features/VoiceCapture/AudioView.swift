@@ -144,6 +144,10 @@ struct AudioView: View {
     @StateObject private var inputVolume = AudioInputVolumeController()
     @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
+    @AppStorage(AudioCapturePreferences.summaryLanguageKey)
+    private var summaryLanguage = AudioSummaryLanguage.automatic
+    @AppStorage(AudioCapturePreferences.summaryPromptKey)
+    private var summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
     @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
@@ -389,6 +393,7 @@ struct AudioView: View {
             ) {
                 audioInputPanel
                 captureControls
+                summarySettingsPanel
                 capturePrivacyPanel
             }
         case .overview:
@@ -1336,6 +1341,72 @@ struct AudioView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(tint.opacity(0.2), lineWidth: 1)
         }
+    }
+
+    private var summarySettingsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Summary settings", systemImage: "text.bubble")
+                .font(.headline)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Language")
+                        .font(.callout.weight(.medium))
+                    Text("Auto infers the language from your transcript. Select a language to override it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Summary language", selection: $summaryLanguage) {
+                    Text(AudioSummaryLanguage.automatic.title)
+                        .tag(AudioSummaryLanguage.automatic)
+                    Divider()
+                    ForEach(AudioSummaryLanguage.allCases.filter { $0 != .automatic }) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 210, alignment: .trailing)
+                .accessibilityLabel("Summary language")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("LLM prompt")
+                        .font(.callout.weight(.medium))
+                    Spacer()
+                    Button("Reset prompt") {
+                        summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
+                    }
+                    .disabled(summaryPrompt == AudioCapturePreferences.defaultSummaryPrompt)
+                }
+
+                Text("Edit the instructions used to generate your notes. The language selected above takes precedence.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextEditor(text: $summaryPrompt)
+                    .font(.system(.callout, design: .monospaced))
+                    .scrollContentBackground(.hidden)
+                    .frame(height: 120)
+                    .padding(10)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                    }
+                    .accessibilityLabel("Summary LLM prompt")
+            }
+
+            Text("Saved automatically. Applies to new and regenerated summaries. An empty prompt uses the default instructions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .audioPanelStyle(cornerRadius: 16)
     }
 
     private var activeCapturePanel: some View {
