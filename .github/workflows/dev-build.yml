@@ -26,6 +26,9 @@ jobs:
       - name: Test release metadata and preview feeds
         run: python3 -m unittest discover -s scripts/tests -p 'test_macos_release.py'
 
+      - name: Test request diagnostics
+        run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
+
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4
         with:

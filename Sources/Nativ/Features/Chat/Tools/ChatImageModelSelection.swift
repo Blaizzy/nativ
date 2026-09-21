@@ -97,7 +97,9 @@ struct ChatImageModelOption: Identifiable, Equatable, Sendable {
 
 struct ChatImageModelSelectionRequest: Equatable, Sendable {
     let operation: ChatImageOperation
-    let models: [ChatImageModelOption]
+    var models: [ChatImageModelOption]
+    var highlightedModelID: String?
+    var sessionID: UUID?
 
     var installedModels: [ChatImageModelOption] {
         models.filter(\.isInstalled)
@@ -105,6 +107,33 @@ struct ChatImageModelSelectionRequest: Equatable, Sendable {
 
     var downloadableModels: [ChatImageModelOption] {
         models.filter { !$0.isInstalled }
+    }
+
+    var effectiveHighlightedModelID: String? {
+        let options = installedModels
+        if let highlightedModelID,
+            options.contains(where: { $0.modelID == highlightedModelID }) {
+            return highlightedModelID
+        }
+        return options.first?.modelID
+    }
+
+    var canMoveHighlight: Bool {
+        installedModels.count > 1
+    }
+
+    func offers(_ modelID: String) -> Bool {
+        models.contains { $0.modelID == modelID }
+    }
+
+    func movingHighlight(by offset: Int) -> ChatImageModelSelectionRequest {
+        let options = installedModels
+        guard canMoveHighlight else { return self }
+        let current = options.firstIndex { $0.modelID == effectiveHighlightedModelID } ?? 0
+        var updated = self
+        updated.highlightedModelID =
+            options[min(max(current + offset, 0), options.count - 1)].modelID
+        return updated
     }
 }
 

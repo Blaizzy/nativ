@@ -2507,34 +2507,24 @@ private struct HubModelRow: View, @MainActor Equatable {
     }
 
     private var memoryFitWarning: HubModelMemoryFitWarning? {
-        if let estimate = model.memoryEstimate, !estimate.isUsable {
-            let required = ByteCountFormatter.string(
-                fromByteCount: Int64(clamping: estimate.workingSetBytes),
-                countStyle: .memory
-            )
-            let total = ByteCountFormatter.string(
-                fromByteCount: Int64(clamping: estimate.totalMemoryBytes),
-                countStyle: .memory
-            )
-            return HubModelMemoryFitWarning(
-                title: "May not fit in memory",
-                message: "Needs about \(required); this Mac has \(total). Try a smaller or quantized model."
-            )
+        guard let estimate = LocalModelMemoryEstimate(
+            downloadSizeBytes: downloadSizeBytes,
+            capabilities: model.capabilities
+        ), !estimate.isUsable else {
+            return nil
         }
-        if let sizeBytes = model.sizeBytes, sizeBytes > 0 {
-            let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
-            let budget = Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction)
-            if Double(sizeBytes) > budget {
-                let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .memory)
-                let total = ByteCountFormatter.string(
-                    fromByteCount: Int64(clamping: totalMemoryBytes), countStyle: .memory)
-                return HubModelMemoryFitWarning(
-                    title: "May not fit in memory",
-                    message: "About \(size) of model data; this Mac has \(total) of memory. Try a smaller or quantized model."
-                )
-            }
-        }
-        return nil
+        let required = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: estimate.workingSetBytes),
+            countStyle: .memory
+        )
+        let total = ByteCountFormatter.string(
+            fromByteCount: Int64(clamping: estimate.totalMemoryBytes),
+            countStyle: .memory
+        )
+        return HubModelMemoryFitWarning(
+            title: "May not fit in memory",
+            message: "Needs about \(required); this Mac has \(total). Try a smaller or quantized model."
+        )
     }
 
     var body: some View {
@@ -3365,6 +3355,12 @@ extension LocalModelProvider {
         case .thinkingMachines:
             .primary
         case .meituanLongCat:
+            .primary
+        case .huggingFace:
+            .primary
+        case .stepFun:
+            .primary
+        case .internLM:
             .primary
         }
     }

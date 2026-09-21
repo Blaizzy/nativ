@@ -21,7 +21,7 @@ private struct ChatSessionBootstrap {
 }
 
 enum ChatStreamingRenderPolicy {
-    static let updatesPerSecond: Double = 20
+    static let updatesPerSecond: Double = 60
     static let flushInterval: Duration = .seconds(1 / updatesPerSecond)
 }
 
@@ -168,6 +168,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let personalizationSnapshot: String
         let toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
@@ -659,7 +660,8 @@ final class ChatViewModel: ObservableObject {
     func archive(
         for sessionID: UUID,
         selectedModelID: String?,
-        systemPrompt: String
+        systemPrompt: String,
+        includePersonalization: Bool = false
     ) -> ChatArchive? {
         let session: ChatSession?
         if sessionID == currentSessionID {
@@ -680,7 +682,8 @@ final class ChatViewModel: ObservableObject {
         return ChatArchive(
             chat: session,
             modelRepositoryID: modelRepositoryID,
-            systemPrompt: session.importedSystemPrompt ?? systemPrompt
+            systemPrompt: session.importedSystemPrompt ?? systemPrompt,
+            includePersonalization: includePersonalization
         )
     }
 
@@ -700,7 +703,31 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stageAttachment(_ attachment: ChatImageAttachment) {
+        guard !pendingImageAttachments.contains(where: { $0.assetID == attachment.assetID }) else { return }
         pendingImageAttachments.append(attachment)
+    }
+
+    @discardableResult
+    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
+        guard !inferenceActivity.isActive(.chat(sessionID)) else { return false }
+        if sessionID == currentSessionID {
+            let previous = messages
+            for index in messages.indices {
+                messages[index].imageAttachments.removeAll { $0.assetID == assetID }
+            }
+            guard persistCurrentSession(updateTimestamp: false) else {
+                messages = previous
+                return false
+            }
+            pendingImageAttachments.removeAll { $0.assetID == assetID }
+            return true
+        }
+        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
+        session.removeArtifact(assetID)
+        guard saveSession(session) else { return false }
+        upsertStoredSession(session)
+        refreshSessionList()
+        return true
     }
 
     @discardableResult
@@ -1159,6 +1186,14 @@ final class ChatViewModel: ObservableObject {
         let imageAttachments = pendingImageAttachments
         let annotations = pendingAnnotations
 
+        if currentSession.personalizationSnapshot == nil {
+            self.currentSession?.capturePersonalization(settings.personalization)
+            guard persistCurrentSession(updateTimestamp: false) else {
+                self.currentSession = currentSession
+                return
+            }
+        }
+
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
                 let revision = ChatPromptRevision.make(
@@ -1241,6 +1276,7 @@ final class ChatViewModel: ObservableObject {
                 userMessageID: userMessageID,
                 assistantMessageID: UUID(),
                 settings: settings,
+                personalizationSnapshot: currentSession?.personalizationSnapshot ?? "",
                 toolScope: projectStore.toolScope(
                     for: projectID(for: sessionID),
                     settings: settings
@@ -1266,6 +1302,48 @@ final class ChatViewModel: ObservableObject {
         for toolMessageID: UUID
     ) -> ChatImageModelSelectionRequest? {
         imageModelSelectionRequests[toolMessageID]
+    }
+
+    private var visibleImageModelSelectionID: UUID? {
+        ChatPendingDecisionScope.soleID(
+            in: imageModelSelectionRequests,
+            matching: currentSessionID
+        ) { $0.sessionID }
+    }
+
+    private var visibleToolConsentID: UUID? {
+        ChatPendingDecisionScope.soleID(
+            in: toolConsentGate.pendingSessions,
+            matching: currentSessionID
+        ) { $0 }
+    }
+
+    func highlightImageModel(_ modelID: String) {
+        guard let toolMessageID = visibleImageModelSelectionID,
+            imageModelSelectionRequests[toolMessageID]?.offers(modelID) == true
+        else {
+            return
+        }
+        imageModelSelectionRequests[toolMessageID]?.highlightedModelID = modelID
+    }
+
+    func moveImageModelHighlight(by offset: Int) -> Bool {
+        guard let toolMessageID = visibleImageModelSelectionID,
+            let request = imageModelSelectionRequests[toolMessageID],
+            request.canMoveHighlight
+        else {
+            return false
+        }
+        imageModelSelectionRequests[toolMessageID] = request.movingHighlight(by: offset)
+        return true
+    }
+
+    func cancelPendingToolDecision() {
+        if let toolMessageID = visibleToolConsentID {
+            denyToolConsent(toolMessageID)
+        } else if let toolMessageID = visibleImageModelSelectionID {
+            cancelImageModelSelection(toolMessageID)
+        }
     }
 
     func selectImageModel(_ toolMessageID: UUID, _ modelID: String) {
@@ -1368,11 +1446,7 @@ final class ChatViewModel: ObservableObject {
                     else {
                         continue
                     }
-                    self?.imageModelSelectionRequests[toolMessageID] =
-                        ChatImageModelSelectionRequest(
-                            operation: operation,
-                            models: models
-                        )
+                    self?.imageModelSelectionRequests[toolMessageID]?.models = models
                 } catch is CancellationError {
                     return
                 } catch {
@@ -1383,8 +1457,11 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func awaitToolConsent(for toolMessageID: UUID) async -> Bool {
-        await toolConsentGate.awaitDecision(for: toolMessageID)
+    private func awaitToolConsent(
+        for toolMessageID: UUID,
+        in sessionID: UUID
+    ) async -> Bool {
+        await toolConsentGate.awaitDecision(for: toolMessageID, inSession: sessionID)
     }
 
     func cancel() {
@@ -1824,11 +1901,11 @@ final class ChatViewModel: ObservableObject {
                 completion = try await client.streamChat(
                     request,
                     onEvent: { event in
-                        await eventRelay.submit(event)
+                        eventRelay.submit(event)
                     })
-                await eventRelay.finish()
+                eventRelay.finish()
             } catch {
-                await eventRelay.cancel()
+                eventRelay.cancel()
                 throw error
             }
             let toolCalls = normalizedToolCalls(completion.toolCalls)
@@ -1883,7 +1960,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved, isCancelled: Task.isCancelled)
                     {
@@ -1948,7 +2025,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved,
                         isCancelled: Task.isCancelled
@@ -1999,7 +2076,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved,
                         isCancelled: Task.isCancelled
@@ -2042,7 +2119,7 @@ final class ChatViewModel: ObservableObject {
                         content: "",
                         attachments: []
                     )
-                    let approved = await awaitToolConsent(for: toolMessageID)
+                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
                     switch ChatToolConsentRouter.outcome(
                         approved: approved, isCancelled: Task.isCancelled)
                     {
@@ -2165,6 +2242,8 @@ final class ChatViewModel: ObservableObject {
                                 )
                             }
 
+                            var request = request
+                            request.sessionID = queuedRequest.sessionID
                             let selectedModelID = await self.imageModelSelectionGate
                                 .awaitSelection(for: toolMessageID) {
                                     self.imageModelSelectionRequests[toolMessageID] = request
@@ -2421,6 +2500,9 @@ final class ChatViewModel: ObservableObject {
         var systemParts: [String] = []
         if !settings.systemPrompt.isEmpty {
             systemParts.append(settings.systemPrompt)
+        }
+        if !queuedRequest.personalizationSnapshot.isEmpty {
+            systemParts.append(queuedRequest.personalizationSnapshot)
         }
         if let projectPrompt = queuedRequest.toolScope.systemPrompt {
             systemParts.append(projectPrompt)
