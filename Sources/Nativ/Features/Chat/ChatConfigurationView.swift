@@ -318,6 +318,33 @@ struct ModelConfigurationView: View {
 
                 Text(systemPromptHint)
                     .configurationHintStyle()
+
+                let personalizationPrompt = settings.personalization.systemPrompt
+                if !personalizationPrompt.isEmpty {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(verbatim: personalizationPrompt)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 7)
+                                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                                }
+
+                            Text("Added to the system prompt for new chats. Existing chats keep their original personalization. Edit in Settings → Personalization.")
+                                .configurationHintStyle()
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        Text("Personalization")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }

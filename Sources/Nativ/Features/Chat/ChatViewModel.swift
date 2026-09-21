@@ -168,6 +168,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let personalizationSnapshot: String
         let toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
@@ -659,7 +660,8 @@ final class ChatViewModel: ObservableObject {
     func archive(
         for sessionID: UUID,
         selectedModelID: String?,
-        systemPrompt: String
+        systemPrompt: String,
+        includePersonalization: Bool = false
     ) -> ChatArchive? {
         let session: ChatSession?
         if sessionID == currentSessionID {
@@ -680,7 +682,8 @@ final class ChatViewModel: ObservableObject {
         return ChatArchive(
             chat: session,
             modelRepositoryID: modelRepositoryID,
-            systemPrompt: session.importedSystemPrompt ?? systemPrompt
+            systemPrompt: session.importedSystemPrompt ?? systemPrompt,
+            includePersonalization: includePersonalization
         )
     }
 
@@ -700,7 +703,31 @@ final class ChatViewModel: ObservableObject {
     }
 
     func stageAttachment(_ attachment: ChatImageAttachment) {
+        guard !pendingImageAttachments.contains(where: { $0.assetID == attachment.assetID }) else { return }
         pendingImageAttachments.append(attachment)
+    }
+
+    @discardableResult
+    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
+        guard !inferenceActivity.isActive(.chat(sessionID)) else { return false }
+        if sessionID == currentSessionID {
+            let previous = messages
+            for index in messages.indices {
+                messages[index].imageAttachments.removeAll { $0.assetID == assetID }
+            }
+            guard persistCurrentSession(updateTimestamp: false) else {
+                messages = previous
+                return false
+            }
+            pendingImageAttachments.removeAll { $0.assetID == assetID }
+            return true
+        }
+        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
+        session.removeArtifact(assetID)
+        guard saveSession(session) else { return false }
+        upsertStoredSession(session)
+        refreshSessionList()
+        return true
     }
 
     @discardableResult
@@ -1159,6 +1186,14 @@ final class ChatViewModel: ObservableObject {
         let imageAttachments = pendingImageAttachments
         let annotations = pendingAnnotations
 
+        if currentSession.personalizationSnapshot == nil {
+            self.currentSession?.capturePersonalization(settings.personalization)
+            guard persistCurrentSession(updateTimestamp: false) else {
+                self.currentSession = currentSession
+                return
+            }
+        }
+
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
                 let revision = ChatPromptRevision.make(
@@ -1241,6 +1276,7 @@ final class ChatViewModel: ObservableObject {
                 userMessageID: userMessageID,
                 assistantMessageID: UUID(),
                 settings: settings,
+                personalizationSnapshot: currentSession?.personalizationSnapshot ?? "",
                 toolScope: projectStore.toolScope(
                     for: projectID(for: sessionID),
                     settings: settings
@@ -2464,6 +2500,9 @@ final class ChatViewModel: ObservableObject {
         var systemParts: [String] = []
         if !settings.systemPrompt.isEmpty {
             systemParts.append(settings.systemPrompt)
+        }
+        if !queuedRequest.personalizationSnapshot.isEmpty {
+            systemParts.append(queuedRequest.personalizationSnapshot)
         }
         if let projectPrompt = queuedRequest.toolScope.systemPrompt {
             systemParts.append(projectPrompt)

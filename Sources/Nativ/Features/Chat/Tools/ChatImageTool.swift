@@ -231,7 +231,12 @@ struct ChatImageToolExecutor {
             settings: settings,
             seed: request.seed
         )
-        let attachments = outputs.map(\.attachment)
+        let attachments = outputs.map { output in
+            var attachment = output.attachment
+            attachment.generation?.prompt = output.revisedPrompt ?? request.prompt
+            attachment.generation?.modelID = modelID
+            return attachment
+        }
         let payload = ChatImageToolResultPayload(
             ok: true,
             operation: request.operation.rawValue,

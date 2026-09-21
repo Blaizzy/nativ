@@ -38,24 +38,31 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity
     )
-    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, deletionHandler: { [weak self] artifact in
+    lazy var artifacts: ArtifactStore = ArtifactStore(persistedDataChanges: persistedDataChanges, deletionHandler: { [weak self] artifact in
         guard let self else {
             return false
         }
-        switch artifact.source {
-        case .uploaded:
-            return chat.removeAttachment(
-                sessionID: artifact.sessionID,
-                messageID: artifact.messageID,
-                attachmentID: artifact.id
-            )
-        case .generated:
-            return imageGeneration.removeOutput(
-                sessionID: artifact.sessionID,
-                turnID: artifact.messageID,
-                outputID: artifact.id
-            )
-        }
+        let current = ArtifactCatalog.artifacts(
+            chats: ChatSessionStore().loadSessions(), images: ImageGenerationSessionStore().loadSessions()
+        ).first { $0.id == artifact.id }
+        guard let current else { return true }
+        let removed = ArtifactDeletion.removeReferences(
+            to: current,
+            isActive: { workspace, id in
+                switch workspace {
+                case .chat: inferenceActivity.isActive(.chat(id))
+                case .imageGeneration: inferenceActivity.isActive(.imageGeneration(id))
+                }
+            },
+            remove: { workspace, id in
+                switch workspace {
+                case .chat: chat.removeArtifact(artifact.id, sessionID: id)
+                case .imageGeneration: imageGeneration.removeArtifact(artifact.id, sessionID: id)
+                }
+            }
+        )
+        if !removed { artifacts.refresh() }
+        return removed
     })
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
