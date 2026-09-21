@@ -3038,7 +3038,17 @@ final class ChatViewModel: ObservableObject {
         guard !isLoadingSessions else {
             return
         }
-        storedSessions = sessionStore.loadSessions()
+        if let changedSessionIDs {
+            for id in changedSessionIDs {
+                if let session = sessionStore.loadSession(id: id) {
+                    upsertStoredSession(session)
+                } else {
+                    storedSessions.removeAll { $0.id == id }
+                }
+            }
+        } else {
+            storedSessions = sessionStore.loadSessions()
+        }
         defer { searchLibrary.reconcile(sessions, changedSessionIDs: changedSessionIDs, from: self) }
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
