@@ -1,6 +1,60 @@
 import XCTest
 
 final class ChatConversationBranchTests: XCTestCase {
+    func testPersonalizationSnapshotIsFrozenAcrossEditsReloadAndBranching() throws {
+        var personalization = NativPersonalization()
+        personalization.profile.preferredName = "Alex"
+        personalization.profile.conversationStyle = .concise
+        personalization.profile.emojiUsage = .none
+        personalization.profile.markdownUsage = .minimal
+        personalization.profile.aboutYou = "Lives in Paris"
+        var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        session.capturePersonalization(personalization)
+        let snapshot = try XCTUnwrap(session.personalizationSnapshot)
+        XCTAssertTrue(snapshot.contains("Alex"))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.ConversationStyle.concise.systemPrompt))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.EmojiUsage.none.systemPrompt))
+        XCTAssertTrue(snapshot.contains(NativPersonalization.MarkdownUsage.minimal.systemPrompt))
+        XCTAssertTrue(snapshot.contains("Lives in Paris"))
+        session.messages.append(ChatTranscriptMessage(role: .user, content: "Hello"))
+
+        personalization.profile.preferredName = "Sam"
+        personalization.profile.conversationStyle = .detailed
+        personalization.profile.emojiUsage = .more
+        personalization.profile.markdownUsage = .structured
+        personalization.profile.aboutYou = ""
+        session = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
+        session.capturePersonalization(personalization)
+        XCTAssertEqual(session.personalizationSnapshot, snapshot)
+        let branch = ChatConversationBranch.make(from: session, messages: session.messages)
+        XCTAssertEqual(branch.personalizationSnapshot, snapshot)
+
+        var newSession = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        newSession.capturePersonalization(personalization)
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains("Sam"))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.ConversationStyle.detailed.systemPrompt))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.EmojiUsage.more.systemPrompt))
+        XCTAssertTrue(try XCTUnwrap(newSession.personalizationSnapshot).contains(NativPersonalization.MarkdownUsage.structured.systemPrompt))
+        XCTAssertFalse(try XCTUnwrap(newSession.personalizationSnapshot).contains("Paris"))
+    }
+
+    func testEmptySnapshotStaysEmptyAndLegacyHistoryDoesNotGainPersonalization() throws {
+        var session = ChatSession(id: UUID(), title: "New chat", createdAt: .now, updatedAt: .now, messages: [])
+        session.capturePersonalization(NativPersonalization())
+        var personalization = NativPersonalization()
+        personalization.profile.preferredName = "Alex"
+        session.capturePersonalization(personalization)
+        XCTAssertEqual(session.personalizationSnapshot, "")
+
+        session.personalizationSnapshot = nil
+        session.messages = [ChatTranscriptMessage(role: .user, content: "Existing history")]
+        let data = try JSONEncoder().encode(session)
+        var legacy = try JSONDecoder().decode(ChatSession.self, from: data)
+        XCTAssertNil(legacy.personalizationSnapshot)
+        legacy.capturePersonalization(personalization)
+        XCTAssertEqual(legacy.personalizationSnapshot, "")
+    }
+
     func testRevisingLatestPromptReplacesItsResponseHistoryWithoutChangingSession() throws {
         let firstUser = ChatTranscriptMessage(role: .user, content: "First prompt")
         let firstAssistant = ChatTranscriptMessage(role: .assistant, content: "First response")

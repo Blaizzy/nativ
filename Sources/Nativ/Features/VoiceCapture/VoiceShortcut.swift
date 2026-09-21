@@ -131,15 +131,21 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     }
 }
 
-extension Notification.Name {
-    static let voiceShortcutPreferencesDidChange = Notification.Name(
-        "VoiceShortcutPreferencesDidChange"
-    )
-}
-
 @MainActor
 final class VoiceShortcutPreferences: ObservableObject {
+    struct DidChange: NotificationCenter.MainActorMessage {
+        typealias Subject = VoiceShortcutPreferences
+    }
+
     static let shared = VoiceShortcutPreferences()
+
+    // Transient UI state; never saved with the shortcut preferences.
+    var isCapturingShortcut = false {
+        didSet {
+            guard isCapturingShortcut != oldValue else { return }
+            NotificationCenter.default.post(DidChange(), subject: self)
+        }
+    }
 
     @Published var recordShortcut: VoiceShortcut {
         didSet { preferencesDidChange() }
@@ -223,9 +229,6 @@ final class VoiceShortcutPreferences: ObservableObject {
 
     private func preferencesDidChange() {
         persistCurrent()
-        NotificationCenter.default.post(
-            name: .voiceShortcutPreferencesDidChange,
-            object: self
-        )
+        NotificationCenter.default.post(DidChange(), subject: self)
     }
 }

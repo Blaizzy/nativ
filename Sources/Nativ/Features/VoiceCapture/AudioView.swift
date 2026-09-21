@@ -224,8 +224,11 @@ struct AudioView: View {
         }
         .onDisappear {
             inputLevelMonitor.stop()
+            shortcuts.isCapturingShortcut = false
         }
-        .sheet(item: $editingShortcut) { kind in
+        .sheet(item: $editingShortcut, onDismiss: {
+            shortcuts.isCapturingShortcut = false
+        }) { kind in
             ShortcutCaptureSheet(
                 kind: kind,
                 conflictMessage: shortcutConflict,
@@ -2640,6 +2643,7 @@ struct AudioView: View {
             Spacer()
             Button("Change") {
                 shortcutConflict = nil
+                shortcuts.isCapturingShortcut = true
                 editingShortcut = kind
             }
             .buttonStyle(.bordered)
@@ -3803,7 +3807,7 @@ private final class ShortcutRecorderNSView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         let modifiers = VoiceShortcutModifiers(
-            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+            eventFlags: event.modifierFlags
         )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
@@ -3818,8 +3822,9 @@ private final class ShortcutRecorderNSView: NSView {
             }
             return
         }
-        pendingModifiers = modifiers
-        onPreview?(modifiers.displayParts.joined(separator: " + "))
+        // Keep the full chord while its modifiers are released one at a time.
+        pendingModifiers.formUnion(modifiers)
+        onPreview?(pendingModifiers.displayParts.joined(separator: " + "))
     }
 
     override func keyDown(with event: NSEvent) {

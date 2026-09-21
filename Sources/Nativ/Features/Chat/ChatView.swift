@@ -74,6 +74,10 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             chat.refreshPendingImageModelSelections()
         }
+        .onReceive(HuggingFaceDownloadManager.shared.completedDownloads) { modelID in
+            chat.highlightImageModel(modelID)
+            chat.refreshPendingImageModelSelections()
+        }
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
@@ -1227,6 +1231,7 @@ private struct ChatAgentStepCell: View {
                     onDeny(message.id)
                 }
                 .buttonStyle(.bordered)
+                .help("Deny (Esc)")
 
                 ChatToolConfirmationButton {
                     onConfirm(message.id)
@@ -1301,7 +1306,8 @@ private struct ChatAgentStepCell: View {
                 if !request.installedModels.isEmpty {
                     imageModelSection(
                         title: "Downloaded",
-                        models: request.installedModels
+                        models: request.installedModels,
+                        defaultActionModelID: request.effectiveHighlightedModelID
                     )
                 }
 
@@ -1317,6 +1323,7 @@ private struct ChatAgentStepCell: View {
                         onCancelImageModelSelection(message.id)
                     }
                     .buttonStyle(.bordered)
+                    .help("Cancel (Esc)")
 
                     Button("Open Models") {
                         onExploreImageModels(request.operation)
@@ -1331,7 +1338,8 @@ private struct ChatAgentStepCell: View {
 
     private func imageModelSection(
         title: String,
-        models: [ChatImageModelOption]
+        models: [ChatImageModelOption],
+        defaultActionModelID: String? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -1339,7 +1347,10 @@ private struct ChatAgentStepCell: View {
                 .foregroundStyle(.secondary)
 
             ForEach(models) { model in
-                ChatImageModelOptionRow(model: model) {
+                ChatImageModelOptionRow(
+                    model: model,
+                    isDefaultAction: model.modelID == defaultActionModelID
+                ) {
                     onSelectImageModel(message.id, model.modelID)
                 }
             }
@@ -1472,11 +1483,37 @@ private struct ChatImageModelOptionRow: View {
     private static let downloadButtonLabelWidth: CGFloat = 180
 
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+    @State private var isHovered = false
 
     let model: ChatImageModelOption
+    var isDefaultAction = false
     let onChoose: () -> Void
 
+    private var choosesOnRowClick: Bool {
+        model.isInstalled && !isDefaultAction
+    }
+
+    private var rowBackground: Color {
+        choosesOnRowClick && isHovered
+            ? Color.primary.opacity(0.07)
+            : Color(nsColor: .controlBackgroundColor)
+    }
+
+    @ViewBuilder
     var body: some View {
+        if choosesOnRowClick {
+            Button(action: onChoose) {
+                rowContent
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .accessibilityLabel("Use \(model.displayName)")
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1503,25 +1540,29 @@ private struct ChatImageModelOptionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(
-            Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 7)
-        )
+        .contentShape(.rect)
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(
+                    isDefaultAction ? Color.accentColor : Color(nsColor: .separatorColor),
+                    lineWidth: isDefaultAction ? 1.5 : 0.5
+                )
         }
     }
 
     @ViewBuilder
     private var trailingControl: some View {
         if model.isInstalled {
-            Button(action: onChoose) {
-                Label("Use", systemImage: "chevron.right")
-                    .labelStyle(.titleAndIcon)
+            if isDefaultAction {
+                ChatToolConfirmationButton(
+                    title: "Use",
+                    systemImage: "chevron.right",
+                    showsReturnHint: false,
+                    accessibilityLabel: "Use \(model.displayName)",
+                    action: onChoose
+                )
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Use \(model.displayName)")
         } else if downloadManager.isDownloading(model.modelID) {
             ModelDownloadProgressControl(
                 progress: downloadManager.progress(for: model.modelID),

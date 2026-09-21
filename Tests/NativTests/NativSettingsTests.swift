@@ -4,6 +4,106 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testFormattingPreferencesRoundTripIndependentlyAndInjectOnlySelectedPrompts() throws {
+        for emoji in NativPersonalization.EmojiUsage.allCases {
+            for markdown in NativPersonalization.MarkdownUsage.allCases {
+                var settings = NativSettings()
+                settings.personalization.profile.emojiUsage = emoji
+                settings.personalization.profile.markdownUsage = markdown
+                let decoded = try PropertyListDecoder().decode(
+                    NativSettings.self, from: PropertyListEncoder().encode(settings)
+                )
+                XCTAssertEqual(decoded.personalization.profile.emojiUsage, emoji)
+                XCTAssertEqual(decoded.personalization.profile.markdownUsage, markdown)
+                var expected: [String] = []
+                if emoji != .default { expected.append("Emoji usage:\n" + emoji.systemPrompt) }
+                if markdown != .default { expected.append("Markdown usage:\n" + markdown.systemPrompt) }
+                XCTAssertEqual(decoded.personalization.systemPrompt, expected.joined(separator: "\n\n"))
+            }
+        }
+    }
+
+    func testMissingOrUnknownFormattingPreferencesUseModelDefaults() throws {
+        for fields in ["", ",\"emojiUsage\":\"unknown\",\"markdownUsage\":\"unknown\""] {
+            let data = Data("{\"preferredName\":\"Alex\",\"conversationStyle\":\"friendly\"\(fields)}".utf8)
+            let profile = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+            XCTAssertEqual(profile.emojiUsage, .default)
+            XCTAssertEqual(profile.markdownUsage, .default)
+            XCTAssertEqual(profile.conversationStyle, .friendly)
+            XCTAssertEqual(profile.preferredName, "Alex")
+        }
+    }
+
+    func testPersonalInfoFieldsAreLimitedTo200CharactersIncludingUnicode() throws {
+        let text = "First line\n" + String(repeating: "👩🏽‍💻", count: 210)
+        let expected = String(text.prefix(200))
+        let profile = NativPersonalization.Profile(
+            preferredName: text, occupation: text, conversationStyle: .friendly, aboutYou: text
+        )
+        XCTAssertEqual(profile.preferredName, expected)
+        XCTAssertEqual(profile.occupation, expected)
+        XCTAssertEqual(profile.aboutYou, expected)
+        XCTAssertEqual(profile.aboutYou.count, 200)
+        XCTAssertTrue(profile.aboutYou.contains("\n"))
+
+        let data = try JSONSerialization.data(withJSONObject: [
+            "preferredName": text, "occupation": text, "aboutYou": text,
+            "conversationStyle": "friendly",
+        ])
+        var decoded = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+        XCTAssertEqual(decoded, profile)
+        decoded.aboutYou = text
+        decoded.limitFieldLengths()
+        XCTAssertEqual(decoded, profile)
+    }
+
+    func testConversationStylesRoundTripAndOnlySelectedPromptIsIncluded() throws {
+        for style in NativPersonalization.ConversationStyle.allCases {
+            var settings = NativSettings()
+            settings.personalization.profile.conversationStyle = style
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self, from: PropertyListEncoder().encode(settings)
+            )
+            XCTAssertEqual(decoded.personalization.profile.conversationStyle, style)
+            if style == .default {
+                XCTAssertTrue(decoded.personalization.systemPrompt.isEmpty)
+            } else {
+                XCTAssertEqual(decoded.personalization.systemPrompt, "Conversation style:\n" + style.systemPrompt)
+            }
+        }
+    }
+
+    func testMissingOrUnknownConversationStyleDefaultsWithoutLosingProfile() throws {
+        for styleField in ["\"responseStyle\":\"Old custom style\"", "\"conversationStyle\":\"unknown\""] {
+            let data = Data("{\"preferredName\":\"Alex\",\"occupation\":\"Designer\",\"aboutYou\":\"Lives in Paris\",\(styleField)}".utf8)
+            let profile = try JSONDecoder().decode(NativPersonalization.Profile.self, from: data)
+            XCTAssertEqual(profile.conversationStyle, .default)
+            XCTAssertEqual(profile.preferredName, "Alex")
+            XCTAssertEqual(profile.occupation, "Designer")
+            XCTAssertEqual(profile.aboutYou, "Lives in Paris")
+        }
+    }
+
+    func testPersonalizationRoundTripsSeparatelyFromSystemPrompt() throws {
+        var settings = NativSettings(systemPrompt: "Existing instructions")
+        settings.personalization.profile = .init(
+            preferredName: "Alex", occupation: "Designer",
+            conversationStyle: .concise, aboutYou: "Lives in Paris"
+        )
+        let decoded = try PropertyListDecoder().decode(
+            NativSettings.self, from: PropertyListEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.personalization, settings.personalization)
+        XCTAssertEqual(decoded.systemPrompt, "Existing instructions")
+        XCTAssertTrue(settings.hasSameLaunchConfiguration(as: NativSettings(systemPrompt: "Existing instructions")))
+    }
+
+    func testLegacySettingsHaveEmptyPersonalization() throws {
+        let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+        XCTAssertEqual(settings.personalization, NativPersonalization())
+        XCTAssertTrue(settings.personalization.systemPrompt.isEmpty)
+    }
+
     func testPinnedModelsRoundTripInOrder() throws {
         let settings = NativSettings(
             pinnedModelIDs: ["org/most-used", "org/second"]
@@ -218,57 +318,6 @@ final class NativSettingsTests: XCTestCase {
         changed.serverHost = "0.0.0.0"
 
         XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
-    }
-
-    func testCachedModelDiscoveryDefaultsToServedForNewAndLegacySettings() throws {
-        let legacyData = try PropertyListSerialization.data(
-            fromPropertyList: ["serverPort": 8080],
-            format: .xml,
-            options: 0
-        )
-        let legacy = try PropertyListDecoder().decode(NativSettings.self, from: legacyData)
-
-        for settings in [NativSettings(), legacy] {
-            XCTAssertFalse(settings.cachedModelDiscoveryEnabled)
-            XCTAssertEqual(settings.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"], "served")
-        }
-    }
-
-    func testCachedModelDiscoveryRoundTripsAndUsesConfiguredCache() throws {
-        for enabled in [false, true] {
-            let settings = NativSettings(
-                modelSearchPath: "~/custom-hf-cache",
-                cachedModelDiscoveryEnabled: enabled
-            )
-            let decoded = try PropertyListDecoder().decode(
-                NativSettings.self,
-                from: PropertyListEncoder().encode(settings)
-            )
-
-            XCTAssertEqual(decoded.cachedModelDiscoveryEnabled, enabled)
-            XCTAssertEqual(
-                decoded.launchEnvironment["MLX_VLM_MODEL_DISCOVERY"],
-                enabled ? "hf-cache" : "served"
-            )
-            XCTAssertEqual(
-                decoded.launchEnvironment["HF_HUB_CACHE"],
-                NSString(string: "~/custom-hf-cache").expandingTildeInPath
-            )
-            XCTAssertFalse(decoded.launchArguments.contains("--model"))
-        }
-    }
-
-    func testCachedModelDiscoveryRequiresRestartInBothDirectionsAndCanBeReverted() {
-        for enabled in [false, true] {
-            let original = NativSettings(cachedModelDiscoveryEnabled: enabled)
-            var changed = original
-            changed.cachedModelDiscoveryEnabled.toggle()
-
-            XCTAssertFalse(original.hasSameLaunchConfiguration(as: changed))
-
-            changed.cachedModelDiscoveryEnabled = enabled
-            XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
-        }
     }
 
     func testServerAPITokenIsNormalizedMaskedAndPassedToServer() {

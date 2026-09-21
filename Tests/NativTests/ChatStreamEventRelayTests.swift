@@ -56,6 +56,11 @@ final class ChatStreamEventRelayTests: XCTestCase {
         XCTAssertEqual(deliveries[0].generatedTokens, 26)
     }
 
+    func testFlushIntervalStaysClearOfTheInterTokenPeriod() {
+        let slowestInterTokenPeriod = Duration.milliseconds(50)
+        XCTAssertLessThan(ChatStreamingRenderPolicy.flushInterval, slowestInterTokenPeriod)
+    }
+
     func testCancelDropsPendingOutput() async {
         var deliveries: [MLXChatStreamDelta] = []
         let relay = ChatStreamEventRelay(
