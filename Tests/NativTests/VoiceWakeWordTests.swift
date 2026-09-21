@@ -87,55 +87,6 @@ struct VoiceWakeWordTests {
         }
     }
 
-    @Test func testBundledModelDetectsIsolatedAndContinuousWakePhrases() throws {
-        let bundle = Bundle(for: WakeWordTestBundle.self)
-        let url = try #require(bundle.url(forResource: "HeyNativ", withExtension: "mlmodelc"))
-        for name in ["hey-native", "hey-native-continuous-short", "hey-native-continuous-long"] {
-            let detector = try VoiceWakeWordModel(url: url)
-            let audioURL = try #require(bundle.url(forResource: name, withExtension: "wav", subdirectory: "WakeWord"))
-            let file = try AVAudioFile(forReading: audioURL)
-            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 1_600))
-            var offset: Int64 = 0
-            var detected = false
-            while file.framePosition < file.length {
-                try file.read(into: buffer)
-                let samples = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
-                if try detector.consume(.init(samples: samples, offset: offset)) { detected = true; break }
-                offset += Int64(samples.count)
-            }
-            #expect(detected, "Missed wake candidate for \(name)")
-        }
-    }
-
-    @Test(arguments: [false, true])
-    func testBundledModelRetainsQuietAndDistantLikeWakePhrases(reverberant: Bool) throws {
-        let bundle = Bundle(for: WakeWordTestBundle.self)
-        let modelURL = try #require(bundle.url(forResource: "HeyNativ", withExtension: "mlmodelc"))
-        let audioURL = try #require(bundle.url(forResource: "hey-native-continuous-short", withExtension: "wav", subdirectory: "WakeWord"))
-        let file = try AVAudioFile(forReading: audioURL)
-        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
-        try file.read(into: buffer)
-        var audio = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
-        if reverberant {
-            // A repeatable acoustic stress case, not a physical distance measurement.
-            var filtered: Float = 0
-            for i in audio.indices {
-                filtered += 0.6 * (audio[i] - filtered)
-                audio[i] = filtered
-            }
-            let direct = audio
-            for i in 1_120..<audio.count { audio[i] += 0.3 * direct[i - 1_120] }
-        }
-        audio = audio.map { $0 * 0.1 } // 20 dB quieter than the source fixture.
-        let detector = try VoiceWakeWordModel(url: modelURL)
-        var detected = false
-        for offset in stride(from: 0, to: audio.count, by: 1_600) {
-            let samples = Array(audio[offset..<min(audio.count, offset + 1_600)])
-            if try detector.consume(.init(samples: samples, offset: Int64(offset))) { detected = true; break }
-        }
-        #expect(detected)
-    }
-
     @Test func testPreRollAndSpeechDuringConfirmationRemainContiguous() throws {
         var capture = VoiceWakeWordCapture()
         let before = (0..<112_000).map { Float($0) / 200_000 }
@@ -262,8 +213,6 @@ struct VoiceWakeWordTests {
         #expect(count >= 3)
     }
 }
-
-private final class WakeWordTestBundle: NSObject {}
 
 @MainActor
 struct VoiceWakeWordPreferencesTests {

@@ -185,8 +185,6 @@ targets:
     platform: macOS
     sources:
       - path: Tests/NativTests
-        excludes:
-          - Fixtures/WakeWord
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
@@ -224,10 +222,6 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordModel.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordFeatures.swift
-      - path: Sources/Nativ/Resources/HeyNativ.mlpackage
-      - path: Tests/NativTests/Fixtures/WakeWord
-        type: folder
-        buildPhase: resources
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift

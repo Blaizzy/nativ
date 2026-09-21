@@ -338,14 +338,12 @@
 		A821F372837FDD950F55193A /* ChatLibrarySearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37E69CFB16DC6B3E115ABA77 /* ChatLibrarySearch.swift */; };
 		A9A3CE3DEBA182260722FEA8 /* ChatWebSearchTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D873D2FEC84059F689E7F623 /* ChatWebSearchTool.swift */; };
 		A9B82EFAD4FD8C57E045721B /* Artifact.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BB9D1D0FC24AC771442B628 /* Artifact.swift */; };
-		AA02E81721B65096DD65669D /* HeyNativ.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = CE6523B3B5D20E874AB51675 /* HeyNativ.mlpackage */; };
 		AA4FD64FCA38FCA61BC4A490 /* SafeLocalFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7A0A31B4307E2520BCD4F2 /* SafeLocalFileReader.swift */; };
 		AA938EB357E47BE2077567E2 /* ControlPanelSidebarRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF298015C5DDB04B72C29A9 /* ControlPanelSidebarRows.swift */; };
 		AAF463B00CFC2B97177A7032 /* MarkdownImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A721B07262EFFDF44CC505 /* MarkdownImages.swift */; };
 		AB05CE341967E073E10EF420 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 7BBE541F53FDF5C0518C0EB0 /* Sparkle */; };
 		AB1C4B8494B46754E6E8BE24 /* AudioAnalyticsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0BD007DAD141D50E1BAA4 /* AudioAnalyticsStore.swift */; };
 		AB4C49A5BFDAA9352BD257B7 /* CustomToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB72E13D688936495CBA7C8 /* CustomToolTests.swift */; };
-		AB66EE8D675975A86CB24A6D /* WakeWord in Resources */ = {isa = PBXBuildFile; fileRef = 9ED5A23970BF85B107C263EF /* WakeWord */; };
 		ABB0814F3990772A1BEF7D0C /* NativExtensionStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27F42CEC1B39477AC13352E3 /* NativExtensionStateStore.swift */; };
 		ACBA3EAEE7677FCAD4977850 /* NativSkill.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDDB4C89F8DD338E9209E7FF /* NativSkill.swift */; };
 		ACC7D165CE2E836C89EE9DA2 /* WebReadContentSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F15F7E180170C5FA55BD38F /* WebReadContentSelector.swift */; };
@@ -787,7 +785,6 @@
 		9BB432A30E8C51EB12CE66E9 /* ChatSelectionEventRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSelectionEventRouterTests.swift; sourceTree = "<group>"; };
 		9C57E985705899CDD8DB5996 /* MCPCatalog.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = MCPCatalog.json; sourceTree = "<group>"; };
 		9EB5FE1937AB157ACAEC5354 /* ChatSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSearch.swift; sourceTree = "<group>"; };
-		9ED5A23970BF85B107C263EF /* WakeWord */ = {isa = PBXFileReference; lastKnownFileType = folder; name = WakeWord; path = Tests/NativTests/Fixtures/WakeWord; sourceTree = SOURCE_ROOT; };
 		9F15F7E180170C5FA55BD38F /* WebReadContentSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebReadContentSelector.swift; sourceTree = "<group>"; };
 		9FB275767AC2B912FA2FEDEE /* UISFXMinimalPlay.mp3 */ = {isa = PBXFileReference; lastKnownFileType = audio.mp3; path = UISFXMinimalPlay.mp3; sourceTree = "<group>"; };
 		9FDFD79A8E1B8AA56AB21FE3 /* NativImageClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativImageClient.swift; sourceTree = "<group>"; };
@@ -1347,14 +1344,6 @@
 			path = Tools;
 			sourceTree = "<group>";
 		};
-		989FD56964EF7EBFB340A55A /* Fixtures */ = {
-			isa = PBXGroup;
-			children = (
-				9ED5A23970BF85B107C263EF /* WakeWord */,
-			);
-			path = Fixtures;
-			sourceTree = "<group>";
-		};
 		9D29C21E137FD536627BCDAC /* ripgrep */ = {
 			isa = PBXGroup;
 			children = (
@@ -1662,7 +1651,6 @@
 				B6B4F745A6B4910276482015 /* VoiceDictationTranscriptTests.swift */,
 				22E7036A82D9F6E366860CB6 /* VoiceWakeWordTests.swift */,
 				A7D47DD0BF553DB26BA498D0 /* WindowCommandRoutingTests.swift */,
-				989FD56964EF7EBFB340A55A /* Fixtures */,
 			);
 			path = NativTests;
 			sourceTree = "<group>";
@@ -1858,7 +1846,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				B46A9BF79148F60ACFF0B261 /* MCPCatalog.json in Resources */,
-				AB66EE8D675975A86CB24A6D /* WakeWord in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2270,7 +2257,6 @@
 				1691371327569F6FA1634DE5 /* FormattingTests.swift in Sources */,
 				E119D6964D35D4F49AD88EDF /* GitHubOAuth.swift in Sources */,
 				C22170FAE93CAF0FCEF39675 /* GitHubOAuthTests.swift in Sources */,
-				AA02E81721B65096DD65669D /* HeyNativ.mlpackage in Sources */,
 				9E5AB6D42F995E0A78C4EA79 /* HubModelSizeResolver.swift in Sources */,
 				6EE79BC99D6A44245D863E3F /* HubModelSizeResolverTests.swift in Sources */,
 				A2DF29E907CC0CEF6EF86FBD /* HuggingFaceCache.swift in Sources */,
