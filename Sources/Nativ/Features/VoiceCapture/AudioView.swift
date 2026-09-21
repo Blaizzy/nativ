@@ -1376,31 +1376,33 @@ struct AudioView: View {
 
             Divider()
 
-            DisclosureGroup("LLM prompts", isExpanded: $showsSummaryPrompts) {
-                VStack(alignment: .leading, spacing: 16) {
-                    summaryPromptEditor(
-                        title: "Summary prompt",
-                        detail: "Used for the transcript, or each section of a long recording.",
-                        prompt: $summaryPrompt,
-                        defaultPrompt: AudioCapturePreferences.defaultSummaryPrompt
-                    )
-
-                    Divider()
-
-                    summaryPromptEditor(
-                        title: "Merge prompt",
-                        detail: "Used to combine section summaries for long recordings.",
-                        prompt: $summaryMergePrompt,
-                        defaultPrompt: AudioCapturePreferences.defaultSummaryMergePrompt
-                    )
-
-                    Text("Saved automatically. The selected language takes precedence for both prompts. An empty prompt uses its default instructions.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showsSummaryPrompts.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showsSummaryPrompts ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 8)
+                        Text("LLM prompts")
+                            .font(.callout.weight(.medium))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
                 }
-                .padding(.top, 12)
+                .buttonStyle(.plain)
+                .accessibilityLabel("LLM prompts")
+                .accessibilityValue(showsSummaryPrompts ? "Expanded" : "Collapsed")
+
+                if showsSummaryPrompts {
+                    summaryPromptEditors
+                        .padding(.top, 12)
+                }
             }
-            .font(.callout.weight(.medium))
 
             Text("Applies to new and regenerated summaries.")
                 .font(.caption)
@@ -1408,6 +1410,30 @@ struct AudioView: View {
         }
         .padding(18)
         .audioPanelStyle(cornerRadius: 16)
+    }
+
+    private var summaryPromptEditors: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            summaryPromptEditor(
+                title: "Summary prompt",
+                detail: "Used for the transcript, or each section of a long recording.",
+                prompt: $summaryPrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryPrompt
+            )
+
+            Divider()
+
+            summaryPromptEditor(
+                title: "Merge prompt",
+                detail: "Used to combine section summaries for long recordings.",
+                prompt: $summaryMergePrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryMergePrompt
+            )
+
+            Text("Saved automatically. The selected language takes precedence for both prompts. An empty prompt uses its default instructions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func summaryPromptEditor(
