@@ -301,6 +301,7 @@ targets:
       - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
+      - path: Sources/Nativ/Features/SystemMonitor/SystemTelemetry.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
       - path: Sources/Nativ/Utilities/ServerPortProbe.swift
