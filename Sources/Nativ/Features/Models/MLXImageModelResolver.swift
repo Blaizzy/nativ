@@ -142,6 +142,12 @@ struct MLXImageModelResolver: Sendable {
             addModelType("bonsai", to: &candidates)
         }
 
+        if Self.qwenImageWeightMarkers.isSubset(
+            of: transformerWeightNames(at: root, fileManager: fileManager)
+        ) {
+            addModelType("qwen_image", to: &candidates)
+        }
+
         let componentURLs =
             (try? fileManager.contentsOfDirectory(
                 at: root,
@@ -257,6 +263,8 @@ struct MLXImageModelResolver: Sendable {
             return "bonsai"
         case "flux.2", "flux2", "klein":
             return "flux2"
+        case "qwen", "qwenimage":
+            return "qwen_image"
         default:
             return normalizedModelType(modelType)
         }
@@ -274,6 +282,25 @@ struct MLXImageModelResolver: Sendable {
         let normalizedName = String(name)
             .replacingOccurrences(of: "-", with: "_")
         return normalizedName.isEmpty ? nil : normalizedName
+    }
+
+    private func transformerWeightNames(
+        at root: URL,
+        fileManager: FileManager
+    ) -> Set<String> {
+        for filename in [
+            "diffusion_pytorch_model.safetensors.index.json",
+            "model.safetensors.index.json",
+        ] {
+            let url = root.appendingPathComponent("transformer/\(filename)")
+            guard let index = loadJSONObject(at: url, fileManager: fileManager),
+                let weightMap = index["weight_map"] as? [String: Any]
+            else {
+                continue
+            }
+            return Set(weightMap.keys)
+        }
+        return []
     }
 
     private func isBonsaiManifest(_ manifest: [String: Any]) -> Bool {
@@ -392,6 +419,28 @@ struct MLXImageModelResolver: Sendable {
                         fileManager: fileManager
                     )
                 }
+        case "qwen_image":
+            return [
+                "transformer/config.json",
+                "vae/config.json",
+                "text_encoder/config.json",
+                "processor/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(
+                    atPath: root.appendingPathComponent($0).path
+                )
+            }
+                && [
+                    "transformer",
+                    "vae",
+                    "text_encoder",
+                ].allSatisfy {
+                    hasSafetensors(
+                        in: $0,
+                        at: root,
+                        fileManager: fileManager
+                    )
+                }
         default:
             // The generated manifest is authoritative for newly bundled
             // backends whose local layout is not yet known to the app.
@@ -413,6 +462,12 @@ struct MLXImageModelResolver: Sendable {
             )) ?? []
         return contents.contains { $0.pathExtension == "safetensors" }
     }
+
+    private static let qwenImageWeightMarkers: Set<String> = [
+        "transformer_blocks.0.img_mlp.gate_layer.weight",
+        "txt_in.text_norm.weight",
+        "txt_in.in_layer.weight",
+    ]
 
     private static let pascalCaseTokenRegex = try! NSRegularExpression(
         pattern: #"[A-Z][a-z0-9]*|[A-Z]+(?=[A-Z]|$)"#

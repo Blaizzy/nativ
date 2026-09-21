@@ -8,6 +8,7 @@ final class MLXImageModelResolverTests: XCTestCase {
         "flux2",
         "ideogram4",
         "mage_flow",
+        "qwen_image",
     ]
     private var temporaryRoot: URL!
 
@@ -183,6 +184,92 @@ final class MLXImageModelResolverTests: XCTestCase {
         )
     }
 
+    func testQwenImagePipelineResolvesToImageGeneration() throws {
+        try makeCompleteQwenImageFixture()
+
+        XCTAssertTrue(
+            resolver().isImageGenerationModel(
+                model: "Qwen/Qwen-Image-2.1",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+        XCTAssertFalse(
+            resolver().isImageEditingModel(
+                model: "Qwen/Qwen-Image-2.1",
+                at: temporaryRoot,
+                fileManager: .default
+            ),
+            "the bundled Qwen-Image backend exposes no edit pipeline"
+        )
+    }
+
+    func testQwenImageRequiresLoadableLocalLayout() throws {
+        try makeCompleteQwenImageFixture()
+        try FileManager.default.removeItem(
+            at: temporaryRoot.appendingPathComponent("processor/tokenizer.json")
+        )
+
+        XCTAssertFalse(
+            resolver().isImageGenerationModel(
+                model: "Qwen/Qwen-Image-2.1",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testQwenLanguageModelIsNotImageGenerationModel() throws {
+        try writeJSON(
+            [
+                "architectures": ["QwenForCausalLM"],
+                "model_type": "qwen",
+            ],
+            to: "config.json"
+        )
+        try touch("model.safetensors")
+
+        XCTAssertFalse(
+            resolver().isImageGenerationModel(
+                model: "Qwen/Qwen-7B",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testQwenImageResolvesFromWeightsWhenRepositoryIsRenamed() throws {
+        try makeCompleteQwenImageFixture()
+
+        XCTAssertTrue(
+            resolver().isImageGenerationModel(
+                model: "local/my-custom-image-checkpoint",
+                at: temporaryRoot,
+                fileManager: .default
+            ),
+            "transformer weight markers identify Qwen-Image without its name"
+        )
+    }
+
+    func testQuantizedQwenImageConversionResolvesWithoutPipelineMetadata()
+        throws
+    {
+        for component in ["transformer", "text_encoder", "vae"] {
+            try writeJSON(["mlx_format": true], to: "\(component)/config.json")
+            try touch("\(component)/model.safetensors")
+        }
+        try touch("processor/tokenizer.json")
+
+        XCTAssertTrue(
+            resolver().isImageGenerationModel(
+                model: "mlx-community/Qwen-Image-2.1-4bit",
+                at: temporaryRoot,
+                fileManager: .default
+            ),
+            "a quantized conversion has no model_index.json and no shard index"
+        )
+    }
+
     func testBundledManifestGatesMetadataCandidates() throws {
         try makeCompleteFlux2Fixture()
         let resolver = MLXImageModelResolver(supportedModelTypes: [])
@@ -201,6 +288,7 @@ final class MLXImageModelResolverTests: XCTestCase {
 
         XCTAssertTrue(modelTypes.contains("flux2"))
         XCTAssertTrue(modelTypes.contains("mage_flow"))
+        XCTAssertTrue(modelTypes.contains("qwen_image"))
         XCTAssertFalse(modelTypes.contains("diffusion_gemma"))
     }
 
@@ -250,6 +338,52 @@ final class MLXImageModelResolverTests: XCTestCase {
             try touch("\(component)/model.safetensors")
         }
         try touch("text_encoder/tokenizer.json")
+    }
+
+    private func makeCompleteQwenImageFixture() throws {
+        try writeJSON(
+            [
+                "_class_name": "QwenImage21Pipeline",
+                "processor": ["transformers", "Qwen3VLProcessor"],
+                "scheduler": [
+                    "diffusers",
+                    "FlowMatchEulerDiscreteScheduler",
+                ],
+                "text_encoder": [
+                    "transformers",
+                    "Qwen3VLForConditionalGeneration",
+                ],
+                "transformer": ["diffusers", "QwenImage21Transformer2DModel"],
+                "vae": ["diffusers", "AutoencoderKLQwenImage21"],
+            ],
+            to: "model_index.json"
+        )
+        try writeJSON(
+            ["_class_name": "QwenImage21Transformer2DModel"],
+            to: "transformer/config.json"
+        )
+        try writeJSON(
+            ["_class_name": "AutoencoderKLQwenImage21"],
+            to: "vae/config.json"
+        )
+        try writeJSON(["model_type": "qwen3_vl"], to: "text_encoder/config.json")
+        try writeJSON(
+            [
+                "weight_map": [
+                    "transformer_blocks.0.img_mlp.gate_layer.weight":
+                        "diffusion_pytorch_model-00001-of-00002.safetensors",
+                    "txt_in.text_norm.weight":
+                        "diffusion_pytorch_model-00001-of-00002.safetensors",
+                    "txt_in.in_layer.weight":
+                        "diffusion_pytorch_model-00001-of-00002.safetensors",
+                ]
+            ],
+            to: "transformer/diffusion_pytorch_model.safetensors.index.json"
+        )
+        for component in ["transformer", "text_encoder", "vae"] {
+            try touch("\(component)/model.safetensors")
+        }
+        try touch("processor/tokenizer.json")
     }
 
     private func writeJSON(_ object: Any, to path: String) throws {
