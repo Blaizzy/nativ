@@ -54,8 +54,7 @@ final class VoiceCaptureCoordinator {
             self?.cancelCapture()
         }
         recorder.onMeterUpdate = { [weak self] level, elapsed in
-            guard let self else { return }
-            self.overlay.update(level: level, elapsed: elapsed)
+            self?.overlay.update(level: level, elapsed: elapsed)
         }
 
         recorder.onRecordingFailure = { [weak self] error, savedURL in
@@ -105,32 +104,19 @@ final class VoiceCaptureCoordinator {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
-        let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
-            workspace.publisher(for: name)
+        let sessionEvents: [(Notification.Name, ReferenceWritableKeyPath<VoiceCaptureCoordinator, Bool>, Bool)] = [
+            (NSWorkspace.willSleepNotification, \.isSystemSleeping, true),
+            (NSWorkspace.didWakeNotification, \.isSystemSleeping, false),
+            (NSWorkspace.sessionDidResignActiveNotification, \.isSessionInactive, true),
+            (NSWorkspace.sessionDidBecomeActiveNotification, \.isSessionInactive, false),
+        ]
+        for (name, flag, inactive) in sessionEvents {
+            NSWorkspace.shared.notificationCenter.publisher(for: name)
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in
                     guard let self else { return }
-                    if name == NSWorkspace.willSleepNotification {
-                        self.isSystemSleeping = true
-                    } else {
-                        self.isSessionInactive = true
-                    }
-                    if self.isWakeWordCapture { self.cancelCapture() }
-                    self.updateWakeWordListening()
-                }
-                .store(in: &observations)
-        }
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
-            workspace.publisher(for: name)
-                .receive(on: RunLoop.main)
-                .sink { [weak self] _ in
-                    guard let self else { return }
-                    if name == NSWorkspace.didWakeNotification {
-                        self.isSystemSleeping = false
-                    } else {
-                        self.isSessionInactive = false
-                    }
+                    self[keyPath: flag] = inactive
+                    if inactive, self.isWakeWordCapture { self.cancelCapture() }
                     self.updateWakeWordListening()
                 }
                 .store(in: &observations)
