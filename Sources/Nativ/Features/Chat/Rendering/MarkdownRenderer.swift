@@ -14,6 +14,7 @@ struct MarkdownRenderer: View {
     var baseURL: URL?
     let fontSize: CGFloat
     var imagePolicy: ImagePolicy = .mathOnly
+    var isStreaming = false
 
     private struct LoadedImages {
         let request: MarkdownImageRequest
@@ -34,7 +35,8 @@ struct MarkdownRenderer: View {
                 dark: colorScheme == .dark,
                 baseURL: baseURL,
                 images: images
-            )
+            ),
+            isStreaming: isStreaming
         )
         .task(id: request) {
             guard let request else { return }

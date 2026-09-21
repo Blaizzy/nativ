@@ -1901,11 +1901,11 @@ final class ChatViewModel: ObservableObject {
                 completion = try await client.streamChat(
                     request,
                     onEvent: { event in
-                        await eventRelay.submit(event)
+                        eventRelay.submit(event)
                     })
-                await eventRelay.finish()
+                eventRelay.finish()
             } catch {
-                await eventRelay.cancel()
+                eventRelay.cancel()
                 throw error
             }
             let toolCalls = normalizedToolCalls(completion.toolCalls)
