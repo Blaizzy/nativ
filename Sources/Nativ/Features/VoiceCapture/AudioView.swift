@@ -148,6 +148,9 @@ struct AudioView: View {
     private var summaryLanguage = AudioSummaryLanguage.automatic
     @AppStorage(AudioCapturePreferences.summaryPromptKey)
     private var summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
+    @AppStorage(AudioCapturePreferences.summaryMergePromptKey)
+    private var summaryMergePrompt = AudioCapturePreferences.defaultSummaryMergePrompt
+    @State private var showsSummaryPrompts = false
     @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
@@ -1373,40 +1376,74 @@ struct AudioView: View {
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("LLM prompt")
-                        .font(.callout.weight(.medium))
-                    Spacer()
-                    Button("Reset prompt") {
-                        summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
-                    }
-                    .disabled(summaryPrompt == AudioCapturePreferences.defaultSummaryPrompt)
+            DisclosureGroup("LLM prompts", isExpanded: $showsSummaryPrompts) {
+                VStack(alignment: .leading, spacing: 16) {
+                    summaryPromptEditor(
+                        title: "Summary prompt",
+                        detail: "Used for the transcript, or each section of a long recording.",
+                        prompt: $summaryPrompt,
+                        defaultPrompt: AudioCapturePreferences.defaultSummaryPrompt
+                    )
+
+                    Divider()
+
+                    summaryPromptEditor(
+                        title: "Merge prompt",
+                        detail: "Used to combine section summaries for long recordings.",
+                        prompt: $summaryMergePrompt,
+                        defaultPrompt: AudioCapturePreferences.defaultSummaryMergePrompt
+                    )
+
+                    Text("Saved automatically. The selected language takes precedence for both prompts. An empty prompt uses its default instructions.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-
-                Text("Edit the instructions used to generate your notes. The language selected above takes precedence.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                TextEditor(text: $summaryPrompt)
-                    .font(.system(.callout, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .frame(height: 120)
-                    .padding(10)
-                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                    }
-                    .accessibilityLabel("Summary LLM prompt")
+                .padding(.top, 12)
             }
+            .font(.callout.weight(.medium))
 
-            Text("Saved automatically. Applies to new and regenerated summaries. An empty prompt uses the default instructions.")
+            Text("Applies to new and regenerated summaries.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(18)
         .audioPanelStyle(cornerRadius: 16)
+    }
+
+    private func summaryPromptEditor(
+        title: String,
+        detail: String,
+        prompt: Binding<String>,
+        defaultPrompt: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Button("Reset prompt") {
+                    prompt.wrappedValue = defaultPrompt
+                }
+                .disabled(prompt.wrappedValue == defaultPrompt)
+                .accessibilityLabel("Reset \(title.lowercased())")
+            }
+
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: prompt)
+                .font(.system(.callout, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .frame(height: 120)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                }
+                .accessibilityLabel(title)
+        }
     }
 
     private var activeCapturePanel: some View {
