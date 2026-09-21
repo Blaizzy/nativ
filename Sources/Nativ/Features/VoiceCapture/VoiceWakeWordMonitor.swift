@@ -1,13 +1,12 @@
 import AVFoundation
 import Combine
 import Foundation
-import Speech
 
-/// An opt-in, on-device listener. Background audio is streamed in memory and never saved.
+/// Opt-in listener. Ambient history stays in memory; only confirmed dictation is saved.
 @MainActor
 final class VoiceWakeWordMonitor: ObservableObject {
     enum State: Equatable {
-        case off, paused, preparing, listening
+        case off, paused, preparing, listening, confirming, capturing
         case unavailable(String)
 
         var description: String {
@@ -16,6 +15,8 @@ final class VoiceWakeWordMonitor: ObservableObject {
             case .paused: "Wake word is paused while audio is busy."
             case .preparing: "Preparing on-device wake word…"
             case .listening: "Listening for “hey nativ”."
+            case .confirming: "Confirming “hey nativ”…"
+            case .capturing: "Recording dictation…"
             case let .unavailable(message): message
             }
         }
@@ -23,7 +24,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
 
     static let shared = VoiceWakeWordMonitor()
     @Published private(set) var state: State = .off
-    var onWake: (() -> Void)?
+    var onCandidate: (() -> Void)?
+    var confirm: ((Data) async throws -> VoiceWakeWordTranscription)?
+    var onConfirmed: (() -> Void)?
+    var onFinished: ((VoiceWakeWordCapture.Result) -> Void)?
+    var onCancelled: (() -> Void)?
+    var onMeterUpdate: ((Float, TimeInterval) -> Void)?
 
     private struct Configuration: Equatable {
         var enabled: Bool
@@ -35,10 +41,10 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private let inputSession = AudioInputEngineSession()
     private var sessionID = UUID()
     private var task: Task<Void, Never>?
-    private var resultsTask: Task<Void, Never>?
-    private var renewalTask: Task<Void, Never>?
-    private var analyzer: SpeechAnalyzer?
-    private var continuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var inferenceTask: Task<Void, Never>?
+    private var confirmationTask: Task<Void, Never>?
+    private var processor: VoiceWakeWordProcessor?
+    private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
     func configure(enabled: Bool, suspended: Bool, deviceID: String?) {
         let next = Configuration(enabled: enabled, suspended: suspended, deviceID: deviceID)
@@ -70,50 +76,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
                 fail("Allow microphone access in System Settings, then try again.", id: id, retry: false)
                 return
             }
-            // The fixed English phrase works independently of the dictation language.
-            guard SpeechTranscriber.isAvailable,
-                  let locale = await SpeechTranscriber.supportedLocale(
-                    equivalentTo: Locale(identifier: "en-US")
-                  )
-            else {
-                fail("The on-device English speech recognizer is unavailable.", id: id, retry: false)
-                return
-            }
-            guard isCurrent(id) else { return }
-            let transcriber = SpeechTranscriber(
-                locale: locale,
-                transcriptionOptions: [],
-                reportingOptions: [.volatileResults, .fastResults],
-                attributeOptions: []
-            )
-            if await AssetInventory.status(forModules: [transcriber]) != .installed {
-                _ = try? await AssetInventory.reserve(locale: locale)
-                guard isCurrent(id) else { return }
-                if let installation = try await AssetInventory.assetInstallationRequest(
-                    supporting: [transcriber]
-                ) {
-                    try await installation.downloadAndInstall()
-                }
-            }
-            guard isCurrent(id) else { return }
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(
-                compatibleWith: [transcriber]
-            ) else { throw VoiceAudioRecorderError.couldNotConvert }
-            guard isCurrent(id) else { return }
-
-            let analyzer = SpeechAnalyzer(
-                modules: [transcriber],
-                options: .init(priority: .utility, modelRetention: .whileInUse)
-            )
-            self.analyzer = analyzer
-            let context = AnalysisContext()
-            context.contextualStrings[.general] = ["hey nativ", "hey native"]
-            try await analyzer.setContext(context)
-            try await analyzer.prepareToAnalyze(in: format)
-            guard isCurrent(id) else { return }
-
-            let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream(
-                bufferingPolicy: .bufferingNewest(32)
+            guard let modelURL = Bundle.main.url(forResource: "HeyNativ", withExtension: "mlmodelc")
+            else { throw VoiceWakeWordModelError.missingModel }
+            guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
+            else { throw VoiceAudioRecorderError.couldNotConvert }
+            let (stream, continuation) = AsyncStream<VoiceWakeWordAudioChunk>.makeStream(
+                bufferingPolicy: .bufferingNewest(8)
             )
             self.continuation = continuation
             let bridge = VoiceWakeWordAudioBridge(format: format, continuation: continuation) {
@@ -122,46 +90,90 @@ final class VoiceWakeWordMonitor: ObservableObject {
                     self?.fail("Could not read microphone audio. Retrying…", id: id)
                 }
             }
-            resultsTask = Task { [weak self] in
-                var detector = VoiceWakeWordDetection()
+            inferenceTask = Task.detached(priority: .utility) { [weak self] in
                 do {
-                    for try await result in transcriber.results {
-                        guard let self, self.isCurrent(id) else { return }
-                        if detector.consume(
-                            String(result.text.characters),
-                            start: result.range.start.seconds,
-                            end: result.range.end.seconds,
-                            isFinal: result.isFinal
-                        ) {
-                            self.stopSession()
-                            self.state = .paused
-                            self.onWake?()
-                            return
+                    let processor = try VoiceWakeWordProcessor(url: modelURL)
+                    try Task.checkCancellation()
+                    guard try await self?.startInput(bridge: bridge, processor: processor, deviceID: deviceID, id: id) == true
+                    else { return }
+                    for await chunk in stream {
+                        try Task.checkCancellation()
+                        let output = try await processor.consume(chunk)
+                        if output.event != nil || output.isConfirmed {
+                            await self?.handle(output, processor: processor, id: id)
                         }
                     }
-                    self?.fail("Wake-word recognition stopped. Retrying…", id: id)
+                    await self?.fail("Wake-word recognition stopped. Retrying…", id: id)
                 } catch {
-                    self?.fail("Wake-word recognition was interrupted. Retrying…", id: id)
+                    guard !Task.isCancelled else { return }
+                    await self?.fail("Wake word is unavailable: \(error.localizedDescription)", id: id)
                 }
             }
-            try inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
-                bridge.append(buffer)
-            }) { [weak self] error in
-                self?.fail(error.localizedDescription, id: id)
-            }
-            state = .listening
-            // Bound the recognizer's session history during all-day listening.
-            renewalTask = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(300)) }
-                catch { return }
-                guard let self, self.isCurrent(id) else { return }
-                self.restart()
-            }
-            _ = try await analyzer.analyzeSequence(stream)
-            fail("Wake-word recognition stopped. Retrying…", id: id)
         } catch {
             fail("Wake word is unavailable: \(error.localizedDescription)", id: id)
         }
+    }
+
+    private func startInput(bridge: VoiceWakeWordAudioBridge, processor: VoiceWakeWordProcessor, deviceID: String?, id: UUID) throws -> Bool {
+        guard isCurrent(id) else { return false }
+        self.processor = processor
+        try inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
+            bridge.append(buffer)
+        }) { [weak self] error in
+            self?.fail(error.localizedDescription, id: id)
+        }
+        state = .listening
+        return true
+    }
+
+    private func handle(_ output: VoiceWakeWordProcessor.Output, processor: VoiceWakeWordProcessor, id: UUID) {
+        guard isCurrent(id) else { return }
+        if state == .capturing { onMeterUpdate?(output.level, output.elapsed) }
+        switch output.event {
+        case .candidate:
+            state = .confirming
+            onCandidate?()
+        case let .confirm(candidateID, audio):
+            guard let confirm else {
+                fail("Wake-word confirmation is unavailable.", id: id, retry: false)
+                return
+            }
+            confirmationTask = Task { [weak self] in
+                do {
+                    // WAV encoding and inference stay off the audio callback/main actor.
+                    let data = await processor.encode(audio)
+                    let transcription = try await confirm(data)
+                    guard let self, self.isCurrent(id) else { return }
+                    guard let accepted = await processor.resolve(id: candidateID, transcription: transcription),
+                          self.isCurrent(id) else { return }
+                    self.confirmationTask = nil
+                    self.state = accepted ? .capturing : .listening
+                    if accepted { self.onConfirmed?() } else { self.onCancelled?() }
+                } catch {
+                    guard let self, self.isCurrent(id) else { return }
+                    self.fail("Wake-word confirmation failed: \(error.localizedDescription)", id: id)
+                }
+            }
+        case let .finished(result):
+            complete(result, id: id)
+        case nil:
+            break
+        }
+    }
+
+    func finishCapture() {
+        guard state == .capturing, let processor else { return }
+        let id = sessionID
+        Task { [weak self] in
+            if let result = await processor.finish() { self?.complete(result, id: id) }
+        }
+    }
+
+    private func complete(_ result: VoiceWakeWordCapture.Result, id: UUID) {
+        guard isCurrent(id) else { return }
+        stopSession(notify: false)
+        state = .paused
+        onFinished?(result)
     }
 
     private func isCurrent(_ id: UUID) -> Bool {
@@ -182,22 +194,47 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
-    private func stopSession() {
+    private func stopSession(notify: Bool = true) {
         sessionID = UUID()
         inputSession.stop()
         continuation?.finish()
         continuation = nil
         task?.cancel()
         task = nil
-        resultsTask?.cancel()
-        resultsTask = nil
-        renewalTask?.cancel()
-        renewalTask = nil
-        if let analyzer {
-            Task { await analyzer.cancelAndFinishNow() }
-        }
-        analyzer = nil
+        inferenceTask?.cancel()
+        inferenceTask = nil
+        confirmationTask?.cancel()
+        confirmationTask = nil
+        processor = nil
+        if notify { onCancelled?() }
     }
+}
+
+/// Serializes audio and confirmation results without blocking capture on network ASR.
+private actor VoiceWakeWordProcessor {
+    struct Output: Sendable {
+        let event: VoiceWakeWordCapture.Event?
+        let isConfirmed: Bool
+        let level: Float
+        let elapsed: TimeInterval
+    }
+
+    private let detector: VoiceWakeWordModel
+    private var capture = VoiceWakeWordCapture()
+
+    init(url: URL) throws { detector = try VoiceWakeWordModel(url: url) }
+
+    func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Output {
+        let detected = capture.canDetect ? try detector.consume(chunk) : false
+        let event = try capture.append(chunk, detected: detected)
+        return Output(event: event, isConfirmed: capture.isConfirmed, level: capture.level, elapsed: capture.elapsed)
+    }
+
+    func encode(_ audio: VoiceWakeWordAudio) -> Data { audio.wavData }
+    func resolve(id: UUID, transcription: VoiceWakeWordTranscription) -> Bool? {
+        capture.resolve(id: id, transcription: transcription)
+    }
+    func finish() -> VoiceWakeWordCapture.Result? { capture.finish() }
 }
 
 /// Converts and owns each buffer before the audio callback returns. The converter is
@@ -205,15 +242,16 @@ final class VoiceWakeWordMonitor: ObservableObject {
 final class VoiceWakeWordAudioBridge: @unchecked Sendable {
     private let lock = NSLock()
     private let format: AVAudioFormat
-    private let continuation: AsyncStream<AnalyzerInput>.Continuation
+    private let continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation
     private let onFailure: @Sendable () -> Void
     private var converter: AVAudioConverter?
     private var pendingBuffer: AVAudioPCMBuffer?
     private var failed = false
+    private var sampleOffset: Int64 = 0
 
     init(
         format: AVAudioFormat,
-        continuation: AsyncStream<AnalyzerInput>.Continuation,
+        continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation,
         onFailure: @escaping @Sendable () -> Void
     ) {
         self.format = format
@@ -247,7 +285,14 @@ final class VoiceWakeWordAudioBridge: @unchecked Sendable {
                     }
                     if status == .error { throw VoiceAudioRecorderError.couldNotConvert }
                     if output.frameLength > 0 {
-                        continuation.yield(AnalyzerInput(buffer: output))
+                        guard let samples = output.floatChannelData?[0]
+                        else { throw VoiceAudioRecorderError.couldNotConvert }
+                        let count = Int(output.frameLength)
+                        continuation.yield(VoiceWakeWordAudioChunk(
+                            samples: Array(UnsafeBufferPointer(start: samples, count: count)),
+                            offset: sampleOffset
+                        ))
+                        sampleOffset += Int64(count)
                     }
                     if status != .haveData { break }
                 }

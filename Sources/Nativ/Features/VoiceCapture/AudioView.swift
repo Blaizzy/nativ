@@ -2430,7 +2430,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Label("Hey Nativ", systemImage: "waveform.badge.mic")
+                    Label("Hey Nativ (Preview)", systemImage: "waveform.badge.mic")
                         .font(.headline)
                     Text("Start dictation by saying “hey nativ”.")
                         .font(.caption)
@@ -2441,10 +2441,10 @@ struct AudioView: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
-            Text("Wait for the recording indicator, then speak. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
+            Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Keeps your selected microphone active while Nativ is running. Wake-word recognition stays on this Mac; background audio is never saved. macOS may download an English speech model the first time.")
+            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase, so the Nativ server must be running.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if shortcuts.isWakeWordEnabled {

@@ -24,7 +24,8 @@ final class VoiceCaptureCoordinator {
     private let overlay = VoiceCaptureOverlayController()
     private let analytics = AudioAnalyticsStore.shared
     private let wakeWordMonitor = VoiceWakeWordMonitor.shared
-    private var wakeWordEndpoint: VoiceWakeWordEndpoint?
+    private var isWakeWordCapture = false
+    private var wakeWordInsertionTarget: VoiceTranscriptInsertionTarget?
     private var observations = Set<AnyCancellable>()
     private var isActive = false
     private var isOtherAudioBusy = false
@@ -55,27 +56,42 @@ final class VoiceCaptureCoordinator {
         recorder.onMeterUpdate = { [weak self] level, elapsed in
             guard let self else { return }
             self.overlay.update(level: level, elapsed: elapsed)
-            guard self.recorder.isRecording,
-                  let action = self.wakeWordEndpoint?.update(level: level, elapsed: elapsed)
-            else { return }
-            switch action {
-            case .finish:
-                self.isShortcutHeld = false
-                self.isHandsFreeMode = false
-                self.endCapture()
-            case .cancel:
-                self.cancelCapture()
-            }
         }
+
         recorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.recordingInterrupted(error, savedURL: savedURL)
         }
-        wakeWordMonitor.onWake = { [weak self] in
+        wakeWordMonitor.onCandidate = { [weak self] in
+            self?.wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
+        }
+        wakeWordMonitor.confirm = { [weak self] audio in
+            guard let self else { throw CancellationError() }
+            return try await self.confirmWakeWord(audio)
+        }
+        wakeWordMonitor.onConfirmed = { [weak self] in
             guard let self, self.canListenForWakeWord else { return }
+            self.isWakeWordCapture = true
             self.isHandsFreeMode = true
             self.isShortcutHeld = true
-            self.wakeWordEndpoint = VoiceWakeWordEndpoint()
-            self.beginCapture()
+            self.activeOverlayTranscriptionID = nil
+            self.overlay.show(at: NSEvent.mouseLocation)
+            // Speech is already in progress; avoid recording an activation chime.
+        }
+        wakeWordMonitor.onMeterUpdate = { [weak self] level, elapsed in
+            self?.overlay.update(level: level, elapsed: elapsed)
+        }
+        wakeWordMonitor.onFinished = { [weak self] result in
+            self?.finishWakeWordCapture(result)
+        }
+        wakeWordMonitor.onCancelled = { [weak self] in
+            guard let self else { return }
+            self.wakeWordInsertionTarget = nil
+            if self.isWakeWordCapture {
+                self.isWakeWordCapture = false
+                self.isShortcutHeld = false
+                self.isHandsFreeMode = false
+                self.overlay.hide()
+            }
         }
         VoiceShortcutPreferences.shared.$isWakeWordEnabled
             .removeDuplicates()
@@ -100,7 +116,7 @@ final class VoiceCaptureCoordinator {
                     } else {
                         self.isSessionInactive = true
                     }
-                    if self.wakeWordEndpoint != nil { self.cancelCapture() }
+                    if self.isWakeWordCapture { self.cancelCapture() }
                     self.updateWakeWordListening()
                 }
                 .store(in: &observations)
@@ -133,7 +149,7 @@ final class VoiceCaptureCoordinator {
 
     func stop() {
         isActive = false
-        wakeWordEndpoint = nil
+        isWakeWordCapture = false
         updateWakeWordListening()
         permissionTask?.cancel()
         permissionTask = nil
@@ -155,19 +171,22 @@ final class VoiceCaptureCoordinator {
 
     func setOtherAudioBusy(_ busy: Bool) {
         isOtherAudioBusy = busy
-        if busy, wakeWordEndpoint != nil { cancelCapture() }
+        if busy, isWakeWordCapture { cancelCapture() }
         updateWakeWordListening()
     }
 
-    private var canListenForWakeWord: Bool {
+    private var canUseWakeWordAudio: Bool {
         isActive && !isSystemSleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
-            && !isShortcutHeld && !recorder.isRecording && transcriptionTasks.isEmpty
+    }
+
+    private var canListenForWakeWord: Bool {
+        canUseWakeWordAudio && !isShortcutHeld && !recorder.isRecording && transcriptionTasks.isEmpty
     }
 
     private func updateWakeWordListening(enabled: Bool? = nil) {
         wakeWordMonitor.configure(
             enabled: isActive && (enabled ?? VoiceShortcutPreferences.shared.isWakeWordEnabled),
-            suspended: !canListenForWakeWord,
+            suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
             deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID
         )
     }
@@ -180,7 +199,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func handleShortcutChange(_ isHeld: Bool) {
-        if isHandsFreeMode {
+        if isHandsFreeMode || isWakeWordCapture {
             guard isHeld else {
                 return
             }
@@ -247,7 +266,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func clearFailedCaptureState() {
-        wakeWordEndpoint = nil
+        isWakeWordCapture = false
         isShortcutHeld = false
         isHandsFreeMode = false
         insertionTarget = nil
@@ -263,7 +282,10 @@ final class VoiceCaptureCoordinator {
     }
 
     private func endCapture() {
-        wakeWordEndpoint = nil
+        if isWakeWordCapture {
+            wakeWordMonitor.finishCapture()
+            return
+        }
         defer { updateWakeWordListening() }
         permissionTask?.cancel()
         permissionTask = nil
@@ -293,7 +315,9 @@ final class VoiceCaptureCoordinator {
     }
 
     private func cancelCapture() {
-        wakeWordEndpoint = nil
+        let wasWakeWordCapture = isWakeWordCapture
+        isWakeWordCapture = false
+        wakeWordInsertionTarget = nil
         permissionTask?.cancel()
         permissionTask = nil
         recorder.discard()
@@ -302,11 +326,12 @@ final class VoiceCaptureCoordinator {
         isShortcutHeld = false
         isHandsFreeMode = false
         overlay.hide()
+        if wasWakeWordCapture { wakeWordMonitor.restart() }
         updateWakeWordListening()
     }
 
     private func retryLastTranscription() {
-        guard !recorder.isRecording else {
+        guard !recorder.isRecording, !isWakeWordCapture else {
             return
         }
         guard let directory = try? VoiceAudioRecorder.recordingsDirectory else {
@@ -322,7 +347,55 @@ final class VoiceCaptureCoordinator {
 
         let target = VoiceTranscriptInserter.captureTarget()
         NSLog("Nativ retrying voice transcription from %@", recordingURL.path)
-        transcribe(recordingURL, target: target, durationSeconds: nil)
+        transcribe(recordingURL, target: target, durationSeconds: nil, wakeWord: recordingURL.lastPathComponent.hasPrefix("wake-"))
+    }
+
+    private func confirmWakeWord(_ audio: Data) async throws -> VoiceWakeWordTranscription {
+        guard let configuration = transcriptionConfigurationProvider?(), configuration.serverIsRunning else {
+            throw VoiceWakeWordModelError.invalidModel("Start the Nativ server to confirm wake words.")
+        }
+        let models = try await LocalModelDiscovery.scan(searchPaths: LocalModelSearchPaths(
+            primary: configuration.modelSearchPath,
+            additional: configuration.additionalModelSearchPaths
+        ))
+        try Task.checkCancellation()
+        guard let modelID = LocalModelDiscovery.speechToTextModelID(in: models, selectedModelID: configuration.selectedModelID) else {
+            throw VoiceWakeWordModelError.invalidModel("Install a speech-to-text model to confirm wake words.")
+        }
+        let client = NativAudioClient(baseURL: configuration.serverBaseURL, apiKey: configuration.serverAPIKey, timeout: 15)
+        do {
+            let result = try await client.transcribe(audioData: audio, fileName: "wake-candidate.wav", model: modelID)
+            return VoiceWakeWordTranscription(text: result.text, modelID: modelID)
+        } catch {
+            if Self.isEmptyTranscriptionError(error) {
+                return VoiceWakeWordTranscription(text: "", modelID: modelID)
+            }
+            throw error
+        }
+    }
+
+    private func finishWakeWordCapture(_ result: VoiceWakeWordCapture.Result) {
+        let target = wakeWordInsertionTarget
+        wakeWordInsertionTarget = nil
+        isWakeWordCapture = false
+        isShortcutHeld = false
+        isHandsFreeMode = false
+        do {
+            // The prefix also preserves wake-phrase stripping when Retry Recent Audio is used.
+            let url = try VoiceAudioRecorder.recordingsDirectory.appendingPathComponent("wake-\(UUID().uuidString).wav")
+            try result.audio.wavData.write(to: url, options: .atomic)
+            scheduleAudioDeletion(url)
+            let id = UUID()
+            activeOverlayTranscriptionID = id
+            overlay.waitForTranscription()
+            transcribe(url, target: target, durationSeconds: result.audio.duration,
+                       overlayTranscriptionID: id, wakeWord: true,
+                       confirmation: result.canReuseConfirmation ? result.confirmation : nil,
+                       wakeWordModelID: result.confirmation.modelID)
+        } catch {
+            overlay.showFailure()
+            wakeWordMonitor.restart()
+        }
     }
 
     private func scheduleExistingAudioDeletion() {
@@ -364,7 +437,10 @@ final class VoiceCaptureCoordinator {
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?,
         durationSeconds: TimeInterval?,
-        overlayTranscriptionID: UUID? = nil
+        overlayTranscriptionID: UUID? = nil,
+        wakeWord: Bool = false,
+        confirmation: VoiceWakeWordTranscription? = nil,
+        wakeWordModelID: String? = nil
     ) {
         let audioData: Data
         do {
@@ -416,17 +492,18 @@ final class VoiceCaptureCoordinator {
             // Both of these are dead ends for the server path. Rather than discarding the
             // recording, hand it to the on-device system recognizer when that is possible;
             // the alert is only shown when there is genuinely nothing that can transcribe.
-            let modelID = LocalModelDiscovery.speechToTextModelID(
+            let modelID = wakeWordModelID ?? LocalModelDiscovery.speechToTextModelID(
                 in: installedModels,
                 selectedModelID: requestConfiguration.selectedModelID
             )
-            guard let modelID, requestConfiguration.serverIsRunning else {
+            guard let modelID, requestConfiguration.serverIsRunning || confirmation != nil else {
                 await self.transcribeWithSystemRecognizer(
                     recordingURL,
                     target: target,
                     durationSeconds: durationSeconds,
                     overlayTranscriptionID: overlayTranscriptionID,
-                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped
+                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped,
+                    wakeWord: wakeWord
                 )
                 return
             }
@@ -436,17 +513,23 @@ final class VoiceCaptureCoordinator {
                     baseURL: requestConfiguration.serverBaseURL,
                     apiKey: requestConfiguration.serverAPIKey
                 )
-                let result = try await client.transcribe(
-                    audioData: audioData,
-                    fileName: recordingURL.lastPathComponent,
-                    model: modelID
-                )
+                let result: NativAudioTranscription
+                if let confirmation {
+                    result = NativAudioTranscription(text: confirmation.text)
+                } else {
+                    result = try await client.transcribe(
+                        audioData: audioData,
+                        fileName: recordingURL.lastPathComponent,
+                        model: modelID
+                    )
+                }
                 guard !Task.isCancelled else {
                     return
                 }
 
                 let dictation = VoiceDictationTranscript(
                     result.text,
+                    wakeWord: wakeWord,
                     returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
                 )
                 guard !dictation.isEmpty else {
@@ -525,7 +608,8 @@ final class VoiceCaptureCoordinator {
         target: VoiceTranscriptInsertionTarget?,
         durationSeconds: TimeInterval?,
         overlayTranscriptionID: UUID?,
-        unavailableReason: ServerUnavailableReason
+        unavailableReason: ServerUnavailableReason,
+        wakeWord: Bool
     ) async {
         guard await AppleSpeechTranscriber.isAvailable else {
             finishOverlayTranscription(overlayTranscriptionID)
@@ -568,8 +652,13 @@ final class VoiceCaptureCoordinator {
         }
         let dictation = VoiceDictationTranscript(
             transcript,
+            wakeWord: wakeWord,
             returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
         )
+        guard !dictation.isEmpty else {
+            handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
+            return
+        }
         let transcriptURL = recordingURL
             .deletingPathExtension()
             .appendingPathExtension("txt")
