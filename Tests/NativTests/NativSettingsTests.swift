@@ -294,8 +294,16 @@ final class NativSettingsTests: XCTestCase {
         let settings = NativSettings(serverHost: "  0.0.0.0  ", serverPort: 9_001)
 
         XCTAssertEqual(settings.normalized().serverHost, "0.0.0.0")
-        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://0.0.0.0:9001")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://127.0.0.1:9001")
         XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "0.0.0.0"))
+    }
+
+    func testWildcardIPv6HostConnectsOverLoopback() {
+        let settings = NativSettings(serverHost: "::", serverPort: 9_003)
+
+        XCTAssertEqual(settings.normalized().serverHost, "::")
+        XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9003")
+        XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::"))
     }
 
     func testIPv6ServerHostProducesValidBaseURL() {
@@ -304,6 +312,33 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(settings.normalized().serverHost, "::1")
         XCTAssertEqual(settings.serverBaseURL.absoluteString, "http://[::1]:9002")
         XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::1"))
+    }
+
+    func testAdvertisedBaseURLUsesLANAddressForWildcardHost() {
+        let settings = NativSettings(serverHost: "0.0.0.0", serverPort: 9_001)
+
+        XCTAssertEqual(
+            settings.resolvedAdvertisedBaseURL(lanAddress: "192.168.1.42").absoluteString,
+            "http://192.168.1.42:9001"
+        )
+    }
+
+    func testAdvertisedBaseURLFallsBackToHostWhenNoLANAddress() {
+        let settings = NativSettings(serverHost: "0.0.0.0", serverPort: 9_001)
+
+        XCTAssertEqual(
+            settings.resolvedAdvertisedBaseURL(lanAddress: nil).absoluteString,
+            "http://0.0.0.0:9001"
+        )
+    }
+
+    func testAdvertisedBaseURLKeepsExplicitHost() {
+        let settings = NativSettings(serverHost: "192.168.1.5", serverPort: 9_001)
+
+        XCTAssertEqual(
+            settings.resolvedAdvertisedBaseURL(lanAddress: "10.0.0.1").absoluteString,
+            "http://192.168.1.5:9001"
+        )
     }
 
     func testMissingServerHostUsesLoopbackDefault() throws {
