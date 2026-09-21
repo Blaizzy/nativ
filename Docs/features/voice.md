@@ -30,7 +30,7 @@ the transcript without pressing Return.
 
 ### “Hey Nativ” wake word
 
-Enable **Audio → Shortcuts → Hey Nativ (Preview)** to start dictation by saying
+Enable **Audio → Shortcuts → Hey Nativ** to start dictation by saying
 **“hey nativ”** and continuing directly into your sentence. Two seconds of silence finishes
 and inserts the transcript through the normal dictation flow. The record shortcut finishes
 early; the overlay's cancel button discards the capture. The wake phrase and preceding audio
@@ -54,7 +54,7 @@ Confirmed recordings follow normal five-minute retention, including the pre-roll
 candidates are not saved. Retrying a wake recording also removes the wake phrase from its text.
 
 The FP16 model is pinned to revision `db95546d86d2fb8463b421d2319a9e744b226988` (1.36 MB).
-This prototype scores two-second, 16 kHz mono windows every **20 ms at threshold 0.3**, with
+The classifier scores two-second, 16 kHz mono windows every **20 ms at threshold 0.3**, with
 an adaptive energy gate, 40 ms attack, and 500 ms hangover. The gate uses the quietest fifth of
 the last five seconds of 20 ms energy frames to estimate background noise. Its threshold is
 6 dB above that estimate, with the existing −50 dBFS minimum. It starts listening immediately,

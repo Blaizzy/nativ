@@ -2430,7 +2430,7 @@ struct AudioView: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Label("Hey Nativ (Preview)", systemImage: "waveform.badge.mic")
+                    Label("Hey Nativ", systemImage: "waveform.badge.mic")
                         .font(.headline)
                     Text("Start dictation by saying “hey nativ”.")
                         .font(.caption)
