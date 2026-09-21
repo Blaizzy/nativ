@@ -150,21 +150,12 @@ struct ArtifactsView: View {
         if dateFilter != .all {
             result = result.filter { dateFilter.includes($0.createdAt) }
         }
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty {
-            return result.sorted(by: sort.comparator)
-        }
-        if let semanticMatches, smartSearchActive {
-            var rank: [UUID: Int] = [:]
-            for (position, id) in semanticMatches.enumerated() {
-                rank[id] = position
-            }
-            return result
-                .filter { rank[$0.id] != nil }
-                .sorted { (rank[$0.id] ?? .max) < (rank[$1.id] ?? .max) }
-        }
-        let lowered = query.lowercased()
-        return result.filter { $0.searchText.contains(lowered) }.sorted(by: sort.comparator)
+        let sorted = sort == .name ? store.sortedByName(result) : result.sorted(by: sort.comparator)
+        return store.searchResults(
+            in: sorted,
+            query: search,
+            semanticMatches: smartSearchActive ? semanticMatches : nil
+        )
     }
 
     private var visibleArtifactIDs: Set<Artifact.ID> {
@@ -503,6 +494,7 @@ struct ArtifactsView: View {
                     artifacts: filtered,
                     selectedID: $previewID,
                     fileURL: store.fileURL,
+                    displayName: store.displayName,
                     onClose: { previewID = nil },
                     onOpenChat: { artifact in
                         previewID = nil
@@ -1196,7 +1188,7 @@ private final class SelectionDragNSView: NSView, NSDraggingSource {
 
 struct ArtifactTile: View {
     let artifact: Artifact
-    let store: ArtifactStore
+    @ObservedObject var store: ArtifactStore
     let isSelecting: Bool
     let isSelected: Bool
     let isFavorite: Bool
@@ -1291,7 +1283,7 @@ struct ArtifactTile: View {
 
 struct ArtifactRow: View {
     let artifact: Artifact
-    let store: ArtifactStore
+    @ObservedObject var store: ArtifactStore
     let isSelecting: Bool
     let isSelected: Bool
 
@@ -1309,7 +1301,7 @@ struct ArtifactRow: View {
                 .clipShape(RoundedRectangle(cornerRadius: 5))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(artifact.filename)
+                Text(store.displayName(for: artifact))
                     .legacyTextStyle(.rowTitle)
                     .lineLimit(1)
                 Text("\(artifact.typeLabel) · \(artifact.source.label)")
@@ -1431,7 +1423,7 @@ private struct ArtifactThumbnail: View {
 
 struct ArtifactInspector: View {
     let artifact: Artifact
-    let store: ArtifactStore
+    @ObservedObject var store: ArtifactStore
     let onOpenPreview: () -> Void
     let onGoToChat: () -> Void
     let onClose: () -> Void
@@ -1460,7 +1452,7 @@ struct ArtifactInspector: View {
                         .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     VStack(alignment: .leading, spacing: 8) {
-                        detailRow("Name", artifact.filename)
+                        detailRow("Name", store.displayName(for: artifact))
                         detailRow("Type", artifact.typeLabel)
                         detailRow("Source", artifact.source.label)
                         detailRow("Used in", "\(Set(artifact.locations.map(\.sessionID)).count) sessions")

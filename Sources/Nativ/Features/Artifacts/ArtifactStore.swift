@@ -126,6 +126,31 @@ final class ArtifactStore: ObservableObject {
         return artifact.filename
     }
 
+    func sortedByName(_ artifacts: [Artifact]) -> [Artifact] {
+        artifacts.sorted {
+            let comparison = displayName(for: $0).localizedCaseInsensitiveCompare(displayName(for: $1))
+            return comparison == .orderedSame
+                ? $0.id.uuidString < $1.id.uuidString
+                : comparison == .orderedAscending
+        }
+    }
+
+    func searchResults(in artifacts: [Artifact], query: String, semanticMatches: [UUID]?) -> [Artifact] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return artifacts }
+        let directMatches = artifacts.filter {
+            displayName(for: $0).lowercased().contains(query) || $0.searchText.contains(query)
+        }
+        guard let semanticMatches else { return directMatches }
+        let directIDs = Set(directMatches.map(\.id))
+        let candidates = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = directIDs
+        return directMatches + semanticMatches.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return candidates[id]
+        }
+    }
+
     func rename(_ artifact: Artifact, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == artifact.filename {
