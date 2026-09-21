@@ -314,33 +314,6 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertTrue(settings.launchArguments.containsAdjacent("--host", "::1"))
     }
 
-    func testAdvertisedBaseURLUsesLANAddressForWildcardHost() {
-        let settings = NativSettings(serverHost: "0.0.0.0", serverPort: 9_001)
-
-        XCTAssertEqual(
-            settings.resolvedAdvertisedBaseURL(lanAddress: "192.168.1.42").absoluteString,
-            "http://192.168.1.42:9001"
-        )
-    }
-
-    func testAdvertisedBaseURLFallsBackToHostWhenNoLANAddress() {
-        let settings = NativSettings(serverHost: "0.0.0.0", serverPort: 9_001)
-
-        XCTAssertEqual(
-            settings.resolvedAdvertisedBaseURL(lanAddress: nil).absoluteString,
-            "http://0.0.0.0:9001"
-        )
-    }
-
-    func testAdvertisedBaseURLKeepsExplicitHost() {
-        let settings = NativSettings(serverHost: "192.168.1.5", serverPort: 9_001)
-
-        XCTAssertEqual(
-            settings.resolvedAdvertisedBaseURL(lanAddress: "10.0.0.1").absoluteString,
-            "http://192.168.1.5:9001"
-        )
-    }
-
     func testMissingServerHostUsesLoopbackDefault() throws {
         let settings = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
 

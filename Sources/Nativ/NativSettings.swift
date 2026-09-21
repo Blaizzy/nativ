@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import NativServerKit
 import Security
@@ -1395,21 +1394,6 @@ struct NativSettings: Codable, Equatable {
         return URL(string: "http://\(host):\(settings.serverPort)")!
     }
 
-    var advertisedBaseURL: URL {
-        resolvedAdvertisedBaseURL(lanAddress: NetworkInterface.primaryIPv4Address())
-    }
-
-    func resolvedAdvertisedBaseURL(lanAddress: String?) -> URL {
-        let settings = normalized()
-        let host: String
-        if Self.isWildcardHost(settings.serverHost), let lanAddress, !lanAddress.isEmpty {
-            host = lanAddress
-        } else {
-            host = settings.serverHost
-        }
-        return URL(string: "http://\(Self.urlHost(host)):\(settings.serverPort)")!
-    }
-
     var launchEnvironment: [String: String] {
         let settings = normalized()
         var environment = [
@@ -1651,10 +1635,6 @@ struct NativSettings: Codable, Equatable {
         }
     }
 
-    private static func isWildcardHost(_ host: String) -> Bool {
-        host == "0.0.0.0" || host == "::" || host == "0:0:0:0:0:0:0:0"
-    }
-
     private static func nonEmpty(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
@@ -1681,44 +1661,5 @@ struct NativSettings: Codable, Equatable {
             baseURL
             .appendingPathComponent("Nativ", isDirectory: true)
             .appendingPathComponent("Settings.plist")
-    }
-}
-
-private enum NetworkInterface {
-    static func primaryIPv4Address() -> String? {
-        var head: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&head) == 0, let first = head else {
-            return nil
-        }
-        defer { freeifaddrs(head) }
-
-        var fallback: String?
-        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let interface = pointer.pointee
-            guard let sockaddr = interface.ifa_addr,
-                sockaddr.pointee.sa_family == UInt8(AF_INET)
-            else { continue }
-            let flags = Int32(interface.ifa_flags)
-            guard flags & IFF_UP == IFF_UP, flags & IFF_LOOPBACK == 0 else {
-                continue
-            }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard
-                getnameinfo(
-                    sockaddr, socklen_t(sockaddr.pointee.sa_len),
-                    &host, socklen_t(host.count),
-                    nil, 0, NI_NUMERICHOST
-                ) == 0
-            else { continue }
-            let address = String(cString: host)
-            guard !address.isEmpty else { continue }
-            if String(cString: interface.ifa_name) == "en0" {
-                return address
-            }
-            if fallback == nil {
-                fallback = address
-            }
-        }
-        return fallback
     }
 }

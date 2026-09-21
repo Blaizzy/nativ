@@ -334,7 +334,7 @@ struct DeveloperView: View {
                 spacing: 8
             ) {
                 ForEach(ServerEndpoint.endpoints(in: selectedEndpointCategory)) { endpoint in
-                    ServerEndpointRow(endpoint: endpoint, baseURL: model.settings.advertisedBaseURL) {
+                    ServerEndpointRow(endpoint: endpoint, baseURL: model.settings.serverBaseURL) {
                         copyEndpoint(endpoint)
                     }
                 }
@@ -396,7 +396,7 @@ struct DeveloperView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Server Endpoints")
                     .font(.callout.weight(.semibold))
-                Text(model.settings.advertisedBaseURL.absoluteString)
+                Text(model.settings.serverBaseURL.absoluteString)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
             }
@@ -478,9 +478,9 @@ struct DeveloperView: View {
         case .available:
             return nil
         case .addressInUse:
-            return "\(settings.advertisedBaseURL.absoluteString) is already in use — Nativ can’t bind to that address."
+            return "\(settings.serverHost):\(settings.serverPort) is already in use — Nativ can’t bind to that address."
         case .invalidAddress:
-            return "\(settings.advertisedBaseURL.absoluteString) can’t be used — check the host and port."
+            return "\(settings.serverHost):\(settings.serverPort) can’t be used — check the host and port."
         }
     }
 
@@ -636,7 +636,7 @@ struct DeveloperView: View {
     private func copyEndpoint(_ endpoint: ServerEndpoint) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(endpoint.absoluteURL(baseURL: model.settings.advertisedBaseURL), forType: .string)
+        pasteboard.setString(endpoint.absoluteURL(baseURL: model.settings.serverBaseURL), forType: .string)
     }
 }
 
