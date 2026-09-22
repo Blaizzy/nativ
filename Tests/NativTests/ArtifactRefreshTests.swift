@@ -142,7 +142,8 @@ final class ArtifactRefreshTests: XCTestCase {
             ),
             refreshesAutomatically: false,
             persistedDataChanges: hub,
-            rebuild: { _, _, _ in ArtifactStore.CatalogSnapshot(fingerprint: nil, artifacts: source.scan()) }
+            rebuild: { _, _, _ in ArtifactStore.CatalogSnapshot(fingerprint: nil, artifacts: source.scan()) },
+            deletionHandler: { _ in true }
         )
     }
 

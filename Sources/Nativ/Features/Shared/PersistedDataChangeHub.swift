@@ -4,6 +4,7 @@ import Foundation
 struct PersistedDataChange: Equatable {
     enum Kind: Equatable {
         case chatSession(UUID)
+        case artifactDeleted(UUID)
         case chatFolders
         case imageGenerationSession(UUID)
     }
