@@ -9,6 +9,18 @@ final class ControlPanelSharedDependencies {
     let inferenceActivity = InferenceActivityCoordinator()
     let projects = ChatProjectStore()
     let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
+    private let artifactChangeOrigin = UUID()
+    lazy var artifactTrash = ArtifactTrash(
+        isActive: { [inferenceActivity] workspace, id in
+            switch workspace {
+            case .chat: inferenceActivity.isActive(.chat(id))
+            case .imageGeneration: inferenceActivity.isActive(.imageGeneration(id))
+            }
+        },
+        didChange: { [persistedDataChanges, artifactChangeOrigin] kind in
+            persistedDataChanges.send(kind, originWindowID: artifactChangeOrigin)
+        }
+    )
 }
 
 @MainActor
@@ -21,6 +33,7 @@ final class ControlPanelDependencies: ObservableObject {
     let inferenceActivity: InferenceActivityCoordinator
     let projects: ChatProjectStore
     let chatSearch: ChatSearchLibrary
+    let artifactTrash: ArtifactTrash
 
     lazy var chat = ChatViewModel(
         windowID: windowID,
@@ -34,32 +47,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity
     )
-    lazy var artifacts: ArtifactStore = ArtifactStore(persistedDataChanges: persistedDataChanges, deletionHandler: { [weak self] artifact in
-        guard let self else {
-            return false
-        }
-        let current = ArtifactCatalog.artifacts(
-            chats: ChatSessionStore().loadSessions(), images: ImageGenerationSessionStore().loadSessions()
-        ).first { $0.id == artifact.id }
-        guard let current else { return true }
-        let removed = ArtifactDeletion.removeReferences(
-            to: current,
-            isActive: { workspace, id in
-                switch workspace {
-                case .chat: inferenceActivity.isActive(.chat(id))
-                case .imageGeneration: inferenceActivity.isActive(.imageGeneration(id))
-                }
-            },
-            remove: { workspace, id in
-                switch workspace {
-                case .chat: chat.removeArtifact(artifact.id, sessionID: id)
-                case .imageGeneration: imageGeneration.removeArtifact(artifact.id, sessionID: id)
-                }
-            }
-        )
-        if !removed { artifacts.refresh() }
-        return removed
-    })
+    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, trash: artifactTrash)
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
@@ -77,5 +65,6 @@ final class ControlPanelDependencies: ObservableObject {
         inferenceActivity = shared.inferenceActivity
         projects = shared.projects
         chatSearch = shared.chatSearch
+        artifactTrash = shared.artifactTrash
     }
 }

@@ -470,6 +470,7 @@ struct ArtifactsView: View {
         .focused($gridFocused)
         .onKeyPress(action: handleKey)
         .task {
+            store.rescan()
             warmSemanticIndex()
         }
         .onChange(of: search) { _, _ in
@@ -516,12 +517,12 @@ struct ArtifactsView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This removes each file from all linked chats and image sessions. It can’t be undone.")
+            Text("This will move each file to the Bin and remove it from linked chats and image sessions. Use Put Back in the Bin to restore it.")
         }
         .alert("Some files could not be removed", isPresented: $showsDeletionFailure) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("A linked session may be generating a response, or a history change could not be saved. The remaining files are still shown in Artifacts.")
+            Text(store.trash?.errorMessage ?? "The files could not be moved to the Bin. Please try again.")
         }
         .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
             Button("Remove Model", role: .destructive) {
@@ -722,7 +723,7 @@ struct ArtifactsView: View {
             searchField
                 .frame(width: 280)
 
-            Button(action: store.refresh) {
+            Button(action: store.rescan) {
                 Image(systemName: "arrow.clockwise")
                     .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
                     .animation(store.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
