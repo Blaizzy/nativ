@@ -218,6 +218,10 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceDictationTranscript.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordDetection.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordMonitor.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordModel.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordFeatures.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioCaptureSleepMonitor.swift

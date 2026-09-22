@@ -156,6 +156,9 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var isHandsFreeEnabled: Bool {
         didSet { preferencesDidChange() }
     }
+    @Published var isWakeWordEnabled: Bool {
+        didSet { persistCurrent() }
+    }
     // Spoken command edits do not require re-registering global keyboard shortcuts.
     @Published var isReturnCommandEnabled: Bool {
         didSet { persistCurrent() }
@@ -173,6 +176,7 @@ final class VoiceShortcutPreferences: ObservableObject {
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
         let isHandsFreeEnabled: Bool?
+        let isWakeWordEnabled: Bool?
         let isReturnCommandEnabled: Bool?
         let returnCommandTrigger: String?
     }
@@ -194,6 +198,7 @@ final class VoiceShortcutPreferences: ObservableObject {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
             isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
+            isWakeWordEnabled = payload.isWakeWordEnabled ?? false
             isReturnCommandEnabled = payload.isReturnCommandEnabled ?? true
             returnCommandTrigger = payload.returnCommandTrigger
                 ?? VoiceDictationTranscript.defaultReturnCommandTrigger
@@ -201,6 +206,7 @@ final class VoiceShortcutPreferences: ObservableObject {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
             isHandsFreeEnabled = true
+            isWakeWordEnabled = false
             isReturnCommandEnabled = true
             returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
         }
@@ -219,6 +225,7 @@ final class VoiceShortcutPreferences: ObservableObject {
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
             isHandsFreeEnabled: isHandsFreeEnabled,
+            isWakeWordEnabled: isWakeWordEnabled,
             isReturnCommandEnabled: isReturnCommandEnabled,
             returnCommandTrigger: returnCommandTrigger
         )
