@@ -279,6 +279,7 @@ targets:
       - path: Sources/Nativ/Features/Browsing/WebSearchProvider.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchService.swift
       - path: Sources/Nativ/Features/Browsing/WebSearchSettingsView.swift
+      - path: Sources/Nativ/Features/Artifacts/ArtifactTrash.swift
       - path: Sources/Nativ/Features/Artifacts/ArtifactRecovery.swift
       - path: Sources/Nativ/Features/Artifacts/ArtifactCatalog.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
