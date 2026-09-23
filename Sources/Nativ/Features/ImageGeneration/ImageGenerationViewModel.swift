@@ -766,33 +766,6 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     @discardableResult
-    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
-        guard !inferenceActivity.isActive(.imageGeneration(sessionID)) else { return false }
-        if sessionID == currentSessionID {
-            let previousTurns = turns
-            let previousReference = activeReference
-            for index in turns.indices {
-                turns[index].referenceImages.removeAll { $0.assetID == assetID }
-                turns[index].outputs.removeAll { ($0.asset?.id ?? $0.id) == assetID }
-            }
-            if activeReference?.assetID == assetID { activeReference = nil }
-            guard persistCurrentSession(updateTimestamp: false) else {
-                turns = previousTurns
-                activeReference = previousReference
-                return false
-            }
-            pendingImageAttachments.removeAll { $0.assetID == assetID }
-            return true
-        }
-        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
-        session.removeArtifact(assetID)
-        guard saveSession(session) else { return false }
-        upsertStoredSession(session)
-        refreshSessionList()
-        return true
-    }
-
-    @discardableResult
     func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) -> Bool {
         guard canModifySession(sessionID) else {
             return false
@@ -883,6 +856,11 @@ final class ImageGenerationViewModel: ObservableObject {
 
     private func handlePersistedDataChange(_ change: PersistedDataChange) {
         guard change.originWindowID != windowID else { return }
+        if case .artifactDeleted(let id) = change.kind {
+            pendingImageAttachments.removeAll { $0.assetID == id }
+            if activeReference?.assetID == id { activeReference = nil }
+            return
+        }
         guard case .imageGenerationSession = change.kind else { return }
 
         storedSessions = sessionStore.loadSessions()

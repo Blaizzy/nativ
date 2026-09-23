@@ -2,6 +2,17 @@ import XCTest
 
 @MainActor
 final class ArtifactDeletionTests: XCTestCase {
+    func testDeletingArtifactClearsUnsentImageReference() {
+        let hub = PersistedDataChangeHub()
+        let viewModel = ImageGenerationViewModel(persistedDataChanges: hub)
+        let attachment = ChatImageAttachment(filename: "image.png", mimeType: "image/png", base64Data: "")
+        viewModel.useAsReference(attachment)
+        XCTAssertNil(viewModel.currentSessionID)
+        XCTAssertEqual(viewModel.activeReference?.assetID, attachment.assetID)
+        hub.send(.artifactDeleted(attachment.assetID), originWindowID: UUID())
+        XCTAssertNil(viewModel.activeReference)
+    }
+
     func testLockedImageSessionRejectsOutputRemoval() {
         let inferenceActivity = InferenceActivityCoordinator()
         let sessionID = UUID()
@@ -54,9 +65,9 @@ final class ArtifactDeletionTests: XCTestCase {
 
         XCTAssertEqual(deletedIDs, Set([allowed.id]))
         XCTAssertEqual(store.artifacts.map(\.id), [rejected.id])
-        XCTAssertFalse(FileManager.default.fileExists(atPath: store.fileURL(for: allowed).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(for: allowed).path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(for: rejected).path))
-        XCTAssertEqual(try loadArtifacts(from: storage.indexURL).map(\.id), [rejected.id])
+        XCTAssertEqual(ArtifactStore.loadIndex(storage.indexURL).artifacts.map(\.id), [rejected.id])
     }
 
     private func makeArtifact(filename: String) -> Artifact {
@@ -99,9 +110,4 @@ final class ArtifactDeletionTests: XCTestCase {
         try encoder.encode(artifacts).write(to: url)
     }
 
-    private func loadArtifacts(from url: URL) throws -> [Artifact] {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode([Artifact].self, from: Data(contentsOf: url))
-    }
 }

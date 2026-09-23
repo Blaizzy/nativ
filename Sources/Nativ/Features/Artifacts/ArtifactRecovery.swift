@@ -1,7 +1,7 @@
 import Foundation
 
 /// Only the removed references are saved; restoring never replaces a conversation snapshot.
-struct ArtifactRecovery: Codable, Identifiable {
+struct ArtifactRecovery: Codable {
     struct Reference: Codable {
         let usage: ArtifactUsage
         let index: Int
@@ -13,7 +13,8 @@ struct ArtifactRecovery: Codable, Identifiable {
     let originalURL: URL
     var trashURL: URL?
     var contentHash: Data?
-    let deletedAt: Date
+    var bookmark: Data?
+    var deletionCompleted: Bool?
     let references: [Reference]
     let recoveredChatID: UUID
     var id: UUID { artifact.id }
@@ -21,7 +22,6 @@ struct ArtifactRecovery: Codable, Identifiable {
     init(artifact: Artifact, originalURL: URL, chats: [ChatSession], images: [ImageGenerationSession]) {
         self.artifact = artifact
         self.originalURL = originalURL
-        deletedAt = .now
         recoveredChatID = UUID()
         var references: [Reference] = []
         for chat in chats {

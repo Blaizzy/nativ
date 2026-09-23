@@ -86,7 +86,8 @@ final class ArtifactIndexFingerprintTests: XCTestCase {
             rebuild: { _, _, known in
                 seen.record(known.fingerprint)
                 return known
-            }
+            },
+            deletionHandler: { _ in true }
         )
     }
 

@@ -176,13 +176,13 @@ final class ArtifactCatalogTests: XCTestCase {
     }
 
     @MainActor
-    func testGalleryDeletionDoesNotUnlinkSharedMediaBytes() throws {
+    func testGalleryDelegatesFileRemovalToDeletionHandler() throws {
         let fixture = Fixture()
         defer { fixture.remove() }
         let output = fixture.output()
         let artifact = try XCTUnwrap(ArtifactCatalog.artifacts(chats: [], images: [fixture.image(turns: [fixture.turn(references: [], outputs: [output])])]).first)
         try fixture.writeIndex([artifact])
-        let store = ArtifactStore(storage: fixture.storage, refreshesAutomatically: false, mediaStore: fixture.media)
+        let store = ArtifactStore(storage: fixture.storage, refreshesAutomatically: false, mediaStore: fixture.media, deletionHandler: { _ in true })
         XCTAssertTrue(store.delete(artifact))
         XCTAssertTrue(store.artifacts.isEmpty)
         XCTAssertNotNil(fixture.media.fileURL(for: try XCTUnwrap(output.asset)))

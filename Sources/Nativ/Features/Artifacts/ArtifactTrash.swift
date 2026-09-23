@@ -1,6 +1,8 @@
+import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import Observation
 
 @MainActor
 final class ArtifactTrash: ObservableObject {
@@ -18,13 +20,14 @@ final class ArtifactTrash: ObservableObject {
     }
 
     @Published private(set) var records: [ArtifactRecovery] = []
-    @Published var errorMessage: String?
+    var errorMessage: String?
+    private var activationCancellable: AnyCancellable?
     private let directory: URL
     private let media: MediaAssetStore
     private let chats: ChatSessionStore
     private let images: ImageGenerationSessionStore
     private let isActive: (ArtifactUsage.Workspace, UUID) -> Bool
-    private let didChange: (ArtifactUsage.Workspace, UUID) -> Void
+    private let didChange: (PersistedDataChange.Kind) -> Void
     private let trashFile: (URL) throws -> URL
 
     init(
@@ -33,7 +36,7 @@ final class ArtifactTrash: ObservableObject {
         chats: ChatSessionStore = .init(),
         images: ImageGenerationSessionStore = .init(),
         isActive: @escaping (ArtifactUsage.Workspace, UUID) -> Bool = { _, _ in false },
-        didChange: @escaping (ArtifactUsage.Workspace, UUID) -> Void = { _, _ in },
+        didChange: @escaping (PersistedDataChange.Kind) -> Void = { _ in },
         trashFile: @escaping (URL) throws -> URL = ArtifactTrash.moveToBin
     ) {
         self.directory = directory ?? media.rootDirectory.deletingLastPathComponent().appendingPathComponent("Deleted Artifacts")
@@ -47,16 +50,43 @@ final class ArtifactTrash: ObservableObject {
             if FileManager.default.fileExists(atPath: self.directory.path) {
                 for url in try FileManager.default.contentsOfDirectory(at: self.directory, includingPropertiesForKeys: nil)
                     where url.pathExtension == "json" {
-                    records.append(try JSONDecoder().decode(ArtifactRecovery.self, from: Data(contentsOf: url)))
+                    do {
+                        records.append(try JSONDecoder().decode(ArtifactRecovery.self, from: Data(contentsOf: url)))
+                    } catch {
+                        errorMessage = "A recovery record could not be read: \(url.lastPathComponent)"
+                    }
                 }
-                records.sort { $0.deletedAt > $1.deletedAt }
             }
         } catch {
             errorMessage = "Some recovery records could not be read: \(error.localizedDescription)"
         }
+        activationCancellable = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.reconcile() }
+        reconcile()
+    }
+
+    /// Reconnect files put back in Finder, retrying when a busy conversation finishes.
+    func reconcile() {
+        withObservationTracking {
+            for record in records {
+                let originalExists = FileManager.default.fileExists(atPath: record.originalURL.path)
+                // A completed deletion stays in the Bin until the user puts the file back.
+                guard originalExists || record.deletionCompleted == false else { continue }
+                do {
+                    try restore(record)
+                } catch RecoveryError.busy {
+                    continue
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.reconcile() }
+        }
     }
 
     func delete(_ artifact: Artifact) throws {
+        guard !FileManager.default.fileExists(atPath: recordURL(artifact.id).path) else { throw RecoveryError.saveFailed }
         guard !records.contains(where: { $0.id == artifact.id }),
               let asset = artifact.asset, let url = media.fileURL(for: asset) else { throw RecoveryError.missing }
         // Refresh locations before deletion: another window may have reused the file.
@@ -67,6 +97,8 @@ final class ArtifactTrash: ObservableObject {
         try checkActivity(current.locations)
         var record = ArtifactRecovery(artifact: current, originalURL: url, chats: chatSessions, images: imageSessions)
         record.contentHash = try Self.contentHash(url)
+        record.bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        record.deletionCompleted = false
         try save(record)
         media.updateOwner("trash:\(record.id)", assets: [asset])
         do {
@@ -83,10 +115,13 @@ final class ArtifactTrash: ObservableObject {
                     session.removeArtifact(artifact.id)
                     guard images.saveSession(session) else { return false }
                 }
-                didChange(workspace, id)
+                didChange(workspace == .chat ? .chatSession(id) : .imageGenerationSession(id))
                 return true
             }
             guard removed else { throw RecoveryError.saveFailed }
+            record.deletionCompleted = true
+            try save(record)
+            didChange(.artifactDeleted(artifact.id))
         } catch {
             // Keep the record if rollback also fails; recovery remains retryable.
             try? restore(record)
@@ -95,10 +130,11 @@ final class ArtifactTrash: ObservableObject {
     }
 
     func restore(_ record: ArtifactRecovery) throws {
+        guard records.contains(where: { $0.id == record.id }) else { return }
         try checkActivity(record.references.map(\.usage))
         let manager = FileManager.default
         if !manager.fileExists(atPath: record.originalURL.path) {
-            guard let trashURL = record.trashURL, manager.fileExists(atPath: trashURL.path) else { throw RecoveryError.missing }
+            guard let trashURL = recoveryURL(record) else { throw RecoveryError.missing }
             guard try Self.contentHash(trashURL) == record.contentHash else { throw RecoveryError.conflict }
             try manager.createDirectory(at: record.originalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try manager.moveItem(at: trashURL, to: record.originalURL)
@@ -113,13 +149,13 @@ final class ArtifactTrash: ObservableObject {
             guard var session = chats.loadSession(id: id) else { continue }
             restored += record.restore(into: &session)
             guard chats.saveSession(session) else { throw RecoveryError.saveFailed }
-            didChange(.chat, id)
+            didChange(.chatSession(id))
         }
         for id in Set(record.references.filter { $0.usage.workspace == .imageGeneration }.map { $0.usage.sessionID }) {
             guard var session = images.loadSession(id: id) else { continue }
             restored += record.restore(into: &session)
             guard images.saveSession(session) else { throw RecoveryError.saveFailed }
-            didChange(.imageGeneration, id)
+            didChange(.imageGenerationSession(id))
         }
         if restored == 0 {
             // Keep the file discoverable when its original chat or message was deleted.
@@ -133,12 +169,23 @@ final class ArtifactTrash: ObservableObject {
             // Retries must not replace a recovered chat that the user has since edited.
             if chats.loadSession(id: session.id) == nil {
                 guard chats.saveSession(session) else { throw RecoveryError.saveFailed }
-                didChange(.chat, session.id)
+                didChange(.chatSession(session.id))
             }
         }
         try manager.removeItem(at: recordURL(record.id))
         records.removeAll { $0.id == record.id }
         media.updateOwner("trash:\(record.id)", assets: [])
+    }
+
+    private func recoveryURL(_ record: ArtifactRecovery) -> URL? {
+        if let url = record.trashURL, FileManager.default.fileExists(atPath: url.path) { return url }
+        // Bookmarks survive renames and the gap between the Bin move and saving its resulting URL.
+        var stale = false
+        guard let bookmark = record.bookmark,
+              let url = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
+                                 relativeTo: nil, bookmarkDataIsStale: &stale),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
     }
 
     private func checkActivity(_ locations: [ArtifactUsage]) throws {
@@ -150,8 +197,7 @@ final class ArtifactTrash: ObservableObject {
     private func save(_ record: ArtifactRecovery) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(record).write(to: recordURL(record.id), options: .atomic)
-        records.removeAll { $0.id == record.id }
-        records.insert(record, at: 0)
+        records = [record] + records.filter { $0.id != record.id }
     }
 
     private static func contentHash(_ url: URL) throws -> Data {
