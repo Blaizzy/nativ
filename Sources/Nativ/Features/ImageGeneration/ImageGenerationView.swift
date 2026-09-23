@@ -185,6 +185,7 @@ private struct ImageGenerationComposer: View {
                         onContentHeightChange: { editorContentHeight = $0 },
                         acceptsImageDrops: true,
                         onImageDropTargetChange: { isEditorDropTargeted = $0 }
+                        maximumHeight: editorMaximumHeight
                     )
 
                     if viewModel.prompt.isEmpty {

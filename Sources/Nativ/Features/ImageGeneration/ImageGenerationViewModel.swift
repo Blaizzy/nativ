@@ -168,7 +168,7 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published private(set) var statusText: String?
     @Published private(set) var scrollToken = 0
 
-    private let sessionStore = ImageGenerationSessionStore()
+    private let sessionStore: ImageGenerationSessionStore
     private let windowID: UUID
     private let persistedDataChanges: PersistedDataChangeHub
     private let inferenceActivity: InferenceActivityCoordinator
@@ -186,11 +186,13 @@ final class ImageGenerationViewModel: ObservableObject {
     init(
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
-        inferenceActivity: InferenceActivityCoordinator = .init()
+        inferenceActivity: InferenceActivityCoordinator = .init(),
+        sessionStore: ImageGenerationSessionStore = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
+        self.sessionStore = sessionStore
         storedSessions = sessionStore.loadSessions().map { session in
             var repaired = session
             for index in repaired.turns.indices where repaired.turns[index].status == .inProgress {
@@ -883,9 +885,13 @@ final class ImageGenerationViewModel: ObservableObject {
 
     private func handlePersistedDataChange(_ change: PersistedDataChange) {
         guard change.originWindowID != windowID else { return }
-        guard case .imageGenerationSession = change.kind else { return }
+        guard case .imageGenerationSession(let id) = change.kind else { return }
 
-        storedSessions = sessionStore.loadSessions()
+        if let session = sessionStore.loadSession(id: id) {
+            upsertStoredSession(session)
+        } else {
+            storedSessions.removeAll { $0.id == id }
+        }
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
                 if !isGenerating, fresh != currentSession {

@@ -315,6 +315,7 @@ struct ChatComposer: View {
                         onContentHeightChange: { height in
                             editorContentHeight = height
                         },
+                        maximumHeight: editorMaximumHeight,
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
                         forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
@@ -2513,6 +2514,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let onContentHeightChange: (CGFloat) -> Void
     var acceptsImageDrops = false
     var onImageDropTargetChange: ((Bool) -> Void)?
+    var maximumHeight: CGFloat = .infinity
     var fontScale: Double = 1.0
     var focusToken: Int = 0
     var forwardsKeysToPendingDecision = false
@@ -2566,7 +2568,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
 
         let scrollView = ChatComposerNSScrollView()
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
@@ -2574,6 +2576,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         scrollView.onLayout = context.coordinator.reportContentHeight
 
         context.coordinator.textView = textView
+        context.coordinator.maximumHeight = maximumHeight
         context.coordinator.onPasteText = onPasteText
         context.coordinator.onTextEdit = onTextEdit
         context.coordinator.onTextCommit = onTextCommit
@@ -2589,6 +2592,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.onTextEdit = onTextEdit
         context.coordinator.onTextCommit = onTextCommit
         context.coordinator.onContentHeightChange = onContentHeightChange
+        context.coordinator.maximumHeight = maximumHeight
 
         guard let textView = context.coordinator.textView else {
             return
@@ -2631,6 +2635,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         var lastResetToken = 0
         private var pendingEdit: (range: NSRange, replacement: String)?
         var onContentHeightChange: (CGFloat) -> Void
+        var maximumHeight: CGFloat = .infinity
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
         private var lastFocusToken: Int
@@ -2737,6 +2742,17 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
             let measuredHeight = ceil(usedRect.maxY + (textView.textContainerInset.height * 2))
+
+            // Enable the scroller only once the editor is capped and the text can
+            // actually scroll. Letting AppKit auto-toggle it while the editor is
+            // still growing loops with legacy scrollers ("Show scroll bars:
+            // Always"): the scroller takes width, the text rewraps, the height
+            // changes, the editor resizes, and the scroller toggles again.
+            let needsScroller = measuredHeight > maximumHeight
+            if let scrollView = textView.enclosingScrollView,
+               scrollView.hasVerticalScroller != needsScroller {
+                scrollView.hasVerticalScroller = needsScroller
+            }
 
             guard lastReportedHeight.map({ abs($0 - measuredHeight) >= 0.5 }) ?? true else {
                 return
