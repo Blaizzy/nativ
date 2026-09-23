@@ -720,6 +720,7 @@ struct ModelsView: View {
                     isSelecting: installedModelSelection.isActive,
                     isSelectedForDeletion: installedModelSelection.contains(localModel.repoID),
                     isPinned: pinnedIDs.contains(localModel.repoID),
+                    huggingFaceToken: modelState.effectiveHuggingFaceToken,
                     onSetPreload: { slot, isEnabled in
                         if isEnabled {
                             model.requestPreloadedModelSwitch(
@@ -1813,6 +1814,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let isSelecting: Bool
     let isSelectedForDeletion: Bool
     let isPinned: Bool
+    let huggingFaceToken: String?
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
     let onToggleSelection: () -> Void
@@ -1821,6 +1823,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
     @State private var showsDeleteConfirmation = false
     @State private var showsUnsupportedModelInformation = false
+    @State private var supportVerdict = InstalledModelSupportVerdict.unconfirmed
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.localModel == rhs.localModel
@@ -1837,6 +1840,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             && lhs.isSelecting == rhs.isSelecting
             && lhs.isSelectedForDeletion == rhs.isSelectedForDeletion
             && lhs.isPinned == rhs.isPinned
+            && lhs.huggingFaceToken == rhs.huggingFaceToken
     }
 
     private var isSelected: Bool {
@@ -1907,12 +1911,10 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     systemImage: "photo.on.rectangle.angled",
                                     color: .accentColor
                                 )
+                            } else if case .unsupported(let request) = supportVerdict {
+                                NotSupportedLabel(request: request)
                             } else if preloadSlots.isEmpty {
-                                ModelPill(
-                                    title: "Not supported",
-                                    systemImage: "exclamationmark.triangle",
-                                    color: .orange
-                                )
+                                NotSupportedLabel(request: nil)
                             }
                             ForEach(
                                 preloadSlots.filter(selectedPreloadSlots.contains)
@@ -1994,6 +1996,12 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 isPinned ? "Unpin Model" : "Pin Model",
                 systemImage: isPinned ? "pin.slash" : "pin",
                 action: onTogglePin
+            )
+        }
+        .task(id: localModel.snapshotURL) {
+            supportVerdict = await InstalledModelSupportResolver.shared.verdict(
+                for: localModel,
+                token: huggingFaceToken
             )
         }
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
@@ -2546,11 +2554,7 @@ private struct HubModelRow: View, @MainActor Equatable {
                                     ModelPill(title: "Gated", systemImage: "lock")
                                 }
                                 if model.support == .unsupported {
-                                    ModelPill(
-                                        title: "Unsupported",
-                                        systemImage: "exclamationmark.triangle.fill",
-                                        color: .orange
-                                    )
+                                    NotSupportedLabel(request: ModelSupportRequest(model: model))
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -3092,6 +3096,95 @@ private struct ModelPill: View {
             .padding(.vertical, 3)
             .background(Capsule().fill(color.opacity(0.10)))
             .fixedSize()
+    }
+}
+
+/// Orange "Not supported" text. A vetted request candidate gets a dotted
+/// underline and a hover popover that asks the runtime maintainers for support.
+private struct NotSupportedLabel: View {
+    let request: ModelSupportRequest?
+    @State private var isShowingRequest = false
+    @State private var isHoveringLabel = false
+    @State private var isHoveringPopover = false
+    @State private var isOpeningRequest = false
+    @State private var presentationUpdate: Task<Void, Never>?
+
+    var body: some View {
+        if let request {
+            text
+                .underline(true, pattern: .dot, color: .orange.opacity(0.6))
+                .fixedSize()
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    isHoveringLabel = hovering
+                    schedulePresentationUpdate()
+                }
+                .accessibilityAction(named: "Request support") { isShowingRequest = true }
+                .popover(isPresented: $isShowingRequest, arrowEdge: .bottom) {
+                    requestPopover(request)
+                        .onHover { hovering in
+                            isHoveringPopover = hovering
+                            schedulePresentationUpdate()
+                        }
+                }
+        } else {
+            text.fixedSize()
+        }
+    }
+
+    private var text: Text {
+        Text("Not supported")
+            .font(.caption.weight(.medium))
+            .foregroundColor(.orange)
+    }
+
+    /// Opens after a short hover so sweeping across the list doesn't pop
+    /// popovers, and stays open while the pointer moves into the popover.
+    private func schedulePresentationUpdate() {
+        presentationUpdate?.cancel()
+        let isHovering = isHoveringLabel || isHoveringPopover
+        guard isHovering != isShowingRequest else {
+            return
+        }
+        presentationUpdate = Task {
+            try? await Task.sleep(for: .milliseconds(isHovering ? 350 : 250))
+            guard !Task.isCancelled, !isOpeningRequest else {
+                return
+            }
+            isShowingRequest = isHoveringLabel || isHoveringPopover
+        }
+    }
+
+    private func requestPopover(_ request: ModelSupportRequest) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(
+                "The bundled \(request.runtimeName) can’t load `\(request.modelType)` models. Let the maintainers know you want it."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Text("Opens GitHub")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Button("Request Support") {
+                    isOpeningRequest = true
+                    Task {
+                        if let url = await request.issueURL() {
+                            NSWorkspace.shared.open(url)
+                        }
+                        isOpeningRequest = false
+                        isShowingRequest = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(isOpeningRequest)
+            }
+        }
+        .padding(14)
+        .frame(width: 280)
     }
 }
 
