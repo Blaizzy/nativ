@@ -184,7 +184,7 @@ private struct ImageGenerationComposer: View {
                         onPasteImage: viewModel.attachImages,
                         onContentHeightChange: { editorContentHeight = $0 },
                         acceptsImageDrops: true,
-                        onImageDropTargetChange: { isEditorDropTargeted = $0 }
+                        onImageDropTargetChange: { isEditorDropTargeted = $0 },
                         maximumHeight: editorMaximumHeight
                     )
 
