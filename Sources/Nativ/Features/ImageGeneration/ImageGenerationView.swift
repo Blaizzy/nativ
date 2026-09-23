@@ -177,7 +177,8 @@ private struct ImageGenerationComposer: View {
                         isEnabled: canCompose,
                         onSubmit: submit,
                         onPasteImage: viewModel.attachImages,
-                        onContentHeightChange: { editorContentHeight = $0 }
+                        onContentHeightChange: { editorContentHeight = $0 },
+                        maximumHeight: editorMaximumHeight
                     )
 
                     if viewModel.prompt.isEmpty {
