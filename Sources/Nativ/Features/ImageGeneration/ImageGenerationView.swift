@@ -162,6 +162,11 @@ private struct ImageGenerationComposer: View {
     @State private var editorContentHeight: CGFloat = 0
     @State private var showsSettings = false
     @State private var isDropTargeted = false
+    @State private var isEditorDropTargeted = false
+
+    private var showsDropTarget: Bool {
+        isDropTargeted || isEditorDropTargeted
+    }
 
     private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
@@ -185,6 +190,8 @@ private struct ImageGenerationComposer: View {
                         onSubmit: submit,
                         onPasteImage: viewModel.attachImages,
                         onContentHeightChange: { editorContentHeight = $0 },
+                        acceptsImageDrops: true,
+                        onImageDropTargetChange: { isEditorDropTargeted = $0 },
                         maximumHeight: editorMaximumHeight
                     )
 
@@ -254,7 +261,7 @@ private struct ImageGenerationComposer: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isDropTargeted ? 2 : 0.75)
+                    .stroke(showsDropTarget ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: showsDropTarget ? 2 : 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             .onDrop(

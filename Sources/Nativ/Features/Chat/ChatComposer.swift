@@ -2512,6 +2512,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     var onRecallPrevious: (() -> Bool)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
+    var acceptsImageDrops = false
+    var onImageDropTargetChange: ((Bool) -> Void)?
     var maximumHeight: CGFloat = .infinity
     var fontScale: Double = 1.0
     var focusToken: Int = 0
@@ -2561,6 +2563,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 14, height: 12)
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
+        textView.acceptsImageDrops = acceptsImageDrops
+        textView.onImageDropTargetChange = onImageDropTargetChange
 
         let scrollView = ChatComposerNSScrollView()
         scrollView.drawsBackground = false
@@ -2599,6 +2603,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
         if let composerTextView = textView as? ChatComposerNSTextView {
+            composerTextView.acceptsImageDrops = acceptsImageDrops
+            composerTextView.onImageDropTargetChange = onImageDropTargetChange
             composerTextView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
             composerTextView.onNavigatePendingSelection = onNavigatePendingSelection
             composerTextView.onCancelPendingDecision = onCancelPendingDecision
@@ -2807,6 +2813,14 @@ private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Bool)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    var onImageDropTargetChange: ((Bool) -> Void)?
+    var acceptsImageDrops = false {
+        didSet {
+            if acceptsImageDrops {
+                registerForDraggedTypes([.fileURL] + NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) })
+            }
+        }
+    }
     var forwardsKeysToPendingDecision = false
     var onNavigatePendingSelection: ((Int) -> Bool)?
     var onCancelPendingDecision: (() -> Void)?
@@ -2814,6 +2828,57 @@ private final class ChatComposerNSTextView: NSTextView {
     /// Returns whether the recall happened, so an Up key that recalls nothing
     /// still moves the caret.
     var onRecallPrevious: (() -> Bool)?
+
+    private func isImageDrop(_ sender: NSDraggingInfo) -> Bool {
+        acceptsImageDrops && ChatImageAttachment.canReadImages(from: sender.draggingPasteboard)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onImageDropTargetChange?(false)
+        super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onImageDropTargetChange?(false)
+        super.draggingEnded(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if isImageDrop(sender) {
+            return isEditable && sender.draggingSourceOperationMask.contains(.copy)
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { onImageDropTargetChange?(false) }
+        if isImageDrop(sender) {
+            // NSTextView otherwise inserts the file path into this plain-text editor.
+            guard isEditable, sender.draggingSourceOperationMask.contains(.copy) else { return false }
+            return onPasteImage?(sender.draggingPasteboard) ?? false
+        }
+        return super.performDragOperation(sender)
+    }
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese
