@@ -186,32 +186,86 @@ final class LocalModelProviderTests: XCTestCase {
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
-    func testReasoningUsesCanonicalHubFilter() {
+    func testFeatureDiscoverySearchesAliasesAndPreservesCombinedRequirements() {
+        XCTAssertEqual(HuggingFaceCapabilityFilter.hubTagSets(for: []), [[]])
+        XCTAssertEqual(HuggingFaceCapabilityFilter.hubTagSets(for: [.text]), [[]])
         XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.reasoning]),
-            ["reasoning"]
+            HuggingFaceCapabilityFilter.hubTagSets(for: [.reasoning]),
+            [["reasoning"], ["thinking"]]
         )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTagSets(for: [.tools]),
+            [["tool-calling"], ["function-calling"], ["tool-use"]]
+        )
+        XCTAssertEqual(
+            HuggingFaceCapabilityFilter.hubTagSets(for: [.text, .reasoning, .tools]),
+            [
+                ["reasoning", "tool-calling"], ["reasoning", "function-calling"],
+                ["reasoning", "tool-use"], ["thinking", "tool-calling"],
+                ["thinking", "function-calling"], ["thinking", "tool-use"],
+            ]
+        )
+        let withDrafter = HuggingFaceCapabilityFilter.hubTagSets(
+            for: [.reasoning, .tools, .drafter]
+        )
+        XCTAssertEqual(withDrafter.count, 24)
+        XCTAssertEqual(Set(withDrafter).count, 24)
+        XCTAssertTrue(withDrafter.allSatisfy { $0.count == 3 })
+        XCTAssertTrue(withDrafter.contains(["thinking", "tool-use", "speculative-decoding"]))
     }
 
-    func testToolCallingUsesCanonicalHubFilter() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.tools]),
-            ["tool-calling"]
-        )
+    func testFeatureBadgesHaveMatchingHubQueries() throws {
+        for reasoning in ["reasoning", "thinking"] {
+            for tools in ["tool-calling", "function-calling", "tool-use"] {
+                let model = try decodeModel(pipelineTag: "text-generation", tags: [reasoning, tools])
+                let selected: Set<LocalModelCapability> = [.reasoning, .tools]
+                XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: selected))
+                XCTAssertTrue(HuggingFaceCapabilityFilter.hubTagSets(for: selected).contains {
+                    Set($0).isSubset(of: Set(model.tags))
+                })
+            }
+        }
     }
 
-    func testCombinedCapabilitiesUseBothCanonicalHubFilters() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.tools, .reasoning]),
-            ["reasoning", "tool-calling"]
-        )
+    func testCombinedFeatureFilterRequiresBothCapabilities() throws {
+        for tags in [["thinking"], ["function-calling"], []] {
+            let model = try decodeModel(pipelineTag: "text-generation", tags: tags)
+            XCTAssertFalse(HuggingFaceCapabilityFilter.matches(
+                model, capabilities: [.reasoning, .tools]
+            ))
+        }
     }
 
-    func testDrafterUsesCanonicalHubFilter() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.drafter]),
-            ["draft-model"]
+    func testTextFilterAllowsAllRecognizedTextPipelinesAndMetadataAliases() throws {
+        for pipeline in [
+            "text-generation", "image-text-to-text", "image-to-text",
+            "visual-question-answering", "audio-text-to-text", "video-text-to-text",
+        ] {
+            XCTAssertTrue(try capabilities(for: pipeline).contains(.text))
+        }
+        for tag in ["conversational", "causal-lm"] {
+            XCTAssertTrue(try capabilities(for: "", tags: [tag]).contains(.text))
+        }
+        XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
+    }
+
+    func testIncidentalMetadataDoesNotCreateFeatureBadges() throws {
+        let model = try decodeModel(
+            pipelineTag: "text-generation",
+            libraryName: "thinking-tools",
+            tags: ["base_model:org/model-thinking", "dataset:org/function-calling", "toolkit"]
         )
+        XCTAssertFalse(model.capabilities.contains(.reasoning))
+        XCTAssertFalse(model.capabilities.contains(.tools))
+    }
+
+    func testInstalledVisionLanguageModelsSurviveTextFilter() throws {
+        for id in ["mlx-community/Qwen3.5-9B-MLX-4bit", "mlx-community/Muse-Glimmer-30B-4bit"] {
+            let model = try decodeModel(id: id, pipelineTag: "image-text-to-text")
+            XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
+            XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
+            XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text, .reasoning]))
+        }
     }
 
     func testDrafterDiscoverySearchesKnownTagVariants() {
@@ -227,10 +281,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
     }
 
     func testSupportedCapabilitiesUseCanonicalPipelineTasks() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.text]),
-            "text-generation"
-        )
+        XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
         XCTAssertEqual(
             HuggingFaceCapabilityFilter.pipelineTag(for: [.audio]),
             "audio-text-to-text"
@@ -251,8 +302,8 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
 
     func testFeatureTagCanBeCombinedWithPipelineTask() {
         XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.text, .reasoning]),
-            "text-generation"
+            HuggingFaceCapabilityFilter.pipelineTag(for: [.vision, .reasoning]),
+            "image-text-to-text"
         )
     }
 

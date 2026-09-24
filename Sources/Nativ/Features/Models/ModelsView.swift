@@ -3251,37 +3251,6 @@ extension LocalModelCapability {
         .drafter,
     ]
 
-    fileprivate var hubQueryItem: URLQueryItem {
-        switch self {
-        case .text:
-            URLQueryItem(name: "pipeline_tag", value: "text-generation")
-        case .vision:
-            URLQueryItem(name: "pipeline_tag", value: "image-text-to-text")
-        case .audio:
-            URLQueryItem(name: "other", value: "audio")
-        case .video:
-            URLQueryItem(name: "other", value: "video")
-        case .imageGeneration:
-            URLQueryItem(name: "pipeline_tag", value: "text-to-image")
-        case .imageEditing:
-            URLQueryItem(name: "pipeline_tag", value: "image-to-image")
-        case .speechToText:
-            URLQueryItem(name: "pipeline_tag", value: "automatic-speech-recognition")
-        case .textToSpeech:
-            URLQueryItem(name: "pipeline_tag", value: "text-to-speech")
-        case .embeddings:
-            URLQueryItem(name: "pipeline_tag", value: "feature-extraction")
-        case .reranking:
-            URLQueryItem(name: "pipeline_tag", value: "text-ranking")
-        case .reasoning:
-            URLQueryItem(name: "other", value: "reasoning")
-        case .tools:
-            URLQueryItem(name: "other", value: "tool-calling")
-        case .drafter:
-            URLQueryItem(name: "other", value: "draft-model")
-        }
-    }
-
     fileprivate var systemImage: String {
         switch self {
         case .text: "text.alignleft"
