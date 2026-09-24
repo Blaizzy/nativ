@@ -2281,7 +2281,16 @@ final class ChatViewModel: ObservableObject {
                         host.handlesTool(named: toolName)
                     {
                         let result = try await host.callTool(
-                            named: toolName, argumentsJSON: toolCall.function?.arguments)
+                            named: toolName,
+                            argumentsJSON: toolCall.function?.arguments,
+                            projectScope: queuedRequest.toolScope,
+                            currentProjectScope: { [self] in
+                                projectStore.toolScope(
+                                    for: queuedRequest.toolScope.projectID,
+                                    settings: appModel?.settings ?? queuedRequest.settings
+                                )
+                            }
+                        )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
                         outcome = try await ChatToolDispatcher.execute(
@@ -2465,7 +2474,12 @@ final class ChatViewModel: ObservableObject {
             : []
         if advertisesToolsForModel {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
-            toolDefinitions += mcpHost?.toolDefinitions() ?? []
+            toolDefinitions += mcpHost?.toolDefinitions(
+                projectScope: projectStore.toolScope(
+                    for: queuedRequest.toolScope.projectID,
+                    settings: appModel?.settings ?? queuedRequest.settings
+                )
+            ) ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
             let fileReadIsConfigured = FileReadAccessPolicy.isConfigured(
