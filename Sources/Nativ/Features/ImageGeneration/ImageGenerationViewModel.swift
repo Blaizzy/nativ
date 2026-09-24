@@ -372,7 +372,11 @@ final class ImageGenerationViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func run(using appModel: NativModel, modelIsInstalled: Bool = true) {
+    func run(
+        using appModel: NativModel,
+        modelIsInstalled: Bool = true,
+        modelSupportsEditing: Bool
+    ) {
         guard !isGenerating,
               appModel.isRunning,
               let requestModelID = normalized(modelID),
@@ -412,6 +416,14 @@ final class ImageGenerationViewModel: ObservableObject {
         requestSettings = settings
 
         let references = effectiveReferenceImages
+        guard modelSupportsEditing || references.isEmpty else {
+            inferenceActivity.end(
+                resource: activityResource,
+                operationID: operationID
+            )
+            statusText = "The selected model does not support image editing."
+            return
+        }
         if references.count == 1 {
             activeReference = references[0]
         } else if references.count > 1 {
@@ -490,12 +502,16 @@ final class ImageGenerationViewModel: ObservableObject {
                     current.status = .completed
                 }
 
-                if outputs.count == 1 {
+                if outputs.count == 1, modelSupportsEditing {
                     activeReference = outputs[0].attachment
                     statusText = "Image ready. Your next prompt will edit it."
                 } else {
                     activeReference = nil
-                    statusText = "\(outputs.count) images ready. Choose one to continue editing."
+                    statusText = outputs.count == 1
+                        ? "Image ready."
+                        : modelSupportsEditing
+                            ? "\(outputs.count) images ready. Choose one to continue editing."
+                            : "\(outputs.count) images ready."
                 }
                 persistCurrentSession(updateTimestamp: true)
                 bumpScroll()

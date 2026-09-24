@@ -1041,9 +1041,15 @@ enum LocalModelDiscovery {
         let configURL = snapshotURL.appendingPathComponent("config.json")
         let tokenizerConfigURL = snapshotURL.appendingPathComponent("tokenizer_config.json")
         let modelIndexURL = snapshotURL.appendingPathComponent("model_index.json")
-        guard fileManager.fileExists(atPath: configURL.path) || fileManager.fileExists(atPath: tokenizerConfigURL.path) || fileManager.fileExists(atPath: modelIndexURL.path)
-        else {
-            return false
+        if !fileManager.fileExists(atPath: configURL.path)
+            && !fileManager.fileExists(atPath: tokenizerConfigURL.path)
+            && !fileManager.fileExists(atPath: modelIndexURL.path)
+        {
+            return MLXImageModelResolver.shared.isSupportedImageModel(
+                model: model,
+                at: snapshotURL,
+                fileManager: fileManager
+            )
         }
 
         switch safetensorsShardIndexStatus(at: snapshotURL, fileManager: fileManager) {
@@ -1645,6 +1651,11 @@ enum LocalModelDiscovery {
             fileManager: fileManager
         ) {
             capabilities.insert(.imageEditing)
+        }
+        if capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        {
+            capabilities.remove(.text)
         }
 
         let audioKeys: Set<String> = [

@@ -50,6 +50,31 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertFalse(model.capabilities.contains(.imageGeneration))
     }
 
+    func testDiscoversFlux2ConversionWithoutRootConfiguration() async throws {
+        let repoID = "mlx-community/FLUX.2-Klein-4B-4bit"
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot.deletingLastPathComponent().deletingLastPathComponent()
+
+        try write(snapshot.lastPathComponent, to: repository.appendingPathComponent("refs/main"))
+        for component in ["transformer", "text_encoder", "vae"] {
+            try write(
+                "weights",
+                to: snapshot.appendingPathComponent("\(component)/0.safetensors")
+            )
+        }
+        try write(
+            "{}",
+            to: snapshot.appendingPathComponent("tokenizer/tokenizer.json")
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+        XCTAssertTrue(model.capabilities.contains(.imageGeneration))
+        XCTAssertTrue(model.capabilities.contains(.imageEditing))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
     func testDiscoversModelFromAdditionalSearchFolder() async throws {
         let externalModel = temporaryCache.appendingPathComponent(
             "external/owner/model",
