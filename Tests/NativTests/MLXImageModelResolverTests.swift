@@ -3,12 +3,23 @@ import NativServerKit
 import XCTest
 
 final class MLXImageModelResolverTests: XCTestCase {
-    private let supportedModelTypes: Set<String> = [
+    private let generationModelTypes: Set<String> = [
         "bonsai",
+        "ernie_image",
         "flux2",
         "ideogram4",
+        "llada_image",
         "mage_flow",
         "qwen_image",
+        "z_image",
+    ]
+    private let editingModelTypes: Set<String> = [
+        "ernie_image",
+        "flux2",
+        "llada_image",
+        "mage_flow",
+        "qwen_image",
+        "z_image",
     ]
     private var temporaryRoot: URL!
 
@@ -54,18 +65,17 @@ final class MLXImageModelResolverTests: XCTestCase {
 
         XCTAssertTrue(
             resolver().isImageGenerationModel(
-                model: "black-forest-labs/FLUX.2-klein-9B-kv",
+                model: "black-forest-labs/FLUX.2-klein-4B",
                 at: temporaryRoot,
                 fileManager: .default
             )
         )
         XCTAssertTrue(
             resolver().isImageEditingModel(
-                model: "black-forest-labs/FLUX.2-klein-9B-kv",
+                model: "black-forest-labs/FLUX.2-klein-4B",
                 at: temporaryRoot,
                 fileManager: .default
-            ),
-            "the bundled FLUX.2 backend supports reference-image editing"
+            )
         )
     }
 
@@ -194,13 +204,48 @@ final class MLXImageModelResolverTests: XCTestCase {
                 fileManager: .default
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             resolver().isImageEditingModel(
                 model: "Qwen/Qwen-Image-2.1",
                 at: temporaryRoot,
                 fileManager: .default
-            ),
-            "the bundled Qwen-Image backend exposes no edit pipeline"
+            )
+        )
+    }
+
+    func testLLaDAImagePipelineResolvesToGenerationAndEditing() throws {
+        try makeCompleteLLaDAImageFixture()
+
+        XCTAssertTrue(
+            resolver().isImageGenerationModel(
+                model: "inclusionAI/LLaDA-Image-Turbo",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+        XCTAssertTrue(
+            resolver().isImageEditingModel(
+                model: "inclusionAI/LLaDA-Image-Turbo",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testLLaDAImageRequiresLoadableLocalLayout() throws {
+        try makeCompleteLLaDAImageFixture()
+        try FileManager.default.removeItem(
+            at: temporaryRoot.appendingPathComponent(
+                "queryformer/model.safetensors"
+            )
+        )
+
+        XCTAssertFalse(
+            resolver().isImageGenerationModel(
+                model: "inclusionAI/LLaDA-Image-Turbo",
+                at: temporaryRoot,
+                fileManager: .default
+            )
         )
     }
 
@@ -272,7 +317,10 @@ final class MLXImageModelResolverTests: XCTestCase {
 
     func testBundledManifestGatesMetadataCandidates() throws {
         try makeCompleteFlux2Fixture()
-        let resolver = MLXImageModelResolver(supportedModelTypes: [])
+        let resolver = MLXImageModelResolver(
+            generationModelTypes: [],
+            editingModelTypes: []
+        )
 
         XCTAssertFalse(
             resolver.isImageGenerationModel(
@@ -285,15 +333,18 @@ final class MLXImageModelResolverTests: XCTestCase {
 
     func testBundledManifestDescribesInstalledBackends() throws {
         let modelTypes = try Nativ.imageGenerationModelTypes()
+        let bundledEditingTypes = try Nativ.imageEditingModelTypes()
 
-        XCTAssertTrue(modelTypes.contains("flux2"))
-        XCTAssertTrue(modelTypes.contains("mage_flow"))
-        XCTAssertTrue(modelTypes.contains("qwen_image"))
+        XCTAssertTrue(editingModelTypes.isSubset(of: modelTypes))
         XCTAssertFalse(modelTypes.contains("diffusion_gemma"))
+        XCTAssertTrue(editingModelTypes.isSubset(of: bundledEditingTypes))
     }
 
     private func resolver() -> MLXImageModelResolver {
-        MLXImageModelResolver(supportedModelTypes: supportedModelTypes)
+        MLXImageModelResolver(
+            generationModelTypes: generationModelTypes,
+            editingModelTypes: editingModelTypes
+        )
     }
 
     private func makeCompleteFlux2Fixture() throws {
@@ -384,6 +435,22 @@ final class MLXImageModelResolverTests: XCTestCase {
             try touch("\(component)/model.safetensors")
         }
         try touch("processor/tokenizer.json")
+    }
+
+    private func makeCompleteLLaDAImageFixture() throws {
+        try writeJSON(
+            ["_class_name": "LLaDAImagePipeline"],
+            to: "model_index.json"
+        )
+        try writeJSON([:], to: "scheduler/scheduler_config.json")
+        try touch("tokenizer/tokenizer.json")
+        for component in [
+            "queryformer", "sigvq", "text_encoder", "text_projection",
+            "transformer",
+        ] {
+            try writeJSON([:], to: "\(component)/config.json")
+            try touch("\(component)/model.safetensors")
+        }
     }
 
     private func writeJSON(_ object: Any, to path: String) throws {

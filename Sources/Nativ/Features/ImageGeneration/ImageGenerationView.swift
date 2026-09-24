@@ -86,6 +86,12 @@ struct ImageGenerationView: View {
             : nil
     }
 
+    private var selectedModelSupportsEditing: Bool {
+        guard let selectedModelID else { return false }
+        return imageModels.first(where: { $0.repoID == selectedModelID })?
+            .capabilities.contains(.imageEditing) == true
+    }
+
     private var modelScanKey: String {
         model.settings.localModelSearchPaths.cacheKey
     }
@@ -111,6 +117,7 @@ struct ImageGenerationView: View {
                             activeReferenceID: viewModel.activeReference?.id,
                             isGenerating: viewModel.isGenerating,
                             progressText: viewModel.statusText,
+                            allowsEditing: selectedModelSupportsEditing,
                             onUseOutput: viewModel.useAsReference,
                             onUseInput: viewModel.useAsReference,
                             onSave: viewModel.save
@@ -364,6 +371,12 @@ private struct ImageGenerationComposer: View {
             : nil
     }
 
+    private var selectedModelSupportsEditing: Bool {
+        guard let selectedModelID else { return false }
+        return imageModels.first(where: { $0.repoID == selectedModelID })?
+            .capabilities.contains(.imageEditing) == true
+    }
+
     private var selectedModelIsEditOnly: Bool {
         guard let selectedModelID,
               let selectedModel = imageModels.first(where: {
@@ -434,7 +447,8 @@ private struct ImageGenerationComposer: View {
         }
         viewModel.run(
             using: model,
-            modelIsInstalled: imageModels.contains { $0.repoID == viewModel.modelID }
+            modelIsInstalled: imageModels.contains { $0.repoID == viewModel.modelID },
+            modelSupportsEditing: selectedModelSupportsEditing
         )
     }
 
@@ -546,6 +560,7 @@ private struct ImageGenerationTurnView: View {
     let activeReferenceID: UUID?
     let isGenerating: Bool
     let progressText: String?
+    let allowsEditing: Bool
     let onUseOutput: (GeneratedImage) -> Void
     let onUseInput: (ChatImageAttachment) -> Void
     let onSave: (GeneratedImage) -> Void
@@ -619,6 +634,7 @@ private struct ImageGenerationTurnView: View {
                         result: output,
                         isActiveReference: activeReferenceID == output.id,
                         isGenerating: isGenerating,
+                        allowsEditing: allowsEditing,
                         onUseAsReference: { onUseOutput(output) },
                         onSave: { onSave(output) }
                     )
@@ -632,6 +648,7 @@ private struct GeneratedImageCard: View {
     let result: GeneratedImage
     let isActiveReference: Bool
     let isGenerating: Bool
+    let allowsEditing: Bool
     let onUseAsReference: () -> Void
     let onSave: () -> Void
 
@@ -658,15 +675,17 @@ private struct GeneratedImageCard: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: onUseAsReference) {
-                    Label(
-                        isActiveReference ? "Selected" : "Continue",
-                        systemImage: isActiveReference ? "checkmark.circle.fill" : "arrow.turn.down.right"
-                    )
+                if allowsEditing {
+                    Button(action: onUseAsReference) {
+                        Label(
+                            isActiveReference ? "Selected" : "Edit",
+                            systemImage: isActiveReference ? "checkmark.circle.fill" : "arrow.turn.down.right"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isGenerating || isActiveReference)
+                    .help("Use this image as the next edit reference")
                 }
-                .buttonStyle(.bordered)
-                .disabled(isGenerating || isActiveReference)
-                .help("Use this image as the next edit reference")
 
                 Button(action: onSave) {
                     Image(systemName: "square.and.arrow.down")
