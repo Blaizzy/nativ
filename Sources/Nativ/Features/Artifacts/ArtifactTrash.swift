@@ -22,6 +22,7 @@ final class ArtifactTrash: ObservableObject {
     @Published private(set) var records: [ArtifactRecovery] = []
     var errorMessage: String?
     private var activationCancellable: AnyCancellable?
+    private var deletionWatches: [UUID: AnyCancellable] = [:]
     private let directory: URL
     private let media: MediaAssetStore
     private let chats: ChatSessionStore
@@ -63,6 +64,7 @@ final class ArtifactTrash: ObservableObject {
         activationCancellable = NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in self?.reconcile() }
         reconcile()
+        records.forEach(watchDeletion)
     }
 
     /// Reconnect files put back in Finder, retrying when a busy conversation finishes.
@@ -172,9 +174,40 @@ final class ArtifactTrash: ObservableObject {
                 didChange(.chatSession(session.id))
             }
         }
-        try manager.removeItem(at: recordURL(record.id))
+        try forget(record)
+    }
+
+    private func forget(_ record: ArtifactRecovery) throws {
+        try FileManager.default.removeItem(at: recordURL(record.id))
+        deletionWatches[record.id] = nil
         records.removeAll { $0.id == record.id }
         media.updateOwner("trash:\(record.id)", assets: [])
+    }
+
+    private func watchDeletion(_ record: ArtifactRecovery) {
+        guard record.deletionCompleted == true, deletionWatches[record.id] == nil,
+              let url = recoveryURL(record) else { return }
+        let descriptor = open(url.path, O_EVTONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { return }
+        // A descriptor follows moves and renames; only permanent deletion removes recovery metadata.
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .delete, queue: .main)
+        source.setEventHandler { [weak self] in
+            Task { @MainActor in
+                guard let self, self.records.contains(where: { $0.id == record.id }) else { return }
+                defer { self.deletionWatches[record.id] = nil }
+                do {
+                    _ = try record.originalURL.checkResourceIsReachable()
+                    return
+                } catch let error as NSError {
+                    guard error.domain == NSCocoaErrorDomain, error.code == NSFileReadNoSuchFileError else { return }
+                }
+                do { try self.forget(record) }
+                catch { self.errorMessage = error.localizedDescription }
+            }
+        }
+        source.setCancelHandler { close(descriptor) }
+        source.resume()
+        deletionWatches[record.id] = AnyCancellable { source.cancel() }
     }
 
     private func recoveryURL(_ record: ArtifactRecovery) -> URL? {
@@ -198,6 +231,7 @@ final class ArtifactTrash: ObservableObject {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try JSONEncoder().encode(record).write(to: recordURL(record.id), options: .atomic)
         records = [record] + records.filter { $0.id != record.id }
+        watchDeletion(record)
     }
 
     private static func contentHash(_ url: URL) throws -> Data {
