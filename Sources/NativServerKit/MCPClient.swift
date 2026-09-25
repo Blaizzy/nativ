@@ -98,6 +98,7 @@ public actor MCPClient {
     private let arguments: [String]
     private let environment: [String: String]
     private let workingDirectory: URL?
+    private let createsWorkingDirectory: Bool
     private let clientName: String
     private let clientVersion: String
 
@@ -110,6 +111,7 @@ public actor MCPClient {
         arguments: [String],
         environment: [String: String],
         workingDirectory: URL? = nil,
+        createsWorkingDirectory: Bool = true,
         clientName: String = "Nativ",
         clientVersion: String = "1.0.0"
     ) {
@@ -117,8 +119,21 @@ public actor MCPClient {
         self.arguments = arguments
         self.environment = environment
         self.workingDirectory = workingDirectory
+        self.createsWorkingDirectory = createsWorkingDirectory
         self.clientName = clientName
         self.clientVersion = clientVersion
+    }
+
+    public func scopedToDirectory(_ directory: URL, arguments: [String]) -> MCPClient {
+        MCPClient(
+            executableURL: executableURL,
+            arguments: arguments,
+            environment: environment,
+            workingDirectory: directory,
+            createsWorkingDirectory: false,
+            clientName: clientName,
+            clientVersion: clientVersion
+        )
     }
 
     public var isConnected: Bool {
@@ -201,10 +216,12 @@ public actor MCPClient {
         process.arguments = arguments
         process.environment = environment
         if let workingDirectory {
-            try FileManager.default.createDirectory(
-                at: workingDirectory,
-                withIntermediateDirectories: true
-            )
+            if createsWorkingDirectory {
+                try FileManager.default.createDirectory(
+                    at: workingDirectory,
+                    withIntermediateDirectories: true
+                )
+            }
             process.currentDirectoryURL = workingDirectory
         }
         process.standardInput = inputPipe
