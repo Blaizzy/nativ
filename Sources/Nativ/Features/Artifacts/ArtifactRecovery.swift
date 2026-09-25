@@ -12,6 +12,7 @@ struct ArtifactRecovery: Codable, Identifiable {
     let artifact: Artifact
     let originalURL: URL
     var trashURL: URL?
+    var contentHash: Data?
     let deletedAt: Date
     let references: [Reference]
     let recoveredChatID: UUID
