@@ -83,32 +83,25 @@ enum HuggingFaceCapabilityFilter {
         "speculative-decoding",
     ]
 
-    /// Reasoning, tool calling, and drafter are Hub model tags rather than pipeline tasks.
-    /// Apply them to the API request so Discover searches the full matching
-    /// catalog instead of filtering a small window of unrelated trending models.
-    static func hubTags(for capabilities: Set<LocalModelCapability>) -> [String] {
-        var tags: [String] = []
-        if capabilities.contains(.reasoning) {
-            tags.append("reasoning")
-        }
-        if capabilities.contains(.tools) {
-            tags.append("tool-calling")
-        }
-        if capabilities.contains(.drafter) {
-            tags.append("draft-model")
-        }
-        return tags
-    }
+    // Shared by classification and discovery queries so every feature badge has
+    // a matching exact-tag Hub query. Keep aliases in a stable request order.
+    static let reasoningTags = ["reasoning", "thinking"]
+    static let toolCallingTags = ["tool-calling", "function-calling", "tool-use"]
 
     static func hubTagSets(
         for capabilities: Set<LocalModelCapability>
     ) -> [[String]] {
-        let canonicalTags = hubTags(for: capabilities)
-        guard capabilities.contains(.drafter) else {
-            return [canonicalTags]
+        var tagSets: [[String]] = [[]]
+        let featureAliases: [(LocalModelCapability, [String])] = [
+            (.reasoning, reasoningTags),
+            (.tools, toolCallingTags),
+            (.drafter, drafterCandidateTags),
+        ]
+        for (capability, aliases) in featureAliases where capabilities.contains(capability) {
+            // OR across requests, AND within each request preserves combined filters.
+            tagSets = tagSets.flatMap { tags in aliases.map { tags + [$0] } }
         }
-        let commonTags = canonicalTags.filter { $0 != "draft-model" }
-        return drafterCandidateTags.map { commonTags + [$0] }
+        return tagSets
     }
 
     /// Select the canonical Hub task for a single Nativ model capability.
@@ -121,7 +114,8 @@ enum HuggingFaceCapabilityFilter {
         }
         switch capability {
         case .text:
-            return "text-generation"
+            // Text spans multiple pipelines and metadata aliases; filter it locally.
+            return nil
         case .vision:
             return "image-text-to-text"
         case .audio:
@@ -339,7 +333,8 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             result.insert(.reranking)
         }
 
-        if descriptors.contains("reasoning") || descriptors.contains("thinking") {
+        let normalizedTags = Set(tags.map { $0.lowercased() })
+        if !normalizedTags.isDisjoint(with: HuggingFaceCapabilityFilter.reasoningTags) {
             result.insert(.reasoning)
         }
 
@@ -350,11 +345,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             result.insert(.audio)
         }
 
-        if descriptors.contains("tool") || descriptors.contains("function-call") {
+        if !normalizedTags.isDisjoint(with: HuggingFaceCapabilityFilter.toolCallingTags) {
             result.insert(.tools)
         }
 
-        let normalizedTags = Set(tags.map { $0.lowercased() })
         let drafterTags: Set<String> = [
             "draft-model", "drafter", "speculative-decoding-draft",
         ]
