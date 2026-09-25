@@ -73,70 +73,199 @@ enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendab
 }
 
 enum HuggingFaceCapabilityFilter {
-    /// `draft-model` is the emerging convention, but older and vendor-specific
-    /// repositories use these aliases. `speculative-decoding` is deliberately
-    /// only a search candidate: config metadata must still identify a drafter.
-    static let drafterCandidateTags = [
-        "draft-model",
-        "drafter",
-        "speculative-decoding-draft",
-        "speculative-decoding",
-    ]
-
-    // Shared by classification and discovery queries so every feature badge has
-    // a matching exact-tag Hub query. Keep aliases in a stable request order.
-    static let reasoningTags = ["reasoning", "thinking"]
-    static let toolCallingTags = ["tool-calling", "function-calling", "tool-use"]
-
-    static func hubTagSets(
-        for capabilities: Set<LocalModelCapability>
-    ) -> [[String]] {
-        var tagSets: [[String]] = [[]]
-        let featureAliases: [(LocalModelCapability, [String])] = [
-            (.reasoning, reasoningTags),
-            (.tools, toolCallingTags),
-            (.drafter, drafterCandidateTags),
-        ]
-        for (capability, aliases) in featureAliases where capabilities.contains(capability) {
-            // OR across requests, AND within each request preserves combined filters.
-            tagSets = tagSets.flatMap { tags in aliases.map { tags + [$0] } }
-        }
-        return tagSets
+    struct QueryVariant: Hashable {
+        let pipelineTag: String?
+        let tags: [String]
     }
 
-    /// Select the canonical Hub task for a single Nativ model capability.
-    /// Feature-only filters remain Hub tags and do not prevent a task filter
-    /// from being sent alongside them.
-    static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
-        let taskCapabilities = capabilities.subtracting([.reasoning, .tools, .drafter])
-        guard taskCapabilities.count == 1, let capability = taskCapabilities.first else {
-            return nil
+    private struct Rule {
+        let capability: LocalModelCapability
+        let pipelineTags: [String]
+        let tags: [String]
+        var fallbackPipelineTags: [String] = []
+        var queryOnlyTags: [String] = []
+        var descriptorFragments: [String] = []
+        var includesUnfilteredQuery = false
+
+        var queryVariants: [QueryVariant] {
+            let constrainedVariants = (pipelineTags + fallbackPipelineTags).map {
+                QueryVariant(pipelineTag: $0, tags: [])
+            } + (tags + queryOnlyTags).map {
+                QueryVariant(pipelineTag: nil, tags: [$0])
+            }
+            return includesUnfilteredQuery
+                ? constrainedVariants + [QueryVariant(pipelineTag: nil, tags: [])]
+                : constrainedVariants
         }
-        switch capability {
-        case .text:
-            // Text spans multiple pipelines and metadata aliases; filter it locally.
-            return nil
-        case .vision:
-            return "image-text-to-text"
-        case .audio:
-            return "audio-text-to-text"
-        case .video:
-            return "video-text-to-text"
-        case .imageGeneration:
-            return "text-to-image"
-        case .imageEditing:
-            return "image-to-image"
-        case .speechToText:
-            return "automatic-speech-recognition"
-        case .textToSpeech:
-            return "text-to-speech"
-        case .embeddings:
-            return "feature-extraction"
-        case .reranking:
-            return "text-ranking"
-        case .reasoning, .tools, .drafter:
-            return nil
+
+        func matches(
+            pipelineTag: String,
+            metadataValues: Set<String>,
+            descriptors: String
+        ) -> Bool {
+            pipelineTags.contains(pipelineTag)
+                || !metadataValues.isDisjoint(with: tags)
+                || (fallbackPipelineTags.contains(pipelineTag)
+                    && descriptorFragments.contains { descriptors.contains($0) })
         }
+    }
+
+    private static let videoPipelineTags = [
+        "video-text-to-text", "text-to-video", "image-to-video",
+        "image-text-to-video", "video-to-video", "video-classification",
+    ]
+
+    private static let rules: [Rule] = [
+        Rule(
+            capability: .text,
+            pipelineTags: [
+                "text-generation", "image-text-to-text", "image-to-text",
+                "visual-question-answering", "audio-text-to-text", "video-text-to-text",
+            ],
+            tags: ["conversational", "causal-lm"]
+        ),
+        Rule(
+            capability: .vision,
+            pipelineTags: [
+                "image-text-to-text", "image-to-text", "visual-question-answering",
+            ] + videoPipelineTags,
+            tags: ["vision", "vision-language", "vlm", "llava", "multimodal", "video"]
+        ),
+        Rule(
+            capability: .audio,
+            pipelineTags: ["audio-text-to-text"],
+            tags: []
+        ),
+        Rule(
+            capability: .video,
+            pipelineTags: videoPipelineTags,
+            tags: ["video"]
+        ),
+        Rule(
+            capability: .imageGeneration,
+            pipelineTags: ["text-to-image"],
+            tags: []
+        ),
+        Rule(
+            capability: .imageEditing,
+            pipelineTags: ["image-to-image", "image-text-to-image"],
+            tags: []
+        ),
+        Rule(
+            capability: .speechToText,
+            pipelineTags: ["automatic-speech-recognition"],
+            tags: [
+                "automatic-speech-recognition", "speech-to-text", "transcription",
+                "transcribe", "asr", "stt", "whisper",
+            ]
+        ),
+        Rule(
+            capability: .textToSpeech,
+            pipelineTags: ["text-to-speech"],
+            tags: ["text-to-speech", "tts"]
+        ),
+        Rule(
+            capability: .embeddings,
+            pipelineTags: [
+                "feature-extraction", "image-feature-extraction", "sentence-similarity",
+            ],
+            tags: ["embedding", "embeddings", "sentence-transformers"]
+        ),
+        Rule(
+            capability: .reranking,
+            pipelineTags: ["text-ranking"],
+            tags: ["reranker", "reranking"],
+            fallbackPipelineTags: ["text-classification"],
+            descriptorFragments: ["reranker", "reranking"]
+        ),
+        Rule(
+            capability: .reasoning,
+            pipelineTags: [],
+            tags: ["reasoning", "thinking"]
+        ),
+        Rule(
+            capability: .tools,
+            pipelineTags: [],
+            tags: ["tool-calling", "function-calling", "tool-use"]
+        ),
+        Rule(
+            capability: .drafter,
+            pipelineTags: [],
+            tags: ["draft-model", "drafter", "speculative-decoding-draft"],
+            queryOnlyTags: ["speculative-decoding"],
+            includesUnfilteredQuery: true
+        ),
+    ]
+
+    static func queryVariants(
+        for capabilities: Set<LocalModelCapability>
+    ) -> [QueryVariant] {
+        guard !capabilities.isEmpty else {
+            return [QueryVariant(pipelineTag: nil, tags: [])]
+        }
+
+        let maximumVariantCount = 32
+        let selectedRules = rules
+            .filter { capabilities.contains($0.capability) }
+            .sorted {
+                if $0.queryVariants.count != $1.queryVariants.count {
+                    return $0.queryVariants.count < $1.queryVariants.count
+                }
+                return $0.capability.rawValue < $1.capability.rawValue
+            }
+        var variants = [QueryVariant(pipelineTag: nil, tags: [])]
+
+        for rule in selectedRules {
+            let combined: [QueryVariant] = variants.flatMap { variant in
+                rule.queryVariants.compactMap { featureVariant in
+                    guard variant.pipelineTag == nil || featureVariant.pipelineTag == nil
+                        || variant.pipelineTag == featureVariant.pipelineTag
+                    else {
+                        return nil
+                    }
+                    return QueryVariant(
+                        pipelineTag: variant.pipelineTag ?? featureVariant.pipelineTag,
+                        tags: variant.tags + featureVariant.tags
+                    )
+                }
+            }
+            if !combined.isEmpty && combined.count <= maximumVariantCount {
+                variants = combined
+            }
+        }
+        return Array(Set(variants)).sorted {
+            let leftPipeline = $0.pipelineTag ?? ""
+            let rightPipeline = $1.pipelineTag ?? ""
+            if leftPipeline != rightPipeline {
+                return leftPipeline < rightPipeline
+            }
+            return $0.tags.joined(separator: "\u{0}")
+                < $1.tags.joined(separator: "\u{0}")
+        }
+    }
+
+    static func resolveCapabilities(
+        pipelineTag: String?,
+        tags: [String],
+        configIdentifiesDrafter: Bool
+    ) -> Set<LocalModelCapability> {
+        let pipeline = pipelineTag?.lowercased() ?? ""
+        let normalizedTags = tags.map { $0.lowercased() }
+        let metadataValues = Set(normalizedTags)
+        let descriptors = normalizedTags.joined(separator: " ")
+        var capabilities = Set(
+            rules.filter {
+                $0.matches(
+                    pipelineTag: pipeline,
+                    metadataValues: metadataValues,
+                    descriptors: descriptors
+                )
+            }.map(\.capability)
+        )
+        if configIdentifiesDrafter {
+            capabilities.insert(.drafter)
+        }
+        return capabilities
     }
 
     static func matches(
@@ -251,114 +380,11 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             MLXDrafterModelResolver.shared.metadata(
                 for: modelConfiguration
             )?.kind
-        capabilities = Self.resolveCapabilities(
+        capabilities = HuggingFaceCapabilityFilter.resolveCapabilities(
             pipelineTag: pipelineTag,
-            libraryName: libraryName,
             tags: tags,
             configIdentifiesDrafter: drafterKind != nil
         )
-    }
-
-    private static func resolveCapabilities(
-        pipelineTag: String?,
-        libraryName: String?,
-        tags: [String],
-        configIdentifiesDrafter: Bool
-    ) -> Set<LocalModelCapability> {
-        let pipeline = pipelineTag?.lowercased() ?? ""
-        let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
-            .joined(separator: " ")
-            .lowercased()
-        var result = Set<LocalModelCapability>()
-
-        let textPipelines: Set<String> = [
-            "text-generation",
-            "image-text-to-text",
-            "image-to-text",
-            "visual-question-answering",
-            "audio-text-to-text",
-            "video-text-to-text",
-        ]
-        if textPipelines.contains(pipeline)
-            || descriptors.contains("conversational")
-            || descriptors.contains("causal-lm") {
-            result.insert(.text)
-        }
-
-        let visionPipelines: Set<String> = [
-            "image-text-to-text", "image-to-text", "visual-question-answering",
-        ]
-        if visionPipelines.contains(pipeline)
-            || descriptors.contains("vision")
-            || descriptors.contains("vlm")
-            || descriptors.contains("llava") {
-            result.insert(.vision)
-        }
-
-        if pipeline.contains("video") || descriptors.contains("video") {
-            result.insert(.video)
-            result.insert(.vision)
-        }
-
-        if pipeline == "text-to-image" {
-            result.insert(.imageGeneration)
-        }
-        if pipeline == "image-to-image" || pipeline == "image-text-to-image" {
-            result.insert(.imageEditing)
-        }
-
-        if pipeline == "automatic-speech-recognition"
-            || descriptors.contains("whisper")
-            || descriptors.contains("transcribe")
-            || descriptors.contains(" asr") {
-            result.insert(.speechToText)
-        }
-
-        if pipeline == "text-to-speech" || descriptors.contains(" tts") {
-            result.insert(.textToSpeech)
-        }
-
-        let embeddingPipelines: Set<String> = [
-            "feature-extraction", "image-feature-extraction", "sentence-similarity",
-        ]
-        if embeddingPipelines.contains(pipeline)
-            || descriptors.contains("embedding")
-            || descriptors.contains("sentence-transformers") {
-            result.insert(.embeddings)
-        }
-
-        if pipeline == "text-ranking"
-            || descriptors.contains("reranker")
-            || descriptors.contains("reranking") {
-            result.insert(.reranking)
-        }
-
-        let normalizedTags = Set(tags.map { $0.lowercased() })
-        if !normalizedTags.isDisjoint(with: HuggingFaceCapabilityFilter.reasoningTags) {
-            result.insert(.reasoning)
-        }
-
-        if pipeline.contains("audio")
-            || descriptors.contains("speech")
-            || result.contains(.speechToText)
-            || result.contains(.textToSpeech) {
-            result.insert(.audio)
-        }
-
-        if !normalizedTags.isDisjoint(with: HuggingFaceCapabilityFilter.toolCallingTags) {
-            result.insert(.tools)
-        }
-
-        let drafterTags: Set<String> = [
-            "draft-model", "drafter", "speculative-decoding-draft",
-        ]
-        if !normalizedTags.isDisjoint(with: drafterTags) {
-            result.insert(.drafter)
-        }
-        if configIdentifiesDrafter {
-            result.insert(.drafter)
-        }
-        return result
     }
 }
 
@@ -425,14 +451,14 @@ private struct HuggingFaceHubClient: Sendable {
         token: String?
     ) async throws -> HuggingFaceModelPage {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let urls = try HuggingFaceCapabilityFilter.hubTagSets(for: capabilities).map {
-            hubTags in
+        let urls = try HuggingFaceCapabilityFilter.queryVariants(for: capabilities).map {
+            variant in
             var components = URLComponents()
             components.scheme = "https"
             components.host = "huggingface.co"
             components.path = "/api/models"
 
-            let hubFilters = ["safetensors"] + hubTags
+            let hubFilters = ["safetensors"] + variant.tags
             var queryItems = [
                 URLQueryItem(name: "filter", value: hubFilters.joined(separator: ",")),
                 URLQueryItem(name: "sort", value: sort.apiSortValue),
@@ -444,7 +470,7 @@ private struct HuggingFaceHubClient: Sendable {
                 ),
                 URLQueryItem(name: "limit", value: "50"),
             ]
-            if let pipelineTag = HuggingFaceCapabilityFilter.pipelineTag(for: capabilities) {
+            if let pipelineTag = variant.pipelineTag {
                 queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
             }
             queryItems.append(

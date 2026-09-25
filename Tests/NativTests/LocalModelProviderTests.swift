@@ -186,43 +186,20 @@ final class LocalModelProviderTests: XCTestCase {
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
-    func testFeatureDiscoverySearchesAliasesAndPreservesCombinedRequirements() {
-        XCTAssertEqual(HuggingFaceCapabilityFilter.hubTagSets(for: []), [[]])
-        XCTAssertEqual(HuggingFaceCapabilityFilter.hubTagSets(for: [.text]), [[]])
+    func testEmptyCapabilitySelectionUsesOneUnfilteredQuery() {
         XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTagSets(for: [.reasoning]),
-            [["reasoning"], ["thinking"]]
+            HuggingFaceCapabilityFilter.queryVariants(for: []),
+            [.init(pipelineTag: nil, tags: [])]
         )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTagSets(for: [.tools]),
-            [["tool-calling"], ["function-calling"], ["tool-use"]]
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTagSets(for: [.text, .reasoning, .tools]),
-            [
-                ["reasoning", "tool-calling"], ["reasoning", "function-calling"],
-                ["reasoning", "tool-use"], ["thinking", "tool-calling"],
-                ["thinking", "function-calling"], ["thinking", "tool-use"],
-            ]
-        )
-        let withDrafter = HuggingFaceCapabilityFilter.hubTagSets(
-            for: [.reasoning, .tools, .drafter]
-        )
-        XCTAssertEqual(withDrafter.count, 24)
-        XCTAssertEqual(Set(withDrafter).count, 24)
-        XCTAssertTrue(withDrafter.allSatisfy { $0.count == 3 })
-        XCTAssertTrue(withDrafter.contains(["thinking", "tool-use", "speculative-decoding"]))
     }
 
-    func testFeatureBadgesHaveMatchingHubQueries() throws {
+    func testFeatureQueriesCoverEveryClassifiedAlias() throws {
         for reasoning in ["reasoning", "thinking"] {
             for tools in ["tool-calling", "function-calling", "tool-use"] {
                 let model = try decodeModel(pipelineTag: "text-generation", tags: [reasoning, tools])
                 let selected: Set<LocalModelCapability> = [.reasoning, .tools]
                 XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: selected))
-                XCTAssertTrue(HuggingFaceCapabilityFilter.hubTagSets(for: selected).contains {
-                    Set($0).isSubset(of: Set(model.tags))
-                })
+                XCTAssertTrue(queryCanReturn(model, capabilities: selected))
             }
         }
     }
@@ -236,17 +213,38 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         }
     }
 
-    func testTextFilterAllowsAllRecognizedTextPipelinesAndMetadataAliases() throws {
-        for pipeline in [
-            "text-generation", "image-text-to-text", "image-to-text",
-            "visual-question-answering", "audio-text-to-text", "video-text-to-text",
-        ] {
-            XCTAssertTrue(try capabilities(for: pipeline).contains(.text))
+    func testEveryCapabilityMetadataSignalHasACompatibleQuery() throws {
+        let fixtures: [(LocalModelCapability, String, [String])] = [
+            (.text, "text-generation", []),
+            (.text, "image-text-to-text", []),
+            (.text, "", ["conversational"]),
+            (.vision, "visual-question-answering", []),
+            (.vision, "", ["vision-language"]),
+            (.audio, "audio-text-to-text", []),
+            (.video, "image-to-video", []),
+            (.video, "", ["video"]),
+            (.imageGeneration, "text-to-image", []),
+            (.imageEditing, "image-text-to-image", []),
+            (.speechToText, "automatic-speech-recognition", []),
+            (.speechToText, "", ["asr"]),
+            (.textToSpeech, "", ["tts"]),
+            (.embeddings, "sentence-similarity", []),
+            (.embeddings, "", ["sentence-transformers"]),
+            (.reranking, "text-ranking", []),
+            (.reranking, "text-classification", ["base_model:org/model-reranker"]),
+            (.reasoning, "text-generation", ["thinking"]),
+            (.tools, "text-generation", ["function-calling"]),
+            (.drafter, "text-generation", ["draft-model"]),
+        ]
+
+        for (capability, pipelineTag, tags) in fixtures {
+            let model = try decodeModel(pipelineTag: pipelineTag, tags: tags)
+            XCTAssertTrue(model.capabilities.contains(capability), "Missing badge for \(capability)")
+            XCTAssertTrue(
+                queryCanReturn(model, capabilities: [capability]),
+                "No compatible query for \(capability)"
+            )
         }
-        for tag in ["conversational", "causal-lm"] {
-            XCTAssertTrue(try capabilities(for: "", tags: [tag]).contains(.text))
-        }
-        XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
     }
 
     func testIncidentalMetadataDoesNotCreateFeatureBadges() throws {
@@ -263,48 +261,90 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         for id in ["mlx-community/Qwen3.5-9B-MLX-4bit", "mlx-community/Muse-Glimmer-30B-4bit"] {
             let model = try decodeModel(id: id, pipelineTag: "image-text-to-text")
             XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
-            XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
-            XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text, .reasoning]))
+            XCTAssertTrue(queryCanReturn(model, capabilities: [.text]))
         }
     }
 
-    func testDrafterDiscoverySearchesKnownTagVariants() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTagSets(for: [.drafter]),
-            [
-                ["draft-model"],
-                ["drafter"],
-                ["speculative-decoding-draft"],
-                ["speculative-decoding"],
-            ]
+    func testAudioDoesNotAbsorbSpeechOnlyModels() throws {
+        let speechToText = try decodeModel(
+            pipelineTag: "automatic-speech-recognition",
+            tags: ["speech", "audio", "asr"]
         )
+        let textToSpeech = try decodeModel(
+            pipelineTag: "text-to-speech",
+            tags: ["speech", "audio", "tts"]
+        )
+
+        XCTAssertEqual(speechToText.capabilities, [.speechToText])
+        XCTAssertEqual(textToSpeech.capabilities, [.textToSpeech])
+        XCTAssertFalse(queryCanReturn(speechToText, capabilities: [.audio]))
+        XCTAssertFalse(queryCanReturn(textToSpeech, capabilities: [.audio]))
     }
 
-    func testSupportedCapabilitiesUseCanonicalPipelineTasks() {
-        XCTAssertNil(HuggingFaceCapabilityFilter.pipelineTag(for: [.text]))
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.audio]),
-            "audio-text-to-text"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.video]),
-            "video-text-to-text"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.embeddings]),
-            "feature-extraction"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.reranking]),
-            "text-ranking"
-        )
+    func testReportedHiddenModelsMatchTheirDiscoveryQueries() throws {
+        let fixtures: [(HuggingFaceModel, LocalModelCapability)] = [
+            (
+                try decodeModel(
+                    id: "mlx-community/Qwen3.8-27B-4bit",
+                    pipelineTag: "image-text-to-text",
+                    tags: ["conversational"]
+                ),
+                .text
+            ),
+            (
+                try decodeModel(
+                    id: "mlx-community/Qwen3.8-27B-Uncensored-OptiQ-4bit",
+                    pipelineTag: "text-generation",
+                    tags: ["reasoning", "function-calling", "tool-use"]
+                ),
+                .tools
+            ),
+            (
+                try decodeModel(
+                    id: "mlx-community/parakeet-tdt-0.6b-v3",
+                    pipelineTag: "automatic-speech-recognition",
+                    tags: ["speech", "audio", "asr"]
+                ),
+                .speechToText
+            ),
+            (
+                try decodeModel(
+                    id: "sentence-transformers/all-MiniLM-L6-v2",
+                    pipelineTag: "sentence-similarity",
+                    tags: ["sentence-transformers", "feature-extraction"]
+                ),
+                .embeddings
+            ),
+            (
+                try decodeModel(
+                    id: "heykorshun/bge-reranker-v2-m3-mlx-int8",
+                    pipelineTag: "text-classification",
+                    tags: ["base_model:BAAI/bge-reranker-v2-m3"]
+                ),
+                .reranking
+            ),
+            (
+                try decodeModel(
+                    id: "Qwen/Qwen-Image-Layered",
+                    pipelineTag: "image-text-to-image"
+                ),
+                .imageEditing
+            ),
+        ]
+
+        for (model, capability) in fixtures {
+            XCTAssertTrue(model.capabilities.contains(capability))
+            XCTAssertTrue(queryCanReturn(model, capabilities: [capability]))
+        }
     }
 
-    func testFeatureTagCanBeCombinedWithPipelineTask() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.vision, .reasoning]),
-            "image-text-to-text"
-        )
+    func testCombinedFiltersStayBoundedAndConstrained() {
+        let capabilities = Set(LocalModelCapability.allCases)
+        let variants = HuggingFaceCapabilityFilter.queryVariants(for: capabilities)
+
+        XCTAssertFalse(variants.isEmpty)
+        XCTAssertLessThanOrEqual(variants.count, 32)
+        XCTAssertTrue(variants.allSatisfy { $0.pipelineTag != nil || !$0.tags.isEmpty })
     }
 
     func testSupportedHubTaskAliasesResolveToNativCapabilities() throws {
@@ -372,6 +412,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
 
         XCTAssertTrue(model.capabilities.contains(.drafter))
         XCTAssertEqual(model.drafterKind, "dflash")
+        XCTAssertTrue(queryCanReturn(model, capabilities: [.drafter]))
     }
 
     func testMalformedDrafterConfigDoesNotBreakHubModelDecoding() throws {
@@ -449,6 +490,17 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         tags: [String] = []
     ) throws -> Set<LocalModelCapability> {
         try decodeModel(pipelineTag: pipelineTag, tags: tags).capabilities
+    }
+
+    private func queryCanReturn(
+        _ model: HuggingFaceModel,
+        capabilities: Set<LocalModelCapability>
+    ) -> Bool {
+        let modelTags = Set(model.tags.map { $0.lowercased() })
+        return HuggingFaceCapabilityFilter.queryVariants(for: capabilities).contains {
+            ($0.pipelineTag == nil || $0.pipelineTag == model.pipelineTag?.lowercased())
+                && Set($0.tags).isSubset(of: modelTags)
+        }
     }
 
     private func decodeModel(
