@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -234,7 +235,11 @@ private struct ImageGenerationComposer: View {
                     .help("Image settings")
                     .disabled(viewModel.isCurrentSessionActiveInAnotherWindow)
                     .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                        ImageGenerationSettingsView(viewModel: viewModel)
+                        ImageGenerationSettingsView(
+                            model: model,
+                            viewModel: viewModel,
+                            modelIsEditOnly: selectedModelIsEditOnly
+                        )
                     }
 
                     Spacer(minLength: 12)
@@ -493,7 +498,35 @@ private struct ImageGenerationComposer: View {
 }
 
 private struct ImageGenerationSettingsView: View {
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
+    let modelIsEditOnly: Bool
+    @State private var loadedDefaults: MLXImageSamplingDefaults?
+    @State private var loadedContext: DefaultsContext?
+    @State private var defaultsUnavailable = false
+
+    private struct DefaultsContext: Hashable {
+        let modelID: String
+        let task: MLXImageTask
+        let baseURL: URL
+        let apiKey: String?
+        let isRunning: Bool
+    }
+
+    private var defaultsContext: DefaultsContext {
+        let settings = model.settings.normalized()
+        return DefaultsContext(
+            modelID: viewModel.modelID,
+            task: viewModel.nextRequestIsEdit || modelIsEditOnly ? .edit : .generate,
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey,
+            isRunning: model.isRunning
+        )
+    }
+
+    private var samplingDefaults: MLXImageSamplingDefaults? {
+        loadedContext == defaultsContext ? loadedDefaults : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -524,19 +557,44 @@ private struct ImageGenerationSettingsView: View {
             }
 
             settingRow("Steps") {
-                TextField("", value: $viewModel.requestSettings.steps, format: .number)
-                    .frame(width: 72)
-                Stepper("", value: $viewModel.requestSettings.steps, in: 1...1_000)
+                TextField(
+                    samplingDefaults.map { "Auto (\($0.steps))" } ?? "Auto",
+                    value: $viewModel.requestSettings.steps,
+                    format: .number
+                )
+                    .frame(width: 110)
+                Stepper("Steps", value: Binding(
+                    get: { viewModel.requestSettings.steps ?? samplingDefaults?.steps ?? 1 },
+                    set: { viewModel.requestSettings.steps = $0 }
+                ), in: 1...1_000)
                     .labelsHidden()
+                    .disabled(viewModel.requestSettings.steps == nil && samplingDefaults == nil)
+                Button("Auto") { viewModel.requestSettings.steps = nil }
+                    .disabled(viewModel.requestSettings.steps == nil)
             }
 
             settingRow("Guidance") {
-                Slider(value: $viewModel.requestSettings.guidance, in: 0...20, step: 0.1)
-                    .frame(width: 150)
-                Text(viewModel.requestSettings.guidance, format: .number.precision(.fractionLength(1)))
-                    .monospacedDigit()
-                    .frame(width: 34, alignment: .trailing)
+                TextField(
+                    samplingDefaults.map { "Auto (\($0.guidance.formatted()))" } ?? "Auto",
+                    value: $viewModel.requestSettings.guidance,
+                    format: .number
+                )
+                    .frame(width: 110)
+                Stepper("Guidance", value: Binding(
+                    get: { viewModel.requestSettings.guidance ?? samplingDefaults?.guidance ?? 0 },
+                    set: { viewModel.requestSettings.guidance = $0 }
+                ), in: 0...100, step: 0.1)
+                    .labelsHidden()
+                    .disabled(viewModel.requestSettings.guidance == nil && samplingDefaults == nil)
+                Button("Auto") { viewModel.requestSettings.guidance = nil }
+                    .disabled(viewModel.requestSettings.guidance == nil)
             }
+
+            Text(defaultsUnavailable && loadedContext == defaultsContext
+                 ? "Default values are unavailable. Auto still uses the model’s defaults when generating."
+                 : "Auto uses the model’s recommended steps and guidance.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             settingRow("Seed") {
                 TextField("Random", text: $viewModel.requestSettings.seedText)
@@ -546,6 +604,24 @@ private struct ImageGenerationSettingsView: View {
         .textFieldStyle(.roundedBorder)
         .padding(18)
         .frame(width: 390)
+        .task(id: defaultsContext) {
+            let context = defaultsContext
+            loadedContext = context
+            loadedDefaults = nil
+            defaultsUnavailable = false
+            guard context.isRunning else { return }
+            do {
+                let defaults = try await NativImageClient(
+                    baseURL: context.baseURL, apiKey: context.apiKey, timeout: 30
+                ).samplingDefaults(model: context.modelID, task: context.task)
+                try Task.checkCancellation()
+                guard defaultsContext == context else { return }
+                loadedDefaults = defaults
+            } catch {
+                guard !Task.isCancelled, defaultsContext == context else { return }
+                defaultsUnavailable = true
+            }
+        }
     }
 
     private func settingRow<Content: View>(

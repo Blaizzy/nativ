@@ -26,8 +26,9 @@ struct ImageRequestSettings: Equatable, Codable, Sendable {
     var count = 1
     var width = 512
     var height = 512
-    var steps = 4
-    var guidance = 1.0
+    // Nil lets the model resolve its own defaults, including any guidance schedule.
+    var steps: Int?
+    var guidance: Double?
     var seedText = ""
 }
 
@@ -411,8 +412,8 @@ final class ImageGenerationViewModel: ObservableObject {
         settings.count = min(max(settings.count, 1), 10)
         settings.width = boundedRoundedDimension(settings.width, upperLimit: maxRequestDimension)
         settings.height = boundedRoundedDimension(settings.height, upperLimit: maxRequestDimension)
-        settings.steps = min(max(settings.steps, 1), 1_000)
-        settings.guidance = min(max(settings.guidance, 0), 100)
+        settings.steps = settings.steps.map { min(max($0, 1), 1_000) }
+        settings.guidance = settings.guidance.map { min(max($0, 0), 100) }
         requestSettings = settings
 
         let references = effectiveReferenceImages
