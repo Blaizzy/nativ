@@ -3,6 +3,80 @@ import XCTest
 
 @MainActor
 final class ArtifactTrashTests: XCTestCase {
+    func testGalleryDeletionMovesToNativeBinThenWatcherRemovesRecoveryReferences() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let trash = ArtifactTrash(directory: fixture.root.appendingPathComponent("Recovery"),
+                                  media: fixture.media, chats: fixture.chats, images: fixture.images)
+        let store = ArtifactStore(
+            storage: .init(indexURL: fixture.root.appendingPathComponent("index.json"), cacheDirectory: fixture.root,
+                           favoritesURL: fixture.root.appendingPathComponent("favorites.json"),
+                           displayNamesURL: fixture.root.appendingPathComponent("names.json")),
+            refreshesAutomatically: false, rebuild: { _, _, _ in .init(fingerprint: nil, artifacts: []) },
+            mediaStore: fixture.media, trash: trash
+        )
+        XCTAssertTrue(store.delete(fixture.artifact))
+        let record = try XCTUnwrap(trash.records.first)
+        let binURL = try XCTUnwrap(record.trashURL)
+        defer { try? FileManager.default.removeItem(at: binURL) }
+        let recordURL = fixture.root.appendingPathComponent("Recovery/\(record.id).json")
+        XCTAssertEqual(try Data(contentsOf: binURL), fixture.bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.originalURL.path))
+        XCTAssertFalse(record.references.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recordURL.path))
+        let ownersURL = fixture.media.rootDirectory.appendingPathComponent("owners.json")
+        let owners = try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: ownersURL))
+        XCTAssertNotNil(owners["trash:\(record.id)"])
+
+        try FileManager.default.removeItem(at: binURL)
+        for _ in 0..<200 where !trash.records.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+
+        XCTAssertTrue(trash.records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: recordURL.path))
+        XCTAssertNil(try JSONDecoder().decode([String: [String]].self, from: Data(contentsOf: ownersURL))["trash:\(record.id)"])
+        XCTAssertTrue(try XCTUnwrap(fixture.chats.loadSession(id: fixture.chat.id)).messages[0].imageAttachments.isEmpty)
+        XCTAssertNil(trash.errorMessage)
+        try await settle([store])
+    }
+
+    func testWatcherReconnectsAfterRestartAndFollowsRenames() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var trash: ArtifactTrash? = fixture.trash()
+        try XCTUnwrap(trash).delete(fixture.artifact)
+        let record = try XCTUnwrap(trash?.records.first)
+        weak var released = trash
+        trash = nil
+        XCTAssertNil(released)
+        let renamed = fixture.root.appendingPathComponent("Bin/Renamed.png")
+        try FileManager.default.moveItem(at: XCTUnwrap(record.trashURL), to: renamed)
+        let restarted = fixture.trash()
+        let moved = fixture.root.appendingPathComponent("Bin/Moved.png")
+        try FileManager.default.moveItem(at: renamed, to: moved)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(restarted.records.map(\.id), [record.id])
+        XCTAssertEqual(try Data(contentsOf: moved), fixture.bytes)
+        try FileManager.default.removeItem(at: moved)
+        for _ in 0..<200 where !restarted.records.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(restarted.records.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("Recovery/\(record.id).json").path))
+    }
+
+    func testDeletionWhileStoppedDoesNotPurgeOnLaunchOrActivation() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        var trash: ArtifactTrash? = fixture.trash()
+        try XCTUnwrap(trash).delete(fixture.artifact)
+        let record = try XCTUnwrap(trash?.records.first)
+        trash = nil
+        try FileManager.default.removeItem(at: XCTUnwrap(record.trashURL))
+        let restarted = fixture.trash()
+        NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(restarted.records.map(\.id), [record.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("Recovery/\(record.id).json").path))
+    }
+
     func testDeleteAndRestoreAfterRestartPreserveBytesIdentityAndEdits() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
