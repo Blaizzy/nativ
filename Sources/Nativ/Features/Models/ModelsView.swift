@@ -649,6 +649,29 @@ struct ModelsView: View {
             )
         }
 
+        if !installedFilterIsActive {
+            ForEach(localLibrary.incompleteDownloads.filter { !activeDownloadIDs.contains($0.repoID) }) { download in
+                IncompleteDownloadRow(
+                    download: download,
+                    failure: downloadManager.errorByModelID[download.repoID],
+                    isDeleting: localLibrary.deletingModelIDs.contains(download.repoID),
+                    canDelete: canDeleteModel(download.repoID),
+                    onResume: {
+                        downloadManager.download(
+                            repoID: download.repoID,
+                            sizeBytes: nil,
+                            cachePath: modelState.settings.modelSearchPath,
+                            volumeIdentifier: modelState.settings.externalModelCache?.volumeIdentifier,
+                            token: modelState.effectiveHuggingFaceToken
+                        ) {}
+                        synchronizeActiveDownloads()
+                    },
+                    onDelete: { deleteModel(download.repoID) }
+                )
+                .modelsListRow()
+            }
+        }
+
         if let error = localLibrary.error {
             ModelsNotice(
                 title: "Couldn’t read the model cache",
@@ -1078,25 +1101,30 @@ struct ModelsView: View {
 
     private func deleteInstalledModel(_ localModel: LocalModel) {
         guard canSelectForDeletion(localModel) else { return }
+        deleteModel(localModel.repoID)
+    }
+
+    private func deleteModel(_ repoID: String) {
+        guard canDeleteModel(repoID) else { return }
         localLibrary.delete(
-            model: localModel,
+            repoID: repoID,
             path: modelState.settings.modelSearchPath,
             volumeIdentifier: modelState.settings.externalModelCache?.volumeIdentifier
         ) {
             var settings = model.settings
-            if settings.languageModelID == localModel.repoID {
+            if settings.languageModelID == repoID {
                 settings.languageModelID = nil
             }
-            if settings.imageGenerationModelID == localModel.repoID {
+            if settings.imageGenerationModelID == repoID {
                 settings.imageGenerationModelID = nil
             }
-            if settings.textToSpeechModelID == localModel.repoID {
+            if settings.textToSpeechModelID == repoID {
                 settings.textToSpeechModelID = nil
             }
-            if settings.speechToTextModelID == localModel.repoID {
+            if settings.speechToTextModelID == repoID {
                 settings.speechToTextModelID = nil
             }
-            settings.pinnedModelIDs.removeAll { $0 == localModel.repoID }
+            settings.pinnedModelIDs.removeAll { $0 == repoID }
             model.settings = settings
             NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
         }
@@ -1113,9 +1141,11 @@ struct ModelsView: View {
     }
 
     private func canSelectForDeletion(_ localModel: LocalModel) -> Bool {
-        localModel.isDeletable
-            && !modelState.modelSwitchInProgress
-            && !isModelInUse(localModel.repoID)
+        localModel.isDeletable && canDeleteModel(localModel.repoID)
+    }
+
+    private func canDeleteModel(_ repoID: String) -> Bool {
+        !modelState.modelSwitchInProgress && !isModelInUse(repoID)
     }
 
     private func toggleInstalledModelSelection(_ localModel: LocalModel) {
@@ -2262,6 +2292,99 @@ private struct InstalledActiveDownloadRow: View {
             maxLength: 44
         )
     }
+}
+
+private struct IncompleteDownloadRow: View {
+    let download: IncompleteModelDownload
+    let failure: HuggingFaceDownloadFailure?
+    let isDeleting: Bool
+    let canDelete: Bool
+    let onResume: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isConfirmingDeletion = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ModelProviderBadge(
+                provider: LocalModelProviderResolver.resolve(
+                    repoID: download.repoID,
+                    modelType: nil,
+                    architectures: []
+                )
+            )
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(NativFormatting.truncateModelName(modelName(download.repoID), maxLength: 44))
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+
+                Text(download.repoID)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if let sizeBytes = download.sizeBytes {
+                    ModelPill(
+                        title: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
+                        systemImage: "internaldrive"
+                    )
+                }
+
+                if let failure {
+                    Text(failure.localizedDescription)
+                        .font(.caption)
+                        .foregroundStyle(NativStatusTone.warning.color)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+            if isDeleting {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 30, height: 30)
+                    .help("Deleting cache")
+            } else {
+                Image(systemName: "circle.lefthalf.filled")
+                    .font(.system(size: 18))
+                    .foregroundStyle(NativStatusTone.warning.color)
+                    .frame(width: 30, height: 30)
+                    .help("Incomplete download")
+                    .accessibilityLabel("Incomplete download")
+
+                Menu {
+                    Button("Finish Download", systemImage: "arrow.down.circle", action: onResume)
+                    Button("Delete Cache…", systemImage: "trash", role: .destructive) {
+                        isConfirmingDeletion = true
+                    }
+                    .disabled(!canDelete)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .rotationEffect(.degrees(90))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Download actions")
+                .accessibilityLabel("Actions for \(download.repoID)")
+            }
+        }
+        .padding(14)
+        .modelRowBackground(isHighlighted: false)
+        .alert("Delete cache?", isPresented: $isConfirmingDeletion) {
+            Button("Delete Cache", role: .destructive, action: onDelete)
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the partially downloaded files for \(download.repoID) from the local Hugging Face cache.")
+        }
+    }
+
 }
 
 private struct ModelsPinnedSectionHeader: View {
