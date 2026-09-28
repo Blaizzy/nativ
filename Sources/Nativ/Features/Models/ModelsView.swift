@@ -651,11 +651,21 @@ struct ModelsView: View {
 
         if !installedFilterIsActive {
             ForEach(localLibrary.incompleteDownloads.filter { !activeDownloadIDs.contains($0.repoID) }) { download in
+                let provider = LocalModelProviderResolver.resolve(
+                    repoID: download.repoID,
+                    modelType: nil,
+                    architectures: []
+                )
                 IncompleteDownloadRow(
                     download: download,
+                    provider: provider,
                     failure: downloadManager.errorByModelID[download.repoID],
+                    isReadmeSelected: readmeSelection?.repoID == download.repoID,
                     isDeleting: localLibrary.deletingModelIDs.contains(download.repoID),
                     canDelete: canDeleteModel(download.repoID),
+                    onShowReadme: {
+                        showReadme(repoID: download.repoID, provider: provider, localSnapshotURL: nil)
+                    },
                     onResume: {
                         downloadManager.download(
                             repoID: download.repoID,
@@ -2296,9 +2306,12 @@ private struct InstalledActiveDownloadRow: View {
 
 private struct IncompleteDownloadRow: View {
     let download: IncompleteModelDownload
+    let provider: LocalModelProvider?
     let failure: HuggingFaceDownloadFailure?
+    let isReadmeSelected: Bool
     let isDeleting: Bool
     let canDelete: Bool
+    let onShowReadme: () -> Void
     let onResume: () -> Void
     let onDelete: () -> Void
 
@@ -2306,76 +2319,22 @@ private struct IncompleteDownloadRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            ModelProviderBadge(
-                provider: LocalModelProviderResolver.resolve(
-                    repoID: download.repoID,
-                    modelType: nil,
-                    architectures: []
-                )
-            )
-
-            VStack(alignment: .leading, spacing: 6) {
-                Text(NativFormatting.truncateModelName(modelName(download.repoID), maxLength: 44))
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
-
-                Text(download.repoID)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
-                if let sizeBytes = download.sizeBytes {
-                    ModelPill(
-                        title: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
-                        systemImage: "internaldrive"
-                    )
+            Button(action: onShowReadme) {
+                HStack(spacing: 14) {
+                    ModelProviderBadge(provider: provider)
+                    details
                 }
-
-                if let failure {
-                    Text(failure.localizedDescription)
-                        .font(.caption)
-                        .foregroundStyle(NativStatusTone.warning.color)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .help("Show README for \(download.repoID)")
+            .accessibilityLabel("Show details for \(download.repoID)")
 
-            if isDeleting {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 30, height: 30)
-                    .help("Deleting cache")
-            } else {
-                Image(systemName: "circle.lefthalf.filled")
-                    .font(.system(size: 18))
-                    .foregroundStyle(NativStatusTone.warning.color)
-                    .frame(width: 30, height: 30)
-                    .help("Incomplete download")
-                    .accessibilityLabel("Incomplete download")
-
-                Menu {
-                    Button("Finish Download", systemImage: "arrow.down.circle", action: onResume)
-                    Button("Delete Cache…", systemImage: "trash", role: .destructive) {
-                        isConfirmingDeletion = true
-                    }
-                    .disabled(!canDelete)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .rotationEffect(.degrees(90))
-                        .frame(width: 30, height: 30)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Download actions")
-                .accessibilityLabel("Actions for \(download.repoID)")
-            }
+            actions
         }
         .padding(14)
-        .modelRowBackground(isHighlighted: false)
+        .modelRowBackground(isHighlighted: isReadmeSelected)
         .alert("Delete cache?", isPresented: $isConfirmingDeletion) {
             Button("Delete Cache", role: .destructive, action: onDelete)
                 .keyboardShortcut(.defaultAction)
@@ -2385,6 +2344,70 @@ private struct IncompleteDownloadRow: View {
         }
     }
 
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(NativFormatting.truncateModelName(modelName(download.repoID), maxLength: 44))
+                .font(.body.weight(.semibold))
+                .lineLimit(1)
+
+            Text(download.repoID)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if let sizeBytes = download.sizeBytes {
+                ModelPill(
+                    title: ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file),
+                    systemImage: "internaldrive"
+                )
+            }
+
+            if let failure {
+                Text(failure.localizedDescription)
+                    .font(.caption)
+                    .foregroundStyle(NativStatusTone.warning.color)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if isDeleting {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 30, height: 30)
+                .help("Deleting cache")
+        } else {
+            Image(systemName: "circle.lefthalf.filled")
+                .font(.system(size: 18))
+                .foregroundStyle(NativStatusTone.warning.color)
+                .frame(width: 30, height: 30)
+                .help("Incomplete download")
+                .accessibilityLabel("Incomplete download")
+
+            Menu {
+                Button("Finish Download", systemImage: "arrow.down.circle", action: onResume)
+                Button("Delete Cache…", systemImage: "trash", role: .destructive) {
+                    isConfirmingDeletion = true
+                }
+                .disabled(!canDelete)
+            } label: {
+                Image(systemName: "ellipsis")
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 30, height: 30)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Download actions")
+            .accessibilityLabel("Actions for \(download.repoID)")
+        }
+    }
 }
 
 private struct ModelsPinnedSectionHeader: View {
