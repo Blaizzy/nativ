@@ -4,13 +4,21 @@ import Foundation
 
 @MainActor
 final class ArtifactTrash: ObservableObject {
+    nonisolated static var localizedName: String {
+        let fileManager = FileManager.default
+        guard let url = fileManager.urls(for: .trashDirectory, in: .userDomainMask).first else {
+            return "Trash"
+        }
+        return fileManager.displayName(atPath: url.path)
+    }
+
     enum RecoveryError: LocalizedError {
         case busy, missing, saveFailed, conflict
 
         var errorDescription: String? {
             switch self {
             case .busy: "A linked session is generating a response. Try again when it finishes."
-            case .missing: "The file is no longer available. It may have been removed from the Bin."
+            case .missing: "The file is no longer available. It may have been removed from the \(ArtifactTrash.localizedName)."
             case .saveFailed: "The history or recovery record could not be saved. Please try again."
             case .conflict: "Another file exists at the original location. Nothing was overwritten."
             }
