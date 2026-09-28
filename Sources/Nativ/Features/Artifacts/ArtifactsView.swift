@@ -517,12 +517,12 @@ struct ArtifactsView: View {
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) { pendingDelete = [] }
         } message: {
-            Text("This will move each file to the Bin and remove it from linked chats and image sessions. Use Put Back in the Bin to restore it.")
+            Text("This will move each file to the \(ArtifactTrash.localizedName) and remove it from linked chats and image sessions. Use Put Back in the \(ArtifactTrash.localizedName) to restore it.")
         }
         .alert("Some files could not be removed", isPresented: $showsDeletionFailure) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(store.trash?.errorMessage ?? "The files could not be moved to the Bin. Please try again.")
+            Text(store.trash?.errorMessage ?? "The files could not be moved to the \(ArtifactTrash.localizedName). Please try again.")
         }
         .alert("Remove Smart Search model?", isPresented: $isConfirmingSemanticModelRemoval) {
             Button("Remove Model", role: .destructive) {
