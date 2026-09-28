@@ -1434,12 +1434,12 @@ final class HuggingFaceDownloadManager: ObservableObject {
             errorByModelID[repoID] = downloadFailure(for: error)
         }
         removeContext(repoID)
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
 
         if let error {
             waiters.forEach { $0.resume(throwing: error) }
         } else {
             completedDownloads.send(repoID)
-            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
             completion?()
             waiters.forEach { $0.resume() }
         }
