@@ -121,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
         hasVisibleWindows flag: Bool
     ) -> Bool {
         performWindowIntent(.activate)
-        return true
+        return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
