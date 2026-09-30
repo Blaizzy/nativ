@@ -58,6 +58,15 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        // Bare WKWebView identifies only AppleWebKit, which sites such as Gmail
+        // mistake for an unsupported browser. Match the installed Safari version
+        // while letting WebKit supply its own platform and engine identity.
+        if let version = Bundle(path: "/Applications/Safari.app")?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           version.range(of: #"^[0-9]+(?:\.[0-9]+)*$"#, options: .regularExpression) != nil {
+            // Safari's compatibility token is frozen, like WebKit's engine token.
+            configuration.applicationNameForUserAgent = "Version/\(version) Safari/605.1.15"
+        }
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
         webView.navigationDelegate = self

@@ -4,6 +4,27 @@ import Network
 
 @MainActor
 final class ChatWorkBrowserTests: XCTestCase {
+    func testFirstRequestAndPageIdentifyTheInstalledSafariVersion() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let browser = ChatWorkBrowser()
+        browser.load(ChatWorkItem(title: "Identity", kind: .website, content: "",
+                                 url: base.appendingPathComponent("user-agent").absoluteString))
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        let requestAgent = try await browser.webView.evaluateJavaScript(
+            "document.getElementById('request-agent').textContent") as? String
+        let pageAgent = try await browser.webView.evaluateJavaScript("navigator.userAgent") as? String
+        let version = try XCTUnwrap(Bundle(path: "/Applications/Safari.app")?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+        let agent = try XCTUnwrap(pageAgent)
+        XCTAssertEqual(requestAgent, agent, "The first request and page scripts must see the same browser identity")
+        XCTAssertTrue(agent.contains("Version/\(version) Safari/"), agent)
+        XCTAssertTrue(agent.contains("AppleWebKit/"), agent)
+        XCTAssertFalse(agent.contains("Chrome/"), "WebKit must not claim to be Chromium")
+        XCTAssertFalse(browser.webView.configuration.websiteDataStore.isPersistent)
+    }
+
     func testNavigationDoesNotPublishThePreviousURLDuringLoading() async throws {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
@@ -182,7 +203,15 @@ final class ChatWorkHTTPFixture {
             }
             let path = header.components(separatedBy: " ").dropFirst().first ?? "/"
             let html: String
-            if path.hasPrefix("/result") {
+            if path == "/user-agent" {
+                let agent = header.components(separatedBy: "\r\n")
+                    .first { $0.lowercased().hasPrefix("user-agent:") }?
+                    .dropFirst("user-agent:".count).trimmingCharacters(in: .whitespaces) ?? ""
+                let escaped = agent.replacingOccurrences(of: "&", with: "&amp;")
+                    .replacingOccurrences(of: "<", with: "&lt;")
+                    .replacingOccurrences(of: ">", with: "&gt;")
+                html = "<title>Browser identity</title><pre id='request-agent'>\(escaped)</pre>"
+            } else if path.hasPrefix("/result") {
                 html = "<title>Search results</title><h1>Search results</h1><a href='/next'>Next</a>"
             } else if path.hasPrefix("/next") {
                 html = "<title>Next page</title><h1>Next page loaded</h1><a href='/'>Home</a>"
