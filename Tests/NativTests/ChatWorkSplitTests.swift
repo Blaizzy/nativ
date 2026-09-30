@@ -29,6 +29,41 @@ final class ChatWorkSplitTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSplitViewTests: XCTestCase {
+    func testSwappingPreservesPaneWidthsAndViewState() async throws {
+        let state = SplitFixtureState()
+        state.composerWidth = 700
+        let host = NSHostingView(rootView: SplitFixture(state: state))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1_200, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderBack(nil)
+        try await Task.sleep(for: .milliseconds(100))
+        let chatIdentity = try XCTUnwrap(state.chatIdentity)
+        let workIdentity = try XCTUnwrap(state.workIdentity)
+        let chatFrame = state.chatFrame
+        let workFrame = state.workFrame
+        XCTAssertLessThan(chatFrame.minX, workFrame.minX)
+
+        state.workOnLeft = true
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(state.expanded)
+        XCTAssertLessThan(state.workFrame.minX, state.chatFrame.minX)
+        XCTAssertEqual(state.chatFrame.width, chatFrame.width, accuracy: 1)
+        XCTAssertEqual(state.workFrame.width, workFrame.width, accuracy: 1)
+        XCTAssertEqual(state.chatFrame.minX - state.workFrame.maxX, 1, accuracy: 1)
+        XCTAssertEqual(state.chatIdentity, chatIdentity)
+        XCTAssertEqual(state.workIdentity, workIdentity)
+
+        state.workOnLeft = false
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(state.chatFrame, chatFrame)
+        XCTAssertEqual(state.workFrame, workFrame)
+        XCTAssertEqual(state.chatIdentity, chatIdentity)
+        XCTAssertEqual(state.workIdentity, workIdentity)
+    }
+
     func testWindowResizeCollapsesBeforeCompressingComposerAndCanRestoreChat() async throws {
         let state = SplitFixtureState()
         let host = NSHostingView(rootView: SplitFixture(state: state))
@@ -64,8 +99,13 @@ final class ChatWorkSplitViewTests: XCTestCase {
 private final class SplitFixtureState: ObservableObject {
     @Published var expanded = false
     @Published var workVisible = true
+    @Published var workOnLeft = false
     @Published var composerWidth: CGFloat = 600
-    var chatWidth: CGFloat = 0
+    var chatFrame: CGRect = .zero
+    var workFrame: CGRect = .zero
+    var chatWidth: CGFloat { chatFrame.width }
+    var chatIdentity: UUID?
+    var workIdentity: UUID?
 }
 
 private struct SplitFixture: View {
@@ -73,12 +113,30 @@ private struct SplitFixture: View {
 
     var body: some View {
         ChatWorkSplitView(isWorkVisible: state.workVisible, isExpanded: $state.expanded,
+                          isWorkOnLeft: $state.workOnLeft,
                           onShowChatOnly: { state.workVisible = false }) {
-            Color.clear
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { state.chatWidth = $0 }
-                .preference(key: ChatComposerMinimumWidthKey.self, value: state.composerWidth)
+            SplitFixturePane { frame, identity in
+                state.chatFrame = frame
+                state.chatIdentity = identity
+            }
+            .preference(key: ChatComposerMinimumWidthKey.self, value: state.composerWidth)
         } work: {
-            Color.clear
+            SplitFixturePane { frame, identity in
+                state.workFrame = frame
+                state.workIdentity = identity
+            }
         }
+    }
+}
+
+private struct SplitFixturePane: View {
+    @State private var identity = UUID()
+    let record: (CGRect, UUID) -> Void
+
+    var body: some View {
+        Color.clear
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: {
+                record($0, identity)
+            }
     }
 }

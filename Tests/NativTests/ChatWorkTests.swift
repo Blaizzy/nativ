@@ -168,6 +168,7 @@ final class ChatWorkTests: XCTestCase {
         var state = ChatWorkState()
         let item = try state.create(title: "Page", kind: .website, content: "<h1>Hi</h1>")
         state.isExpanded = true
+        state.isWorkOnLeft = true
         let session = ChatSession(id: UUID(), title: "Work", createdAt: Date(), updatedAt: Date(), messages: [], workState: state)
         let encoder = JSONEncoder()
         let data = try encoder.encode(session)
@@ -175,6 +176,12 @@ final class ChatWorkTests: XCTestCase {
         XCTAssertEqual(decoded.workState, state)
         XCTAssertEqual(decoded.workState?.selectedID, item.id)
         var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var legacyWork = try XCTUnwrap(legacy["workState"] as? [String: Any])
+        legacyWork.removeValue(forKey: "isWorkOnLeft")
+        legacy["workState"] = legacyWork
+        let olderWork = try JSONDecoder().decode(ChatSession.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertNil(olderWork.workState?.isWorkOnLeft)
+        XCTAssertEqual(olderWork.workState?.selectedID, item.id)
         legacy.removeValue(forKey: "workState")
         let legacyData = try JSONSerialization.data(withJSONObject: legacy)
         XCTAssertNil(try JSONDecoder().decode(ChatSession.self, from: legacyData).workState)
