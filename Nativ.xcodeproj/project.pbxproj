@@ -204,6 +204,7 @@
 		5620EDCF472DEF4388E8E526 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CDD9C3FE179B2E8D76FC769 /* SettingsView.swift */; };
 		56B6A9EF8A305C95F9E81D06 /* Routine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06F067B3DB861CF232820136 /* Routine.swift */; };
 		56D0E3D130B4DF4003811E6D /* VoiceDictationExtensionRuntime.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = 37408935D4EAA2CA89CC0A4C /* VoiceDictationExtensionRuntime.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		574BFA005D45064B46AF2091 /* ChatWorkPreviewServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844185CE313F7BAEE4B12230 /* ChatWorkPreviewServer.swift */; };
 		575DCB7EC96DAB35B415434C /* ImageGenerationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4B44C59153CB242FE92D3A /* ImageGenerationView.swift */; };
 		582B1E2A148EF3DEE78B11E2 /* ArtifactStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5C2AB90FC12D1B83D6691F4 /* ArtifactStore.swift */; };
 		589A3D1D88F2768F7D0FE974 /* NativExtensionManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD61E02ECEEF3C00ECF238A8 /* NativExtensionManifest.swift */; };
@@ -499,6 +500,7 @@
 		ED1F61AA671F9F65A2F34ADB /* NativSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 594711E024396C78703CE05A /* NativSettings.swift */; };
 		ED6BDF238125ABAB48A4227D /* RoutineSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90012E8ECF43A5A55BFD8787 /* RoutineSupport.swift */; };
 		ED703AEACA9A247F6F7D6920 /* Brave.png in Resources */ = {isa = PBXBuildFile; fileRef = A1389B0FCBFE26464CD80041 /* Brave.png */; };
+		ED8C3B04E8E01603D12531B3 /* ChatWorkPreviewServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844185CE313F7BAEE4B12230 /* ChatWorkPreviewServer.swift */; };
 		EDC3AFA2C2196552BE5114BF /* FileReadConfigurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 666373077639162EFFBE424B /* FileReadConfigurationView.swift */; };
 		EE06C225BEBDD9D572B62A54 /* PowerPointDocumentTextExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D4ED7BDFBC000148E13EA19 /* PowerPointDocumentTextExtractor.swift */; };
 		EE2FF0405F9793107A7883FD /* ServerPortProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */; };
@@ -797,6 +799,7 @@
 		833184CF67354776A01A808B /* FileWriteAccessPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWriteAccessPolicy.swift; sourceTree = "<group>"; };
 		83A221B9B5CCE60A43CC46AC /* IntegrationServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntegrationServices.swift; sourceTree = "<group>"; };
 		83D56A7BC388C8D6DEAEFA18 /* ChatWebReadToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebReadToolTests.swift; sourceTree = "<group>"; };
+		844185CE313F7BAEE4B12230 /* ChatWorkPreviewServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkPreviewServer.swift; sourceTree = "<group>"; };
 		846F6324EA769406B747062D /* FileSyntaxValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSyntaxValidator.swift; sourceTree = "<group>"; };
 		8513AE482EB6C3113080826A /* PDFDocumentTextExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PDFDocumentTextExtractorTests.swift; sourceTree = "<group>"; };
 		85179B12862D6319C3F91027 /* StatusMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuController.swift; sourceTree = "<group>"; };
@@ -1626,6 +1629,7 @@
 				157AFC6B1A2168A488C67ABB /* ChatWorkBrowser.swift */,
 				52D493889222E1BCE7D6D8A1 /* ChatWorkDocument.swift */,
 				DC089429C83DC5703DE031AE /* ChatWorkPane.swift */,
+				844185CE313F7BAEE4B12230 /* ChatWorkPreviewServer.swift */,
 				39B3E82A6F0DC701B7780AE6 /* ChatWorkspacePicker.swift */,
 				B066DABBB9BF8319E218CA95 /* ChatWorkSplitView.swift */,
 				7C85BEEDE73BA13311CC3E08 /* ChatWorkState.swift */,
@@ -2090,6 +2094,7 @@
 				E266948298079B76F46989D8 /* ChatWorkBrowser.swift in Sources */,
 				947F53CF169D116B1EE4460D /* ChatWorkDocument.swift in Sources */,
 				7F997535C9DFD47225075098 /* ChatWorkPane.swift in Sources */,
+				ED8C3B04E8E01603D12531B3 /* ChatWorkPreviewServer.swift in Sources */,
 				FBDC169DC5CF4D7DEDDE5B1B /* ChatWorkSplitView.swift in Sources */,
 				9F7C095FFABABFA1281FA517 /* ChatWorkState.swift in Sources */,
 				AB4F018D0DAE2FA8A0E33D9D /* ChatWorkTool.swift in Sources */,
@@ -2344,6 +2349,7 @@
 				74113E24D445D326202E518E /* ChatWorkBrowser.swift in Sources */,
 				407F62AB71707EAE5B7757D2 /* ChatWorkBrowserTests.swift in Sources */,
 				45905073ED0669755EA1E40B /* ChatWorkDocument.swift in Sources */,
+				574BFA005D45064B46AF2091 /* ChatWorkPreviewServer.swift in Sources */,
 				BE983C4E83F16F83DB4F6873 /* ChatWorkSplitTests.swift in Sources */,
 				3676ACB3AE704585EF4C8194 /* ChatWorkSplitView.swift in Sources */,
 				E009AC13E8BD4E0E3B7FA025 /* ChatWorkState.swift in Sources */,

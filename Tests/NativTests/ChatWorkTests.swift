@@ -341,6 +341,42 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(restored.workState, saved)
     }
 
+    func testGeneratedWebsiteCanBeCreatedOperatedUpdatedAndRestored() async throws {
+        func json(_ value: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+        }
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Game",
+            kind: .website, content: "<button onclick=\"this.textContent='Started'\">Start</button>"), in: session.id))
+        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(created["id"] as? String)))
+        XCTAssertEqual(created["editable"] as? Bool, true)
+        XCTAssertEqual(created["revision"] as? Int, 1)
+        let controls = try XCTUnwrap(created["elements"] as? [[String: Any]])
+        let control = try XCTUnwrap(controls.first?["id"] as? String)
+        let clicked = try json(await chat.executeWorkAction(ChatWorkRequest(action: .click, elementID: control), in: session.id))
+        XCTAssertTrue((clicked["text"] as? String)?.contains("Started") == true)
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: id), in: session.id)
+        let html = "<h1>Updated game</h1><script>document.body.dataset.ready='yes'</script>"
+        let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, content: html,
+            expectedRevision: 1), in: session.id))
+        XCTAssertEqual(updated["revision"] as? Int, 2)
+        XCTAssertEqual(updated["text"] as? String, "Updated game")
+        XCTAssertEqual(updated["runtime_errors"] as? [String], [])
+        let saved = try XCTUnwrap(store.loadSession(id: session.id)?.workState?.selectedItem)
+        XCTAssertNil(saved.url)
+        XCTAssertEqual(saved.content, html)
+        XCTAssertTrue(saved.canEdit)
+        let restored = subject(root)
+        try await loaded(restored)
+        restored.selectSession(session.id)
+        let reopened = try json(await restored.executeWorkAction(ChatWorkRequest(action: .open, id: id), in: session.id))
+        XCTAssertEqual(reopened["text"] as? String, "Updated game")
+        XCTAssertNotEqual(reopened["url"] as? String, updated["url"] as? String)
+        XCTAssertEqual(restored.workState.selectedItem, saved)
+    }
+
     func testAgentOpensAndOperatesAWebsiteThroughTheSessionDispatcher() async throws {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()

@@ -89,7 +89,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(selected, "Translate this sentence.")
     }
 
-    func testGeneratedPreviewTranslationReadsThePreviewFrame() async throws {
+    func testGeneratedPageTranslationReadsTheMainPage() async throws {
         let browser = ChatWorkBrowser()
         browser.load(ChatWorkItem(title: "Preview", kind: .website, content: "<h1>Hello from the preview</h1>"))
         _ = try await inspect(browser)
@@ -146,6 +146,143 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertFalse(first === pool.browser(for: item, sessionID: UUID()))
         pool.remove(itemID: item.id, sessionID: session)
         XCTAssertFalse(first === pool.browser(for: item, sessionID: session))
+    }
+
+    func testGeneratedWebsiteRunsScriptsStorageModulesCanvasAndAgentClicks() async throws {
+        let browser = ChatWorkBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
+        browser.load(ChatWorkItem(title: "Game", kind: .website, content: """
+            <!doctype html><title>Local game</title><canvas width="40" height="40"></canvas>
+            <button onclick="localStorage.setItem('played', 'yes'); document.querySelector('p').textContent='Started';
+                document.querySelector('canvas').getContext('2d').fillRect(0,0,20,20)">Start</button><p>Ready</p>
+            <script type="module">
+            localStorage.setItem('module', 'ready');
+            const html = await (await fetch(location.href)).text();
+            document.body.dataset.fetched = String(html.includes('Local game'));
+            document.addEventListener('keydown', e => { document.body.dataset.key = e.key; });
+            </script>
+            """))
+        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let url = try XCTUnwrap(URL(string: try XCTUnwrap(first["url"] as? String)))
+        XCTAssertEqual(url.scheme, "http")
+        XCTAssertEqual(url.host, "127.0.0.1")
+        XCTAssertEqual(first["title"] as? String, "Local game")
+        let clicked = try decode(await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first))))
+        XCTAssertTrue((clicked["text"] as? String)?.contains("Started") == true)
+        for _ in 0..<30 {
+            if try await browser.webView.evaluateJavaScript("document.body.dataset.fetched === 'true'") as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let state = try await browser.webView.callAsyncJavaScript("""
+            document.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowRight'}));
+            return [window.top === window, location.origin, localStorage.getItem('played'), localStorage.getItem('module'),
+                document.body.dataset.fetched, document.body.dataset.key,
+                document.querySelector('canvas').getContext('2d').getImageData(0,0,1,1).data[3]];
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Any]
+        let values = try XCTUnwrap(state)
+        XCTAssertEqual(values[0] as? Bool, true)
+        XCTAssertTrue((values[1] as? String)?.hasPrefix("http://127.0.0.1:") == true)
+        XCTAssertEqual(values[2] as? String, "yes")
+        XCTAssertEqual(values[3] as? String, "ready")
+        XCTAssertEqual(values[4] as? String, "true")
+        XCTAssertEqual(values[5] as? String, "ArrowRight")
+        XCTAssertEqual(values[6] as? Int, 255)
+        XCTAssertTrue(browser.runtimeErrors.isEmpty, browser.runtimeErrors.description)
+    }
+
+    func testGeneratedPageReportsScriptFailuresAndClearsThemAfterSourceRepair() async throws {
+        let browser = ChatWorkBrowser()
+        var item = ChatWorkItem(title: "Broken game", kind: .website, content: """
+            <button onclick="throw new Error('Start failed')">Start</button>
+            <script>const snake = []; snake[0].x;</script>
+            """)
+        browser.load(item)
+        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        XCTAssertFalse(try XCTUnwrap(first["runtime_errors"] as? [String]).isEmpty)
+        let clicked = try decode(await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first))))
+        XCTAssertTrue(try XCTUnwrap(clicked["runtime_errors"] as? [String]).contains { $0.contains("Start failed") })
+        let originalURL = browser.localPageURL
+        item.content = "<h1>Repaired</h1><script>localStorage.setItem('version','2')</script>"
+        browser.load(item)
+        let repaired = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        XCTAssertEqual(browser.localPageURL, originalURL)
+        XCTAssertEqual(repaired["text"] as? String, "Repaired")
+        XCTAssertEqual(repaired["runtime_errors"] as? [String], [])
+        let value = try await browser.webView.evaluateJavaScript("localStorage.getItem('version')")
+        XCTAssertEqual(value as? String, "2")
+    }
+
+    func testGeneratedNavigationAndReloadKeepTheEditableSourceAndOrigin() async throws {
+        let remote = try ChatWorkHTTPFixture()
+        let base = try await remote.start()
+        defer { remote.stop() }
+        let browser = ChatWorkBrowser()
+        let item = ChatWorkItem(title: "Local", kind: .website, content: """
+            <a href="\(base.absoluteString)" target="_blank">Navigate</a>
+            <script>localStorage.setItem('loads', String(Number(localStorage.getItem('loads') || 0) + 1));</script>
+            """)
+        var published: [String] = []
+        browser.onNavigate = { published.append($0) }
+        browser.load(item)
+        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let local = try XCTUnwrap(browser.localPageURL)
+        _ = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("Navigate", in: first)))
+        browser.load(item)
+        XCTAssertEqual(browser.webView.url, base)
+        _ = try await browser.execute(ChatWorkRequest(action: .back))
+        _ = try await browser.execute(ChatWorkRequest(action: .reload))
+        XCTAssertEqual(browser.webView.url, local)
+        let loads = try await browser.webView.evaluateJavaScript("Number(localStorage.getItem('loads'))")
+        XCTAssertGreaterThan(loads as? Int ?? 0, 1)
+        XCTAssertTrue(published.isEmpty, "Temporary URLs must never replace generated source in saved chat state")
+    }
+
+    func testPreviewServerRestrictsRoutesAndHostAndServesUpdatedUTF8() async throws {
+        let server = try ChatWorkPreviewServer()
+        server.update("<h1>🐍</h1>")
+        let url = try await server.start()
+        defer { server.stop() }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "<h1>🐍</h1>")
+        for path in ["/", "/etc/passwd", "/wrong/index.html"] {
+            let (_, response) = try await URLSession.shared.data(from: URL(string: path, relativeTo: url)!)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+        var request = URLRequest(url: url)
+        request.setValue("attacker.invalid", forHTTPHeaderField: "Host")
+        let (_, forbidden) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((forbidden as? HTTPURLResponse)?.statusCode, 403)
+        request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (_, method) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((method as? HTTPURLResponse)?.statusCode, 405)
+        server.update("Updated")
+        let (updated, _) = try await URLSession.shared.data(from: url)
+        XCTAssertEqual(String(decoding: updated, as: UTF8.self), "Updated")
+    }
+
+    func testGeneratedPagesStayIsolatedAndClosingStopsTheirServer() async throws {
+        let pool = ChatWorkBrowserPool()
+        let session = UUID()
+        var item = ChatWorkItem(title: "Page", kind: .website, content: "<p>First</p>")
+        let first = pool.browser(for: item, sessionID: session)
+        item.content = "<p>Latest source</p>"
+        _ = pool.browser(for: item, sessionID: session)
+        let latest = try decode(await first.execute(ChatWorkRequest(action: .inspect)))
+        XCTAssertEqual(latest["text"] as? String, "Latest source")
+        let firstURL = try XCTUnwrap(first.localPageURL)
+        _ = try await first.webView.evaluateJavaScript("localStorage.setItem('private','first page')")
+        let second = pool.browser(for: item, sessionID: UUID())
+        _ = try await second.execute(ChatWorkRequest(action: .inspect))
+        XCTAssertNotEqual(first.localPageURL?.port, second.localPageURL?.port)
+        let value = try await second.webView.evaluateJavaScript("localStorage.getItem('private')")
+        XCTAssertTrue(value is NSNull)
+        pool.remove(itemID: item.id, sessionID: session)
+        do {
+            _ = try await URLSession.shared.data(for: URLRequest(url: firstURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2))
+            XCTFail("Closing the tab must stop its loopback server even if a view still retains the browser")
+        } catch { XCTAssertTrue(error is URLError) }
     }
 
     private func inspect(_ browser: ChatWorkBrowser) async throws -> [String: Any] {

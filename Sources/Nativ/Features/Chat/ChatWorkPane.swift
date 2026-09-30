@@ -21,8 +21,14 @@ struct ChatWorkPane: View {
             tabBar
             Divider()
             if let item = chat.workState.selectedItem {
-                if item.url != nil, let sessionID = chat.currentSessionID {
+                if item.kind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
                     ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID)) {
+                        if item.canEdit {
+                            viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right", isSelected: false) {
+                                sourceIDs.insert(item.id)
+                            }
+                            ChatWorkCopyButton(item: item).id(item.id)
+                        }
                         itemActions(item)
                     }
                 } else {

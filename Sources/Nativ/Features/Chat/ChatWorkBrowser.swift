@@ -19,11 +19,11 @@ final class ChatWorkBrowserPool {
     }
 
     func remove(sessionID: UUID) {
-        browsers.removeValue(forKey: sessionID)?.values.forEach { $0.webView.stopLoading() }
+        browsers.removeValue(forKey: sessionID)?.values.forEach { $0.stop() }
     }
 
     func remove(itemID: UUID, sessionID: UUID) {
-        browsers[sessionID]?.removeValue(forKey: itemID)?.webView.stopLoading()
+        browsers[sessionID]?.removeValue(forKey: itemID)?.stop()
     }
 
     func elementLabel(_ elementID: String, itemID: UUID, sessionID: UUID) -> String? {
@@ -45,11 +45,16 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     @Published private(set) var canGoBack = false
     @Published private(set) var canGoForward = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var runtimeErrors: [String] = []
+    @Published private(set) var localPageURL: URL?
     var onNavigate: ((String) -> Void)?
     private var loadedContent: String?
     private var loadedURL: String?
     private var modelURL: String?
-    private var previewFrame: WKFrameInfo?
+    private var previewServer: ChatWorkPreviewServer?
+    private var previewLoad: Task<Void, Never>?
+    private var previewGeneration = UUID()
+    private var isStartingPreview = false
     private var pendingNavigation: WKNavigation?
     private var observations: [NSKeyValueObservation] = []
     private(set) var elementLabels: [String: String] = [:]
@@ -58,6 +63,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.diagnosticsScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         // Bare WKWebView identifies only AppleWebKit, which sites such as Gmail
         // mistake for an unsupported browser. Match the installed Safari version
         // while letting WebKit supply its own platform and engine identity.
@@ -69,6 +77,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         }
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        configuration.userContentController.add(ChatWorkScriptErrors(browser: self), name: "nativWorkError")
         webView.navigationDelegate = self
         webView.uiDelegate = self
         webView.allowsBackForwardNavigationGestures = true
@@ -91,34 +100,70 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     func load(_ item: ChatWorkItem) {
         if let rawURL = item.url {
             guard modelURL != rawURL else { return }
+            stopPreview()
+            loadedContent = nil
             modelURL = rawURL
             do { try navigate(rawURL) } catch { errorMessage = error.localizedDescription }
         } else if loadedContent != item.content {
             loadedContent = item.content
-            loadedURL = nil
             modelURL = nil
-            previewFrame = nil
             errorMessage = nil
-            // A sandboxed, opaque-origin frame can run preview scripts without a native bridge,
-            // file access, popups, downloads, form submissions, or top-level navigation.
-            let escaped = item.content
-                .replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "\"", with: "&quot;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
-            pendingNavigation = webView.loadHTMLString("""
-                <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-                <style>html,body,iframe{margin:0;border:0;width:100%;height:100%;}iframe{position:absolute;inset:0;}</style>
-                </head><body><iframe title="Website preview" sandbox="allow-scripts" srcdoc="\(escaped)"></iframe></body></html>
-                """, baseURL: nil)
+            runtimeErrors = []
+            elementLabels = [:]
+            previewLoad?.cancel()
+            let generation = UUID()
+            previewGeneration = generation
+            do {
+                let server = try previewServer ?? ChatWorkPreviewServer()
+                previewServer = server
+                server.update(item.content)
+                isStartingPreview = true
+                isLoading = true
+                previewLoad = Task { @MainActor [weak self] in
+                    do {
+                        let url = try await server.start()
+                        try Task.checkCancellation()
+                        guard let self, self.previewGeneration == generation else { return }
+                        self.localPageURL = url
+                        self.isStartingPreview = false
+                        self.loadedURL = url.absoluteString
+                        self.pendingNavigation = self.webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
+                    } catch {
+                        guard let self, self.previewGeneration == generation else { return }
+                        self.isStartingPreview = false
+                        self.errorMessage = error.localizedDescription
+                        self.refreshNavigation()
+                    }
+                }
+            } catch { errorMessage = error.localizedDescription }
         }
+    }
+
+    private func stopPreview() {
+        previewLoad?.cancel()
+        previewLoad = nil
+        previewGeneration = UUID()
+        isStartingPreview = false
+        previewServer?.stop()
+        previewServer = nil
+        localPageURL = nil
+    }
+
+    func stop() {
+        stopPreview()
+        webView.stopLoading()
+    }
+
+    fileprivate func recordScriptError(_ message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame, let text = message.body as? String,
+              runtimeErrors.count < 20 else { return }
+        let bounded = String(text.prefix(2_000))
+        if !runtimeErrors.contains(bounded) { runtimeErrors.append(bounded) }
     }
 
     func navigate(_ rawURL: String) throws {
         let url = try ChatWorkState.webURL(rawURL)
         loadedURL = url.absoluteString
-        loadedContent = nil
-        previewFrame = nil
         errorMessage = nil
         elementLabels = [:]
         pendingNavigation = webView.load(URLRequest(url: url, timeoutInterval: 30))
@@ -133,17 +178,13 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         let isEmbeddedDocument = navigationAction.targetFrame?.isMainFrame == false
             && ["about", "data", "blob"].contains(scheme)
         let isPreviewDocument = loadedURL == nil && ["about", "data", "blob"].contains(scheme)
-        if loadedContent != nil, navigationAction.sourceFrame.isMainFrame,
-           navigationAction.targetFrame?.isMainFrame == false {
-            previewFrame = navigationAction.targetFrame
-        }
         return isWeb || isEmbeddedDocument || isPreviewDocument ? .allow : .cancel
     }
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         // A user-activated target="_blank" link should open instead of disappearing.
-        if navigationAction.targetFrame == nil, loadedContent == nil,
+        if navigationAction.targetFrame == nil,
            let url = navigationAction.request.url,
            (try? ChatWorkState.webURL(url.absoluteString)) != nil {
             pendingNavigation = webView.load(navigationAction.request)
@@ -156,7 +197,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         let text = try await webView.callAsyncJavaScript("""
             const selected = window.getSelection()?.toString().trim();
             return selected || (document.querySelector('main,article') || document.body)?.innerText || '';
-            """, arguments: [:], in: loadedContent == nil ? nil : previewFrame, contentWorld: .defaultClient)
+            """, arguments: [:], in: nil, contentWorld: .defaultClient)
         guard let text = text as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ChatWorkError.invalid("Select some text on the page to translate.")
         }
@@ -171,6 +212,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         pendingNavigation = navigation
+        runtimeErrors = []
         errorMessage = nil
         elementLabels = [:]
         refreshNavigation()
@@ -202,13 +244,14 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         // isLoading changes before WebKit replaces its old URL. Publishing that old URL
         // would save it back to the item and make SwiftUI load the previous page again.
         if pendingNavigation == nil && !webView.isLoading { publishCommittedAddress() }
-        isLoading = webView.isLoading
+        isLoading = isStartingPreview || webView.isLoading
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
     }
 
     private func publishCommittedAddress() {
-        guard loadedURL != nil, let url = webView.url?.absoluteString,
+        // Generated source remains editable and persists without its temporary loopback URL.
+        guard loadedContent == nil, loadedURL != nil, let url = webView.url?.absoluteString,
               (try? ChatWorkState.webURL(url)) != nil else { return }
         loadedURL = url
         guard modelURL != url else { return }
@@ -255,19 +298,23 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                                            "canGoBack": webView.canGoBack,
                                            "canGoForward": webView.canGoForward], in: nil, contentWorld: .defaultClient
         ) as? String else { throw ChatWorkError.invalid("The page could not be inspected.") }
-        if let object = try? JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any],
-           let elements = object["elements"] as? [[String: Any]] {
+        guard var object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any] else {
+            throw ChatWorkError.invalid("The page could not be inspected.")
+        }
+        object["runtime_errors"] = runtimeErrors
+        object["local_page_url"] = localPageURL?.absoluteString
+        if let elements = object["elements"] as? [[String: Any]] {
             elementLabels = Dictionary(elements.compactMap { element in
                 guard let id = element["id"] as? String, let label = element["label"] as? String else { return nil }
                 return (id, label.isEmpty ? (element["tag"] as? String ?? "control") : label)
             }, uniquingKeysWith: { first, _ in first })
         }
-        return snapshot
+        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
     }
 
     private func waitForPage() async throws {
         let deadline = Date().addingTimeInterval(20)
-        while pendingNavigation != nil || webView.isLoading {
+        while isStartingPreview || pendingNavigation != nil || webView.isLoading {
             try Task.checkCancellation()
             guard Date() < deadline else {
                 throw ChatWorkError.invalid("The page is still loading. Inspect it again shortly.")
@@ -276,6 +323,21 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         }
         if let errorMessage { throw ChatWorkError.invalid(errorMessage) }
     }
+
+    private static let diagnosticsScript = """
+        (() => {
+            let count = 0;
+            const report = message => {
+                if (count++ < 20) window.webkit.messageHandlers.nativWorkError.postMessage(String(message).slice(0, 2000));
+            };
+            window.addEventListener('error', event => {
+                if (event.message) report(event.message + (event.lineno ? ' (line ' + event.lineno + ')' : ''));
+            });
+            window.addEventListener('unhandledrejection', event => {
+                report('Unhandled promise rejection: ' + (event.reason?.message || event.reason));
+            });
+        })();
+        """
 
     private static let inspectScript = """
         const visible = el => {
@@ -327,6 +389,16 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         el.dispatchEvent(new Event('change', {bubbles:true}));
         return '';
         """
+}
+
+/// Web content can report bounded diagnostics only; it cannot invoke application actions.
+@MainActor
+private final class ChatWorkScriptErrors: NSObject, WKScriptMessageHandler {
+    weak var browser: ChatWorkBrowser?
+    init(browser: ChatWorkBrowser) { self.browser = browser }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        browser?.recordScriptError(message)
+    }
 }
 
 struct ChatWorkWebView: NSViewRepresentable {
@@ -413,6 +485,23 @@ struct ChatWorkBrowserToolbar<Actions: View>: View {
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                navigation.frame(minWidth: 200)
+                actions().fixedSize()
+            }
+            VStack(spacing: 8) {
+                navigation
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    actions()
+                }
+            }
+        }
+        .padding(8)
+    }
+
+    private var navigation: some View {
         HStack(spacing: 8) {
             ChatWorkNavigationButtons(
                 canGoBack: browser.canGoBack, canGoForward: browser.canGoForward,
@@ -423,9 +512,16 @@ struct ChatWorkBrowserToolbar<Actions: View>: View {
             ChatWorkAddressField(address: browser.address) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
-            actions()
+            if let url = browser.localPageURL {
+                Button { try? browser.navigate(url.absoluteString) } label: {
+                    Image(systemName: "house").frame(width: 30, height: 30)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .help("Open local webpage")
+                .accessibilityLabel("Open local webpage")
+            }
         }
-        .padding(8)
     }
 }
 
@@ -436,6 +532,11 @@ struct ChatWorkBrowserView: View {
         VStack(spacing: 0) {
             if let error = browser.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.red).padding(10)
+            }
+            if let error = browser.runtimeErrors.first {
+                Text("JavaScript: \(error)").font(.caption).foregroundStyle(.orange)
+                    .lineLimit(2).textSelection(.enabled).padding(10)
+                    .help(browser.runtimeErrors.joined(separator: "\n"))
             }
             ChatWorkWebView(browser: browser)
                 .overlay(alignment: .top) {
