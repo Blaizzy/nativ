@@ -721,7 +721,8 @@ final class ChatViewModel: ObservableObject {
         let browser = workBrowsers.browser(for: item, sessionID: sessionID)
         browser.onNavigate = { [weak self] address in
             guard let self, var state = self.workState(for: sessionID),
-                  let index = state.items.firstIndex(where: { $0.id == item.id }) else { return }
+                  let index = state.items.firstIndex(where: { $0.id == item.id }),
+                  state.items[index].url != nil else { return }
             state.items[index].url = address
             try? self.saveWorkState(state, in: sessionID, updateTimestamp: false)
         }
@@ -786,9 +787,9 @@ final class ChatViewModel: ObservableObject {
     func executeWorkAction(_ request: ChatWorkRequest, in sessionID: UUID) async throws -> String {
         let request = try resolvedWorkRequest(request, in: sessionID)
         guard var state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
-        let opensRemoteWebsite = request.action == .open && (request.url != nil
-            || state.items.contains { $0.id == request.id && $0.kind == .website && $0.url != nil })
-        if request.action.isBrowserAction || opensRemoteWebsite {
+        let opensWebsite = request.action == .open && (request.url != nil
+            || state.items.contains { $0.id == request.id && $0.kind == .website })
+        if request.action.isBrowserAction || opensWebsite {
             let item = try state.browserItem(for: request)
             try saveWorkState(state, in: sessionID, updateTimestamp: false)
             var browserRequest = request
@@ -805,10 +806,16 @@ final class ChatViewModel: ObservableObject {
         if request.action != .read && request.action != .list {
             try saveWorkState(state, in: sessionID, updateTimestamp: true)
         }
-        if request.action == .create, let item = state.selectedItem,
-           item.kind == .website, item.url != nil {
-            return try await workBrowser(for: item, sessionID: sessionID)
+        if request.action == .create || request.action == .update, let item = state.selectedItem,
+           item.kind == .website {
+            let snapshot = try await workBrowser(for: item, sessionID: sessionID)
                 .execute(ChatWorkRequest(action: .inspect, id: item.id))
+            guard var object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any] else {
+                throw ChatWorkError.invalid("The page could not be inspected.")
+            }
+            object["revision"] = item.revision
+            object["editable"] = item.canEdit
+            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         }
         return result
     }
