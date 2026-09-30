@@ -3,6 +3,24 @@ import XCTest
 
 @MainActor
 final class MarkdownSelectionTests: XCTestCase {
+    func testTranslateMenuUsesSelectedPreviewTextWithoutChangingTheDocument() throws {
+        let (window, _, surface) = fixture("# Hola\n\nUn **documento**.", height: 300)
+        defer { window.close() }
+        var translatedSource: String?
+        surface.onTranslate = { translatedSource = $0 }
+        _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+        let originalText = surface.selection.text
+        let event = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let view = try XCTUnwrap(surface.visibleTextViews.first)
+        let menu = try XCTUnwrap(view.menu(for: event))
+        let action = try XCTUnwrap(menu.items.first { $0.title == "Translate…" })
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        XCTAssertEqual(translatedSource, "Hola\n\nUn documento.")
+        XCTAssertEqual(surface.selection.text, originalText)
+    }
+
     func testDragAcrossHeadingParagraphAndCodeCopiesOnePassage() throws {
         let (window, _, surface) = fixture("# A heading\n\nA **bold** paragraph.\n\n```swift\nlet answer = 42\n```", height: 500)
         defer { window.close() }

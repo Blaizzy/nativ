@@ -53,6 +53,66 @@ Each window keeps its own navigation, chat, draft, and generation state while sh
 inference server, loaded models, and settings. A chat can generate in only one window at a
 time, and model selection is unavailable while any window is generating.
 
+## Work pane
+
+Select **Work pane** (⌘⇧B) to open a resizable workspace beside the conversation.
+The **+** button opens a new-tab page without closing existing tabs. **Tools**
+creates documents, code, and HTML pages or imports a UTF-8 file; **Suggested** and
+**Recents** reopen saved work. The rounded address bar accepts HTTP(S) URLs, bare
+hostnames, local development addresses, or search terms (searched with Google).
+The expand control switches between split and full view. Model configuration and
+the work pane share the right side of chat.
+
+- **Documents and code:** edit source, preview Markdown or highlighted code, and
+  export a file. Markdown previews render math and resolve newly imported documents'
+  relative images against the original file location. Text imports are copies;
+  editing them does not modify the original.
+- **Websites:** switch generated HTML between source and an interactive preview,
+  or browse an HTTP(S) URL, including a local development server. Remote pages have
+  back, forward, reload, and address controls. Browser storage is separate from
+  the user's regular browser and lasts only while its tab stays open in the app.
+- **Translation:** the Translate button opens the native macOS translation popover
+  for selected source or browser text, or the document/page's prose. Select the target
+  language in the popover; macOS may offer to download a language. Selected Markdown
+  preview text also has a **Translate…** context-menu action. Translation does not
+  overwrite the original content.
+- **Collaboration:** use the discussion button to add feedback to the chat draft,
+  including selected source text and the item's revision. Nothing is sent until
+  the user sends the draft.
+- **Persistence:** items, open tabs, selection, and pane visibility are saved with
+  the session. Closing a tab preserves its contents under **+ → Recents**.
+  Work-only sessions are retained even if no messages have been sent.
+
+The native `chat_work` tool lists, reads, creates, opens, and updates these items.
+Updates require the revision returned by `read`; an intervening user edit causes
+a conflict instead of being overwritten. If an agent omits an update's ID, the app
+uses only its latest read in that chat with the same revision and matching title/kind
+when provided. This read receipt is kept in memory, and the target is fixed before
+consent. A `.md` or `.markdown` creation can omit `kind`. `open` with a `url` opens a website directly
+without requiring a pre-existing item ID; it reuses a saved tab with the same URL.
+`navigate` with a `url` changes the selected website, or opens a website if no remote
+page is selected. An explicit `id` always targets that tab. Opening or creating a
+remote website waits for the page and returns its ID, loaded URL, text, and controls.
+`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, and `type` operate on
+the same browser instance displayed to the user and return a fresh page snapshot.
+Browser actions can omit `id` to use the selected remote website; `click` and `type`
+instead resolve the tab from the supplied element ID, even after selecting another
+tab. The resolved target is shown and fixed before consent. The item list
+includes website URLs so agents can distinguish renamed or navigated tabs.
+Browser element IDs expire after
+the next inspection or action, and changed inputs are rejected. All `chat_work`
+calls use the existing consent UI, showing the action arguments before execution.
+
+This version supports up to 24 items per chat and 256 KB of text per item. Office
+documents and PDFs are not editable in this pane; code is not executed locally.
+Browser inspection covers the main document's DOM, not canvas controls, shadow
+roots, or embedded frames. Password and file inputs require direct user interaction.
+HTML previews run scripts in a sandboxed frame without native host access.
+
+Sources: [`ChatWorkPane`](../../Sources/Nativ/Features/Chat/ChatWorkPane.swift),
+[`ChatWorkState`](../../Sources/Nativ/Features/Chat/ChatWorkState.swift), and
+[`ChatWorkBrowser`](../../Sources/Nativ/Features/Chat/ChatWorkBrowser.swift).
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is
@@ -64,6 +124,7 @@ A tool-calling model can invoke host capabilities mid-conversation. The registry
 | Model library | List installed models or switch the active model. |
 | Server stats | Report server and request statistics. |
 | System monitor | Report live CPU, GPU, and memory readings. |
+| Chat work | Create and edit shared work, open tabs, and interact with remote websites in the work pane. |
 | File Read | Read bounded text and search contents or filenames in a user-authorized local folder. |
 | File Write | Create, overwrite, and patch text files in a user-authorized local folder. |
 

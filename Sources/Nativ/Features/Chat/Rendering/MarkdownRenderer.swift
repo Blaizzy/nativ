@@ -15,6 +15,7 @@ struct MarkdownRenderer: View {
     let fontSize: CGFloat
     var imagePolicy: ImagePolicy = .mathOnly
     var isStreaming = false
+    var onTranslate: ((String) -> Void)?
 
     private struct LoadedImages {
         let request: MarkdownImageRequest
@@ -36,7 +37,8 @@ struct MarkdownRenderer: View {
                 baseURL: baseURL,
                 images: images
             ),
-            isStreaming: isStreaming
+            isStreaming: isStreaming,
+            onTranslate: onTranslate
         )
         .task(id: request) {
             guard let request else { return }
