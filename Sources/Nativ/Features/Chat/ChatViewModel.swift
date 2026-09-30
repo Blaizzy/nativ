@@ -741,7 +741,7 @@ final class ChatViewModel: ObservableObject {
             guard let read = lastWorkReads[sessionID], read.canEdit,
                   request.expectedRevision == read.revision,
                   request.title == nil || request.title == read.title,
-                  request.kind == nil || request.kind == read.kind else {
+                  request.kind == nil || request.kind == read.resolvedKind else {
                 throw ChatWorkError.invalid("update requires id and expected_revision from read. Read the intended item, then copy its id and revision into update. An omitted id can only target the last item read with the same revision and title.")
             }
             resolved.id = read.id
@@ -788,7 +788,7 @@ final class ChatViewModel: ObservableObject {
         let request = try resolvedWorkRequest(request, in: sessionID)
         guard var state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         let opensWebsite = request.action == .open && (request.url != nil
-            || state.items.contains { $0.id == request.id && $0.kind == .website })
+            || state.items.contains { $0.id == request.id && $0.resolvedKind == .website })
         if request.action.isBrowserAction || opensWebsite {
             let item = try state.browserItem(for: request)
             try saveWorkState(state, in: sessionID, updateTimestamp: false)
@@ -807,7 +807,7 @@ final class ChatViewModel: ObservableObject {
             try saveWorkState(state, in: sessionID, updateTimestamp: true)
         }
         if request.action == .create || request.action == .update, let item = state.selectedItem,
-           item.kind == .website {
+           item.resolvedKind == .website {
             let snapshot = try await workBrowser(for: item, sessionID: sessionID)
                 .execute(ChatWorkRequest(action: .inspect, id: item.id))
             guard var object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any] else {

@@ -216,6 +216,50 @@ final class ChatWorkTests: XCTestCase {
         XCTAssertEqual(result.content, "[]")
     }
 
+    func testHTMLDetectionPreservesExistingItemsAndUsesHTMLExportNames() throws {
+        let page = "<!DOCTYPE html>\n<html lang='en'><head><title>Game</title></head><body><canvas></canvas></body></html>"
+        let examples: [(String, ChatWorkItem.Kind, String, String?)] = [
+            ("Snake Game", .document, page, nil),
+            ("Snake Game", .code, page, nil),
+            ("Untitled", .document, "\u{feff} \n<!-- generated -->\n" + page + "\n<!-- end -->", nil),
+            ("Game", .document, "<HTML><BODY>Game</BODY></HTML>", nil),
+            ("Game.HTML", .document, "<button>Play</button>", nil),
+            ("Game", .code, "<button>Play</button>", " HTML ")
+        ]
+        for (title, kind, content, language) in examples {
+            let item = ChatWorkItem(title: title, kind: kind, content: content, language: language)
+            let restored = try JSONDecoder().decode(ChatWorkItem.self, from: JSONEncoder().encode(item))
+            XCTAssertEqual(restored, item)
+            XCTAssertEqual(restored.resolvedKind, .website, title)
+            XCTAssertEqual(restored.kind, kind, "Detection must not migrate saved source metadata")
+            XCTAssertEqual(restored.content, content)
+            XCTAssertTrue(restored.canEdit)
+            XCTAssertTrue(restored.exportFilename.lowercased().hasSuffix(".html"))
+            var state = ChatWorkState(items: [restored], openIDs: [restored.id], selectedID: restored.id)
+            XCTAssertEqual(try state.browserItem(for: ChatWorkRequest(action: .inspect)).id, restored.id)
+            let result = try state.execute(ChatWorkRequest(action: .read, id: restored.id))
+            let read = try json(result)
+            XCTAssertEqual(read["kind"] as? String, "website")
+            struct ReadContent: Decodable { var content: String }
+            XCTAssertEqual(try JSONDecoder().decode(ReadContent.self, from: Data(result.utf8)).content, content)
+            XCTAssertEqual(read["revision"] as? Int, 1)
+        }
+    }
+
+    func testMarkdownAndCodeExamplesDoNotBecomeExecutableWebpages() {
+        let page = "<!doctype html><html><body>Example</body></html>"
+        for content in ["# HTML notes\n\n" + page, "```html\n" + page + "\n```",
+                        "<details><summary>Notes</summary>Text</details>",
+                        "An example: <html><body>Hi</body></html>", "<html>Example snippet",
+                        "const template = `" + page + "`;", "&lt;html&gt;Example&lt;/html&gt;"] {
+            for kind in [ChatWorkItem.Kind.document, .code] {
+                let item = ChatWorkItem(title: "Notes", kind: kind, content: content)
+                XCTAssertEqual(item.resolvedKind, kind, content)
+                XCTAssertEqual(item.exportFilename, "Notes")
+            }
+        }
+    }
+
     private func json(_ value: String) throws -> [String: Any] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
     }
@@ -375,6 +419,44 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(reopened["text"] as? String, "Updated game")
         XCTAssertNotEqual(reopened["url"] as? String, updated["url"] as? String)
         XCTAssertEqual(restored.workState.selectedItem, saved)
+    }
+
+    func testExistingHTMLDocumentOpensAsLiveWebsiteAndRemainsEditable() async throws {
+        let (root, store, original) = try fixture()
+        let html = """
+            <!DOCTYPE html><html><head><title>Snake Game</title></head><body>
+            <button onclick="this.textContent='Running'">Play</button></body></html>
+            """
+        let item = ChatWorkItem(title: "Snake Game", kind: .document, content: html, updatedBy: "Agent")
+        var session = original
+        session.workState = ChatWorkState(items: [item], openIDs: [item.id], selectedID: item.id, isVisible: true)
+        XCTAssertTrue(store.saveSession(session))
+        let chat = subject(root)
+        try await loaded(chat)
+        chat.selectSession(session.id)
+        func json(_ value: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+        }
+        let opened = try json(await chat.executeWorkAction(ChatWorkRequest(action: .open, id: item.id), in: session.id))
+        XCTAssertEqual(opened["title"] as? String, "Snake Game")
+        XCTAssertTrue((opened["url"] as? String)?.hasPrefix("http://127.0.0.1:") == true)
+        let controls = try XCTUnwrap(opened["elements"] as? [[String: Any]])
+        let button = try XCTUnwrap(controls.first?["id"] as? String)
+        let clicked = try json(await chat.executeWorkAction(ChatWorkRequest(action: .click, elementID: button), in: session.id))
+        XCTAssertTrue((clicked["text"] as? String)?.contains("Running") == true)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem, item)
+        let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id))
+        XCTAssertEqual(read["kind"] as? String, "website")
+        let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, kind: .website,
+            content: html.replacingOccurrences(of: "Play", with: "Restart"), expectedRevision: 1), in: session.id))
+        XCTAssertEqual(updated["kind"] as? String, "website")
+        XCTAssertEqual(updated["revision"] as? Int, 2)
+        XCTAssertTrue((updated["text"] as? String)?.contains("Restart") == true)
+        XCTAssertNil(store.loadSession(id: session.id)?.workState?.selectedItem?.url)
+        let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Another Game",
+            kind: .document, content: html), in: session.id))
+        XCTAssertEqual(created["kind"] as? String, "website")
+        XCTAssertNotNil(created["elements"])
     }
 
     func testAgentOpensAndOperatesAWebsiteThroughTheSessionDispatcher() async throws {
