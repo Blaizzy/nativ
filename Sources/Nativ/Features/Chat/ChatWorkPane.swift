@@ -305,19 +305,45 @@ struct ChatWorkPane: View {
 
     private func itemToolbar(_ item: ChatWorkItem) -> some View {
         HStack(spacing: 8) {
-            Picker("View", selection: Binding(
-                get: { sourceIDs.contains(item.id) },
-                set: { if $0 { sourceIDs.insert(item.id) } else { sourceIDs.remove(item.id) } }
-            )) {
-                Text("Preview").tag(false)
-                Text("Source").tag(true)
+            HStack(spacing: 2) {
+                viewModeButton("Preview", symbol: "eye", isSelected: !sourceIDs.contains(item.id)) {
+                    sourceIDs.remove(item.id)
+                }
+                viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right",
+                               isSelected: sourceIDs.contains(item.id)) {
+                    sourceIDs.insert(item.id)
+                }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 136)
+            .padding(2)
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("View mode")
             Spacer(minLength: 0)
+            ChatWorkCopyButton(item: item).id(item.id)
             itemActions(item)
         }
         .padding(8)
+    }
+
+    private func viewModeButton(_ title: String, symbol: String, isSelected: Bool,
+                                action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(isSelected ? Color.primary : .secondary)
+                .frame(width: 32, height: 28)
+                .background(isSelected ? Color.primary.opacity(0.09) : .clear,
+                            in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .strokeBorder(isSelected ? Color.primary.opacity(0.16) : .clear, lineWidth: 1)
+                }
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func itemActions(_ item: ChatWorkItem) -> some View {
@@ -471,6 +497,55 @@ struct ChatWorkPane: View {
         }
         translationText = trimmed
         showsTranslation = true
+    }
+}
+
+private struct ChatWorkCopyButton: View {
+    let item: ChatWorkItem
+    @State private var copyID: UUID?
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button { copy(item.content) } label: {
+                Text(copyID == nil ? "Copy" : "Copied")
+                    .frame(width: 58, height: 30)
+                    .contentShape(.rect)
+            }
+            .help(item.kind == .document ? "Copy Markdown" : "Copy source")
+            .accessibilityLabel(copyID == nil ? "Copy content" : "Copied")
+            Divider().frame(height: 16)
+            Menu {
+                Button(item.kind == .document ? "Copy Markdown" : "Copy source") { copy(item.content) }
+                if item.kind == .document {
+                    Button("Copy plain text") { copy(ChatWorkDocument.plainText(item.content)) }
+                }
+                Button("Copy file name") { copy(item.title) }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .medium))
+                    .frame(width: 26, height: 30)
+                    .contentShape(.rect)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Copy options")
+            .accessibilityLabel("Copy options")
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .task(id: copyID) {
+            guard copyID != nil else { return }
+            do { try await Task.sleep(for: .seconds(1.5)) } catch { return }
+            copyID = nil
+        }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copyID = UUID()
     }
 }
 
