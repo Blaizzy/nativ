@@ -91,6 +91,12 @@ struct ChatToolScope: Equatable, Sendable {
         isProject && projectToolsEnabled && rootPath != nil
     }
 
+    /// Whether folder-scoped tools have a root to run against: the project folder in a
+    /// project chat, the File Read folder otherwise.
+    var fileToolsAreAvailable: Bool {
+        isProject ? projectToolsAreAvailable : rootPath != nil
+    }
+
     var fileReadRootPath: String? {
         rootPath
     }
@@ -131,7 +137,7 @@ struct ChatToolScope: Equatable, Sendable {
         Self(
             projectID: nil,
             projectName: nil,
-            rootPath: nil,
+            rootPath: settings.fileReadRootPath,
             projectToolsEnabled: false
         )
     }
