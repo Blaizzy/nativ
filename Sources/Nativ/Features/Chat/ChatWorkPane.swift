@@ -16,12 +16,6 @@ struct ChatWorkPane: View {
     @State private var showsTranslation = false
     @State private var preparesTranslation = false
 
-    private let pageInset: CGFloat = 24
-
-    private func pageWidth(_ item: ChatWorkItem) -> CGFloat {
-        item.kind == .document ? 900 : .infinity
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             tabBar
@@ -327,10 +321,8 @@ struct ChatWorkPane: View {
             ChatWorkCopyButton(item: item).id(item.id)
             itemActions(item)
         }
-        .frame(maxWidth: pageWidth(item))
-        .padding(.horizontal, pageInset)
+        .padding(.horizontal, 24)
         .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
     }
 
     private func viewModeButton(_ title: String, symbol: String, isSelected: Bool,
@@ -404,24 +396,20 @@ struct ChatWorkPane: View {
     @ViewBuilder
     private func itemContent(_ item: ChatWorkItem) -> some View {
         if sourceIDs.contains(item.id) && item.canEdit {
-            ChatWorkSourceEditor(text: item.content, inset: pageInset, onChange: { text, previousContent in
+            ChatWorkSourceEditor(text: item.content, onChange: { text, previousContent in
                 do { try chat.updateWorkItem(item.id, content: text, previousContent: previousContent) }
                 catch { errorMessage = error.localizedDescription }
             }, onSelection: { selectedText = $0 })
             .id(item.id)
-            .frame(maxWidth: pageWidth(item) + pageInset * 2)
-            .frame(maxWidth: .infinity)
         } else if item.kind == .website, let sessionID = chat.currentSessionID {
             ChatWorkBrowserView(browser: chat.workBrowser(for: item, sessionID: sessionID))
                 .id(item.id)
         } else {
             ScrollView {
                 MarkdownRenderer(content: previewMarkdown(item), baseURL: item.sourceURL.flatMap(URL.init(string:)),
-                                 fontSize: 15, imagePolicy: .document, fillsTableWidth: true,
-                                 onTranslate: presentTranslation)
-                    .frame(maxWidth: pageWidth(item), alignment: .leading)
-                    .padding(pageInset)
-                    .frame(maxWidth: .infinity)
+                                 fontSize: 15, imagePolicy: .document, onTranslate: presentTranslation)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
             }
         }
     }
@@ -580,7 +568,6 @@ private struct ChatWorkCardStyle: ButtonStyle {
 
 private struct ChatWorkSourceEditor: NSViewRepresentable {
     let text: String
-    let inset: CGFloat
     let onChange: (String, String) -> Void
     let onSelection: (String) -> Void
 
@@ -596,8 +583,7 @@ private struct ChatWorkSourceEditor: NSViewRepresentable {
         editor.isAutomaticSpellingCorrectionEnabled = false
         editor.allowsUndo = true
         editor.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        editor.textContainerInset = NSSize(width: inset, height: inset)
-        editor.textContainer?.lineFragmentPadding = 0
+        editor.textContainerInset = NSSize(width: 16, height: 16)
         editor.string = text
         context.coordinator.lastContent = text
         editor.delegate = context.coordinator
