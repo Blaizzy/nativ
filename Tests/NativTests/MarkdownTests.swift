@@ -149,6 +149,30 @@ final class MarkdownGeometryTests: XCTestCase {
                 as? NSParagraphStyle)?.alignment, .right)
     }
 
+    func testDocumentTablesAlignWithPageWidthWithoutChangingChatTables() throws {
+        let source = """
+            # Browsing Notes
+
+            | Site | URL |
+            | --- | --- |
+            | Repometer | https://blaizzy.github.io/repometer/ |
+            | Swift Documentation | https://www.swift.org/documentation/ |
+            """
+        for width: CGFloat in [260, 900] {
+            let layout = MarkdownLayouter.layout(
+                source, width: width, style: .init(fillsTableWidth: true))
+            let table = try XCTUnwrap(layout.blocks.last)
+            XCTAssertEqual(table.contentSize.width, width, accuracy: 0.5)
+            XCTAssertEqual(table.frame.minX, layout.blocks.first?.frame.minX)
+            XCTAssertFalse(table.scrollsHorizontally)
+            for fragment in table.text {
+                XCTAssertLessThanOrEqual(fragment.frame.maxX, width)
+            }
+        }
+        let chatLayout = MarkdownLayouter.layout(source, width: 900, style: .init())
+        XCTAssertLessThan(try XCTUnwrap(chatLayout.blocks.last).contentSize.width, 900)
+    }
+
     func testMathHasMetricsAndCopyAlternativeBeforeMounting() throws {
         let source = MathPreprocessor.preprocess(#"Inline $\frac{a+b}{c}$ and text."#)
         let layout = MarkdownLayouter.layout(source, width: 400, style: .init())
