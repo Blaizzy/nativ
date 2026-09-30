@@ -235,6 +235,7 @@ targets:
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkState.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkSplitView.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkDocument.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkBrowser.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
