@@ -25,6 +25,30 @@ struct ChatWorkItem: Identifiable, Codable, Equatable {
     var updatedBy = "You"
 
     var canEdit: Bool { url == nil }
+
+    /// Older chats and agents can label a complete HTML page as a document or code.
+    /// Resolve its presentation without rewriting its source, ID, or revision.
+    var resolvedKind: Kind {
+        guard canEdit, kind != .website else { return kind }
+        let ext = (title as NSString).pathExtension.lowercased()
+        let language = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["html", "htm"].contains(ext) || language == "html" || language == "text/html" {
+            return .website
+        }
+        // Require a whole page, not HTML mentioned in prose, a fenced example,
+        // or an inline Markdown element such as <details>.
+        let startsPage = content.range(of: #"(?is)\A[\s\uFEFF]*(?:<!--.*?-->\s*)*(?:<!doctype\s+html\b[^>]*>|<html(?=[\s>]))"#,
+                                       options: .regularExpression) != nil
+        let endsPage = content.range(of: #"(?is)</(?:html|body)>\s*(?:<!--.*?-->\s*)*\z"#,
+                                     options: .regularExpression) != nil
+        return startsPage && endsPage ? .website : kind
+    }
+
+    var exportFilename: String {
+        guard canEdit, resolvedKind == .website,
+              !["html", "htm"].contains((title as NSString).pathExtension.lowercased()) else { return title }
+        return title + ".html"
+    }
 }
 
 struct ChatWorkState: Codable, Equatable {

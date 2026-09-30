@@ -21,7 +21,7 @@ struct ChatWorkPane: View {
             tabBar
             Divider()
             if let item = chat.workState.selectedItem {
-                if item.kind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
+                if item.resolvedKind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
                     ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID)) {
                         if item.canEdit {
                             viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right", isSelected: false) {
@@ -80,7 +80,7 @@ struct ChatWorkPane: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
                         ForEach(chat.workState.openItems) { item in
-                            workTab(title: item.title, symbol: item.kind.symbol,
+                            workTab(title: item.title, symbol: item.resolvedKind.symbol,
                                     isSelected: chat.workState.selectedID == item.id,
                                     select: { chat.openWorkItem(item.id) },
                                     close: { chat.closeWorkItem(item.id) })
@@ -208,9 +208,9 @@ struct ChatWorkPane: View {
                             ForEach(Array(chat.workState.items.suffix(4).reversed())) { item in
                                 Button { chat.openWorkItem(item.id) } label: {
                                     VStack(spacing: 16) {
-                                        Image(systemName: item.kind.symbol)
+                                        Image(systemName: item.resolvedKind.symbol)
                                             .font(.system(size: 25, weight: .light))
-                                            .foregroundStyle(item.kind == .code ? Color.mint : .secondary)
+                                            .foregroundStyle(item.resolvedKind == .code ? Color.mint : .secondary)
                                             .frame(height: 34)
                                         Text(item.title).font(.system(size: 12)).lineLimit(1)
                                     }
@@ -230,7 +230,7 @@ struct ChatWorkPane: View {
                             ForEach(chat.workState.items.reversed()) { item in
                                 Button { chat.openWorkItem(item.id) } label: {
                                     HStack(spacing: 12) {
-                                        Image(systemName: item.kind.symbol)
+                                        Image(systemName: item.resolvedKind.symbol)
                                             .foregroundStyle(.secondary)
                                             .frame(width: 30, height: 30)
                                             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
@@ -291,7 +291,7 @@ struct ChatWorkPane: View {
 
     private func itemSubtitle(_ item: ChatWorkItem) -> String {
         if let address = item.url, let host = URL(string: address)?.host { return host }
-        switch item.kind {
+        switch item.resolvedKind {
         case .document: return "Document"
         case .code: return item.language.map { "Code · \($0)" } ?? "Code"
         case .website: return "Website"
@@ -363,7 +363,7 @@ struct ChatWorkPane: View {
                         let text: String
                         if !selectedText.isEmpty {
                             text = selectedText
-                        } else if item.kind == .website, let sessionID {
+                        } else if item.resolvedKind == .website, let sessionID {
                             text = try await chat.workBrowser(for: item, sessionID: sessionID).textForTranslation()
                         } else {
                             text = ChatWorkDocument.translationText(item.content)
@@ -408,7 +408,7 @@ struct ChatWorkPane: View {
                 catch { errorMessage = error.localizedDescription }
             }, onSelection: { selectedText = $0 })
             .id(item.id)
-        } else if item.kind == .website, let sessionID = chat.currentSessionID {
+        } else if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
             ChatWorkBrowserView(browser: chat.workBrowser(for: item, sessionID: sessionID))
                 .id(item.id)
         } else {
@@ -422,7 +422,7 @@ struct ChatWorkPane: View {
     }
 
     private func previewMarkdown(_ item: ChatWorkItem) -> String {
-        guard item.kind == .code else { return ChatWorkDocument.renderedMarkdown(item.content) }
+        guard item.resolvedKind == .code else { return ChatWorkDocument.renderedMarkdown(item.content) }
         let fence = String(repeating: "`", count: max(3, (item.content.components(separatedBy: .newlines)
             .map { $0.prefix(while: { $0 == "`" }).count }.max() ?? 0) + 1))
         return "\(fence)\(item.language ?? "")\n\(item.content)\n\(fence)"
@@ -489,7 +489,7 @@ struct ChatWorkPane: View {
 
     private func export(_ item: ChatWorkItem) {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = item.title
+        panel.nameFieldStringValue = item.exportFilename
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try item.content.write(to: url, atomically: true, encoding: .utf8) }
         catch { errorMessage = error.localizedDescription }
@@ -517,12 +517,12 @@ private struct ChatWorkCopyButton: View {
                     .frame(width: 58, height: 30)
                     .contentShape(.rect)
             }
-            .help(item.kind == .document ? "Copy Markdown" : "Copy source")
+            .help(item.resolvedKind == .document ? "Copy Markdown" : "Copy source")
             .accessibilityLabel(copyID == nil ? "Copy content" : "Copied")
             Divider().frame(height: 16)
             Menu {
-                Button(item.kind == .document ? "Copy Markdown" : "Copy source") { copy(item.content) }
-                if item.kind == .document {
+                Button(item.resolvedKind == .document ? "Copy Markdown" : "Copy source") { copy(item.content) }
+                if item.resolvedKind == .document {
                     Button("Copy plain text") { copy(ChatWorkDocument.plainText(item.content)) }
                 }
                 Button("Copy file name") { copy(item.title) }
