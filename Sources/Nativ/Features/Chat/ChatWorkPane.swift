@@ -106,7 +106,8 @@ struct ChatWorkPane: View {
             .help(chat.workState.isExpanded == true ? "Enter split view" : "Enter full view")
             .accessibilityLabel(chat.workState.isExpanded == true ? "Enter split view" : "Enter full view")
             Button { chat.setWorkPaneVisible(false) } label: {
-                Image(systemName: "sidebar.right").frame(width: 28, height: 28)
+                Image(systemName: chat.workState.isWorkOnLeft == true ? "sidebar.left" : "sidebar.right")
+                    .frame(width: 28, height: 28)
             }
             .help("Hide work pane")
             .accessibilityLabel("Hide work pane")
@@ -116,7 +117,7 @@ struct ChatWorkPane: View {
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 8)
-        .padding(.leading, chat.workState.isExpanded == true && !isSidebarVisible
+        .padding(.leading, (chat.workState.isExpanded == true || chat.workState.isWorkOnLeft == true) && !isSidebarVisible
                  ? (isFullScreen ? ControlPanelLayout.topControlsLeadingPaddingFullScreen
                     : ControlPanelLayout.topControlsLeadingPadding) + ControlPanelLayout.topControlSize
                  : 0)

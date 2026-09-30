@@ -647,6 +647,13 @@ final class ChatViewModel: ObservableObject {
         try? saveWorkState(state, in: sessionID, updateTimestamp: false)
     }
 
+    func setWorkPaneOnLeft(_ onLeft: Bool) {
+        guard let sessionID = currentSessionID else { return }
+        var state = workState
+        state.isWorkOnLeft = onLeft
+        try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+    }
+
     func openWorkNewTab() {
         guard let sessionID = currentSessionID else { return }
         var state = workState

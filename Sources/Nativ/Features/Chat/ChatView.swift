@@ -30,6 +30,8 @@ struct ChatView: View {
                 isExpanded: Binding(get: { chat.workState.isExpanded == true }, set: { expanded in
                     if expanded != (chat.workState.isExpanded == true) { chat.toggleWorkPaneExpanded() }
                 }),
+                isWorkOnLeft: Binding(get: { chat.workState.isWorkOnLeft == true },
+                                      set: { chat.setWorkPaneOnLeft($0) }),
                 onShowChatOnly: { chat.setWorkPaneVisible(false) }
             ) {
                 transcript(project: project)

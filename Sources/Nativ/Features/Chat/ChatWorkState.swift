@@ -35,6 +35,7 @@ struct ChatWorkState: Codable, Equatable {
     var selectedID: UUID?
     var isVisible = false
     var isExpanded: Bool? = false
+    var isWorkOnLeft: Bool? = false
 
     var selectedItem: ChatWorkItem? { items.first { $0.id == selectedID } }
     var openItems: [ChatWorkItem] { openIDs.compactMap { id in items.first { $0.id == id } } }
