@@ -305,7 +305,7 @@ struct ChatWorkPane: View {
 
     private func itemToolbar(_ item: ChatWorkItem) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 2) {
+            HStack(spacing: 0) {
                 viewModeButton("Preview", symbol: "eye", isSelected: !sourceIDs.contains(item.id)) {
                     sourceIDs.remove(item.id)
                 }
@@ -314,8 +314,7 @@ struct ChatWorkPane: View {
                     sourceIDs.insert(item.id)
                 }
             }
-            .padding(2)
-            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9))
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("View mode")
             Spacer(minLength: 0)
@@ -329,14 +328,13 @@ struct ChatWorkPane: View {
                                 action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 15))
+                .font(.system(size: 12))
                 .foregroundStyle(isSelected ? Color.primary : .secondary)
-                .frame(width: 32, height: 28)
-                .background(isSelected ? Color.primary.opacity(0.09) : .clear,
-                            in: RoundedRectangle(cornerRadius: 7))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(isSelected ? Color.primary.opacity(0.16) : .clear, lineWidth: 1)
+                .frame(width: 30, height: 30)
+                .background {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isSelected ? Color.primary.opacity(0.09) : .clear)
+                        .padding(2)
                 }
                 .contentShape(.rect)
         }
