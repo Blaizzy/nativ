@@ -7,13 +7,18 @@ fail() {
     exit 1
 }
 
+replace_existing=false
+if [[ "${1:-}" == "--replace-existing" ]]; then
+    replace_existing=true
+    shift
+fi
 if (($# != 1)); then
-    fail "usage: open_macos_debug.sh /path/to/Nativ.app"
+    fail "usage: open_macos_debug.sh [--replace-existing] /path/to/Nativ.app"
 fi
 
 app_path="$1"
 [[ -d "$app_path" ]] || fail "app bundle is missing: $app_path"
-app_path="$(cd "$(dirname "$app_path")" && pwd -P)/$(basename "$app_path")"
+app_path="$(cd "$app_path" && pwd -P)"
 
 bundle_identifier="$(
     /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
@@ -33,28 +38,78 @@ signature_details="$(codesign -dvvv -r- "$app_path" 2>&1)"
     fail "refusing to open a build without a stable designated requirement"
 }
 
-# Multiple Nativ builds compete for the same global shortcuts and make privacy
-# status appear inconsistent. Close prior instances before opening this exact
-# verified bundle.
+# All worktrees share the app's identity, data, server port, and shortcuts. Serialize
+# launches, and require an intentional switch before stopping another checkout.
+launch_directory="$(getconf DARWIN_USER_TEMP_DIR)"
+[[ -d "$launch_directory" ]] || fail "the per-user temporary directory is unavailable"
+launch_lock="${launch_directory%/}/nativ-debug-launch.lock"
+umask 077
+shlock -f "$launch_lock" -p "$$" || fail "another Nativ launch is in progress; try again when it finishes"
+trap 'rm -f "$launch_lock"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+expected_command="$app_path/Contents/MacOS/Nativ"
+process_command() {
+    local value
+    value="$(ps -p "$1" -o comm= 2>/dev/null || true)"
+    printf '%s\n' "${value#"${value%%[![:space:]]*}"}"
+}
+
+process_ids=()
+process_commands=()
+foreign_commands=()
 while IFS= read -r process_id; do
     [[ -n "$process_id" ]] || continue
+    process_path="$(process_command "$process_id")"
+    [[ -n "$process_path" ]] || continue
+    process_ids+=("$process_id")
+    process_commands+=("$process_path")
+    if [[ "$process_path" != "$expected_command" ]]; then
+        foreign_commands+=("$process_path")
+    fi
+done < <(pgrep -u "$UID" -x Nativ || true)
+
+# Preflight every process before stopping any, including this checkout's own app.
+if ((${#foreign_commands[@]} > 0)) && [[ "$replace_existing" != true ]]; then
+    printf 'A different Nativ build is already running:\n' >&2
+    printf '  %s\n' "${foreign_commands[@]}" >&2
+    fail "left all running builds untouched. Quit the other build, or use --replace-existing to switch intentionally"
+fi
+
+for ((index = 0; index < ${#process_ids[@]}; index++)); do
+    process_id="${process_ids[$index]}"
+    process_path="${process_commands[$index]}"
+    # Recheck the executable in case the process exited and its PID was reused.
+    [[ "$(process_command "$process_id")" == "$process_path" ]] || continue
+    echo "Stopping $process_path (PID $process_id)"
     kill "$process_id" 2>/dev/null || true
-done < <(pgrep -x Nativ || true)
+done
+
+# Let the previous app release its server and shortcuts before starting the next.
+for ((index = 0; index < ${#process_ids[@]}; index++)); do
+    process_id="${process_ids[$index]}"
+    process_path="${process_commands[$index]}"
+    for _ in {1..40}; do
+        [[ "$(process_command "$process_id")" == "$process_path" ]] || break
+        sleep 0.25
+    done
+    [[ "$(process_command "$process_id")" != "$process_path" ]] || {
+        fail "Nativ did not quit: $process_path. No new build was opened"
+    }
+done
 
 open -na "$app_path"
 
-expected_command="$app_path/Contents/MacOS/Nativ"
 for _ in {1..20}; do
     while IFS= read -r process_id; do
         [[ -n "$process_id" ]] || continue
-        process_command="$(ps -p "$process_id" -o command= 2>/dev/null || true)"
-        process_command="${process_command#"${process_command%%[![:space:]]*}"}"
-        if [[ "$process_command" == "$expected_command" ]]; then
+        if [[ "$(process_command "$process_id")" == "$expected_command" ]]; then
             echo "Opened $app_path"
             echo "Bundle identifier: $bundle_identifier"
             exit 0
         fi
-    done < <(pgrep -x Nativ || true)
+    done < <(pgrep -u "$UID" -x Nativ || true)
     sleep 0.25
 done
 

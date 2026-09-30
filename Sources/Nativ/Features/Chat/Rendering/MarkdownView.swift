@@ -8,17 +8,20 @@ struct MarkdownView: NSViewRepresentable {
     let style: MarkdownStyle
     var plainText = false
     var isStreaming = false
+    var onTranslate: ((String) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.chatSearchHighlight) private var searchHighlight
 
     func makeNSView(context: Context) -> MarkdownSurface {
         let view = MarkdownSurface()
+        view.onTranslate = onTranslate
         view.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         view.setSearchHighlight(searchHighlight)
         return view
     }
 
     func updateNSView(_ nsView: MarkdownSurface, context: Context) {
+        nsView.onTranslate = onTranslate
         nsView.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         nsView.setSearchHighlight(searchHighlight)
     }
@@ -36,6 +39,7 @@ struct MarkdownView: NSViewRepresentable {
 
 @MainActor
 final class MarkdownSurface: NSView {
+    var onTranslate: ((String) -> Void)?
     private(set) lazy var selection = MarkdownSelection(surface: self)
     var visibleTextViews: [MarkdownSelectableTextView] { mounted.values.flatMap { $0.content.textViews } }
     private var content: String?
@@ -77,8 +81,18 @@ final class MarkdownSurface: NSView {
         let copy = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
         copy.target = self
         copy.isEnabled = selection.range.length > 0
+        if onTranslate != nil {
+            let translate = menu.addItem(withTitle: "Translate…", action: #selector(translateSelection(_:)), keyEquivalent: "")
+            translate.target = self
+            translate.isEnabled = selection.range.length > 0
+        }
         menu.autoenablesItems = false
         return menu
+    }
+
+    @objc private func translateSelection(_ sender: Any?) {
+        guard !selection.text.isEmpty else { return }
+        onTranslate?(selection.text)
     }
 
     override init(frame: NSRect) {
@@ -470,11 +484,7 @@ final class MarkdownSelectableTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         if document?.range.length ?? 0 > 0 {
-            let menu = NSMenu()
-            let item = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
-            item.target = self
-            menu.autoenablesItems = false
-            return menu
+            return document?.contextualMenu(for: event)
         }
         return super.menu(for: event)
     }

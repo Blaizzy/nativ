@@ -38,6 +38,7 @@ Full feature and contributor documentation lives in **[`Docs/`](Docs/README.md)*
 |---|---|
 | **Local chat and vision** | Streaming conversations, image attachments, reasoning output, response metrics, and persistent chat history. |
 | **Multiple windows** | Open independent workspaces with Command + Shift + N while sharing the same inference server, loaded models, and settings. |
+| **Shared work pane** | Open document, code, HTML, and website tabs beside chat. Edit and preview work, discuss selected source, and let agents update shared items or operate the same browser page. |
 | **Image generation and editing** | Generate and edit images locally with compatible MLX image models in a dedicated Images tab. |
 | **Model library** | Discover installed MLX models, browse and download compatible models from Hugging Face with fit warnings for your memory, store the cache on an external APFS drive, inspect capabilities, switch models, or remove old ones. Preload separate language, image-generation, speech, and embedding models at once, with a warning if the combination would exceed your Mac's memory. |
 | **Performance analytics** | Track request volume, token usage, time to first token, decode speed, model performance, and recent activity. |
@@ -130,6 +131,13 @@ Local builds are signed with the Apple Development identity configured in
 keychain unlocked while building. The stable signer-bound identity lets macOS
 keep Accessibility permission across rebuilds instead of treating each binary
 as a different app.
+
+The debug launch script restarts only the exact app bundle requested. If another
+worktree's Nativ is running, it leaves both builds untouched and reports its path.
+To intentionally switch builds, quit the running app first or use
+`./scripts/open_macos_debug.sh --replace-existing /absolute/path/to/Nativ.app`.
+Concurrent launches are serialized across worktrees to protect the shared app
+identity, chat data, server, and shortcuts.
 
 To test an unreleased `mlx-audio` checkout, point the build at its local path:
 
