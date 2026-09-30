@@ -63,9 +63,10 @@ hostnames, local development addresses, or search terms (searched with Google).
 The expand control switches between split and full view. Model configuration and
 the work pane share the right side of chat.
 
-- **Documents and code:** edit source, preview Markdown or highlighted code, and
-  export a file. Markdown previews render math and resolve newly imported documents'
-  relative images against the original file location. Text imports are copies;
+- **Documents and code:** use the eye and code icons to switch between preview and
+  source. **Copy** copies the full source; its menu also offers plain text for Markdown
+  and the file name. You can also export a file. Markdown previews render math and
+  resolve newly imported documents' relative images against the original file location. Text imports are copies;
   editing them does not modify the original.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have

@@ -47,6 +47,34 @@ final class ChatWorkTests: XCTestCase {
         XCTAssertEqual(text, "Hello\n\nA formatted sentence.\n\nSecond paragraph.")
     }
 
+    func testPlainTextCopyPreservesCodeTableColumnsAndChecklistStates() {
+        let source = """
+            # Notes
+
+            A **formatted** [sentence](https://example.com).
+
+            | Site | Status |
+            | --- | --- |
+            | Swift | Ready |
+            | | Pending |
+
+            - [x] Visited
+            - [ ] Review
+
+            ```swift
+            if ready {
+                print("Copy this too")
+            }
+            ```
+            """
+        let text = ChatWorkDocument.plainText(source)
+        XCTAssertTrue(text.hasPrefix("Notes\n\nA formatted sentence."))
+        XCTAssertTrue(text.contains("Site\tStatus\nSwift\tReady\n\tPending"), text)
+        XCTAssertTrue(text.contains("☑ Visited\n☐ Review"), text)
+        XCTAssertTrue(text.contains("if ready {\n    print(\"Copy this too\")\n}"), text)
+        XCTAssertFalse(text.contains("```"))
+    }
+
     func testNewTabKeepsOpenWorkAndRestoresAcrossLaunches() throws {
         var state = ChatWorkState()
         let document = try state.create(title: "Notes.md", kind: .document, content: "Keep my edits")
