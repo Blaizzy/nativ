@@ -967,6 +967,38 @@ enum LocalModelDiscovery {
         "voxtral"
     ]
 
+    static func languageModelPreloadEligibility(
+        repoID: String,
+        searchRoots: [String]
+    ) -> Bool? {
+        let fileManager = FileManager.default
+        for root in searchRoots {
+            guard let snapshotURL = modelSnapshotURL(
+                repoID: repoID,
+                path: expandedPath(root),
+                fileManager: fileManager
+            ),
+                isLikelyMLXModelSnapshot(
+                    snapshotURL,
+                    model: repoID,
+                    fileManager: fileManager
+                )
+            else {
+                continue
+            }
+            let capabilities = modelCapabilities(
+                model: repoID,
+                at: snapshotURL,
+                fileManager: fileManager
+            )
+            return capabilities.contains(.text)
+                && !capabilities.contains(.drafter)
+                && !capabilities.contains(.embeddings)
+                && !capabilities.contains(.reranking)
+        }
+        return nil
+    }
+
     static func speechToTextPreloadIssue(repoID: String, path: String) -> String? {
         let fileManager = FileManager.default
         guard let snapshotURL = modelSnapshotURL(
@@ -1675,9 +1707,17 @@ enum LocalModelDiscovery {
             "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
         ]
         let generativeArchitectures = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
+        let languageConfigurationKeys: Set<String> = [
+            "language_config", "llm_config", "text_config",
+        ]
+        let tokenGenerationKeys: Set<String> = ["eos_token_id", "vocab_size"]
+        let rootConfigKeys = Set(config.keys)
         if primaryTask.includesLanguageCapability(
             fallbackMatch: textDescriptors.contains(where: descriptors.contains)
                 || generativeArchitectures.contains(where: descriptors.contains)
+                || !rootConfigKeys.isDisjoint(with: languageConfigurationKeys)
+                || (rootConfigKeys.contains("vision_config")
+                    && tokenGenerationKeys.isSubset(of: rootConfigKeys))
         ) {
             capabilities.insert(.text)
         }
