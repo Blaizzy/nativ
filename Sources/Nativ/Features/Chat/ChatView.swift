@@ -25,15 +25,16 @@ struct ChatView: View {
             model: model,
             isConfigurationVisible: $showsConfiguration
         ) {
-            HSplitView {
-                if !(chat.workState.isVisible && chat.workState.isExpanded == true) {
-                    transcript(project: project)
-                        .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
-                }
-                if chat.workState.isVisible {
-                    ChatWorkPane(chat: chat)
-                        .frame(minWidth: 320, idealWidth: 540, maxWidth: .infinity, maxHeight: .infinity)
-                }
+            ChatWorkSplitView(
+                isWorkVisible: chat.workState.isVisible,
+                isExpanded: Binding(get: { chat.workState.isExpanded == true }, set: { expanded in
+                    if expanded != (chat.workState.isExpanded == true) { chat.toggleWorkPaneExpanded() }
+                }),
+                onShowChatOnly: { chat.setWorkPaneVisible(false) }
+            ) {
+                transcript(project: project)
+            } work: {
+                ChatWorkPane(chat: chat)
             }
         }
         .background(Color.nativMainContentBackground)
@@ -518,6 +519,9 @@ private struct ChatComposerContainer: View {
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
+        .transformPreference(ChatComposerMinimumWidthKey.self) { width in
+            if width > 0 { width += ChatTranscriptLayout.horizontalPadding * 2 }
+        }
     }
 }
 

@@ -239,6 +239,8 @@ struct ChatComposer: View {
     @State private var webReadProviderLabel: String?
     @State private var browsingConfigurationRevision = 0
     @State private var composerWidth: CGFloat = 410
+    @State private var workspacePickerWidth: CGFloat = 120
+    @State private var modelPickerWidth: CGFloat = 180
     private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
@@ -385,6 +387,8 @@ struct ChatComposer: View {
                         selection: workspaceMode,
                         onSelect: onSelectWorkspaceMode
                     )
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
 
                     Spacer(minLength: 12)
 
@@ -394,6 +398,7 @@ struct ChatComposer: View {
                     }
 
                     modelPicker
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
 
                     Button {
                         if showsStopButton {
@@ -441,6 +446,7 @@ struct ChatComposer: View {
             }
         }
         .padding(.vertical, composerVerticalPadding)
+        .preference(key: ChatComposerMinimumWidthKey.self, value: minimumControlsWidth)
         .task(id: modelScanKey) {
             localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
@@ -478,6 +484,13 @@ struct ChatComposer: View {
         .sheet(isPresented: $showsCapabilities) {
             ChatCapabilitiesSheet(model: model)
         }
+    }
+
+    private var minimumControlsWidth: CGFloat {
+        // Add, workspace picker, spacer, optional context ring, model picker, Send,
+        // plus the row's spacing and horizontal padding.
+        30 + workspacePickerWidth + 12 + modelPickerWidth + 32 + 22
+            + (contextWindowUsage == nil ? 8 * 4 : 17 + 8 * 5)
     }
 
     private var addPanel: some View {
