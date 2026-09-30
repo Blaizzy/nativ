@@ -15,7 +15,6 @@ struct MarkdownRenderer: View {
     let fontSize: CGFloat
     var imagePolicy: ImagePolicy = .mathOnly
     var isStreaming = false
-    var fillsTableWidth = false
     var onTranslate: ((String) -> Void)?
 
     private struct LoadedImages {
@@ -36,8 +35,7 @@ struct MarkdownRenderer: View {
                 fontSize: fontSize,
                 dark: colorScheme == .dark,
                 baseURL: baseURL,
-                images: images,
-                fillsTableWidth: fillsTableWidth
+                images: images
             ),
             isStreaming: isStreaming,
             onTranslate: onTranslate

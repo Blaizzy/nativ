@@ -5,7 +5,6 @@ struct MarkdownStyle: Hashable {
     var dark = false
     var baseURL: URL?
     var images: MarkdownImages = .empty
-    var fillsTableWidth = false
 
     var foreground: NSColor {
         dark ? NSColor(white: 0.94, alpha: 1) : NSColor(white: 0.06, alpha: 1)
@@ -286,7 +285,7 @@ enum MarkdownLayouter {
                         (cells.map { measure($0[column], width: 100_000).width }.max() ?? 0) + 26))
             }
             let preferred = widths.reduce(0, +) + 1
-            if preferred > width || style.fillsTableWidth {
+            if preferred > width {
                 let factor = max(1, width - 1) / widths.reduce(0, +)
                 widths = widths.map { max(1, $0 * factor) }
             }
