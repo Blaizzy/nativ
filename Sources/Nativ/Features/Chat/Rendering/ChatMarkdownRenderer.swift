@@ -1,25 +1,5 @@
 import SwiftUI
 
-struct ChatMessageTextLayoutModifier: ViewModifier {
-  let usesCompactBubble: Bool
-  let textAlignment: TextAlignment
-  let alignment: Alignment
-
-  @ViewBuilder
-  func body(content: Content) -> some View {
-    if usesCompactBubble {
-      content
-        .lineSpacing(2)
-    } else {
-      content
-        .lineSpacing(2)
-        .multilineTextAlignment(textAlignment)
-        .frame(maxWidth: .infinity, alignment: alignment)
-        .fixedSize(horizontal: false, vertical: true)
-    }
-  }
-}
-
 struct ChatMarkdownRenderer: View {
   let messageID: UUID?
   let content: String

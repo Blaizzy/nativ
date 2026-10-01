@@ -671,18 +671,30 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     @ViewBuilder
     private func textBubble(_ content: String) -> some View {
         let usesCompactBubble = !content.contains(where: \.isNewline) && content.count <= 72
-        ChatMessageText(
-            messageID: message.id,
-            content: content,
-            rendersMarkdown: rendersMarkdown,
-            isStreaming: message.isStreaming,
-            isUserPrompt: message.role == .user
-        )
-        .modifier(ChatMessageTextLayoutModifier(
-            usesCompactBubble: usesCompactBubble,
-            textAlignment: textAlignment,
-            alignment: alignment
-        ))
+        Group {
+            if usesCompactBubble {
+                ChatMessageText(
+                    messageID: message.id,
+                    content: content,
+                    rendersMarkdown: rendersMarkdown,
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
+                )
+                .lineSpacing(2)
+            } else {
+                ChatMessageText(
+                    messageID: message.id,
+                    content: content,
+                    rendersMarkdown: rendersMarkdown,
+                    isStreaming: message.isStreaming,
+                    isUserPrompt: message.role == .user
+                )
+                .lineSpacing(2)
+                .multilineTextAlignment(textAlignment)
+                .frame(maxWidth: .infinity, alignment: alignment)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
         .modifier(ChatSelectionReplyModifier(message: message))
         .font(.body)
         .padding(.horizontal, message.role == .assistant ? 0 : 12)
