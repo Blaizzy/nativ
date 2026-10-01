@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ChatWorkPane: View {
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject private var browserProfile = ChatWorkBrowserProfile.shared
     @Environment(\.controlPanelIsFullScreen) private var isFullScreen
     @Environment(\.controlPanelIsSidebarVisible) private var isSidebarVisible
     @State private var sourceIDs: Set<UUID> = []
@@ -14,6 +15,7 @@ struct ChatWorkPane: View {
     @State private var translationText = ""
     @State private var showsTranslation = false
     @State private var preparesTranslation = false
+    @State private var confirmsClearWebsiteData = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +36,7 @@ struct ChatWorkPane: View {
                         }, onAnnotationError: { errorMessage = $0 }) {
                             browserPageMenu(item)
                         }
+                        .disabled(browserProfile.isClearingWebsiteData)
                     } else {
                         itemToolbar(item)
                     }
@@ -85,6 +88,15 @@ struct ChatWorkPane: View {
                 if chat.workState.isExpanded == true { chat.toggleWorkPaneExpanded() }
                 feedbackTarget = nil
             }
+        }
+        .confirmationDialog("Clear website data?", isPresented: $confirmsClearWebsiteData,
+                            titleVisibility: .visible) {
+            Button("Clear website data", role: .destructive) {
+                Task { await browserProfile.clearWebsiteData() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes cookies, website storage, and caches for all browser tabs in this app and signs you out of websites. Open pages will reload. Chats and documents are kept.")
         }
     }
 
@@ -432,6 +444,8 @@ struct ChatWorkPane: View {
             Button("Translate", systemImage: "translate") { translate(item) }
                 .disabled(preparesTranslation)
             Button("Discuss in chat", systemImage: "text.bubble") { presentFeedback(for: item) }
+            Divider()
+            Button("Clear website data…", systemImage: "trash") { confirmsClearWebsiteData = true }
         } label: {
             Image(nsImage: Self.pageMenuIcon)
                 .font(.system(size: 12))

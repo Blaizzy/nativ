@@ -3,16 +3,57 @@ import Foundation
 import SwiftUI
 import WebKit
 
+/// Website sign-ins belong to the app profile, not to an individual chat or tab.
+@MainActor
+final class ChatWorkBrowserProfile: ObservableObject {
+    static let shared = ChatWorkBrowserProfile(defaults: .standard)
+    let dataStore: WKWebsiteDataStore
+    @Published private(set) var isClearingWebsiteData = false
+    private let browsers = NSHashTable<ChatWorkBrowser>.weakObjects()
+
+    init(dataStore: WKWebsiteDataStore) {
+        self.dataStore = dataStore
+    }
+
+    convenience init(defaults: UserDefaults) {
+        let key = "chatWorkBrowserProfileID"
+        let identifier = defaults.string(forKey: key).flatMap(UUID.init(uuidString:)) ?? UUID()
+        defaults.set(identifier.uuidString, forKey: key)
+        // App-scoped preferences keep Preview's profile separate from Nativ's.
+        self.init(dataStore: WKWebsiteDataStore(forIdentifier: identifier))
+    }
+
+    fileprivate func register(_ browser: ChatWorkBrowser) { browsers.add(browser) }
+
+    func clearWebsiteData() async {
+        guard !isClearingWebsiteData else { return }
+        isClearingWebsiteData = true
+        defer { isClearingWebsiteData = false }
+        let openBrowsers = browsers.allObjects
+        for browser in openBrowsers {
+            browser.annotator.cancel()
+            browser.webView.stopLoading()
+            browser.elementLabels = [:]
+        }
+        await dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
+        // Reload all chats/windows using this profile so signed-in pages refresh too.
+        for browser in openBrowsers { browser.webView.reloadFromOrigin() }
+    }
+}
+
 @MainActor
 final class ChatWorkBrowserPool {
     private var browsers: [UUID: [UUID: ChatWorkBrowser]] = [:]
+    private let profile: ChatWorkBrowserProfile
+
+    init(profile: ChatWorkBrowserProfile = .shared) { self.profile = profile }
 
     func browser(for item: ChatWorkItem, sessionID: UUID) -> ChatWorkBrowser {
         if let browser = browsers[sessionID]?[item.id] {
             browser.load(item)
             return browser
         }
-        let browser = ChatWorkBrowser()
+        let browser = ChatWorkBrowser(profile: profile)
         browsers[sessionID, default: [:]][item.id] = browser
         browser.load(item)
         return browser
@@ -40,6 +81,7 @@ final class ChatWorkBrowserPool {
 @MainActor
 final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView
+    let profile: ChatWorkBrowserProfile
     let annotator = ChatWorkAnnotator()
     @Published private(set) var address = ""
     @Published private(set) var isLoading = false
@@ -58,11 +100,12 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     private var isStartingPreview = false
     private var pendingNavigation: WKNavigation?
     private var observations: [NSKeyValueObservation] = []
-    private(set) var elementLabels: [String: String] = [:]
+    fileprivate(set) var elementLabels: [String: String] = [:]
 
-    override init() {
+    init(profile: ChatWorkBrowserProfile = .shared) {
+        self.profile = profile
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = profile.dataStore
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.userContentController.addUserScript(WKUserScript(
@@ -97,9 +140,11 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                 Task { @MainActor in self?.refreshNavigation() }
             }
         ]
+        profile.register(self)
     }
 
     func load(_ item: ChatWorkItem) {
+        guard !profile.isClearingWebsiteData else { return }
         if let rawURL = item.url {
             guard modelURL != rawURL else { return }
             stopPreview()
@@ -166,6 +211,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func navigate(_ rawURL: String) throws {
+        guard !profile.isClearingWebsiteData else {
+            throw ChatWorkError.invalid("Website data is being cleared. Try again in a moment.")
+        }
         let url = try ChatWorkState.webURL(rawURL)
         annotator.cancel()
         loadedURL = url.absoluteString
@@ -268,6 +316,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
 
     func execute(_ request: ChatWorkRequest) async throws -> String {
         try Task.checkCancellation()
+        guard !profile.isClearingWebsiteData else {
+            throw ChatWorkError.invalid("Website data is being cleared. Try again in a moment.")
+        }
         switch request.action {
         case .navigate:
             guard let url = request.url else { throw ChatWorkError.invalid("navigate requires url.") }
