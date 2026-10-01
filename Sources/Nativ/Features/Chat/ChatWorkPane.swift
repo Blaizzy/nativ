@@ -78,7 +78,8 @@ struct ChatWorkPane: View {
             ChatWorkFeedbackSheet(target: target) { comment in
                 guard chat.currentSessionID == target.sessionID,
                       chat.workState.selectedID == target.item.id else { return }
-                chat.draft += (chat.draft.isEmpty ? "" : "\n\n") + target.message(comment: comment)
+                do { try chat.addWorkFeedback(target, comment: comment) }
+                catch { errorMessage = error.localizedDescription; return }
                 if chat.workState.isExpanded == true { chat.toggleWorkPaneExpanded() }
                 feedbackTarget = nil
             }

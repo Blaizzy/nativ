@@ -548,9 +548,9 @@ final class ChatViewModel: ObservableObject {
             annotations: pendingAnnotations
         )
         promptEditContext = ChatPromptEditContext(messageID: messageID)
-        restoreComposerDraft(ChatPastedTextDraft(text: message.content, pastedTexts: message.pastedTexts))
+        restoreComposerDraft(ChatPastedTextDraft(text: message.annotationPresentation.content, pastedTexts: message.pastedTexts))
         pendingImageAttachments = message.imageAttachments
-        pendingAnnotations = message.annotations
+        pendingAnnotations = message.annotationPresentation.annotations
         composerFocusToken += 1
     }
 
@@ -559,6 +559,7 @@ final class ChatViewModel: ObservableObject {
         guard promptEditContext == nil,
             pastedTextDraft.isEmpty,
             pendingImageAttachments.isEmpty,
+            pendingAnnotations.isEmpty,
             let messageID = latestUserMessageID
         else {
             return false
@@ -1320,6 +1321,7 @@ final class ChatViewModel: ObservableObject {
 
     func addAnnotation(_ annotation: ChatAnnotation) {
         guard pendingAnnotations.count < ChatAnnotation.maximumCount,
+              annotation.workReference == nil,
               messages.contains(where: { $0.id == annotation.sourceMessageID }),
               !pendingAnnotations.contains(where: {
                   $0.sourceMessageID == annotation.sourceMessageID
@@ -1332,6 +1334,28 @@ final class ChatViewModel: ObservableObject {
 
     func removeAnnotation(_ id: UUID) {
         pendingAnnotations.removeAll { $0.id == id }
+    }
+
+    func addWorkFeedback(_ target: ChatWorkFeedback, comment: String) throws {
+        guard currentSessionID == target.sessionID, workState.items.contains(where: { $0.id == target.item.id }) else {
+            throw ChatWorkError.invalid("Return to the chat containing this annotation.")
+        }
+        let text: String
+        if let selection = target.annotation {
+            guard pendingAnnotations.count < ChatAnnotation.maximumCount else {
+                throw ChatWorkError.invalid("Send or remove an annotation before adding another.")
+            }
+            let reference = ChatWorkAnnotationReference(itemID: target.item.id, title: target.item.title,
+                                                        revision: target.item.revision, selection: selection)
+            pendingAnnotations.append(reference.annotation())
+            text = comment
+        } else {
+            text = target.message(comment: comment)
+        }
+        let appended = (draft.isEmpty ? "" : "\n\n") + text
+        restoreComposerDraft(pastedTextDraft.replacingText(
+            in: NSRange(location: (composerText as NSString).length, length: 0), with: appended))
+        composerFocusToken += 1
     }
 
     func send(

@@ -606,8 +606,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
-                if !message.annotations.isEmpty {
-                    ChatAnnotationCards(annotations: message.annotations)
+                if !message.annotationPresentation.annotations.isEmpty {
+                    ChatAnnotationCards(annotations: message.annotationPresentation.annotations)
                 }
                 if showsTextContent {
                     if message.role == .user, !message.pastedTexts.isEmpty {
@@ -769,7 +769,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     private var displayContent: String {
-        message.content.isEmpty ? " " : message.content
+        let content = message.annotationPresentation.content
+        return content.isEmpty ? " " : content
     }
 
     private var showsTextContent: Bool {

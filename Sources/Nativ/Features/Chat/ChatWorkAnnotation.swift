@@ -49,7 +49,7 @@ struct ChatWorkFeedbackSheet: View {
     }
 }
 
-struct ChatWorkPageAnnotation: Decodable, Equatable {
+struct ChatWorkPageAnnotation: Codable, Equatable, Sendable {
     let url: String
     let selector: String
     let text: String
