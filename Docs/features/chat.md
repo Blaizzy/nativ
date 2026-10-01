@@ -57,7 +57,7 @@ time, and model selection is unavailable while any window is generating.
 
 Select **Work pane** (⌘⇧B) to open a resizable workspace beside the conversation.
 The **+** button opens a new-tab page without closing existing tabs. **Tools**
-creates documents, code, and HTML pages or imports a UTF-8 file; **Suggested** and
+creates terminals, documents, code, and HTML pages or imports a UTF-8 file; **Suggested** and
 **Recents** reopen saved work. The rounded address bar accepts HTTP(S) URLs, bare
 hostnames, local development addresses, or search terms (searched with Google).
 The expand control switches between split and full view. Model configuration and
@@ -72,6 +72,17 @@ the work pane share the right side of chat.
   or browse an HTTP(S) URL, including a local development server. Remote pages have
   back, forward, reload, and address controls. Browser storage is separate from
   the user's regular browser and lasts only while its tab stays open in the app.
+- **Terminal:** choose **+ → Terminal** for an interactive zsh shell in the chat's
+  project folder, or your home folder. Each terminal retains its process, working
+  directory, and environment while switching tabs or chats. Closing the tab stops
+  the shell and saves a bounded, redacted output snapshot; reopening it or
+  restarting the app starts a fresh shell. Approved agent `terminal` commands stream
+  into a separate, output-only **Agent terminal** tab. Each native `terminal` command
+  still runs in its own process and uses the existing command approval flow.
+  Agents can also run commands in an existing interactive tab with `chat_work.run`,
+  including in standalone chats. Each command shows its target and arguments for
+  approval and passes the terminal command safety checks. Shell input or process
+  changes invalidate pending approval. User zsh startup files still load normally.
 - **Translation:** the Translate button opens the native macOS translation popover
   for selected source or browser text, or the document/page's prose. Select the target
   language in the popover; macOS may offer to download a language. Selected Markdown
@@ -85,6 +96,15 @@ the work pane share the right side of chat.
   Work-only sessions are retained even if no messages have been sent.
 
 The native `chat_work` tool lists, reads, creates, opens, and updates these items.
+Terminal creation accepts a title with `kind: "terminal"`. For an existing terminal,
+`run` takes its `id` and a `command`, preserving the shell's working directory and
+environment. An omitted ID uses only the selected terminal. `read` and `inspect`
+return current output, working directory, running state, readiness, and exit code;
+`interrupt` sends Ctrl-C. `run` waits up to `timeout` seconds (1–30, default 10), then
+returns the current state without stopping a longer command. Read again to follow
+progress. A busy terminal or a partially typed command must be finished or
+interrupted before another agent command can run. Browser click/type actions and
+editing terminal content never execute shell commands.
 Updates require the revision returned by `read`; an intervening user edit causes
 a conflict instead of being overwritten. If an agent omits an update's ID, the app
 uses only its latest read in that chat with the same revision and matching title/kind
@@ -105,7 +125,8 @@ the next inspection or action, and changed inputs are rejected. All `chat_work`
 calls use the existing consent UI, showing the action arguments before execution.
 
 This version supports up to 24 items per chat and 256 KB of text per item. Office
-documents and PDFs are not editable in this pane; code is not executed locally.
+documents and PDFs are not editable in this pane. Code-file previews do not
+execute code; use a terminal for local commands.
 Browser inspection covers the main document's DOM, not canvas controls, shadow
 roots, or embedded frames. Password and file inputs require direct user interaction.
 HTML previews run scripts in a sandboxed frame without native host access.

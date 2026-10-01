@@ -3,13 +3,14 @@ import Foundation
 /// Shared, session-owned work. Closing a tab never deletes its contents.
 struct ChatWorkItem: Identifiable, Codable, Equatable {
     enum Kind: String, Codable, CaseIterable {
-        case document, code, website
+        case document, code, website, terminal
 
         var symbol: String {
             switch self {
             case .document: "doc.text"
             case .code: "chevron.left.forwardslash.chevron.right"
             case .website: "globe"
+            case .terminal: "terminal"
             }
         }
     }
@@ -21,10 +22,12 @@ struct ChatWorkItem: Identifiable, Codable, Equatable {
     var url: String?
     var language: String?
     var sourceURL: String?
+    var terminalWorkingDirectory: String?
+    var terminalCommand: String?
     var revision = 1
     var updatedBy = "You"
 
-    var canEdit: Bool { url == nil }
+    var canEdit: Bool { url == nil && kind != .terminal }
 
     /// Older chats and agents can label a complete HTML page as a document or code.
     /// Resolve its presentation without rewriting its source, ID, or revision.
@@ -94,6 +97,9 @@ struct ChatWorkState: Codable, Equatable {
         }
         let title = try Self.validatedTitle(title)
         try Self.validateContent(content)
+        if kind == .terminal, !content.isEmpty || url != nil || language != nil || sourceURL != nil {
+            throw ChatWorkError.invalid("Create a terminal with a title only. Use the terminal tool to run an approved command.")
+        }
         if let url {
             guard kind == .website, content.isEmpty else {
                 throw ChatWorkError.invalid("A website needs either a URL or HTML content, not both.")
@@ -121,7 +127,7 @@ struct ChatWorkState: Codable, Equatable {
             throw ChatWorkError.conflict
         }
         guard items[index].canEdit else {
-            throw ChatWorkError.invalid("Remote websites are view-only. Create an HTML website to edit its source.")
+            throw ChatWorkError.invalid("This item has no editable source. Use the terminal tool for commands or create an HTML website to edit webpage source.")
         }
         try Self.validateContent(content)
         let validatedTitle = try title.map(Self.validatedTitle)

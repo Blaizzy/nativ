@@ -82,6 +82,7 @@ To run the app:
 To build from source, you will also need:
 
 - Xcode with the macOS 26 SDK.
+- The Xcode Metal Toolchain for the embedded terminal (`xcodebuild -downloadComponent MetalToolchain`).
 - [`xcodegen`](https://github.com/yonaskolb/XcodeGen).
 - Python 3.
 - Network access to GitHub Releases and PyPI while the embedded Python bundle is first assembled or refreshed.

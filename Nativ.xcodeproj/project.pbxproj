@@ -62,6 +62,7 @@
 		1890C306E4861079C4CA34AB /* FileReadAccessPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B0425C365C50DD040161226 /* FileReadAccessPolicy.swift */; };
 		18BA08A2DD4C4CAD2DC6B0E3 /* NativBulkSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7069F17AAC82BF3F1FD1C95E /* NativBulkSelection.swift */; };
 		197EBBED5CC651E6364617B5 /* VoiceCaptureOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C93856381B1D89C4DE61DCC /* VoiceCaptureOverlay.swift */; };
+		1A178EF46268799AE323FDB7 /* ChatWorkTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BEDA4DB8215C9D7C8078F28 /* ChatWorkTerminalTests.swift */; };
 		1A6F5207528E44EA9FF8F831 /* NativChatClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38E6FD97A66F91B3B667B3FE /* NativChatClient.swift */; };
 		1A82A76742BFEEBE881659BD /* TavilyBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C90AC464C5C04FB14A3C789 /* TavilyBrowsingProvider.swift */; };
 		1AF312AA0292E34A471F5D16 /* ChatToolConfirmationButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8272E05C13BEB152E8C7C3D4 /* ChatToolConfirmationButton.swift */; };
@@ -141,6 +142,7 @@
 		39F8BACAF5377A5DA14581BA /* ChatListModelsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = B598294F3FC3EA81BCD7A680 /* ChatListModelsTool.swift */; };
 		3A4D3E1F9313D9896173130D /* VoiceShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7405BB62742DE08EB640A2C5 /* VoiceShortcut.swift */; };
 		3AA3A795AAD2F1EE33BECFCB /* NimbleBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32ECE279A81609EFF928C0D5 /* NimbleBrowsingProvider.swift */; };
+		3AFF125435F3C39C23AD06BC /* ChatWorkTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D174F906418CC994011980 /* ChatWorkTerminal.swift */; };
 		3C612817DDB7C3800F41F61C /* PersistedDataChangeHubTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C870DD5A3B825D12BC04EB9D /* PersistedDataChangeHubTests.swift */; };
 		3CFCC551774CD33CA71FE609 /* ArtifactRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD136B8C2C1F6B2B554064C5 /* ArtifactRefreshTests.swift */; };
 		3D7F718E2E136C35CD3509B4 /* ChatSystemStatsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = A83D9F5E20A8F5FFC8618E82 /* ChatSystemStatsTool.swift */; };
@@ -192,6 +194,7 @@
 		4FC9EEEC4DFDE7766C2526E2 /* ChatDocumentContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A176708720937F2AEF36812 /* ChatDocumentContextBuilder.swift */; };
 		4FF939720FFF6FCEEFFC7018 /* ChatProjectStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23682FBD5DC3FC2517ABF397 /* ChatProjectStoreTests.swift */; };
 		506A12DCE5B56E53208A8BA2 /* NativServerKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1651E057CC5D05857CF1595 /* NativServerKit.swift */; };
+		5188B55363796046F67285DC /* SwaTexRender in Frameworks */ = {isa = PBXBuildFile; productRef = CB3602F4C9B417450A9FAA0B /* SwaTexRender */; };
 		5196EA3B5CC4CE166899FE19 /* ControlPanelActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD296E4B5897E7E46606B697 /* ControlPanelActions.swift */; };
 		526A3EF3AFEABD6199E68051 /* NativPrefillProgressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF689E20F88237D2D6A25B3 /* NativPrefillProgressTests.swift */; };
 		52927A9A78C07E5E649AFDF6 /* FilePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C9FECAED1FB3E2D43716FF /* FilePreview.swift */; };
@@ -367,7 +370,7 @@
 		AA4FD64FCA38FCA61BC4A490 /* SafeLocalFileReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7A0A31B4307E2520BCD4F2 /* SafeLocalFileReader.swift */; };
 		AA938EB357E47BE2077567E2 /* ControlPanelSidebarRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BF298015C5DDB04B72C29A9 /* ControlPanelSidebarRows.swift */; };
 		AAF463B00CFC2B97177A7032 /* MarkdownImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A721B07262EFFDF44CC505 /* MarkdownImages.swift */; };
-		AB05CE341967E073E10EF420 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 7BBE541F53FDF5C0518C0EB0 /* Sparkle */; };
+		AB05CE341967E073E10EF420 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F307136B3F35001FE3A9F65F /* SwiftTerm */; };
 		AB1C4B8494B46754E6E8BE24 /* AudioAnalyticsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0BD007DAD141D50E1BAA4 /* AudioAnalyticsStore.swift */; };
 		AB4C49A5BFDAA9352BD257B7 /* CustomToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAB72E13D688936495CBA7C8 /* CustomToolTests.swift */; };
 		AB4F018D0DAE2FA8A0E33D9D /* ChatWorkTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = E38BD838C0F3E46486F5A2A3 /* ChatWorkTool.swift */; };
@@ -406,7 +409,7 @@
 		B8D44F30A79786E04C9B69DE /* ChatStreamEventRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6424934AA457AEE6B59C1227 /* ChatStreamEventRelay.swift */; };
 		B951641CCDDFF5C718078D99 /* FileSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5668DEC01979A9C0F082682C /* FileSearchEngine.swift */; };
 		B986E17A8D75D859BFF14BBF /* ReleaseVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3F46907258A26CF631CB3BD /* ReleaseVersion.swift */; };
-		BA7876C934E43E103899E70E /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 73083760B397D149449368BB /* cmark-gfm-extensions */; };
+		BA7876C934E43E103899E70E /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = CEB8C184F0B1004039AF6A59 /* cmark-gfm */; };
 		BC0753B567DC8935199FCDFB /* ImageGenerationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 239C5B241E83468B75C43E5A /* ImageGenerationViewModel.swift */; };
 		BD65446445E57FFE4E717F42 /* SystemMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7F0D894C4EB6521F21D4D /* SystemMonitorView.swift */; };
 		BE712AD5A19F62157BB8535C /* LaunchAtLoginController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 676481665F5FA780DE8D402E /* LaunchAtLoginController.swift */; };
@@ -425,11 +428,12 @@
 		C3D251E72388C59FFEA7E9C4 /* ChatAttachmentNoticesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51539FFC3A9D763AA1746318 /* ChatAttachmentNoticesView.swift */; };
 		C410036C89EF4AC16C1AFE76 /* NativWindowState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D228AE1FDCC09FF03F3C0607 /* NativWindowState.swift */; };
 		C4381191592EC7C3B97E2C35 /* FilePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44C9FECAED1FB3E2D43716FF /* FilePreview.swift */; };
-		C43BABF794329C2C1D03F869 /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = CEB8C184F0B1004039AF6A59 /* cmark-gfm */; };
+		C43BABF794329C2C1D03F869 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 7BBE541F53FDF5C0518C0EB0 /* Sparkle */; };
 		C4A766A43FD62815D056BD93 /* ParallelBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC8347D15B2595FF7819F7C /* ParallelBrowsingProvider.swift */; };
 		C5CE4EBDB988CF611FB2D6DA /* SystemMenuBarPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE1E26171E964D9769E65CB /* SystemMenuBarPreferences.swift */; };
 		C6DFA4F348008EDB924A3FC1 /* WebReadContentSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F15F7E180170C5FA55BD38F /* WebReadContentSelector.swift */; };
 		C7697F50D8F4E4628DFEE397 /* Tavily.png in Resources */ = {isa = PBXBuildFile; fileRef = BF65681C9FD920314BECC7D3 /* Tavily.png */; };
+		C7DF191157AD3ED53F68B3F0 /* ChatWorkTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33D174F906418CC994011980 /* ChatWorkTerminal.swift */; };
 		C7E82815819A49D1AA619711 /* ArtifactCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14764324568DE9C6AC095EDA /* ArtifactCatalog.swift */; };
 		C84FA1A269F12B130EAEB57B /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52EB7572F271F7D68DC3F97D /* ModelsView.swift */; };
 		C89558DC65CAAEC956198688 /* ExtensionsHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D5BCE1A4769FE7823B5C79D /* ExtensionsHubView.swift */; };
@@ -511,6 +515,7 @@
 		EED0FA36452769271F0CB8BB /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89C8AB8FCF1292D303C7EB2 /* MarkdownRenderer.swift */; };
 		EF3678F684519D8ADC625B20 /* MLXImageModelResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */; };
 		F110515E63D4C200A8930120 /* Perplexity.png in Resources */ = {isa = PBXBuildFile; fileRef = F84C7B764CE1B6F63746E3BB /* Perplexity.png */; };
+		F118E505C0B99F19BFAEC8C2 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F16FD8B24B12F6B12FCC606D /* SwiftTerm */; };
 		F14A3E893E8DE4DE035C3925 /* ChatConversationBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B059AF48F10F1B0502DC5E6F /* ChatConversationBranchTests.swift */; };
 		F173E87800BD20A7A0993FBD /* WebReadService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C695753548A6C1F2F37C602 /* WebReadService.swift */; };
 		F2D992CF4F2CDFF9BEA13C3B /* ServerPortProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */; };
@@ -518,13 +523,13 @@
 		F32A65A75BCD6911505114F4 /* NativExtensionSDK.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EC94DCF581824C3B1FCADAB8 /* NativExtensionSDK.framework */; };
 		F39E0A3FF5B7D6375EBB71BC /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = B50DB6DEB5C434C27FE9AF66 /* MarkdownText.swift */; };
 		F3D21045349377FF044ABDC7 /* MarkdownSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE109F2077912969C25E134 /* MarkdownSelection.swift */; };
-		F419F46D380D8BB63BEE29EC /* SwaTexRender in Frameworks */ = {isa = PBXBuildFile; productRef = CB3602F4C9B417450A9FAA0B /* SwaTexRender */; };
+		F419F46D380D8BB63BEE29EC /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = B47FB8D68E53A933ACF71A58 /* Highlightr */; };
 		F55977B2BF1C55FDBC7AD537 /* HuggingFaceDownloadPreflight.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4D6131B6961BE835918A998 /* HuggingFaceDownloadPreflight.swift */; };
 		F58ED8B576ABBE02882D43D1 /* HubModelSizeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */; };
 		F5EB384AAC13043938A0A7EB /* IntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */; };
 		F6BFEEE99336BB34E3194214 /* NativExtensionPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BD28C5E1607C8E6025B7240 /* NativExtensionPlatform.swift */; };
 		F7F573F15C7DC5CD17061EB9 /* ChatProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11A25CB7C798C39A206FACC /* ChatProjectStore.swift */; };
-		F945C21FDDC8AE619860D222 /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = B47FB8D68E53A933ACF71A58 /* Highlightr */; };
+		F945C21FDDC8AE619860D222 /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = 73083760B397D149449368BB /* cmark-gfm-extensions */; };
 		F9B4AAA3C467240C00807753 /* ChatReadFileToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56181DA223153BACC750E96 /* ChatReadFileToolTests.swift */; };
 		FAFA56EECAB162BEDDA61DD2 /* VoiceWakeWordDetection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A28DAF80BABEE10D703D919 /* VoiceWakeWordDetection.swift */; };
 		FBD608F58527BA13C4F8CC5A /* ChatSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EB5FE1937AB157ACAEC5354 /* ChatSearch.swift */; };
@@ -690,6 +695,7 @@
 		32ECE279A81609EFF928C0D5 /* NimbleBrowsingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NimbleBrowsingProvider.swift; sourceTree = "<group>"; };
 		330FEA0F4955A2486E0C3A22 /* ServerPortProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerPortProbe.swift; sourceTree = "<group>"; };
 		332C54820A1273F103E68BC2 /* ChatImageModelSelectionRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatImageModelSelectionRequestTests.swift; sourceTree = "<group>"; };
+		33D174F906418CC994011980 /* ChatWorkTerminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkTerminal.swift; sourceTree = "<group>"; };
 		35C1220F03EC60874920E0CE /* RoutineScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoutineScheduler.swift; sourceTree = "<group>"; };
 		37408935D4EAA2CA89CC0A4C /* VoiceDictationExtensionRuntime.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = VoiceDictationExtensionRuntime.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		37413930F2389C2520E98117 /* ArtifactRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactRecoveryTests.swift; sourceTree = "<group>"; };
@@ -719,6 +725,7 @@
 		4AF689E20F88237D2D6A25B3 /* NativPrefillProgressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativPrefillProgressTests.swift; sourceTree = "<group>"; };
 		4BBF7A59DCE85B6CEBFFD743 /* ChatTextSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatTextSearch.swift; sourceTree = "<group>"; };
 		4BEAD8583687ABA95FF4986E /* LogTextStorageMutationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTextStorageMutationTests.swift; sourceTree = "<group>"; };
+		4BEDA4DB8215C9D7C8078F28 /* ChatWorkTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkTerminalTests.swift; sourceTree = "<group>"; };
 		4C93856381B1D89C4DE61DCC /* VoiceCaptureOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCaptureOverlay.swift; sourceTree = "<group>"; };
 		4DCD9D4118F0B3580590998F /* ScheduledTaskChatLinker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledTaskChatLinker.swift; sourceTree = "<group>"; };
 		4DEE7582DCB286B9D878E28E /* ChatAttachmentKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachmentKind.swift; sourceTree = "<group>"; };
@@ -997,11 +1004,12 @@
 				488BBCB7C0182ABB1FBADAD1 /* NativServerKit.framework in Frameworks */,
 				361D948B1B76F41B63A0B832 /* NativExtensionSDK.framework in Frameworks */,
 				E9CD4ED9C227090EFE23EB03 /* ZIPFoundation in Frameworks */,
-				AB05CE341967E073E10EF420 /* Sparkle in Frameworks */,
-				C43BABF794329C2C1D03F869 /* cmark-gfm in Frameworks */,
-				BA7876C934E43E103899E70E /* cmark-gfm-extensions in Frameworks */,
-				F945C21FDDC8AE619860D222 /* Highlightr in Frameworks */,
-				F419F46D380D8BB63BEE29EC /* SwaTexRender in Frameworks */,
+				AB05CE341967E073E10EF420 /* SwiftTerm in Frameworks */,
+				C43BABF794329C2C1D03F869 /* Sparkle in Frameworks */,
+				BA7876C934E43E103899E70E /* cmark-gfm in Frameworks */,
+				F945C21FDDC8AE619860D222 /* cmark-gfm-extensions in Frameworks */,
+				F419F46D380D8BB63BEE29EC /* Highlightr in Frameworks */,
+				5188B55363796046F67285DC /* SwaTexRender in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1017,6 +1025,7 @@
 				467A79817882057E60D2E4ED /* Highlightr in Frameworks */,
 				308D702D90DECE44C62375CD /* SwaTexRender in Frameworks */,
 				B8025D46E56B130B785F7EBE /* ZIPFoundation in Frameworks */,
+				F118E505C0B99F19BFAEC8C2 /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1641,6 +1650,7 @@
 				39B3E82A6F0DC701B7780AE6 /* ChatWorkspacePicker.swift */,
 				B066DABBB9BF8319E218CA95 /* ChatWorkSplitView.swift */,
 				7C85BEEDE73BA13311CC3E08 /* ChatWorkState.swift */,
+				33D174F906418CC994011980 /* ChatWorkTerminal.swift */,
 				07AA5BEA8DD43664FA37A14E /* Rendering */,
 				967B3678137E2B152FAC9838 /* Tools */,
 			);
@@ -1699,6 +1709,7 @@
 				AFA5142DB692E378ADE8DFA0 /* ChatWebSearchToolTests.swift */,
 				DC37AD4573FA876961F1399C /* ChatWorkBrowserTests.swift */,
 				66E58A37E07B049CDB77B95E /* ChatWorkSplitTests.swift */,
+				4BEDA4DB8215C9D7C8078F28 /* ChatWorkTerminalTests.swift */,
 				DAD21FFA02A2C23DB3BC11E1 /* ChatWorkTests.swift */,
 				18D567A929D30844940A94F4 /* ControlPanelDependencyOwnershipTests.swift */,
 				DAB72E13D688936495CBA7C8 /* CustomToolTests.swift */,
@@ -1801,6 +1812,7 @@
 				0771E5ACBAEB27CD4A733935 /* Highlightr */,
 				7C44F2BDEB36AE1669F3B4C5 /* SwaTexRender */,
 				66E307AA0AD0D089ED4F2AB5 /* ZIPFoundation */,
+				F16FD8B24B12F6B12FCC606D /* SwiftTerm */,
 			);
 			productName = Nativ;
 			productReference = DE575DB2DCD07A1864311714 /* Nativ.app */;
@@ -1824,6 +1836,7 @@
 			name = NativTests;
 			packageProductDependencies = (
 				7916EF3A0446EB624D66C33F /* ZIPFoundation */,
+				F307136B3F35001FE3A9F65F /* SwiftTerm */,
 				7BBE541F53FDF5C0518C0EB0 /* Sparkle */,
 				CEB8C184F0B1004039AF6A59 /* cmark-gfm */,
 				73083760B397D149449368BB /* cmark-gfm-extensions */,
@@ -1912,6 +1925,7 @@
 				0FB7E2D2B22FC46D3462C47A /* XCRemoteSwiftPackageReference "Sparkle" */,
 				F0DF26FE39829DA66FD81C62 /* XCRemoteSwiftPackageReference "SwaTex" */,
 				5415DFEB5C121F7044B3D436 /* XCRemoteSwiftPackageReference "swift-cmark" */,
+				0DCA3A7257026C34244A0BBB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				5409D05039F3337AF74DB4F3 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				4AEDB4F2A39BE67B1DF710AE /* XCRemoteSwiftPackageReference "swift-sdk" */,
 			);
@@ -2107,6 +2121,7 @@
 				ED8C3B04E8E01603D12531B3 /* ChatWorkPreviewServer.swift in Sources */,
 				FBDC169DC5CF4D7DEDDE5B1B /* ChatWorkSplitView.swift in Sources */,
 				9F7C095FFABABFA1281FA517 /* ChatWorkState.swift in Sources */,
+				C7DF191157AD3ED53F68B3F0 /* ChatWorkTerminal.swift in Sources */,
 				AB4F018D0DAE2FA8A0E33D9D /* ChatWorkTool.swift in Sources */,
 				BF5A1AD007F259A2F926AF57 /* ChatWorkspacePicker.swift in Sources */,
 				FD18166B4B3FAEB77E0D8C69 /* CodexCLIProfile.swift in Sources */,
@@ -2365,6 +2380,8 @@
 				BE983C4E83F16F83DB4F6873 /* ChatWorkSplitTests.swift in Sources */,
 				3676ACB3AE704585EF4C8194 /* ChatWorkSplitView.swift in Sources */,
 				E009AC13E8BD4E0E3B7FA025 /* ChatWorkState.swift in Sources */,
+				3AFF125435F3C39C23AD06BC /* ChatWorkTerminal.swift in Sources */,
+				1A178EF46268799AE323FDB7 /* ChatWorkTerminalTests.swift in Sources */,
 				FD154570F407F481094C3964 /* ChatWorkTests.swift in Sources */,
 				E4308D02B22F925631EF7FED /* ChatWorkTool.swift in Sources */,
 				1C6295D830FE941FDCE3ECCC /* CodexCLIProfile.swift in Sources */,
@@ -2997,6 +3014,14 @@
 				version = 2.3.0;
 			};
 		};
+		0DCA3A7257026C34244A0BBB /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = exactVersion;
+				version = 1.18.0;
+			};
+		};
 		0FB7E2D2B22FC46D3462C47A /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle";
@@ -3104,6 +3129,16 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5415DFEB5C121F7044B3D436 /* XCRemoteSwiftPackageReference "swift-cmark" */;
 			productName = "cmark-gfm";
+		};
+		F16FD8B24B12F6B12FCC606D /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0DCA3A7257026C34244A0BBB /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		F307136B3F35001FE3A9F65F /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0DCA3A7257026C34244A0BBB /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
