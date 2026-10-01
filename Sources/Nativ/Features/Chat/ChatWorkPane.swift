@@ -21,17 +21,21 @@ struct ChatWorkPane: View {
             Divider()
             if let item = chat.workState.selectedItem {
                 if item.resolvedKind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
-                    ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID), onAnnotate: { annotation in
+                    ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
+                                           showsFileActions: item.canEdit, onAnnotate: { annotation in
                         guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
                         presentFeedback(for: item, annotation: annotation)
-                    }, onAnnotationError: { errorMessage = $0 }) {
+                    }, onAnnotationError: { errorMessage = $0 }, pageActions: { browserPageMenu(item) }) {
                         if item.canEdit {
                             viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right", isSelected: false) {
                                 sourceIDs.insert(item.id)
                             }
                             ChatWorkCopyButton(item: item).id(item.id)
+                            exportButton(item)
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12))
+                                .background(Color.primary.opacity(0.07), in: Capsule())
                         }
-                        itemActions(item)
                     }
                 } else {
                     itemToolbar(item)
@@ -366,25 +370,7 @@ struct ChatWorkPane: View {
 
     private func itemActions(_ item: ChatWorkItem) -> some View {
         HStack(spacing: 4) {
-            Button {
-                let sessionID = chat.currentSessionID
-                preparesTranslation = true
-                Task { @MainActor in
-                    defer { preparesTranslation = false }
-                    do {
-                        let text: String
-                        if !selectedText.isEmpty {
-                            text = selectedText
-                        } else if item.resolvedKind == .website, let sessionID {
-                            text = try await chat.workBrowser(for: item, sessionID: sessionID).textForTranslation()
-                        } else {
-                            text = ChatWorkDocument.translationText(item.content)
-                        }
-                        guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
-                        presentTranslation(text)
-                    } catch { errorMessage = error.localizedDescription }
-                }
-            } label: {
+            Button { translate(item) } label: {
                 Image(systemName: "translate").frame(width: 30, height: 30)
             }
             .disabled(preparesTranslation)
@@ -399,16 +385,80 @@ struct ChatWorkPane: View {
             .help("Discuss this work in chat")
             .accessibilityLabel("Discuss this work in chat")
             if item.canEdit {
-                Button { export(item) } label: {
-                    Image(systemName: "arrow.down.to.line").frame(width: 30, height: 30)
-                }
-                .help("Export file")
-                .accessibilityLabel("Export file")
+                exportButton(item)
             }
         }
         .buttonStyle(.plain)
         .font(.system(size: 12))
         .background(Color.primary.opacity(0.07), in: Capsule())
+    }
+
+    private func browserPageMenu(_ item: ChatWorkItem) -> some View {
+        Menu {
+            Button("Translate", systemImage: "translate") { translate(item) }
+                .disabled(preparesTranslation)
+            Button("Discuss in chat", systemImage: "text.bubble") { presentFeedback(for: item) }
+        } label: {
+            Image(nsImage: Self.pageMenuIcon)
+                .font(.system(size: 12))
+                .frame(width: 30, height: 30)
+                .background(Color.primary.opacity(0.07), in: Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Page actions")
+        .accessibilityLabel("Page actions")
+        .translationPresentation(isPresented: $showsTranslation, text: translationText)
+    }
+
+    // Native macOS menus extract the label image and ignore SwiftUI rotation.
+    private static let pageMenuIcon: NSImage = {
+        let symbol = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        let side = max(symbol?.size.width ?? 12, symbol?.size.height ?? 12)
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            guard let symbol else { return false }
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            let transform = NSAffineTransform()
+            transform.translateX(by: rect.midX, yBy: rect.midY)
+            transform.rotate(byDegrees: 90)
+            transform.concat()
+            symbol.draw(in: NSRect(x: -symbol.size.width / 2, y: -symbol.size.height / 2,
+                                   width: symbol.size.width, height: symbol.size.height))
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
+
+    private func exportButton(_ item: ChatWorkItem) -> some View {
+        Button { export(item) } label: {
+            Image(systemName: "arrow.down.to.line").frame(width: 30, height: 30)
+        }
+        .help("Export file")
+        .accessibilityLabel("Export file")
+    }
+
+    private func translate(_ item: ChatWorkItem) {
+        let sessionID = chat.currentSessionID
+        preparesTranslation = true
+        Task { @MainActor in
+            defer { preparesTranslation = false }
+            do {
+                let text: String
+                if !selectedText.isEmpty {
+                    text = selectedText
+                } else if item.resolvedKind == .website, let sessionID {
+                    text = try await chat.workBrowser(for: item, sessionID: sessionID).textForTranslation()
+                } else {
+                    text = ChatWorkDocument.translationText(item.content)
+                }
+                guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
+                presentTranslation(text)
+            } catch { errorMessage = error.localizedDescription }
+        }
     }
 
     @ViewBuilder
