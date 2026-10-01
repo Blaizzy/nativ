@@ -20,6 +20,8 @@ jobs:
   build-notarize-publish:
     if: ${{ (github.event.release.tag_name || inputs.tag) != 'preview' }}
     runs-on: macos-26
+    outputs:
+      release_channel: ${{ steps.build.outputs.release_channel }}
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       APP_BUNDLE_ID: ${{ vars.NATIV_BUNDLE_IDENTIFIER }}
@@ -67,6 +69,15 @@ jobs:
           python3 scripts/macos_release.py preflight \
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
             --environment "$GITHUB_ENV" --notes "$RUNNER_TEMP/release-notes.md"
+
+      - name: Check out mlx-vlm main for RC builds
+        if: ${{ env.RELEASE_CHANNEL == 'rc' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Blaizzy/mlx-vlm
+          ref: main
+          path: .cache/mlx-vlm
+          persist-credentials: false
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -117,11 +128,15 @@ jobs:
           echo "NOTARY_KEY_PATH=$NOTARY_KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, and create appcast
+        id: build
+        env:
+          MLX_VLM_SOURCE_PATH: ${{ env.RELEASE_CHANNEL == 'rc' && format('{0}/.cache/mlx-vlm', github.workspace) || '' }}
         run: |
           scripts/release_macos.sh \
             --build-number "$RELEASE_BUILD_NUMBER" \
             --release-notes "$RUNNER_TEMP/release-notes.md" \
             "$RELEASE_VERSION"
+          echo "release_channel=$RELEASE_CHANNEL" >> "$GITHUB_OUTPUT"
 
       - name: Upload notarized app to GitHub Release
         run: |
@@ -195,8 +210,10 @@ jobs:
 
   publish-preview:
     needs: build-notarize-publish
+    # Stable releases skip this job; RCs and explicit preview refreshes run it.
     if: >-
-      ${{ !cancelled() && (needs.build-notarize-publish.result == 'success' ||
+      ${{ !cancelled() && ((needs.build-notarize-publish.result == 'success' &&
+          needs.build-notarize-publish.outputs.release_channel == 'rc') ||
           (github.event_name == 'workflow_dispatch' && inputs.tag == 'preview')) }}
     runs-on: ubuntu-latest
     env:
