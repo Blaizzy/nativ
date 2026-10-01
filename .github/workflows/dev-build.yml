@@ -32,6 +32,9 @@ jobs:
       - name: Test request diagnostics
         run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
 
+      - name: Test GitHub MCP server installer
+        run: python3 -m unittest discover -s scripts/tests -p 'test_install_github_mcp_server.py' -v
+
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4
         with:
