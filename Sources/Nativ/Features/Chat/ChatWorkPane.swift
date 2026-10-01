@@ -20,24 +20,31 @@ struct ChatWorkPane: View {
             tabBar
             Divider()
             if let item = chat.workState.selectedItem {
-                if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
-                    ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
-                                           isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
-                        guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
-                        presentFeedback(for: item, annotation: annotation)
-                    }, onAnnotationError: { errorMessage = $0 }) {
-                        browserPageMenu(item)
+                if item.kind == .terminal, let sessionID = chat.currentSessionID {
+                    ChatWorkTerminalPane(session: chat.workTerminal(for: item, sessionID: sessionID)) {
+                        chat.restartWorkTerminal(item.id)
                     }
+                    .id(item.id)
                 } else {
-                    itemToolbar(item)
+                    if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
+                        ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
+                                               isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
+                            guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
+                            presentFeedback(for: item, annotation: annotation)
+                        }, onAnnotationError: { errorMessage = $0 }) {
+                            browserPageMenu(item)
+                        }
+                    } else {
+                        itemToolbar(item)
+                    }
+                    Divider()
+                    itemContent(item)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Divider()
-                itemContent(item)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Divider()
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle")
-                    Text("Saved in this chat")
+                    Text(item.kind == .terminal ? "Terminal in this chat" : "Saved in this chat")
                     Spacer()
                     Text("\(item.updatedBy) · Revision \(item.revision)")
                 }
@@ -183,6 +190,7 @@ struct ChatWorkPane: View {
             Button("New document", systemImage: "doc.text") { newDocument() }
             Button("New code file", systemImage: "chevron.left.forwardslash.chevron.right") { newCode() }
             Button("New HTML page", systemImage: "globe") { newHTML() }
+            Button("New terminal", systemImage: "terminal") { newTerminal() }
             Divider()
             Button("Import file…", systemImage: "folder") { importFile() }
         } label: {
@@ -202,6 +210,7 @@ struct ChatWorkPane: View {
                 VStack(alignment: .leading, spacing: 14) {
                     sectionTitle("Tools")
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 155), spacing: 8)], spacing: 8) {
+                        toolCard("Terminal", symbol: "terminal", action: newTerminal)
                         toolCard("Document", symbol: "doc.text", action: newDocument)
                         toolCard("Code", symbol: "chevron.left.forwardslash.chevron.right", action: newCode)
                         toolCard("Website", symbol: "globe", action: newHTML)
@@ -259,7 +268,7 @@ struct ChatWorkPane: View {
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Your work, alongside your chat").font(.system(size: 13, weight: .medium))
-                        Text("Create a document, write code, or open a website above. Work you and your agent create will appear here.")
+                        Text("Open a terminal, create a document, write code, or open a website above. Work you and your agent create will appear here.")
                             .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, 8)
@@ -302,11 +311,18 @@ struct ChatWorkPane: View {
         case .document: return "Document"
         case .code: return item.language.map { "Code · \($0)" } ?? "Code"
         case .website: return "Website"
+        case .terminal: return item.terminalWorkingDirectory ?? "Terminal"
         }
     }
 
     private func newDocument() { create(title: "Untitled.md", kind: .document, content: "# Untitled\n\n") }
     private func newCode() { create(title: "Untitled.txt", kind: .code) }
+    private func newTerminal() {
+        do {
+            let count = chat.workState.items.filter { $0.kind == .terminal && $0.terminalCommand == nil }.count
+            try chat.createWorkItem(title: count == 0 ? "Terminal" : "Terminal \(count + 1)", kind: .terminal)
+        } catch { errorMessage = error.localizedDescription }
+    }
     private func newHTML() {
         create(title: "index.html", kind: .website, content: """
             <!doctype html>

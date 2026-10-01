@@ -202,7 +202,7 @@ enum ChatToolRegistry {
             ))
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWorkToolRegistry.definition,
-            displayDescription: "Create, edit, and discuss documents, code, and websites beside chat.",
+            displayDescription: "Work on documents, code, websites, and shared terminals beside chat.",
             configuration: nil
         ))
         return tools

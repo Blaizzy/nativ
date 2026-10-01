@@ -11,7 +11,7 @@ enum ChatWorkToolRegistry {
         page and returns its tab ID, URL, text, and controls. Navigate with {"action":"navigate",\
         "url":"https://example.com/next"}; an omitted ID uses the selected website or opens a new tab. \
         List or read existing items, create a \
-        document (Markdown), code file, or website (self-contained HTML or an http/https URL), update \
+        document (Markdown), code file, terminal, or website (self-contained HTML or an http/https URL), update \
         editable content, or open an existing item by ID. Inspect, navigate, go back/forward, reload, click, and type in website \
         tabs using the same live browser the user sees. Generated HTML/CSS/JavaScript runs as a local webpage. Complete HTML pages are detected even without a .html filename or when created as a document. Inspect returns visible text, runtime_errors, and element IDs; \
         use only element IDs from the latest result for click/type. Every browser action returns a fresh \
@@ -21,26 +21,37 @@ enum ChatWorkToolRegistry {
         "title":"Notes.md","content":"# Notes"}. Read before updating, then call \
         {"action":"update","id":"ID_FROM_READ","expected_revision":1,"content":"COMPLETE_UPDATED_TEXT"}. \
         Pass the returned revision as expected_revision \
-        to preserve user edits. Include title in update to rename an editable item while passing its complete content and expected_revision. Remote website source cannot be edited. This tool does not execute \
-        shell commands or write local files. Use kind website for HTML apps with inline CSS/JavaScript; standalone code files are source only. The user can edit and export the shared work.
+        to preserve user edits. Include title in update to rename an editable item while passing its complete content and expected_revision. Remote website source cannot be edited. \
+        For terminals, reuse an existing terminal from list, or create one with kind terminal and a title only. \
+        Run a shell command in that SAME terminal with {"action":"run","id":"TERMINAL_ID","command":"ls -la"}. \
+        Omit id only to use the selected terminal. Commands require approval, preserve cd and environment changes, and return output, cwd, running, and exit_code. \
+        read or inspect returns current terminal output; interrupt stops its foreground command. If running is true, read again later or interrupt; do not submit another command. \
+        Terminal actions work in regular chats too. Never use browser click/type or put commands in terminal content. \
+        Use kind website for HTML apps with inline CSS/JavaScript; standalone code files are source only. The user can edit and export the shared work.
         """,
         parameters: .object([
             "type": .string("object"),
             "additionalProperties": .bool(false),
             "properties": .object([
                 "action": .object(["type": .string("string"), "enum": .array(
-                    ["list", "read", "create", "update", "open", "inspect", "navigate", "back", "forward", "reload", "click", "type"].map { .string($0) }
+                    ["list", "read", "create", "update", "open", "inspect", "navigate", "back", "forward", "reload", "click", "type", "run", "interrupt"].map { .string($0) }
                 )]),
                 "id": field("Tab/item ID returned by this tool. Required for read or opening an existing item without a URL. For update, use the ID from read; omission targets only the last document read in this chat with the matching expected_revision. For click/type, omission targets the tab that supplied element_id. Other browser actions default to the selected website. open with url needs no ID."),
                 "title": field("Name or filename; required for create."),
                 "kind": .object(["type": .string("string"), "enum": .array(
-                    ["document", "code", "website"].map { .string($0) }
+                    ["document", "code", "website", "terminal"].map { .string($0) }
                 )]),
                 "content": field("Complete text or HTML source; required for update."),
                 "url": field("An http/https URL. Required for navigate. For open, opens a website without needing title, kind, or id. With an explicit id, open navigates that website tab."),
                 "language": field("Optional code language, such as swift, python, or javascript."),
                 "element_id": field("Element ID from the most recent inspect; required for click/type."),
                 "text": field("Text to fill into the inspected input; required for type."),
+                "command": field("Shell command for run, executed in the selected terminal or the terminal identified by id. Do not create a new terminal if one is already open."),
+                "timeout": .object([
+                    "type": .string("integer"),
+                    "description": .string("For run, seconds to wait for output (1–30, default 10). A longer command keeps running; use read to check it or interrupt to stop it."),
+                    "minimum": .number(1), "maximum": .number(30)
+                ]),
                 "expected_revision": .object([
                     "type": .string("integer"),
                     "description": .string("Revision returned by read; required for update.")
@@ -57,7 +68,9 @@ enum ChatWorkToolRegistry {
 
 struct ChatWorkRequest: Decodable {
     enum Action: String, Decodable {
-        case list, read, create, update, open, inspect, navigate, back, forward, reload, click, type
+        case list, read, create, update, open, inspect, navigate, back, forward, reload, click, type, run, interrupt
+
+        var isTerminalMutation: Bool { self == .run || self == .interrupt }
 
         var isBrowserAction: Bool {
             switch self {
@@ -76,12 +89,16 @@ struct ChatWorkRequest: Decodable {
     var expectedRevision: Int?
     var elementID: String?
     var text: String?
+    var command: String?
+    var timeout: Int?
+    // Native-only receipt: a changed shell or user input invalidates pending consent.
+    var terminalReceipt: ChatWorkTerminalReceipt? = nil
 
     enum CodingKeys: String, CodingKey {
         case action, id, title, kind, content, url, language
         case expectedRevision = "expected_revision"
         case elementID = "element_id"
-        case text
+        case text, command, timeout
     }
 
     static func decode(_ call: MLXChatToolCall) throws -> Self {
@@ -97,7 +114,7 @@ extension ChatWorkState {
     /// Pure state transitions keep agent actions scoped to the request's session.
     mutating func execute(_ request: ChatWorkRequest) throws -> String {
         switch request.action {
-        case .inspect, .navigate, .back, .forward, .reload, .click, .type:
+        case .inspect, .navigate, .back, .forward, .reload, .click, .type, .run, .interrupt:
             throw ChatWorkError.unavailable
         case .list:
             return try itemListJSON()
@@ -107,7 +124,7 @@ extension ChatWorkState {
             }
             let markdownName = ["md", "markdown"].contains((title as NSString).pathExtension.lowercased())
             guard let kind = request.kind ?? (markdownName ? .document : nil) else {
-                throw ChatWorkError.invalid("create requires kind: document, code, or website. For Markdown use kind: document.")
+                throw ChatWorkError.invalid("create requires kind: document, code, website, or terminal. For Markdown use kind: document.")
             }
             let item = try create(
                 title: title, kind: kind, content: request.content ?? "", url: request.url,
@@ -161,6 +178,9 @@ extension ChatWorkState {
             throw ChatWorkError.invalid("Select a website tab, pass its id from list, or open a URL with {\"action\":\"open\",\"url\":\"https://example.com\"}.")
         }
         guard item.resolvedKind == .website else {
+            if item.kind == .terminal {
+                throw ChatWorkError.invalid("This is a terminal. Use run with id and command (for example ls -la), read/inspect for output, or interrupt. Browser click/type do not operate a terminal.")
+            }
             throw ChatWorkError.invalid("This item is not a website. Use open with a URL to open a browser tab.")
         }
         open(item.id)
@@ -170,8 +190,12 @@ extension ChatWorkState {
     func itemListJSON() throws -> String {
         let data = try JSONSerialization.data(withJSONObject: items.map {
             var object: [String: Any] = ["id": $0.id.uuidString, "title": $0.title, "kind": $0.resolvedKind.rawValue,
-                                       "revision": $0.revision, "selected": $0.id == selectedID]
+                                       "revision": $0.revision, "selected": $0.id == selectedID, "open": openIDs.contains($0.id)]
             object["url"] = $0.url
+            if $0.kind == .terminal {
+                object["interactive"] = $0.terminalCommand == nil
+                object["cwd"] = $0.terminalWorkingDirectory
+            }
             return object
         }, options: [.sortedKeys])
         return String(decoding: data, as: UTF8.self)

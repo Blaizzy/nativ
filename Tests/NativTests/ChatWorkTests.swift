@@ -1,4 +1,5 @@
 import XCTest
+import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
@@ -267,6 +268,164 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testSharedTerminalRunsInTheExistingShellAndKeepsConsentBoundToItsTarget() async throws {
+        let (root, _, original) = try fixture()
+        let folder = root.appendingPathComponent("with spaces")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try "visible".write(to: folder.appendingPathComponent("file-from-shared-shell.txt"), atomically: true, encoding: .utf8)
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Existing terminal", kind: .terminal)
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let terminal = chat.workTerminal(for: item, sessionID: original.id)
+        defer { terminal.stop() }
+        terminal.startIfNeeded(environment: ["HOME": root.path, "ZDOTDIR": root.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+        try await terminalReady(terminal)
+        let request = try chat.resolvedWorkRequest(ChatWorkRequest(action: .run,
+            command: "export NATIV_SHELL_TEST=42\ncd '\(folder.path)'\nprintf '\\nSHARED_%s:%s\\n' \"$NATIV_SHELL_TEST\" \"$PWD\""), in: original.id)
+        do {
+            _ = try await chat.executeWorkAction(request, in: original.id)
+            XCTFail("A shell command must require consent")
+        } catch { XCTAssertEqual(error as? ChatTerminalToolError, .approvalRequired) }
+        // Changing the selected tab while approval is pending must not retarget the command.
+        try chat.createWorkItem(title: "Another terminal", kind: .terminal)
+        let result = try await chat.executeWorkAction(request, in: original.id, terminalApprovalGranted: true)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any])
+        XCTAssertEqual(payload["id"] as? String, item.id.uuidString)
+        XCTAssertEqual((payload["cwd"] as? String)?.replacingOccurrences(of: "/private/var/", with: "/var/"), folder.path)
+        XCTAssertEqual(payload["exit_code"] as? Int, 0)
+        XCTAssertEqual(payload["running"] as? Bool, false)
+        XCTAssertEqual(chat.workState.selectedItem?.terminalWorkingDirectory, payload["cwd"] as? String)
+        XCTAssertTrue((payload["content"] as? String)?.contains("SHARED_42:") == true, result)
+        let listing = try await chat.executeWorkAction(ChatWorkRequest(action: .run, id: item.id, command: "ls"),
+                                                      in: original.id, terminalApprovalGranted: true)
+        XCTAssertTrue(listing.contains("file-from-shared-shell.txt"), listing)
+        XCTAssertEqual(chat.workState.items.count, 2)
+
+        let stale = try chat.resolvedWorkRequest(ChatWorkRequest(action: .run, id: item.id, command: "printf should-not-run"), in: original.id)
+        let native = try XCTUnwrap(terminal.view as? LocalProcessTerminalView)
+        native.send(txt: "echo unsent")
+        do {
+            _ = try await chat.executeWorkAction(stale, in: original.id, terminalApprovalGranted: true)
+            XCTFail("User input must invalidate pending approval")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("changed")) }
+        XCTAssertFalse(terminal.text.contains("should-not-run"))
+        terminal.interrupt()
+        try await terminalReady(terminal)
+        let beforeClose = try chat.resolvedWorkRequest(ChatWorkRequest(action: .run, id: item.id, command: "printf should-not-run"), in: original.id)
+        chat.closeWorkItem(item.id)
+        chat.openWorkItem(item.id)
+        do {
+            _ = try await chat.executeWorkAction(beforeClose, in: original.id, terminalApprovalGranted: true)
+            XCTFail("A restarted shell must invalidate pending approval")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("changed")) }
+        chat.closeWorkItem(item.id)
+    }
+
+    func testSharedTerminalReadInterruptAndSafetyValidation() async throws {
+        let (root, _, original) = try fixture()
+        try """
+        function __test_prompt_hook() { print -r -- $? > "$HOME/hook-status"; }
+        precmd_functions=(__test_prompt_hook)
+        """.write(to: root.appendingPathComponent(".zshrc"), atomically: true, encoding: .utf8)
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Terminal", kind: .terminal)
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let terminal = chat.workTerminal(for: item, sessionID: original.id)
+        defer { terminal.stop() }
+        terminal.startIfNeeded(environment: ["HOME": root.path, "ZDOTDIR": root.path, "PATH": "/usr/bin:/bin"])
+        try await terminalReady(terminal)
+        for command in ["rm -rf /", "echo test\r", "\u{1b}[201~bad", ""] {
+            XCTAssertThrowsError(try chat.resolvedWorkRequest(ChatWorkRequest(action: .run, command: command), in: original.id))
+        }
+        XCTAssertThrowsError(try chat.resolvedWorkRequest(ChatWorkRequest(action: .run, command: "ls", timeout: 31), in: original.id))
+        let running = try await chat.executeWorkAction(ChatWorkRequest(action: .run, command: "sleep 10", timeout: 1),
+                                                       in: original.id, terminalApprovalGranted: true)
+        XCTAssertTrue(running.contains("\"running\":true"), running)
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .interrupt), in: original.id, terminalApprovalGranted: true)
+        try await terminalReady(terminal)
+        let read = try await chat.executeWorkAction(ChatWorkRequest(action: .inspect, id: item.id), in: original.id)
+        XCTAssertTrue(read.contains("\"running\":false"), read)
+        let failed = try await chat.executeWorkAction(ChatWorkRequest(action: .run, command: "false"),
+                                                      in: original.id, terminalApprovalGranted: true)
+        XCTAssertTrue(failed.contains("\"exit_code\":1"), failed)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("hook-status"), encoding: .utf8), "1\n",
+                       "A failed command must still run the user's prompt hooks with the original exit status")
+    }
+
+    private func terminalReady(_ terminal: ChatWorkTerminalSession) async throws {
+        for _ in 0..<500 {
+            if terminal.atPrompt && !terminal.commandIsRunning { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTFail("Shell did not reach a prompt: \(terminal.text)")
+        throw CancellationError()
+    }
+
+    func testClosingAgentTerminalCancelsItsCommandWithoutReopeningTheTab() async throws {
+        let (root, _, original) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let request = TerminalProcessRequest(command: "printf 'cancel_%s\\n' ready; sleep 5; printf 'finished'",
+                                             currentDirectoryURL: root, timeout: 10,
+                                             environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"))
+        let task = Task { try await chat.runWorkTerminalCommand(request, in: original.id) }
+        for _ in 0..<100 {
+            if let item = chat.workState.selectedItem,
+               chat.workTerminals.existing(itemID: item.id, sessionID: original.id)?.text.contains("cancel_ready") == true { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let terminal = try XCTUnwrap(chat.workTerminals.existing(itemID: item.id, sessionID: original.id))
+        XCTAssertTrue(terminal.text.contains("cancel_ready"))
+        let start = Date()
+        chat.closeWorkItem(item.id)
+        do {
+            _ = try await task.value
+            XCTFail("Closing the agent terminal must cancel the command")
+        } catch is CancellationError {}
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertFalse(terminal.isRunning)
+        XCTAssertFalse(chat.workState.openIDs.contains(item.id))
+        XCTAssertNil(chat.workTerminals.existing(itemID: item.id, sessionID: original.id))
+    }
+
+    func testAgentTerminalStreamsAndPersistsInItsOriginatingChat() async throws {
+        let (root, store, original) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let request = TerminalProcessRequest(command: "printf 'stream_%s\\n' before; sleep 0.5; printf 'after\\n'",
+                                             currentDirectoryURL: root, timeout: 10,
+                                             environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"))
+        let task = Task { try await chat.runWorkTerminalCommand(request, in: original.id) }
+        var terminal: ChatWorkTerminalSession?
+        for _ in 0..<100 {
+            if let item = chat.workState.selectedItem {
+                terminal = chat.workTerminals.existing(itemID: item.id, sessionID: original.id)
+                if terminal?.text.contains("stream_before") == true { break }
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let live = try XCTUnwrap(terminal)
+        XCTAssertTrue(live.text.contains("stream_before"))
+        XCTAssertTrue(live.isRunning)
+        // Switching chats cannot move the result to the newly selected chat.
+        chat.createSession()
+        XCTAssertNotEqual(chat.currentSessionID, original.id)
+        let result = try await task.value
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertFalse(live.isRunning)
+        XCTAssertTrue(chat.workState.items.isEmpty)
+        let saved = try XCTUnwrap(store.loadSession(id: original.id)?.workState?.selectedItem)
+        XCTAssertEqual(saved.kind, .terminal)
+        XCTAssertTrue(saved.content.contains("before\nafter"))
+        let read = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: saved.id), in: original.id)
+        XCTAssertTrue(read.contains("after"))
+        chat.deleteSession(original.id)
+        XCTAssertNil(chat.workTerminals.existing(itemID: saved.id, sessionID: original.id))
+    }
+
     func testWorkFeedbackAddsStructuredAnnotationsWhilePreservingTheDraftAndPastedText() async throws {
         let (root, _, session) = try fixture()
         let chat = subject(root)
