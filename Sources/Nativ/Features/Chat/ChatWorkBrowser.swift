@@ -40,6 +40,7 @@ final class ChatWorkBrowserPool {
 @MainActor
 final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
     let webView: WKWebView
+    let annotator = ChatWorkAnnotator()
     @Published private(set) var address = ""
     @Published private(set) var isLoading = false
     @Published private(set) var canGoBack = false
@@ -77,6 +78,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         }
         webView = WKWebView(frame: .zero, configuration: configuration)
         super.init()
+        annotator.attach(to: webView)
         configuration.userContentController.add(ChatWorkScriptErrors(browser: self), name: "nativWorkError")
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -105,6 +107,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             modelURL = rawURL
             do { try navigate(rawURL) } catch { errorMessage = error.localizedDescription }
         } else if loadedContent != item.content {
+            annotator.cancel()
             loadedContent = item.content
             modelURL = nil
             errorMessage = nil
@@ -150,6 +153,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func stop() {
+        annotator.cancel()
         stopPreview()
         webView.stopLoading()
     }
@@ -163,6 +167,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
 
     func navigate(_ rawURL: String) throws {
         let url = try ChatWorkState.webURL(rawURL)
+        annotator.cancel()
         loadedURL = url.absoluteString
         errorMessage = nil
         elementLabels = [:]
@@ -211,6 +216,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        annotator.cancel()
         pendingNavigation = navigation
         runtimeErrors = []
         errorMessage = nil
@@ -235,6 +241,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        annotator.cancel()
         pendingNavigation = nil
         errorMessage = "The page stopped responding. Reload to try again."
     }
@@ -482,6 +489,8 @@ struct ChatWorkNavigationButtons: View {
 
 struct ChatWorkBrowserToolbar<Actions: View>: View {
     @ObservedObject var browser: ChatWorkBrowser
+    let onAnnotate: (ChatWorkPageAnnotation) -> Void
+    let onAnnotationError: (String) -> Void
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
@@ -509,6 +518,9 @@ struct ChatWorkBrowserToolbar<Actions: View>: View {
                 back: { browser.webView.goBack() }, forward: { browser.webView.goForward() },
                 reload: { if browser.isLoading { browser.webView.stopLoading() } else { browser.webView.reload() } }
             )
+            ChatWorkAnnotateButton(annotator: browser.annotator, onSelect: onAnnotate, onError: onAnnotationError)
+                .disabled(browser.isLoading)
+                .fixedSize()
             ChatWorkAddressField(address: browser.address) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
@@ -543,5 +555,6 @@ struct ChatWorkBrowserView: View {
                     if browser.isLoading { ProgressView().controlSize(.small).padding(8) }
                 }
         }
+        .onDisappear { browser.annotator.cancel() }
     }
 }
