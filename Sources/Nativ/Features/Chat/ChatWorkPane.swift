@@ -16,6 +16,7 @@ struct ChatWorkPane: View {
     @State private var showsTranslation = false
     @State private var preparesTranslation = false
     @State private var confirmsClearWebsiteData = false
+    @State private var showsFiles = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,8 +57,12 @@ struct ChatWorkPane: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
             } else {
-                newTabToolbar
-                newTabPage
+                if showsFiles {
+                    filesPage
+                } else {
+                    newTabToolbar
+                    newTabPage
+                }
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
@@ -65,12 +70,19 @@ struct ChatWorkPane: View {
             selectedText = ""
             feedbackTarget = nil
             showsTranslation = false
+            if chat.workState.selectedID != nil { showsFiles = false }
         }
         .onChange(of: chat.currentSessionID) { _, _ in
             selectedText = ""
             sourceIDs = []
             feedbackTarget = nil
             showsTranslation = false
+            showsFiles = false
+            refreshFiles()
+        }
+        .onAppear { refreshFiles() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshFiles()
         }
         .alert("Work pane", isPresented: Binding(
             get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
@@ -110,14 +122,15 @@ struct ChatWorkPane: View {
                                     isSelected: chat.workState.selectedID == item.id,
                                     select: { chat.openWorkItem(item.id) },
                                     close: { chat.closeWorkItem(item.id) })
+                                .contextMenu { fileLocationActions(item) }
                                 .id(item.id.uuidString)
                         }
                         if chat.workState.selectedItem == nil {
-                            workTab(title: "New tab", symbol: "globe", isSelected: true,
+                            workTab(title: showsFiles ? "Files" : "New tab", symbol: showsFiles ? "folder" : "globe", isSelected: true,
                                     select: {}, close: closeNewTab)
                                 .id("new")
                         }
-                        Button { chat.openWorkNewTab() } label: {
+                        Button { showsFiles = false; chat.openWorkNewTab() } label: {
                             Image(systemName: "plus").frame(width: 28, height: 28)
                         }
                         .help("New tab")
@@ -199,6 +212,8 @@ struct ChatWorkPane: View {
 
     private var creationMenu: some View {
         Menu {
+            Button("Files in this chat", systemImage: "folder") { openFiles() }
+            Divider()
             Button("New document", systemImage: "doc.text") { newDocument() }
             Button("New code file", systemImage: "chevron.left.forwardslash.chevron.right") { newCode() }
             Button("New HTML page", systemImage: "globe") { newHTML() }
@@ -226,7 +241,7 @@ struct ChatWorkPane: View {
                         toolCard("Document", symbol: "doc.text", action: newDocument)
                         toolCard("Code", symbol: "chevron.left.forwardslash.chevron.right", action: newCode)
                         toolCard("Website", symbol: "globe", action: newHTML)
-                        toolCard("Files", symbol: "folder", action: importFile)
+                        toolCard("Files", symbol: "folder", action: openFiles)
                     }
                 }
                 if !chat.workState.items.isEmpty {
@@ -305,7 +320,8 @@ struct ChatWorkPane: View {
                 Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 16)
                 Text(title)
                 Spacer(minLength: 0)
-                Image(systemName: "plus").font(.system(size: 10)).foregroundStyle(.tertiary)
+                Image(systemName: title == "Files" ? "arrow.up.right" : "plus")
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             .font(.system(size: 12))
             .padding(.horizontal, 12)
@@ -314,7 +330,105 @@ struct ChatWorkPane: View {
             .contentShape(.rect)
         }
         .buttonStyle(ChatWorkCardStyle())
-        .help(title == "Files" ? "Import a document or code file" : "Create a \(title.lowercased())")
+        .help(title == "Files" ? "Browse files created in this chat" : "Create a \(title.lowercased())")
+    }
+
+    private var filesPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Button { showsFiles = false } label: { Image(systemName: "arrow.left") }
+                    .help("Back to new tab").accessibilityLabel("Back to new tab")
+                Text("Files in this chat").font(.headline)
+                Spacer()
+                Button { refreshFiles() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh files").accessibilityLabel("Refresh files")
+                Button("Import…", action: importFile)
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+            if let directory = chat.workFilesDirectory {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text(directory.path).font(.system(size: 11)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle).textSelection(.enabled).help(directory.path)
+                    Spacer(minLength: 0)
+                    Button { copyWorkText(directory.path) } label: { Image(systemName: "doc.on.doc") }
+                        .help("Copy folder path").accessibilityLabel("Copy folder path")
+                    Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: directory.path) } label: {
+                        Image(systemName: "folder")
+                    }
+                    .help("Show folder in Finder").accessibilityLabel("Show folder in Finder")
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .padding(.horizontal, 16).padding(.bottom, 16)
+            }
+            Divider()
+            let files = chat.workState.items.filter(\.canEdit)
+                .sorted { $0.storedFilename.localizedStandardCompare($1.storedFilename) == .orderedAscending }
+            if files.isEmpty {
+                ContentUnavailableView("No files yet", systemImage: "folder", description:
+                    Text("Documents, code, and HTML pages created in this chat appear here. You can also import a file."))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        ForEach(files) { item in
+                            HStack(spacing: 8) {
+                                Button { chat.openWorkItem(item.id) } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: item.resolvedKind.symbol).foregroundStyle(.secondary)
+                                            .frame(width: 28)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(item.storedFilename).lineLimit(1)
+                                            Text(itemSubtitle(item)).font(.system(size: 11)).foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(12).contentShape(.rect)
+                                }
+                                .buttonStyle(ChatWorkCardStyle())
+                                .help("Open \(item.storedFilename) in the side pane")
+                                Menu { fileLocationActions(item) } label: {
+                                    Image(nsImage: Self.pageMenuIcon).frame(width: 30, height: 30)
+                                }
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                                .help("File actions").accessibilityLabel("Actions for \(item.storedFilename)")
+                            }
+                            .contextMenu { fileLocationActions(item) }
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func fileLocationActions(_ item: ChatWorkItem) -> some View {
+        if let url = chat.workFileURL(for: item) {
+            Button("Copy file path", systemImage: "doc.on.doc") { copyWorkText(url.path) }
+            Button("Show in Finder", systemImage: "folder") {
+                do {
+                    try chat.refreshWorkFiles()
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } catch { errorMessage = error.localizedDescription }
+            }
+        }
+    }
+
+    private func refreshFiles() {
+        guard chat.currentSessionID != nil else { return }
+        do { try chat.refreshWorkFiles() }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    private func openFiles() {
+        do {
+            try chat.refreshWorkFiles()
+            chat.openWorkNewTab()
+            showsFiles = true
+        } catch { errorMessage = error.localizedDescription }
     }
 
     private func itemSubtitle(_ item: ChatWorkItem) -> String {
@@ -411,6 +525,11 @@ struct ChatWorkPane: View {
             .accessibilityLabel("Discuss this work in chat")
             if item.canEdit {
                 exportButton(item)
+                Menu { fileLocationActions(item) } label: {
+                    Image(nsImage: Self.pageMenuIcon).frame(width: 30, height: 30)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("File actions").accessibilityLabel("File actions")
             }
         }
         .buttonStyle(.plain)
@@ -437,6 +556,14 @@ struct ChatWorkPane: View {
                 Menu("Copy", systemImage: "doc.on.doc") {
                     Button("Source") { copyWorkText(item.content) }
                     Button("File name") { copyWorkText(item.title) }
+                    if let url = chat.workFileURL(for: item) {
+                        Button("File path") { copyWorkText(url.path) }
+                    }
+                }
+                if let url = chat.workFileURL(for: item) {
+                    Button("Show in Finder", systemImage: "folder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
                 }
                 Button("Download…", systemImage: "arrow.down.to.line") { export(item) }
                 Divider()

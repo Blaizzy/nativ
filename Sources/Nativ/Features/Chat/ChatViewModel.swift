@@ -695,6 +695,28 @@ final class ChatViewModel: ObservableObject {
         try saveWorkState(state, in: sessionID, updateTimestamp: true)
     }
 
+    var workFilesDirectory: URL? {
+        currentSessionID.map { sessionStore.workFiles.directory(for: $0) }
+    }
+
+    func workFileURL(for item: ChatWorkItem) -> URL? {
+        currentSessionID.flatMap { sessionStore.workFiles.fileURL(for: item, sessionID: $0) }
+    }
+
+    func refreshWorkFiles(in requestedSessionID: UUID? = nil) throws {
+        guard let sessionID = requestedSessionID ?? currentSessionID,
+              let state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
+        guard canModifySession(sessionID) else { return }
+        let refreshed = try sessionStore.workFiles.refreshed(state, sessionID: sessionID)
+        if refreshed != state {
+            try saveWorkState(refreshed, in: sessionID, updateTimestamp: true)
+        } else {
+            // Materialize older chats lazily, without changing their titles or revisions.
+            try sessionStore.workFiles.save(state, previous: state, sessionID: sessionID)
+        }
+        try sessionStore.workFiles.createDirectory(for: sessionID)
+    }
+
     private func terminalDirectory(in sessionID: UUID) -> String {
         if let projectID = projectID(for: sessionID), let project = projectStore.project(withID: projectID) {
             return project.rootPath
@@ -904,6 +926,7 @@ final class ChatViewModel: ObservableObject {
         if request.action.isTerminalMutation, !terminalApprovalGranted {
             throw ChatTerminalToolError.approvalRequired
         }
+        try refreshWorkFiles(in: sessionID)
         let request = try resolvedWorkRequest(request, in: sessionID)
         guard var state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         if let item = state.items.first(where: { $0.id == (request.id ?? state.selectedID) }), item.kind == .terminal {
@@ -942,9 +965,12 @@ final class ChatViewModel: ObservableObject {
             if request.action == .open {
                 browserRequest.action = request.url != nil && request.id != nil ? .navigate : .inspect
             }
-            return try await workBrowser(for: item, sessionID: sessionID).execute(browserRequest)
+            let result = try await workBrowser(for: item, sessionID: sessionID).execute(browserRequest)
+            return try workResult(result, item: item, sessionID: sessionID)
         }
-        let result = try state.execute(request)
+        let result = try state.execute(request) { item in
+            sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)
+        }
         if request.action == .create, state.selectedItem?.kind == .terminal {
             state.items[state.items.count - 1].terminalWorkingDirectory = terminalDirectory(in: sessionID)
         }
@@ -968,9 +994,17 @@ final class ChatViewModel: ObservableObject {
             }
             object["revision"] = item.revision
             object["editable"] = item.canEdit
+            object["file_path"] = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)?.path
             return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         }
         return result
+    }
+
+    private func workResult(_ result: String, item: ChatWorkItem, sessionID: UUID) throws -> String {
+        guard let url = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID),
+              var object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any] else { return result }
+        object["file_path"] = url.path
+        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
     }
 
     func createSession(projectID: UUID? = nil) {

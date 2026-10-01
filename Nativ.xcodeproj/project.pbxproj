@@ -120,6 +120,7 @@
 		32E3DD03D61C201E783539AF /* ChatServerStatsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 068ED8143814678E688A3A62 /* ChatServerStatsTool.swift */; };
 		330070AC18DC9F0752EB7138 /* RealtimeAudioMeter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5682AEE2C7DF8C9A3AFAC3DF /* RealtimeAudioMeter.swift */; };
 		33ADC132B82225C5E233F440 /* ChatSwitchModelTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BBBE5DAD60FA5D2450B2CD /* ChatSwitchModelTool.swift */; };
+		34BF37F7D867C1049DC3B7C5 /* ChatWorkFileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF6514DA8A7C6194EF088E4 /* ChatWorkFileTests.swift */; };
 		351B2202E8690FC608A32AEF /* IntegrationServicesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1D1AD1FEA6B27EDEC9D49D1 /* IntegrationServicesTests.swift */; };
 		35250151AA1AA5EF7B4257DE /* ChatTerminalTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E1CF05FF502F41036F9958 /* ChatTerminalTool.swift */; };
 		3545A0F2A3E0FE78FE7D501E /* WebBrowsingError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A1B88001E3E22C2E592C0BA /* WebBrowsingError.swift */; };
@@ -156,6 +157,7 @@
 		41E383BBE43E9CDE0B70826D /* IntegrationServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83A221B9B5CCE60A43CC46AC /* IntegrationServices.swift */; };
 		42293318F2E4FA62AD0CF762 /* IntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD8DD9E277F67490B9744732 /* IntegrationTypes.swift */; };
 		4262747AC6425403FC1F2210 /* ArtifactDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4FFC04214D6E98258786D8 /* ArtifactDeletionTests.swift */; };
+		42ADA357F5B61291F7B469D6 /* ChatWorkFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CEA0F58301A281EEDD5333C /* ChatWorkFileStore.swift */; };
 		42E4499A9E626E2A06B6D544 /* ChatImageModelSelectionRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 332C54820A1273F103E68BC2 /* ChatImageModelSelectionRequestTests.swift */; };
 		43450E39C6229D137A927F99 /* ArtifactProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F5045481C806F7F3478679 /* ArtifactProvenanceTests.swift */; };
 		444833C6AEF5C794590B8A45 /* ChatToolRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31D10F9AFCCD57FA0625CA24 /* ChatToolRegistry.swift */; };
@@ -257,6 +259,7 @@
 		702AFCE23DACD12454A8A7A5 /* ChatAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A108D078B32275B9F99C98C7 /* ChatAnnotationTests.swift */; };
 		70545F329C01AD4C683BF264 /* NativWindowHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1301809E464FD9315BF2A22 /* NativWindowHandle.swift */; };
 		70620E92994E9828794445D8 /* ChatSearchFilesTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA054C2CE69D40692AB665CD /* ChatSearchFilesTool.swift */; };
+		70C58DECD14229803F5FF221 /* ChatWorkFileStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CEA0F58301A281EEDD5333C /* ChatWorkFileStore.swift */; };
 		71346ABDC1EEEA74A22218EC /* ArtifactTrashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EEC2A452A788D13C8F336A6 /* ArtifactTrashTests.swift */; };
 		71659335E55225ABCBB4E993 /* IssueReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46B388273DDFAD7C6C0F4E1 /* IssueReport.swift */; };
 		727CB29E8AF1A50C063FD972 /* ServerProcessEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055942EFAB585BE493AC9AD7 /* ServerProcessEnvironmentTests.swift */; };
@@ -658,6 +661,7 @@
 		1B412A48D040D2DE044FF083 /* HubModelSizeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModelSizeResolver.swift; sourceTree = "<group>"; };
 		1C30476FCFDB8FC736643EEB /* NativAnalyticsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativAnalyticsStore.swift; sourceTree = "<group>"; };
 		1C695753548A6C1F2F37C602 /* WebReadService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebReadService.swift; sourceTree = "<group>"; };
+		1CEA0F58301A281EEDD5333C /* ChatWorkFileStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkFileStore.swift; sourceTree = "<group>"; };
 		1D3C334D11AD00D0290AA42D /* SoftwareUpdaterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoftwareUpdaterTests.swift; sourceTree = "<group>"; };
 		1D4B44C59153CB242FE92D3A /* ImageGenerationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageGenerationView.swift; sourceTree = "<group>"; };
 		1E03F44A59784052F3095DFE /* AudioCaptureSleepMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureSleepMonitor.swift; sourceTree = "<group>"; };
@@ -803,6 +807,7 @@
 		7F316824C4C3D36A94717A62 /* PerplexityBrowsingProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerplexityBrowsingProvider.swift; sourceTree = "<group>"; };
 		7F7FC582B0E18D226E87A1FE /* HuggingFaceHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceHub.swift; sourceTree = "<group>"; };
 		7FE817B51A37BDB25AD26A11 /* ChatViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModelTests.swift; sourceTree = "<group>"; };
+		7FF6514DA8A7C6194EF088E4 /* ChatWorkFileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWorkFileTests.swift; sourceTree = "<group>"; };
 		811B9BB1926AD34A02556012 /* ArtifactPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactPreview.swift; sourceTree = "<group>"; };
 		8158351DC9E135F30DA83A01 /* ChatWebReadTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatWebReadTool.swift; sourceTree = "<group>"; };
 		820A7EF6D7E1FA0F171A5A59 /* AudioCaptureLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioCaptureLibrary.swift; sourceTree = "<group>"; };
@@ -1645,6 +1650,7 @@
 				FFFF7999F40CB3A712F79392 /* ChatWorkAnnotationReference.swift */,
 				157AFC6B1A2168A488C67ABB /* ChatWorkBrowser.swift */,
 				52D493889222E1BCE7D6D8A1 /* ChatWorkDocument.swift */,
+				1CEA0F58301A281EEDD5333C /* ChatWorkFileStore.swift */,
 				DC089429C83DC5703DE031AE /* ChatWorkPane.swift */,
 				844185CE313F7BAEE4B12230 /* ChatWorkPreviewServer.swift */,
 				39B3E82A6F0DC701B7780AE6 /* ChatWorkspacePicker.swift */,
@@ -1708,6 +1714,7 @@
 				83D56A7BC388C8D6DEAEFA18 /* ChatWebReadToolTests.swift */,
 				AFA5142DB692E378ADE8DFA0 /* ChatWebSearchToolTests.swift */,
 				DC37AD4573FA876961F1399C /* ChatWorkBrowserTests.swift */,
+				7FF6514DA8A7C6194EF088E4 /* ChatWorkFileTests.swift */,
 				66E58A37E07B049CDB77B95E /* ChatWorkSplitTests.swift */,
 				4BEDA4DB8215C9D7C8078F28 /* ChatWorkTerminalTests.swift */,
 				DAD21FFA02A2C23DB3BC11E1 /* ChatWorkTests.swift */,
@@ -2117,6 +2124,7 @@
 				A4AFB642F8FC6EF1CF17A13F /* ChatWorkAnnotationReference.swift in Sources */,
 				E266948298079B76F46989D8 /* ChatWorkBrowser.swift in Sources */,
 				947F53CF169D116B1EE4460D /* ChatWorkDocument.swift in Sources */,
+				70C58DECD14229803F5FF221 /* ChatWorkFileStore.swift in Sources */,
 				7F997535C9DFD47225075098 /* ChatWorkPane.swift in Sources */,
 				ED8C3B04E8E01603D12531B3 /* ChatWorkPreviewServer.swift in Sources */,
 				FBDC169DC5CF4D7DEDDE5B1B /* ChatWorkSplitView.swift in Sources */,
@@ -2376,6 +2384,8 @@
 				74113E24D445D326202E518E /* ChatWorkBrowser.swift in Sources */,
 				407F62AB71707EAE5B7757D2 /* ChatWorkBrowserTests.swift in Sources */,
 				45905073ED0669755EA1E40B /* ChatWorkDocument.swift in Sources */,
+				42ADA357F5B61291F7B469D6 /* ChatWorkFileStore.swift in Sources */,
+				34BF37F7D867C1049DC3B7C5 /* ChatWorkFileTests.swift in Sources */,
 				574BFA005D45064B46AF2091 /* ChatWorkPreviewServer.swift in Sources */,
 				BE983C4E83F16F83DB4F6873 /* ChatWorkSplitTests.swift in Sources */,
 				3676ACB3AE704585EF4C8194 /* ChatWorkSplitView.swift in Sources */,

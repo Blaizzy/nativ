@@ -57,7 +57,7 @@ time, and model selection is unavailable while any window is generating.
 
 Select **Work pane** (⌘⇧B) to open a resizable workspace beside the conversation.
 The **+** button opens a new-tab page without closing existing tabs. **Tools**
-creates terminals, documents, code, and HTML pages or imports a UTF-8 file; **Suggested** and
+creates terminals, documents, code, and HTML pages; **Suggested** and
 **Recents** reopen saved work. The rounded address bar accepts HTTP(S) URLs, bare
 hostnames, local development addresses, or search terms (searched with Google).
 The expand control switches between split and full view. Model configuration and
@@ -68,6 +68,17 @@ the work pane share the right side of chat.
   and the file name. You can also export a file. Markdown previews render math and
   resolve newly imported documents' relative images against the original file location. Text imports are copies;
   editing them does not modify the original.
+- **Files:** browse the documents, code, and generated HTML saved in this chat,
+  including closed tabs. Selecting a file reopens its existing side-pane tab.
+  Use **Import…** to copy in another UTF-8 file. The Files header shows the chat's
+  folder; its buttons copy the folder path or open it in Finder. Each file's menu
+  also offers **Copy file path** and **Show in Finder**. Sources live under the app's
+  chat storage at `Files/<chat-id>/<item-id>/<filename>`, so duplicate names do not
+  overwrite each other. Pane and agent edits save to these files. Edits made in an
+  external editor or terminal are picked up by **Refresh files**, when returning
+  to the app, or before the next agent work action; conflicting edits are rejected.
+  Agent `chat_work` results include the same `file_path`. Remote website and terminal
+  tabs are not source files.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have
   back, forward, reload, and address controls. Cookies and website storage use a

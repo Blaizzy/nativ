@@ -814,6 +814,10 @@ struct ChatSessionStore {
     private let legacyChatDirectory: URL?
     private let mediaStore: MediaAssetStore
 
+    var workFiles: ChatWorkFileStore {
+        ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
+    }
+
     init(
         chatDirectory: URL? = nil,
         legacyChatDirectory: URL? = nil,
@@ -876,7 +880,15 @@ struct ChatSessionStore {
             var persisted = session
             _ = try persisted.externalizeAssets(using: mediaStore)
             let data = try makeEncoder().encode(persisted)
+            let previous = (try? Data(contentsOf: sessionURL(for: session.id)))
+                .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }?.workState
+            if let state = persisted.workState {
+                try workFiles.save(state, previous: previous, sessionID: persisted.id)
+            }
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
+            if let state = persisted.workState {
+                workFiles.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
+            }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true
         } catch {
