@@ -17,7 +17,6 @@ import json
 import os
 import sys
 import tempfile
-import traceback
 from pathlib import Path
 
 try:
@@ -82,9 +81,6 @@ async def _verify(entry, folder, bundled_directory):
     except asyncio.TimeoutError:
         return False, f"timed out after {TIMEOUT_SECONDS}s"
     except Exception as exc:
-        # MCP transports wrap startup errors in TaskGroup exception groups.
-        # Keep their nested causes in the CI log instead of hiding the failure.
-        traceback.print_exception(exc)
         return False, f"{type(exc).__name__}: {exc}"
     if count == 0:
         return False, "connected but exposed no tools"
