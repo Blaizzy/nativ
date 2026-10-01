@@ -38,7 +38,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
     }
 
     private var configuration = Configuration(enabled: false, suspended: false)
-    private let inputSession = AudioInputEngineSession()
+    private let inputSession = AudioInputCaptureSession()
     private var sessionID = UUID()
     private var task: Task<Void, Never>?
     private var inferenceTask: Task<Void, Never>?
@@ -114,14 +114,15 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
-    private func startInput(bridge: VoiceWakeWordAudioBridge, processor: VoiceWakeWordProcessor, deviceID: String?, id: UUID) throws -> Bool {
+    private func startInput(bridge: VoiceWakeWordAudioBridge, processor: VoiceWakeWordProcessor, deviceID: String?, id: UUID) async throws -> Bool {
         guard isCurrent(id) else { return false }
         self.processor = processor
-        try inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
+        try await inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
             bridge.append(buffer)
         }) { [weak self] error in
             self?.fail(error.localizedDescription, id: id)
         }
+        guard isCurrent(id) else { return false }
         state = .listening
         return true
     }

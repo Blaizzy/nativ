@@ -276,6 +276,73 @@ final class RealtimeAudioMeterTests: XCTestCase {
     }
 }
 
+final class AudioInputSampleReceiverTests: XCTestCase {
+    func testNativePCMFormatsReachMeterAndRecordingWithoutChangingRateOrChannels() throws {
+        for commonFormat in [AVAudioCommonFormat.pcmFormatFloat32, .pcmFormatInt16] {
+            for interleaved in [false, true] {
+                for rate in [24_000.0, 48_000.0] {
+                    let format = try XCTUnwrap(AVAudioFormat(
+                        commonFormat: commonFormat, sampleRate: rate, channels: 2, interleaved: interleaved
+                    ))
+                    let pcm = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 240))
+                    pcm.frameLength = 240
+                    for channel in 0..<2 {
+                        for frame in 0..<240 {
+                            if commonFormat == .pcmFormatFloat32 {
+                                pcm.floatChannelData![channel][frame * pcm.stride] = 0.25
+                            } else {
+                                pcm.int16ChannelData![channel][frame * pcm.stride] = 8_192
+                            }
+                        }
+                    }
+                    let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).wav")
+                    defer { try? FileManager.default.removeItem(at: url) }
+                    let writer = VoiceAudioRecordingWriter(outputURL: url)
+                    let meter = RealtimeAudioMeter(profile: .recording)
+                    let delivery = AudioInputCaptureDelivery(tap: VoiceAudioRecorder.makeTap(writer: writer, realtimeMeter: meter))
+                    let receiver = AudioInputSampleReceiver(delivery: delivery) { error in
+                        XCTFail("Sample conversion failed: \(error)")
+                    }
+                    receiver.consume(try sampleBuffer(from: pcm))
+                    delivery.stop()
+                    receiver.consume(try sampleBuffer(from: pcm))
+                    writer.finish()
+                    let file = try AVAudioFile(forReading: url)
+                    XCTAssertEqual(file.length, 240)
+                    XCTAssertEqual(file.processingFormat.sampleRate, rate)
+                    XCTAssertEqual(file.processingFormat.channelCount, 2)
+                    let result = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 240))
+                    try file.read(into: result)
+                    XCTAssertEqual(result.floatChannelData![0][239], 0.25, accuracy: 0.00001)
+                    XCTAssertEqual(result.floatChannelData![1][239], 0.25, accuracy: 0.00001)
+                    XCTAssertGreaterThan(try XCTUnwrap(meter.snapshot(after: 0)).level, 0)
+                }
+            }
+        }
+    }
+
+    private func sampleBuffer(from pcm: AVAudioPCMBuffer) throws -> CMSampleBuffer {
+        var sample: CMSampleBuffer?
+        var timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: CMTimeScale(pcm.format.sampleRate)),
+            presentationTimeStamp: .zero, decodeTimeStamp: .invalid
+        )
+        XCTAssertEqual(CMSampleBufferCreate(
+            allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false,
+            makeDataReadyCallback: nil, refcon: nil, formatDescription: pcm.format.formatDescription,
+            sampleCount: Int(pcm.frameLength), sampleTimingEntryCount: 1, sampleTimingArray: &timing,
+            sampleSizeEntryCount: 0, sampleSizeArray: nil, sampleBufferOut: &sample
+        ), noErr)
+        let result = try XCTUnwrap(sample)
+        XCTAssertEqual(CMSampleBufferSetDataBufferFromAudioBufferList(
+            result, blockBufferAllocator: kCFAllocatorDefault, blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: 0, bufferList: pcm.audioBufferList
+        ), noErr)
+        XCTAssertEqual(CMSampleBufferSetDataReady(result), noErr)
+        return result
+    }
+}
+
 @MainActor
 final class RealtimeAudioMeterPublisherTests: XCTestCase {
     func testPublisherCoalescesAndDeliversOnlyOnMainActor() async throws {
@@ -377,93 +444,97 @@ private final class VoiceAudioWriterProbe: VoiceAudioBufferWriting, @unchecked S
 }
 
 @MainActor
-final class AudioInputEngineSessionTests: XCTestCase {
-    func testConfigurationChangeRebuildsEngineAndIgnoresOldNotifications() async {
-        let first = AudioInputEngineProbe()
-        let second = AudioInputEngineProbe()
-        let restarted = expectation(description: "Engine restarted")
-        second.onStart = { restarted.fulfill() }
+final class AudioInputCaptureSessionTests: XCTestCase {
+    func testSelectionReusesCaptureAndStopSuppressesLateAudioAndErrors() async throws {
+        let capture = AudioInputCaptureProbe()
         var creations = 0
-        let session = AudioInputEngineSession(retryDelays: [.zero]) {
+        let session = AudioInputCaptureSession {
+            creations += 1
+            return capture
+        }
+        let meter = RealtimeAudioMeter(profile: .inputMonitor)
+        try await session.start(deviceUniqueID: "first", tap: AudioInputLevelMonitor.makeTap(realtimeMeter: meter)) { _ in
+            XCTFail("A stopped capture reported a late failure")
+        }
+        try await session.select(deviceUniqueID: "second")
+        XCTAssertEqual(creations, 1)
+        XCTAssertEqual(capture.deviceUniqueID, "second")
+        XCTAssertEqual(capture.stopCount, 0)
+        session.stop()
+        capture.deliver(sampleRate: 48_000, channels: 1, frames: 1_024)
+        capture.fail()
+        await Task.yield()
+        XCTAssertNil(meter.snapshot(after: 0))
+    }
+
+    func testFailedSelectionLeavesPreviousCaptureRunning() async throws {
+        let capture = AudioInputCaptureProbe()
+        let session = AudioInputCaptureSession { capture }
+        try await session.start(deviceUniqueID: "first", tap: { _, _ in }) { _ in XCTFail() }
+        defer { session.stop() }
+        capture.failsSelection = true
+        do {
+            try await session.select(deviceUniqueID: "missing")
+            XCTFail("Unavailable selection succeeded")
+        } catch {}
+        XCTAssertEqual(capture.deviceUniqueID, "first")
+        XCTAssertTrue(capture.isRunning)
+        XCTAssertEqual(capture.stopCount, 0)
+    }
+
+    func testStopDuringStartupCannotReviveRecording() async throws {
+        let capture = AudioInputCaptureProbe()
+        capture.suspendsStart = true
+        let session = AudioInputCaptureSession { capture }
+        let recorder = VoiceAudioRecorder(inputSession: session)
+        let url = try temporaryDirectory().appendingPathComponent("cancelled.wav")
+        let start = Task { try await recorder.start(outputURL: url) }
+        while capture.startContinuation == nil { await Task.yield() }
+        XCTAssertNil(recorder.stop())
+        capture.resumeStart()
+        do {
+            _ = try await start.value
+            XCTFail("Cancelled recording started")
+        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testNewStartWaitsForPreviousCaptureToStop() async throws {
+        let first = AudioInputCaptureProbe()
+        first.suspendsStart = true
+        let second = AudioInputCaptureProbe()
+        var creations = 0
+        let session = AudioInputCaptureSession {
             creations += 1
             return creations == 1 ? first : second
         }
-        defer { session.stop() }
-        do {
-            try session.start(deviceUniqueID: "selected-input", tap: { _, _ in }) { error in
-                XCTFail("Unexpected recovery failure: \(error)")
-            }
-        } catch {
-            XCTFail("Unexpected start failure: \(error)")
-            return
-        }
-        let staleNotification = first.onConfigurationChange
-        first.changeConfiguration()
-        staleNotification?()
-        await fulfillment(of: [restarted], timeout: 2)
-        XCTAssertEqual(creations, 2)
-        XCTAssertEqual(first.stopCount, 1)
-        XCTAssertEqual(second.deviceUniqueID, "selected-input")
-        XCTAssertTrue(second.isRunning)
-        staleNotification?()
-        XCTAssertEqual(creations, 2)
-    }
-
-    func testStoppingCancelsPendingRecovery() async throws {
-        let first = AudioInputEngineProbe()
-        var creations = 0
-        let session = AudioInputEngineSession(retryDelays: [.milliseconds(20)]) {
-            creations += 1
-            return first
-        }
-        try session.start(deviceUniqueID: nil, tap: { _, _ in }) { error in
-            XCTFail("Stopped session reported a failure: \(error)")
-        }
-        first.changeConfiguration()
+        let start = Task { try await session.start(deviceUniqueID: "first", tap: { _, _ in }) { _ in XCTFail() } }
+        while first.startContinuation == nil { await Task.yield() }
         session.stop()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(creations, 1)
-        XCTAssertFalse(first.isRunning)
-    }
-
-    func testRecoveryRetriesThenReportsOneFailure() async throws {
-        let first = AudioInputEngineProbe()
-        var attempts: [AudioInputEngineProbe] = []
-        let failed = expectation(description: "Recovery failure reported")
-        let session = AudioInputEngineSession(retryDelays: [.zero, .zero, .zero]) {
-            let engine = attempts.isEmpty ? first : AudioInputEngineProbe(failsToStart: true)
-            attempts.append(engine)
-            return engine
-        }
-        defer { session.stop() }
-        try session.start(deviceUniqueID: nil, tap: { _, _ in }) { _ in failed.fulfill() }
-        first.changeConfiguration()
-        await fulfillment(of: [failed], timeout: 2)
-        XCTAssertEqual(attempts.count, 4)
-        XCTAssertTrue(attempts.allSatisfy { !$0.isRunning && $0.stopCount == 1 })
+        let replacement = Task { try await session.start(deviceUniqueID: "second", tap: { _, _ in }) { _ in XCTFail() } }
+        await Task.yield()
+        XCTAssertFalse(second.isRunning)
+        first.resumeStart()
+        _ = await start.result
+        try await replacement.value
+        XCTAssertEqual(first.stopCount, 1)
+        XCTAssertTrue(second.isRunning)
+        session.stop()
     }
 
     func testRecordingContinuesAcrossDeviceFormatChange() async throws {
-        let directory = try temporaryDirectory()
-        let outputURL = directory.appendingPathComponent("recording.wav")
-        let first = AudioInputEngineProbe()
-        let second = AudioInputEngineProbe()
-        let restarted = expectation(description: "Recording input restarted")
-        second.onStart = { restarted.fulfill() }
-        var creations = 0
-        let session = AudioInputEngineSession(retryDelays: [.zero]) {
-            creations += 1
-            return creations == 1 ? first : second
-        }
+        let outputURL = try temporaryDirectory().appendingPathComponent("recording.wav")
+        let capture = AudioInputCaptureProbe()
+        let session = AudioInputCaptureSession { capture }
         let recorder = VoiceAudioRecorder(inputSession: session)
         recorder.onRecordingFailure = { error, _ in XCTFail("Unexpected failure: \(error)") }
-        defer { recorder.stop() }
-        try recorder.start(outputURL: outputURL)
-        first.deliver(sampleRate: 48_000, channels: 1, frames: 4_800)
-        first.changeConfiguration()
-        await fulfillment(of: [restarted], timeout: 2)
-        second.deliver(sampleRate: 44_100, channels: 2, frames: 4_410)
+        try await recorder.start(outputURL: outputURL)
+        capture.deliver(sampleRate: 48_000, channels: 1, frames: 4_800)
+        try await session.select(deviceUniqueID: "second")
+        capture.deliver(sampleRate: 24_000, channels: 1, frames: 2_400)
         XCTAssertTrue(recorder.isRecording)
+        XCTAssertEqual(capture.stopCount, 0)
         XCTAssertEqual(recorder.stop(), outputURL)
         XCTAssertEqual(recorder.lastRecordingDuration ?? 0, 0.2, accuracy: 0.001)
         let file = try AVAudioFile(forReading: outputURL)
@@ -472,14 +543,13 @@ final class AudioInputEngineSessionTests: XCTestCase {
         XCTAssertEqual(Double(file.length) / 48_000, 0.2, accuracy: 0.001)
     }
 
-    func testRecordingRecoveryFailurePreservesCapturedAudio() async throws {
-        let directory = try temporaryDirectory()
-        let outputURL = directory.appendingPathComponent("recording.wav")
-        let first = AudioInputEngineProbe()
+    func testCaptureFailurePreservesPartialRecordingWithoutRetrying() async throws {
+        let outputURL = try temporaryDirectory().appendingPathComponent("recording.wav")
+        let capture = AudioInputCaptureProbe()
         var creations = 0
-        let session = AudioInputEngineSession(retryDelays: [.zero]) {
+        let session = AudioInputCaptureSession {
             creations += 1
-            return creations == 1 ? first : AudioInputEngineProbe(failsToStart: true)
+            return capture
         }
         let recorder = VoiceAudioRecorder(inputSession: session)
         let failed = expectation(description: "Recorder stopped with partial audio")
@@ -487,10 +557,12 @@ final class AudioInputEngineSessionTests: XCTestCase {
             XCTAssertEqual(savedURL, outputURL)
             failed.fulfill()
         }
-        try recorder.start(outputURL: outputURL)
-        first.deliver(sampleRate: 48_000, channels: 1, frames: 4_800)
-        first.changeConfiguration()
+        try await recorder.start(outputURL: outputURL)
+        capture.deliver(sampleRate: 48_000, channels: 1, frames: 4_800)
+        capture.fail()
+        capture.fail()
         await fulfillment(of: [failed], timeout: 2)
+        XCTAssertEqual(creations, 1)
         XCTAssertFalse(recorder.isRecording)
         XCTAssertEqual(recorder.lastRecordingDuration ?? 0, 0.1, accuracy: 0.000001)
         XCTAssertEqual(try AVAudioFile(forReading: outputURL).length, 4_800)
@@ -498,8 +570,8 @@ final class AudioInputEngineSessionTests: XCTestCase {
 
     func testWriteFailureStopsRecordingAndNotifiesOnce() async throws {
         let directory = try temporaryDirectory()
-        let first = AudioInputEngineProbe()
-        let session = AudioInputEngineSession { first }
+        let first = AudioInputCaptureProbe()
+        let session = AudioInputCaptureSession { first }
         let recorder = VoiceAudioRecorder(inputSession: session)
         let failed = expectation(description: "Write failure delivered")
         var failures = 0
@@ -508,7 +580,7 @@ final class AudioInputEngineSessionTests: XCTestCase {
             XCTAssertNil(savedURL)
             failed.fulfill()
         }
-        try recorder.start(outputURL: directory.appendingPathComponent("missing/recording.wav"))
+        try await recorder.start(outputURL: directory.appendingPathComponent("missing/recording.wav"))
         try FileManager.default.removeItem(at: directory.appendingPathComponent("missing"))
         first.deliver(sampleRate: 48_000, channels: 1, frames: 1_024)
         first.deliver(sampleRate: 48_000, channels: 1, frames: 1_024)
@@ -520,10 +592,10 @@ final class AudioInputEngineSessionTests: XCTestCase {
 
     func testStoppingExposesWriteFailureAndOldFailureCannotStopNewRecording() async throws {
         let directory = try temporaryDirectory()
-        let first = AudioInputEngineProbe()
-        let second = AudioInputEngineProbe()
+        let first = AudioInputCaptureProbe()
+        let second = AudioInputCaptureProbe()
         var creations = 0
-        let session = AudioInputEngineSession {
+        let session = AudioInputCaptureSession {
             creations += 1
             return creations == 1 ? first : second
         }
@@ -531,14 +603,14 @@ final class AudioInputEngineSessionTests: XCTestCase {
         recorder.onRecordingFailure = { error, _ in
             XCTFail("A stopped recording delivered a stale failure: \(error)")
         }
-        try recorder.start(outputURL: directory.appendingPathComponent("missing/recording.wav"))
+        try await recorder.start(outputURL: directory.appendingPathComponent("missing/recording.wav"))
         try FileManager.default.removeItem(at: directory.appendingPathComponent("missing"))
         first.deliver(sampleRate: 48_000, channels: 1, frames: 1_024)
         XCTAssertNil(recorder.stop())
         XCTAssertNotNil(recorder.lastRecordingError)
 
         let newURL = directory.appendingPathComponent("new.wav")
-        try recorder.start(outputURL: newURL)
+        try await recorder.start(outputURL: newURL)
         defer { recorder.stop() }
         second.deliver(sampleRate: 48_000, channels: 1, frames: 1_024)
         try await Task.sleep(for: .milliseconds(20))
@@ -556,37 +628,46 @@ final class AudioInputEngineSessionTests: XCTestCase {
 }
 
 @MainActor
-private final class AudioInputEngineProbe: AudioInputEngineDriving {
+private final class AudioInputCaptureProbe: AudioInputCaptureDriving {
     var isRunning = false
-    var onConfigurationChange: (() -> Void)?
-    var onStart: (() -> Void)?
     var stopCount = 0
     var deviceUniqueID: String?
-    private let failsToStart: Bool
-    private var tap: (@Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void)?
-
-    init(failsToStart: Bool = false) { self.failsToStart = failsToStart }
+    var failsSelection = false
+    var suspendsStart = false
+    var startContinuation: CheckedContinuation<Void, Never>?
+    private var delivery: AudioInputCaptureDelivery?
+    private var onFailure: (@Sendable (Error) -> Void)?
 
     func start(
-        deviceUniqueID: String?,
-        tap: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void
-    ) throws {
-        if failsToStart { throw VoiceAudioRecorderError.inputDeviceUnavailable }
+        deviceUniqueID: String?, delivery: AudioInputCaptureDelivery,
+        onFailure: @escaping @Sendable (Error) -> Void
+    ) async throws {
         self.deviceUniqueID = deviceUniqueID
-        self.tap = tap
+        self.delivery = delivery
+        self.onFailure = onFailure
+        if suspendsStart {
+            await withCheckedContinuation { startContinuation = $0 }
+        }
         isRunning = true
-        onStart?()
     }
 
-    func stop() {
+    func resumeStart() {
+        startContinuation?.resume()
+        startContinuation = nil
+    }
+
+    func select(deviceUniqueID: String?) async throws {
+        if failsSelection { throw VoiceAudioRecorderError.inputDeviceUnavailable }
+        self.deviceUniqueID = deviceUniqueID
+    }
+
+    func stop() async {
         stopCount += 1
         isRunning = false
-        tap = nil
     }
 
-    func changeConfiguration() {
-        isRunning = false
-        onConfigurationChange?()
+    func fail() {
+        onFailure?(VoiceAudioRecorderError.inputDeviceUnavailable)
     }
 
     func deliver(sampleRate: Double, channels: AVAudioChannelCount, frames: AVAudioFrameCount) {
@@ -598,6 +679,6 @@ private final class AudioInputEngineProbe: AudioInputEngineDriving {
                 buffer.floatChannelData![channel][frame] = 0.25
             }
         }
-        tap?(buffer, AVAudioTime(hostTime: 0))
+        delivery?.submit(buffer, at: AVAudioTime(hostTime: 0))
     }
 }

@@ -238,10 +238,13 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                try self.recorder.start(
+                try await self.recorder.start(
                     deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
                 )
+                guard !Task.isCancelled, self.isShortcutHeld else { return }
                 self.overlay.didStartRecording()
+            } catch is CancellationError {
+                return
             } catch {
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.clearFailedCaptureState()
