@@ -735,6 +735,65 @@ final class ChatWorkSessionTests: XCTestCase {
         throw CancellationError()
     }
 
+    func testAgentAndPaneShareFilesAndImportExternalEditsWithRevisionChecks() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        func json(_ value: String) throws -> [String: Any] {
+            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+        }
+        let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Notes.md",
+            kind: .document, content: "# Original"), in: session.id))
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        XCTAssertEqual(created["file_path"] as? String, url.path)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Original")
+        try chat.updateWorkItem(item.id, content: "# Pane edit", previousContent: "# Original")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Pane edit")
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id)
+        try "# Terminal edit".write(to: url, atomically: true, encoding: .utf8)
+        chat.closeWorkItem(item.id)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Terminal edit")
+        do {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                content: "Stale", expectedRevision: 2), in: session.id)
+            XCTFail("A stale revision must not overwrite an external edit")
+        } catch ChatWorkError.conflict {
+            // The disk edit increments the revision before the agent update is applied.
+        } catch { XCTFail("Unexpected error: \(error)") }
+        let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id))
+        XCTAssertEqual(read["content"] as? String, "# Terminal edit")
+        XCTAssertEqual(read["revision"] as? Int, 3)
+        XCTAssertEqual(read["file_path"] as? String, url.path)
+        let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+            content: "# Agent edit", expectedRevision: 3), in: session.id))
+        XCTAssertEqual(updated["file_path"] as? String, url.path)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Agent edit")
+        let list = try await chat.executeWorkAction(ChatWorkRequest(action: .list), in: session.id)
+        let listed = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(list.utf8)) as? [[String: Any]])
+        XCTAssertEqual(listed.first?["file_path"] as? String, url.path)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem?.content, "# Agent edit")
+        let restored = subject(root)
+        try await loaded(restored)
+        restored.selectSession(session.id)
+        try restored.refreshWorkFiles()
+        restored.openWorkItem(item.id)
+        XCTAssertEqual(restored.workState.items.count, 1)
+        XCTAssertEqual(restored.workState.selectedItem?.id, item.id)
+        XCTAssertEqual(restored.workFileURL(for: item), url)
+    }
+
+    func testFailedFileSaveDoesNotPublishUnsavedWork() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let before = chat.workState
+        try Data("not a directory".utf8).write(to: root.appendingPathComponent("Chat/Files"))
+        XCTAssertThrowsError(try chat.createWorkItem(title: "Unsaved.md", kind: .document, content: "Unsaved"))
+        XCTAssertEqual(chat.workState, before)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.items ?? [], [])
+    }
+
     func testWorkOnlySessionSurvivesSwitchingAndPreservesExistingMetadata() async throws {
         let (root, store, original) = try fixture()
         let chat = subject(root)
