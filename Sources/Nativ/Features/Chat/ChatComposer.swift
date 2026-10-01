@@ -740,8 +740,31 @@ struct ChatComposer: View {
             notices.append(ChatAttachmentNotice(
                 id: "document-context-limit",
                 severity: .warning,
-                title: "Some documents weren’t included",
+                title: modelContextLimit(in: omittedDocuments) == nil
+                    ? "Some documents weren’t included"
+                    : "These documents need a larger context",
                 message: documentContextWarningMessage(for: omittedDocuments),
+                systemImage: "doc.badge.ellipsis",
+                isDismissible: true
+            ))
+        }
+        if let overflow = pendingDocumentOverflow {
+            notices.append(ChatAttachmentNotice(
+                id: "document-upload-overflow",
+                severity: .warning,
+                title: "More text than this model can read",
+                message: pendingDocumentOverflowMessage(overflow),
+                systemImage: "doc.badge.ellipsis",
+                isDismissible: true
+            ))
+        }
+        let trimmedDocuments = viewModel.currentDocumentContextTrims
+        if omittedDocuments.isEmpty, !trimmedDocuments.isEmpty {
+            notices.append(ChatAttachmentNotice(
+                id: "document-context-trimmed",
+                severity: .warning,
+                title: "Some documents were shortened",
+                message: documentTrimWarningMessage(for: trimmedDocuments),
                 systemImage: "doc.badge.ellipsis",
                 isDismissible: true
             ))
@@ -783,15 +806,70 @@ struct ChatComposer: View {
         return nil
     }
 
+    private var pendingDocumentOverflow: (characters: Int, contextLimit: Int)? {
+        guard viewModel.currentDocumentContextOmissions.isEmpty,
+            viewModel.currentDocumentContextTrims.isEmpty,
+            let contextLimit = effectiveContextWindowCapacity,
+            contextLimit > 0
+        else { return nil }
+        let characters = viewModel.pendingDocumentCharacterTotal
+        guard characters > 0 else { return nil }
+        let budget = ChatDocumentBudget.derived(
+            contextLimit: contextLimit,
+            maximumOutputTokens: model.settings.maxTokens,
+            basePromptTokens: 0
+        ).characters
+        guard characters > budget else { return nil }
+        return (characters, contextLimit)
+    }
+
+    private func pendingDocumentOverflowMessage(
+        _ overflow: (characters: Int, contextLimit: Int)
+    ) -> String {
+        let count = viewModel.pendingDocumentCharacters.count
+        let subject = count == 1 ? "This file holds" : "These \(count) files hold"
+        return "\(subject) about \(NativFormatting.integer(overflow.characters)) characters, "
+            + "more than this model’s \(NativFormatting.integer(overflow.contextLimit))-token "
+            + "context can take at once. You can still send it — Nativ will use the most "
+            + "relevant parts of each file."
+    }
+
+    private func modelContextLimit(in omissions: [ChatDocumentOmission]) -> Int? {
+        for omission in omissions {
+            if case .modelContext(let contextLimit) = omission.reason {
+                return contextLimit
+            }
+        }
+        return nil
+    }
+
     private func documentContextWarningMessage(
         for omissions: [ChatDocumentOmission]
     ) -> String {
-        if omissions.count == 1, let filename = omissions.first?.filename {
-            return "The model’s context is full, so “\(filename)” wasn’t included."
-        }
         let filenames = omissions.prefix(3).map { "“\($0.filename)”" }.joined(separator: ", ")
         let suffix = omissions.count > 3 ? ", and \(omissions.count - 3) more" : ""
-        return "The model’s context is full, so \(filenames)\(suffix) weren’t included."
+        let named = "\(filenames)\(suffix)"
+        let verb = omissions.count == 1 ? "wasn’t" : "weren’t"
+
+        guard let contextLimit = modelContextLimit(in: omissions) else {
+            let fallback = NativFormatting.integer(
+                ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
+            )
+            return "Nativ couldn’t read the model’s context size, so it fell back to a "
+                + "\(fallback)-character limit and \(named) \(verb) included."
+        }
+        return "Everything attached needs more room than this model’s "
+            + "\(NativFormatting.integer(contextLimit))-token context window, "
+            + "so \(named) \(verb) included. "
+            + "Choose a model with a larger context, or raise the context size in server settings."
+    }
+
+    private func documentTrimWarningMessage(for filenames: [String]) -> String {
+        let names = filenames.prefix(3).map { "“\($0)”" }.joined(separator: ", ")
+        let suffix = filenames.count > 3 ? ", and \(filenames.count - 3) more" : ""
+        let verb = filenames.count == 1 ? "was" : "were"
+        return "\(names)\(suffix) \(verb) too long for this model’s context window, so only the "
+            + "most relevant parts were sent."
     }
 
     private func visionModelWarningMessage(

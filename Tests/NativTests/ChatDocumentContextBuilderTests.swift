@@ -472,9 +472,203 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
             [ChatDocumentOmission(
                 attachmentID: newer.id,
                 filename: "newer.pdf",
-                reason: .contextLimit
+                reason: .attachmentBudget
             )]
         )
+    }
+
+    func testLargeDocumentDoesNotStarveSmallerOnesBehindIt() async throws {
+        let large = attachment(filename: "styles.css")
+        let small = attachment(filename: "404.html")
+        let message = userMessage(attachments: [large, small])
+        let builder = builder(
+            contents: [
+                "styles.css": content(filename: "styles.css", text: String(repeating: "a", count: 45_000)),
+                "404.html": content(filename: "404.html", text: String(repeating: "b", count: 300)),
+            ]
+        )
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(characters: 48_000, source: .fallback)
+        )
+
+        XCTAssertEqual(result.omittedDocuments, [])
+        let context = try XCTUnwrap(result[message.id])
+        XCTAssertTrue(context.contains("404.html"))
+        XCTAssertTrue(context.contains("styles.css"))
+    }
+
+    func testCachedCharacterCountBecomesAvailableAfterValidation() async throws {
+        let attachment = attachment(filename: "report.pdf")
+        let extractor = CountingDocumentTextExtractor(
+            content: content(filename: "report.pdf", text: String(repeating: "a", count: 1_234))
+        )
+        let extractionCache = ChatDocumentExtractionCache(extract: extractor.extract)
+        let validator = ChatAttachmentValidator(extractionCache: extractionCache)
+
+        let beforeValidation = await extractionCache.cachedCharacterCount(for: attachment.id)
+        XCTAssertNil(beforeValidation)
+
+        _ = try await validator.validateDocument(attachment)
+
+        let afterValidation = await extractionCache.cachedCharacterCount(for: attachment.id)
+        XCTAssertEqual(afterValidation, 1_234)
+        let extractionCount = await extractor.extractionCount
+        XCTAssertEqual(extractionCount, 1)
+    }
+
+    func testDerivedBudgetSuppliesThePreSendOverflowThreshold() {
+        XCTAssertEqual(
+            ChatDocumentBudget.derived(
+                contextLimit: 8_192,
+                maximumOutputTokens: 1_024,
+                basePromptTokens: 0
+            ).characters,
+            27_648
+        )
+        XCTAssertEqual(
+            ChatDocumentBudget.derived(
+                contextLimit: 4_096,
+                maximumOutputTokens: 1_024,
+                basePromptTokens: 0
+            ).characters,
+            11_264
+        )
+    }
+
+    func testReportsTrimmedDocumentsWhenNothingIsDropped() async throws {
+        let large = attachment(filename: "styles.css")
+        let small = attachment(filename: "404.html")
+        let message = userMessage(attachments: [large, small])
+        let builder = builder(contents: [
+            "styles.css": content(filename: "styles.css", text: String(repeating: "a", count: 45_000)),
+            "404.html": content(filename: "404.html", text: String(repeating: "b", count: 300)),
+        ])
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(characters: 20_000, source: .modelContext(contextLimit: 8_192))
+        )
+
+        XCTAssertEqual(result.omittedDocuments, [])
+        XCTAssertEqual(result.trimmedFilenames, ["styles.css"])
+    }
+
+    func testWebsiteFolderReportsNoTrimsWhenEverythingFits() async throws {
+        let index = attachment(filename: "index.html")
+        let notFound = attachment(filename: "404.html")
+        let message = userMessage(attachments: [index, notFound])
+        let builder = builder(contents: [
+            "index.html": content(filename: "index.html", text: String(repeating: "a", count: 17_100)),
+            "404.html": content(filename: "404.html", text: String(repeating: "d", count: 301)),
+        ])
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget.derived(
+                contextLimit: 131_072,
+                maximumOutputTokens: 1_024,
+                basePromptTokens: 0
+            )
+        )
+
+        XCTAssertEqual(result.omittedDocuments, [])
+        XCTAssertEqual(result.trimmedFilenames, [])
+    }
+
+    func testWebsiteFolderFitsEntirelyInALargeModelContext() async throws {
+        let index = attachment(filename: "index.html")
+        let styles = attachment(filename: "styles.css")
+        let downloads = attachment(filename: "downloads.html")
+        let notFound = attachment(filename: "404.html")
+        let message = userMessage(attachments: [index, styles, downloads, notFound])
+        let builder = builder(contents: [
+            "index.html": content(filename: "index.html", text: String(repeating: "a", count: 17_100)),
+            "styles.css": content(filename: "styles.css", text: String(repeating: "b", count: 45_282)),
+            "downloads.html": content(
+                filename: "downloads.html",
+                text: String(repeating: "c", count: 13_900)
+            ),
+            "404.html": content(filename: "404.html", text: String(repeating: "d", count: 301)),
+        ])
+
+        let budget = ChatDocumentBudget.derived(
+            contextLimit: 32_768,
+            maximumOutputTokens: 1_024,
+            basePromptTokens: 0
+        )
+        let result = try await builder.contexts(for: [message], budget: budget)
+
+        XCTAssertEqual(result.omittedDocuments, [])
+        let context = try XCTUnwrap(result[message.id])
+        for filename in ["index.html", "styles.css", "downloads.html", "404.html"] {
+            XCTAssertTrue(context.contains("--- Begin attached document: \(filename) ---"))
+        }
+        XCTAssertFalse(context.contains("Selected relevant excerpts"))
+    }
+
+    func testDerivedBudgetReportsModelContextAsTheReason() async throws {
+        let first = attachment(filename: "a.md")
+        let second = attachment(filename: "b.md")
+        let message = userMessage(attachments: [first, second])
+        let builder = builder(
+            contents: [
+                "a.md": content(filename: "a.md", text: String(repeating: "a", count: 4_000)),
+                "b.md": content(filename: "b.md", text: String(repeating: "b", count: 4_000)),
+            ]
+        )
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(characters: 10, source: .modelContext(contextLimit: 4_096))
+        )
+
+        let reasons = result.omittedDocuments.map(\.reason)
+        XCTAssertFalse(reasons.isEmpty)
+        XCTAssertTrue(reasons.allSatisfy { $0 == .modelContext(contextLimit: 4_096) })
+    }
+
+    func testDerivedBudgetIgnoresThePerDocumentFallbackCap() async throws {
+        let large = attachment(filename: "big.css")
+        let message = userMessage(attachments: [large])
+        let builder = builder(
+            contents: ["big.css": content(filename: "big.css", text: String(repeating: "a", count: 40_000))],
+            maximumCharactersPerDocument: 24_000,
+            maximumCharactersPerRequest: 48_000
+        )
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(
+                characters: 120_000,
+                source: .modelContext(contextLimit: 131_072)
+            )
+        )
+
+        let context = try XCTUnwrap(result[message.id])
+        XCTAssertFalse(context.contains("Selected relevant excerpts"))
+    }
+
+    func testOmittedDocumentsAreNamedInThePromptSoTheModelDoesNotGuess() async throws {
+        let large = attachment(filename: "big.css")
+        let dropped = attachment(filename: "gone.html")
+        let message = userMessage(attachments: [large, dropped])
+        let builder = builder(
+            contents: [
+                "big.css": content(filename: "big.css", text: String(repeating: "a", count: 4_000)),
+                "gone.html": content(filename: "gone.html", text: String(repeating: "b", count: 4_000)),
+            ]
+        )
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(characters: 2_000, source: .fallback)
+        )
+
+        let context = try XCTUnwrap(result[message.id])
+        XCTAssertTrue(context.contains("gone.html"))
+        XCTAssertTrue(context.contains("rather than guessing"))
     }
 
     func testTokenBudgetScalesCharactersUsingMeasuredDocumentTokens() {

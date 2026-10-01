@@ -190,7 +190,9 @@ final class ChatViewModel: ObservableObject {
 
     private struct PreparedDocumentContext {
         var result: ChatDocumentContextResult
-        var characterLimit: Int
+        var budget: ChatDocumentBudget
+
+        var characterLimit: Int { budget.characters }
     }
 
     @Published private(set) var sessions: [ChatSessionSummary] = []
@@ -209,8 +211,10 @@ final class ChatViewModel: ObservableObject {
         }
     }
     @Published private(set) var attachmentValidations: [UUID: ChatAttachmentValidation] = [:]
+    @Published private(set) var pendingDocumentCharacters: [UUID: Int] = [:]
     @Published private(set) var attachmentImportError: String?
     @Published private var documentOmissionsBySessionID: [UUID: [ChatDocumentOmission]] = [:]
+    @Published private var documentTrimsBySessionID: [UUID: [String]] = [:]
     @Published private(set) var pendingAnnotations: [ChatAnnotation] = []
     private(set) lazy var annotationActions = ChatAnnotationActions(chat: self)
     // Only views that read draft text should update on a keystroke. Publishing it
@@ -277,6 +281,7 @@ final class ChatViewModel: ObservableObject {
     private let persistedDataChanges: PersistedDataChangeHub
     private let inferenceActivity: InferenceActivityCoordinator
     private let documentContextBuilder: ChatDocumentContextBuilder
+    private let documentExtractionCache: ChatDocumentExtractionCache
     private let attachmentValidator: ChatAttachmentValidator
     private var sessionLoadTask: Task<Void, Never>?
     private var activeTask: Task<Void, Never>?
@@ -319,6 +324,7 @@ final class ChatViewModel: ObservableObject {
         self.sessionStore = ChatSessionStore(chatDirectory: sessionDirectory)
         self.searchLibrary = searchLibrary
         let documentExtractionCache = ChatDocumentExtractionCache()
+        self.documentExtractionCache = documentExtractionCache
         documentContextBuilder = ChatDocumentContextBuilder(
             extractionCache: documentExtractionCache
         )
@@ -505,9 +511,18 @@ final class ChatViewModel: ObservableObject {
         currentSessionID.flatMap { documentOmissionsBySessionID[$0] } ?? []
     }
 
+    var pendingDocumentCharacterTotal: Int {
+        pendingDocumentCharacters.values.reduce(0, +)
+    }
+
+    var currentDocumentContextTrims: [String] {
+        currentSessionID.flatMap { documentTrimsBySessionID[$0] } ?? []
+    }
+
     func clearDocumentContextOmissions() {
         guard let currentSessionID else { return }
         documentOmissionsBySessionID[currentSessionID] = nil
+        documentTrimsBySessionID[currentSessionID] = nil
     }
 
     func canEditUserMessage(_ messageID: UUID) -> Bool {
@@ -1269,6 +1284,7 @@ final class ChatViewModel: ObservableObject {
         }
         self.appModel = appModel
         documentOmissionsBySessionID[sessionID] = nil
+        documentTrimsBySessionID[sessionID] = nil
         requestQueue.append(
             QueuedChatRequest(
                 id: UUID(),
@@ -1663,6 +1679,7 @@ final class ChatViewModel: ObservableObject {
             attachmentValidationTasks.removeValue(forKey: id)?.cancel()
         }
         attachmentValidations = attachmentValidations.filter { liveIDs.contains($0.key) }
+        pendingDocumentCharacters = pendingDocumentCharacters.filter { liveIDs.contains($0.key) }
 
         for attachment in pendingImageAttachments
         where attachmentValidations[attachment.id] == nil {
@@ -1686,6 +1703,12 @@ final class ChatViewModel: ObservableObject {
                         return
                     }
                     attachmentValidations[attachmentID] = validation
+                    if validation == .ready,
+                       let characters = await documentExtractionCache.cachedCharacterCount(
+                           for: attachmentID
+                       ) {
+                        pendingDocumentCharacters[attachmentID] = characters
+                    }
                 } catch is CancellationError {
                     return
                 } catch {
@@ -1843,18 +1866,33 @@ final class ChatViewModel: ObservableObject {
             throw NativChatError.invalidResponse
         }
         let documentMessages = Array(initialMessages[..<initialAssistantIndex])
-        var documentContext = PreparedDocumentContext(
-            result: try await documentContextBuilder.contexts(for: documentMessages),
-            characterLimit: ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
-        )
+        let hasDocumentAttachments = documentMessages.contains { message in
+            message.role == .user && message.imageAttachments.contains {
+                $0.chatAttachmentKind.documentFormat != nil
+            }
+        }
         var effectiveContextLimit: Int?
-        if !documentContext.result.contexts.isEmpty {
+        if hasDocumentAttachments {
             effectiveContextLimit = try? await NativMetricsClient(
                 baseURL: queuedRequest.settings.serverBaseURL
             )
             .fetchMetrics(apiKey: queuedRequest.settings.serverAPIKey)
             .server.effectiveContextLimit
         }
+        let initialBudget = effectiveContextLimit.map {
+            ChatDocumentBudget.derived(
+                contextLimit: $0,
+                maximumOutputTokens: activeSettings.maxTokens,
+                basePromptTokens: 0
+            )
+        } ?? .fallback
+        var documentContext = PreparedDocumentContext(
+            result: try await documentContextBuilder.contexts(
+                for: documentMessages,
+                budget: initialBudget
+            ),
+            budget: initialBudget
+        )
 
         while true {
             try Task.checkCancellation()
@@ -1869,8 +1907,8 @@ final class ChatViewModel: ObservableObject {
                 effectiveContextLimit: effectiveContextLimit,
                 client: client
             )
-            setDocumentContextOmissions(
-                documentContext.result.omittedDocuments,
+            setDocumentContextNotices(
+                documentContext.result,
                 for: queuedRequest.sessionID
             )
             guard
@@ -2406,12 +2444,13 @@ final class ChatViewModel: ObservableObject {
                 if nextLimit >= prepared.characterLimit {
                     nextLimit = max(0, prepared.characterLimit - 1)
                 }
+                let nextBudget = prepared.budget.resized(to: nextLimit)
                 prepared = PreparedDocumentContext(
                     result: try await documentContextBuilder.contexts(
                         for: messages,
-                        maximumCharactersPerRequest: nextLimit
+                        budget: nextBudget
                     ),
-                    characterLimit: nextLimit
+                    budget: nextBudget
                 )
             }
         } catch is CancellationError {
@@ -2422,13 +2461,17 @@ final class ChatViewModel: ObservableObject {
         return prepared
     }
 
-    private func setDocumentContextOmissions(
-        _ omissions: [ChatDocumentOmission],
+    private func setDocumentContextNotices(
+        _ result: ChatDocumentContextResult,
         for sessionID: UUID
     ) {
-        let contextLimited = omissions.filter { $0.reason == .contextLimit }
-        if documentOmissionsBySessionID[sessionID] != contextLimited {
-            documentOmissionsBySessionID[sessionID] = contextLimited.isEmpty ? nil : contextLimited
+        let budgetLimited = result.omittedDocuments.filter(\.reason.isBudgetRelated)
+        if documentOmissionsBySessionID[sessionID] != budgetLimited {
+            documentOmissionsBySessionID[sessionID] = budgetLimited.isEmpty ? nil : budgetLimited
+        }
+        let trimmed = result.trimmedFilenames
+        if documentTrimsBySessionID[sessionID] != trimmed {
+            documentTrimsBySessionID[sessionID] = trimmed.isEmpty ? nil : trimmed
         }
     }
 

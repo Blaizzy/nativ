@@ -77,6 +77,10 @@ actor ChatDocumentExtractionCache {
         self.extract = extract
     }
 
+    func cachedCharacterCount(for attachmentID: UUID) -> Int? {
+        documents[attachmentID]?.content.characterCount
+    }
+
     func document(for attachment: ChatImageAttachment) async throws -> IndexedChatDocument {
         try Task.checkCancellation()
         if let document = documents[attachment.id] {
