@@ -9,8 +9,7 @@ struct ChatWorkPane: View {
     @Environment(\.controlPanelIsSidebarVisible) private var isSidebarVisible
     @State private var sourceIDs: Set<UUID> = []
     @State private var errorMessage: String?
-    @State private var showsFeedback = false
-    @State private var feedback = ""
+    @State private var feedbackTarget: ChatWorkFeedback?
     @State private var selectedText = ""
     @State private var translationText = ""
     @State private var showsTranslation = false
@@ -22,7 +21,10 @@ struct ChatWorkPane: View {
             Divider()
             if let item = chat.workState.selectedItem {
                 if item.resolvedKind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
-                    ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID)) {
+                    ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID), onAnnotate: { annotation in
+                        guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
+                        presentFeedback(for: item, annotation: annotation)
+                    }, onAnnotationError: { errorMessage = $0 }) {
                         if item.canEdit {
                             viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right", isSelected: false) {
                                 sourceIDs.insert(item.id)
@@ -56,12 +58,13 @@ struct ChatWorkPane: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: chat.workState.selectedID) { _, _ in
             selectedText = ""
+            feedbackTarget = nil
             showsTranslation = false
         }
         .onChange(of: chat.currentSessionID) { _, _ in
             selectedText = ""
             sourceIDs = []
-            showsFeedback = false
+            feedbackTarget = nil
             showsTranslation = false
         }
         .alert("Work pane", isPresented: Binding(
@@ -71,7 +74,15 @@ struct ChatWorkPane: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .sheet(isPresented: $showsFeedback) { feedbackEntry }
+        .sheet(item: $feedbackTarget) { target in
+            ChatWorkFeedbackSheet(target: target) { comment in
+                guard chat.currentSessionID == target.sessionID,
+                      chat.workState.selectedID == target.item.id else { return }
+                chat.draft += (chat.draft.isEmpty ? "" : "\n\n") + target.message(comment: comment)
+                if chat.workState.isExpanded == true { chat.toggleWorkPaneExpanded() }
+                feedbackTarget = nil
+            }
+        }
     }
 
     private var tabBar: some View {
@@ -380,8 +391,7 @@ struct ChatWorkPane: View {
             .accessibilityLabel("Translate")
             .translationPresentation(isPresented: $showsTranslation, text: translationText)
             Button {
-                feedback = ""
-                showsFeedback = true
+                presentFeedback(for: item)
             } label: {
                 Image(systemName: "text.bubble").frame(width: 30, height: 30)
             }
@@ -410,7 +420,7 @@ struct ChatWorkPane: View {
             .id(item.id)
         } else if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
             ChatWorkBrowserView(browser: chat.workBrowser(for: item, sessionID: sessionID))
-                .id(item.id)
+                .id("\(sessionID):\(item.id)")
         } else {
             ScrollView {
                 MarkdownRenderer(content: previewMarkdown(item), baseURL: item.sourceURL.flatMap(URL.init(string:)),
@@ -428,31 +438,9 @@ struct ChatWorkPane: View {
         return "\(fence)\(item.language ?? "")\n\(item.content)\n\(fence)"
     }
 
-    private var feedbackEntry: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Discuss \(chat.workState.selectedItem?.title ?? "this work")").font(.headline)
-            if !selectedText.isEmpty {
-                Text(selectedText).font(.caption.monospaced()).lineLimit(5).foregroundStyle(.secondary)
-            }
-            TextField("What would you like to change?", text: $feedback, axis: .vertical)
-                .textFieldStyle(.roundedBorder).lineLimit(3...6)
-            HStack {
-                Spacer()
-                Button("Cancel") { showsFeedback = false }.keyboardShortcut(.cancelAction)
-                Button("Add to chat") {
-                    guard let item = chat.workState.selectedItem else { return }
-                    var context = "Regarding \(item.title) (work item \(item.id), revision \(item.revision)):\n"
-                    if !selectedText.isEmpty { context += "Selected text:\n\(selectedText)\n\n" }
-                    context += feedback
-                    chat.draft += (chat.draft.isEmpty ? "" : "\n\n") + context
-                    if chat.workState.isExpanded == true { chat.toggleWorkPaneExpanded() }
-                    showsFeedback = false
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(24).frame(width: 440)
+    private func presentFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil) {
+        feedbackTarget = ChatWorkFeedback(item: item, sessionID: chat.currentSessionID,
+                                          annotation: annotation, selectedText: selectedText)
     }
 
     private func create(title: String, kind: ChatWorkItem.Kind, content: String = "") {

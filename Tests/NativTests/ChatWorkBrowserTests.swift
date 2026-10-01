@@ -4,6 +4,116 @@ import Network
 
 @MainActor
 final class ChatWorkBrowserTests: XCTestCase {
+    func testAnnotationFeedbackKeepsTheOriginalWorkRevisionAndSelection() {
+        var item = ChatWorkItem(title: "Game", kind: .website, content: "<canvas></canvas>")
+        let sessionID = UUID()
+        let annotation = ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#game",
+                                               text: "", x: 40, y: 60)
+        let feedback = ChatWorkFeedback(item: item, sessionID: sessionID, annotation: annotation,
+                                        selectedText: "Stale source selection")
+        item.revision += 1
+        item.title = "Renamed"
+        let message = feedback.message(comment: "Make this easier to see")
+        XCTAssertEqual(feedback.sessionID, sessionID)
+        XCTAssertTrue(message.contains("Regarding Game (work item \(item.id), revision 1)"))
+        XCTAssertTrue(message.contains("canvas#game"))
+        XCTAssertTrue(message.contains("(40, 60)"))
+        XCTAssertTrue(message.hasSuffix("Comment: Make this easier to see"))
+        XCTAssertFalse(message.contains("Stale source selection"))
+    }
+
+    func testAnnotationPicksAnElementWithoutActivatingItAndKeepsPageCodeIsolated() async throws {
+        let browser = ChatWorkBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
+        browser.load(ChatWorkItem(title: "Game", kind: .website, content: """
+            <button id="play" onclick="document.body.dataset.played='yes'">Play again</button>
+            <input type="password" value="private-value">
+            """))
+        defer { browser.stop() }
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        var selection: ChatWorkPageAnnotation?
+        try await browser.annotator.start { selection = $0 }
+        XCTAssertTrue(browser.annotator.isActive)
+        let isolated = try await browser.webView.evaluateJavaScript("""
+            typeof globalThis.__nativAnnotation === 'undefined' && !window.webkit?.messageHandlers?.nativWorkAnnotation
+            """)
+        XCTAssertEqual(isolated as? Bool, true)
+        try await pickAnnotation("#play", in: browser)
+        for _ in 0..<50 where selection == nil { try await Task.sleep(for: .milliseconds(10)) }
+        let picked = try XCTUnwrap(selection)
+        XCTAssertEqual(picked.selector, "button#play")
+        XCTAssertEqual(picked.text, "Play again")
+        XCTAssertEqual(picked.url, browser.localPageURL?.absoluteString)
+        XCTAssertEqual(picked.x, 5)
+        XCTAssertEqual(picked.y, 5)
+        XCTAssertFalse(picked.context.contains("private-value"))
+        XCTAssertFalse(browser.annotator.isActive)
+        let untouched = try await browser.webView.evaluateJavaScript("""
+            !document.body.dataset.played && !document.querySelector('[data-nativ-annotation]')
+            """)
+        XCTAssertEqual(untouched as? Bool, true)
+        // Once picking ends, the same button behaves normally again.
+        _ = try await browser.webView.evaluateJavaScript("document.getElementById('play').click()")
+        let played = try await browser.webView.evaluateJavaScript("document.body.dataset.played")
+        XCTAssertEqual(played as? String, "yes")
+    }
+
+    func testAnnotationCanPickCanvasOnRemotePageAndCancelsOnEscapeNavigationAndClose() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let browser = ChatWorkBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
+        browser.load(ChatWorkItem(title: "Remote", kind: .website, content: "", url: base.absoluteString))
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        _ = try await browser.webView.evaluateJavaScript("document.body.innerHTML='<canvas id=game aria-label=Snake></canvas>'")
+        var selection: ChatWorkPageAnnotation?
+        try await browser.annotator.start { selection = $0 }
+        try await pickAnnotation("canvas", in: browser)
+        for _ in 0..<50 where selection == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(selection?.selector, "canvas#game")
+        XCTAssertEqual(selection?.text, "Snake")
+        XCTAssertEqual(selection?.url, base.absoluteString)
+        try await browser.annotator.start { _ in XCTFail("Cancelled annotations must not open feedback") }
+        _ = try await browser.webView.evaluateJavaScript("window.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape'}))")
+        for _ in 0..<50 where browser.annotator.isActive { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertFalse(browser.annotator.isActive)
+        try await browser.annotator.start { _ in XCTFail("Navigation must cancel annotation") }
+        try browser.navigate(base.appendingPathComponent("next").absoluteString)
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        XCTAssertFalse(browser.annotator.isActive)
+        let overlay = try await browser.webView.evaluateJavaScript("!!document.querySelector('[data-nativ-annotation]')")
+        XCTAssertEqual(overlay as? Bool, false)
+        try await browser.annotator.start { _ in XCTFail("Closing must cancel annotation") }
+        browser.stop()
+        XCTAssertFalse(browser.annotator.isActive)
+    }
+
+    func testRestartingAnnotationDiscardsThePreviousCallbackAndBoundsPageText() async throws {
+        let browser = ChatWorkBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
+        browser.load(ChatWorkItem(title: "Long page", kind: .website, content: "<p id=prose>\(String(repeating: "x", count: 5000))</p>"))
+        defer { browser.stop() }
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        try await browser.annotator.start { _ in XCTFail("Stale selection callback") }
+        browser.annotator.cancel()
+        var selection: ChatWorkPageAnnotation?
+        try await browser.annotator.start { selection = $0 }
+        try await pickAnnotation("p", in: browser)
+        for _ in 0..<50 where selection == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(try XCTUnwrap(selection).text.count, 2000)
+    }
+
+    private func pickAnnotation(_ selector: String, in browser: ChatWorkBrowser) async throws {
+        _ = try await browser.webView.callAsyncJavaScript("""
+            const element = document.querySelector(selector), rect = element.getBoundingClientRect();
+            const overlay = document.querySelector('[data-nativ-annotation]');
+            for (const type of ['mousemove', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                overlay.dispatchEvent(new MouseEvent(type, {bubbles:true,cancelable:true,clientX:rect.x+5,clientY:rect.y+5}));
+            }
+            """, arguments: ["selector": selector], in: nil, contentWorld: .page)
+    }
+
     func testFirstRequestAndPageIdentifyTheInstalledSafariVersion() async throws {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
