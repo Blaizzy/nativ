@@ -151,6 +151,52 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         XCTAssertTrue(context.contains("[Page 5]"))
     }
 
+    func testNewerMessageClaimsBudgetBeforeOlderAttachments() async throws {
+        let olderMessage = userMessage(attachments: [attachment(filename: "old.css")])
+        let newerMessage = userMessage(attachments: [attachment(filename: "new.css")])
+        let builder = builder(contents: [
+            "old.css": content(filename: "old.css", text: String(repeating: "ö", count: 40_000)),
+            "new.css": content(filename: "new.css", text: String(repeating: "ø", count: 40_000)),
+        ])
+
+        let result = try await builder.contexts(
+            for: [olderMessage, newerMessage],
+            budget: ChatDocumentBudget(
+                characters: 40_000,
+                source: .modelContext(contextLimit: 16_384)
+            )
+        )
+
+        let newer = try XCTUnwrap(result[newerMessage.id]).filter { $0 == "ø" }.count
+        XCTAssertEqual(newer, 40_000)
+        XCTAssertNil(result[olderMessage.id])
+        XCTAssertEqual(result.omittedDocuments.map(\.filename), ["old.css"])
+    }
+
+    func testDocumentsInOneMessageStillShareThatMessagesBudget() async throws {
+        let message = userMessage(attachments: [
+            attachment(filename: "big.css"),
+            attachment(filename: "tiny.css"),
+        ])
+        let builder = builder(contents: [
+            "big.css": content(filename: "big.css", text: String(repeating: "å", count: 40_000)),
+            "tiny.css": content(filename: "tiny.css", text: String(repeating: "ü", count: 300)),
+        ])
+
+        let result = try await builder.contexts(
+            for: [message],
+            budget: ChatDocumentBudget(
+                characters: 20_000,
+                source: .modelContext(contextLimit: 8_192)
+            )
+        )
+
+        XCTAssertEqual(result.omittedDocuments, [])
+        let context = try XCTUnwrap(result[message.id])
+        XCTAssertEqual(context.filter { $0 == "ü" }.count, 300)
+        XCTAssertTrue(context.contains("big.css"))
+    }
+
     func testRequestLimitPrioritizesNewestMessages() async throws {
         let olderMessage = userMessage(attachments: [attachment(filename: "older.pdf")])
         let newerMessage = userMessage(attachments: [attachment(filename: "newer.pdf")])

@@ -192,8 +192,8 @@ struct ChatDocumentContextBuilder: Sendable {
         let totalCharacters = budget.appliesPerDocumentCap
             ? min(budget.characters, maximumCharactersPerRequest)
             : budget.characters
-        let allocation = Self.fairShareLimits(
-            for: resolved,
+        let allocation = Self.allocate(
+            resolved,
             budget: max(0, totalCharacters),
             floor: minimumCharactersPerDocument,
             perDocumentCap: perDocumentCap
@@ -256,6 +256,37 @@ struct ChatDocumentContextBuilder: Sendable {
         in this request. Their contents are unavailable to you — say so if asked about them \
         rather than guessing.]
         """
+    }
+
+    /// Newer messages claim the budget first; documents within one message share what it claims.
+    static func allocate(
+        _ documents: [ResolvedDocument],
+        budget: Int,
+        floor: Int,
+        perDocumentCap: Int?
+    ) -> [UUID: Int] {
+        var messageOrder: [UUID] = []
+        for document in documents where !messageOrder.contains(document.messageID) {
+            messageOrder.append(document.messageID)
+        }
+
+        var allocation: [UUID: Int] = [:]
+        var remaining = budget
+        for messageID in messageOrder {
+            let tier = documents.filter { $0.messageID == messageID }
+            let limits = fairShareLimits(
+                for: tier,
+                budget: max(0, remaining),
+                floor: floor,
+                perDocumentCap: perDocumentCap
+            )
+            for document in tier {
+                let limit = limits[document.attachmentID] ?? 0
+                allocation[document.attachmentID] = limit
+                remaining -= min(limit, document.document.content.characterCount)
+            }
+        }
+        return allocation
     }
 
     static func fairShareLimits(
