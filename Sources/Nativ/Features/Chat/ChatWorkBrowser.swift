@@ -487,12 +487,11 @@ struct ChatWorkNavigationButtons: View {
     }
 }
 
-struct ChatWorkBrowserToolbar<ViewMode: View, PageActions: View>: View {
+struct ChatWorkBrowserToolbar<PageActions: View>: View {
     @ObservedObject var browser: ChatWorkBrowser
     let isShowingSource: Bool
     let onAnnotate: (ChatWorkPageAnnotation) -> Void
     let onAnnotationError: (String) -> Void
-    @ViewBuilder let viewMode: () -> ViewMode
     @ViewBuilder let pageActions: () -> PageActions
 
     var body: some View {
@@ -507,7 +506,6 @@ struct ChatWorkBrowserToolbar<ViewMode: View, PageActions: View>: View {
             ChatWorkAnnotateButton(annotator: browser.annotator, onSelect: onAnnotate, onError: onAnnotationError)
                 .disabled(browser.isLoading || isShowingSource)
                 .fixedSize()
-            viewMode().fixedSize()
             ChatWorkAddressField(address: browser.address) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
