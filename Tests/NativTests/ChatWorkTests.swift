@@ -783,6 +783,37 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(restored.workFileURL(for: item), url)
     }
 
+    func testRenamingAFileUpdatesItsTabAndDiskPathWithoutLosingExternalEdits() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Untitled.md", kind: .document, content: "# Original")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let originalURL = try XCTUnwrap(chat.workFileURL(for: item))
+        try "# From editor".write(to: originalURL, atomically: true, encoding: .utf8)
+        try chat.renameWorkItem(item.id, name: "Project notes", previousTitle: item.title)
+        let renamed = try XCTUnwrap(chat.workState.selectedItem)
+        XCTAssertEqual(renamed.id, item.id)
+        XCTAssertEqual(renamed.title, "Project notes.md")
+        XCTAssertEqual(renamed.content, "# From editor")
+        XCTAssertEqual(chat.workState.items.count, 1)
+        XCTAssertEqual(chat.workState.openIDs, [item.id])
+        let url = try XCTUnwrap(chat.workFileURL(for: renamed))
+        XCTAssertEqual(url.lastPathComponent, "Project notes.md")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# From editor")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: originalURL.path))
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem, renamed)
+        for invalidName in ["", "../outside.md", "bad/name.md", "bad:name.md"] {
+            XCTAssertThrowsError(try chat.renameWorkItem(item.id, name: invalidName, previousTitle: renamed.title))
+        }
+        XCTAssertThrowsError(try chat.renameWorkItem(item.id, name: "Stale.md", previousTitle: item.title))
+        XCTAssertEqual(chat.workState.selectedItem, renamed)
+        let restored = subject(root)
+        try await loaded(restored)
+        restored.selectSession(session.id)
+        XCTAssertEqual(restored.workState.selectedItem, renamed)
+    }
+
     func testFailedFileSaveDoesNotPublishUnsavedWork() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)

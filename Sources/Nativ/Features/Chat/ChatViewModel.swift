@@ -798,6 +798,31 @@ final class ChatViewModel: ObservableObject {
         try saveWorkState(state, in: sessionID, updateTimestamp: true)
     }
 
+    func renameWorkItem(_ id: UUID, name: String, previousTitle: String) throws {
+        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != ".", name != "..",
+              name.rangeOfCharacter(from: CharacterSet(charactersIn: "/:\\").union(.controlCharacters)) == nil else {
+            throw ChatWorkError.invalid("Enter a file name without slashes, colons, or control characters.")
+        }
+        // Renaming must keep the latest source, including changes made in an external editor.
+        try refreshWorkFiles(in: sessionID)
+        var state = workState
+        guard let item = state.items.first(where: { $0.id == id }) else { throw ChatWorkError.missingItem }
+        guard item.canEdit else { throw ChatWorkError.invalid("Only saved files can be renamed.") }
+        guard item.title == previousTitle else { throw ChatWorkError.conflict }
+        var renamed = item
+        renamed.title = name
+        let filename = renamed.storedFilename
+        guard name == filename || (name as NSString).pathExtension.isEmpty && filename.hasPrefix(name + ".") else {
+            throw ChatWorkError.invalid("Use a file name with the current extension and up to 240 UTF-8 bytes.")
+        }
+        guard filename != item.title else { return }
+        try state.update(id: id, content: item.content, expectedRevision: item.revision,
+                         title: filename, author: "You")
+        try saveWorkState(state, in: sessionID, updateTimestamp: true)
+    }
+
     /// Save before publishing an edit, retaining current session metadata and window ownership.
     private func saveWorkState(_ state: ChatWorkState, in sessionID: UUID, updateTimestamp: Bool) throws {
         guard canModifySession(sessionID) else {
