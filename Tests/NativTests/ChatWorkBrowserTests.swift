@@ -4,6 +4,112 @@ import Network
 
 @MainActor
 final class ChatWorkBrowserTests: XCTestCase {
+    private func makeBrowser() -> ChatWorkBrowser {
+        ChatWorkBrowser(profile: ChatWorkBrowserProfile(dataStore: .nonPersistent()))
+    }
+
+    private func persistentProfile() -> ChatWorkBrowserProfile {
+        let identifier = UUID()
+        removeProfileAfterTest(identifier)
+        return ChatWorkBrowserProfile(dataStore: WKWebsiteDataStore(forIdentifier: identifier))
+    }
+
+    private func removeProfileAfterTest(_ identifier: UUID) {
+        addTeardownBlock { @MainActor in
+            // WebKit releases its network-process session asynchronously after the last tab closes.
+            for attempt in 0..<30 {
+                do {
+                    try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+                    return
+                } catch {
+                    let failure = error as NSError
+                    guard failure.domain == "WKWebSiteDataStore", failure.code == 1, attempt < 29 else { throw error }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        }
+    }
+
+    func testPersistentProfileIdentitySurvivesRecreationAndSeparatesAppPreferences() throws {
+        let appSuite = "nativ-browser-app-\(UUID())"
+        let previewSuite = "nativ-browser-preview-\(UUID())"
+        let app = try XCTUnwrap(UserDefaults(suiteName: appSuite))
+        let preview = try XCTUnwrap(UserDefaults(suiteName: previewSuite))
+        defer {
+            app.removePersistentDomain(forName: appSuite)
+            preview.removePersistentDomain(forName: previewSuite)
+        }
+        let first = ChatWorkBrowserProfile(defaults: app)
+        let restored = ChatWorkBrowserProfile(defaults: try XCTUnwrap(UserDefaults(suiteName: appSuite)))
+        let separate = ChatWorkBrowserProfile(defaults: preview)
+        XCTAssertTrue(first.dataStore.isPersistent)
+        XCTAssertEqual(first.dataStore.identifier, restored.dataStore.identifier)
+        XCTAssertNotEqual(first.dataStore.identifier, separate.dataStore.identifier)
+        let ids = [try XCTUnwrap(first.dataStore.identifier), try XCTUnwrap(separate.dataStore.identifier)]
+        for id in ids { removeProfileAfterTest(id) }
+    }
+
+    func testWebsiteSignInIsSharedAcrossChatsAndSurvivesClosingAndRecreatingTabs() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let profile = persistentProfile()
+        let pool = ChatWorkBrowserPool(profile: profile)
+        let item = ChatWorkItem(title: "Sign-in fixture", kind: .website, content: "", url: base.absoluteString)
+        let firstChat = UUID(), secondChat = UUID()
+        let first = pool.browser(for: item, sessionID: firstChat)
+        _ = try await inspect(first)
+        _ = try await first.webView.evaluateJavaScript("""
+            document.cookie = 'nativ_fixture=remembered; Max-Age=3600; Path=/';
+            localStorage.setItem('nativ_fixture', 'saved');
+            """)
+        let second = pool.browser(for: item, sessionID: secondChat)
+        _ = try await inspect(second)
+        let secondState = try await websiteFixtureState(second)
+        XCTAssertEqual(secondState, "remembered:saved")
+        pool.remove(sessionID: firstChat)
+        pool.remove(sessionID: secondChat)
+        // A new pool and store instance resolve the same saved profile.
+        let restoredProfile = ChatWorkBrowserProfile(dataStore: WKWebsiteDataStore(forIdentifier: try XCTUnwrap(profile.dataStore.identifier)))
+        let reopened = ChatWorkBrowserPool(profile: restoredProfile).browser(for: item, sessionID: UUID())
+        _ = try await inspect(reopened)
+        let restoredState = try await websiteFixtureState(reopened)
+        XCTAssertEqual(restoredState, "remembered:saved")
+    }
+
+    func testClearingWebsiteDataSignsOutAllProfileTabsWithoutClearingAnotherProfile() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let profile = persistentProfile(), otherProfile = persistentProfile()
+        let tabs = [ChatWorkBrowser(profile: profile), ChatWorkBrowser(profile: profile)]
+        let other = ChatWorkBrowser(profile: otherProfile)
+        let item = ChatWorkItem(title: "Sign-in fixture", kind: .website, content: "", url: base.absoluteString)
+        for browser in tabs + [other] {
+            browser.load(item)
+            _ = try await inspect(browser)
+            _ = try await browser.webView.evaluateJavaScript("""
+                document.cookie = 'nativ_fixture=remembered; Max-Age=3600; Path=/';
+                localStorage.setItem('nativ_fixture', 'saved');
+                """)
+        }
+        await profile.clearWebsiteData()
+        for browser in tabs {
+            _ = try await inspect(browser)
+            let clearedState = try await websiteFixtureState(browser)
+            XCTAssertEqual(clearedState, "missing:missing")
+        }
+        let separateState = try await websiteFixtureState(other)
+        XCTAssertEqual(separateState, "remembered:saved")
+    }
+
+    private func websiteFixtureState(_ browser: ChatWorkBrowser) async throws -> String? {
+        try await browser.webView.evaluateJavaScript("""
+            (document.cookie.includes('nativ_fixture=remembered') ? 'remembered' : 'missing') + ':' +
+            (localStorage.getItem('nativ_fixture') || 'missing')
+            """) as? String
+    }
+
     func testAnnotationFeedbackKeepsTheOriginalWorkRevisionAndSelection() {
         var item = ChatWorkItem(title: "Game", kind: .website, content: "<canvas></canvas>")
         let sessionID = UUID()
@@ -23,7 +129,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testAnnotationPicksAnElementWithoutActivatingItAndKeepsPageCodeIsolated() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
         browser.load(ChatWorkItem(title: "Game", kind: .website, content: """
             <button id="play" onclick="document.body.dataset.played='yes'">Play again</button>
@@ -62,7 +168,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
         defer { server.stop() }
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
         browser.load(ChatWorkItem(title: "Remote", kind: .website, content: "", url: base.absoluteString))
         _ = try await browser.execute(ChatWorkRequest(action: .inspect))
@@ -90,7 +196,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testRestartingAnnotationDiscardsThePreviousCallbackAndBoundsPageText() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
         browser.load(ChatWorkItem(title: "Long page", kind: .website, content: "<p id=prose>\(String(repeating: "x", count: 5000))</p>"))
         defer { browser.stop() }
@@ -118,7 +224,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
         defer { server.stop() }
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.load(ChatWorkItem(title: "Identity", kind: .website, content: "",
                                  url: base.appendingPathComponent("user-agent").absoluteString))
         _ = try await browser.execute(ChatWorkRequest(action: .inspect))
@@ -139,7 +245,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
         defer { server.stop() }
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         var item = ChatWorkItem(title: "Fixture", kind: .website, content: "", url: base.absoluteString)
         var addresses: [String] = []
         browser.onNavigate = { url in addresses.append(url); item.url = url }
@@ -161,7 +267,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
         defer { server.stop() }
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.load(ChatWorkItem(title: "Fixture", kind: .website, content: "", url: base.absoluteString))
         let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
         let result = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("New window", in: first)))
@@ -169,7 +275,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testRemotePagesCanRenderInlineFrames() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.load(ChatWorkItem(title: "Remote", kind: .website, content: "", url: "http://127.0.0.1:1"))
         browser.webView.stopLoading()
         browser.webView.loadHTMLString("""
@@ -181,7 +287,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testTranslationUsesSelectedTextOrPageProseWithoutFormValues() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.loadHTMLString("""
             <nav>Navigation</nav><main><h1>Hello</h1><p>Translate this sentence.</p></main>
             <input type="password" value="do-not-translate">
@@ -200,7 +306,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testGeneratedPageTranslationReadsTheMainPage() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.load(ChatWorkItem(title: "Preview", kind: .website, content: "<h1>Hello from the preview</h1>"))
         _ = try await inspect(browser)
         let text = try await browser.textForTranslation()
@@ -208,7 +314,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testAgentInspectsTypesAndClicksTheSharedPage() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.loadHTMLString("""
             <html><head><title>Shared fixture</title></head><body>
             <input aria-label="Name"><input type="password" value="do-not-expose" aria-label="Password">
@@ -234,7 +340,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testAnInterveningUserInputPreventsAgentOverwrite() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.loadHTMLString("<input aria-label='Name' value='Original'>", baseURL: nil)
         let state = try await inspect(browser)
         let id = try element("Name", in: state)
@@ -248,7 +354,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testBrowserPoolKeepsSessionIsolationAndTabState() {
-        let pool = ChatWorkBrowserPool()
+        let pool = ChatWorkBrowserPool(profile: ChatWorkBrowserProfile(dataStore: .nonPersistent()))
         let item = ChatWorkItem(title: "Page", kind: .website, content: "<h1>Page</h1>")
         let session = UUID()
         let first = pool.browser(for: item, sessionID: session)
@@ -259,7 +365,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testGeneratedWebsiteRunsScriptsStorageModulesCanvasAndAgentClicks() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
         browser.load(ChatWorkItem(title: "Game", kind: .website, content: """
             <!doctype html><title>Local game</title><canvas width="40" height="40"></canvas>
@@ -301,7 +407,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testGeneratedPageReportsScriptFailuresAndClearsThemAfterSourceRepair() async throws {
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         var item = ChatWorkItem(title: "Broken game", kind: .website, content: """
             <button onclick="throw new Error('Start failed')">Start</button>
             <script>const snake = []; snake[0].x;</script>
@@ -326,7 +432,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let remote = try ChatWorkHTTPFixture()
         let base = try await remote.start()
         defer { remote.stop() }
-        let browser = ChatWorkBrowser()
+        let browser = makeBrowser()
         let item = ChatWorkItem(title: "Local", kind: .website, content: """
             <a href="\(base.absoluteString)" target="_blank">Navigate</a>
             <script>localStorage.setItem('loads', String(Number(localStorage.getItem('loads') || 0) + 1));</script>
@@ -373,7 +479,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     }
 
     func testGeneratedPagesStayIsolatedAndClosingStopsTheirServer() async throws {
-        let pool = ChatWorkBrowserPool()
+        let pool = ChatWorkBrowserPool(profile: ChatWorkBrowserProfile(dataStore: .nonPersistent()))
         let session = UUID()
         var item = ChatWorkItem(title: "Page", kind: .website, content: "<p>First</p>")
         let first = pool.browser(for: item, sessionID: session)

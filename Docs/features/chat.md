@@ -70,8 +70,14 @@ the work pane share the right side of chat.
   editing them does not modify the original.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have
-  back, forward, reload, and address controls. Browser storage is separate from
-  the user's regular browser and lasts only while its tab stays open in the app.
+  back, forward, reload, and address controls. Cookies and website storage use a
+  persistent profile shared across tabs, chats, and windows, so website sign-ins
+  survive closing tabs and restarting the app, until the website expires them.
+  This profile is separate from the user's regular browser; Nativ Preview also
+  has its own profile. The page's **⋮ → Clear website data…** action asks for
+  confirmation, then removes this app profile's cookies, website storage, and
+  caches and reloads open pages. Chats and documents are kept. Existing sign-ins
+  from older builds' temporary tabs require signing in once after upgrading.
 - **Terminal:** choose **+ → Terminal** for an interactive zsh shell in the chat's
   project folder, or your home folder. Each terminal retains its process, working
   directory, and environment while switching tabs or chats. Closing the tab stops
