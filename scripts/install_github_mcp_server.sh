@@ -65,16 +65,10 @@ fi
 
 if [[ "$archive_is_valid" != true ]]; then
     temporary_archive="${archive_path}.download"
-    trap 'rm -f "$temporary_archive"' EXIT
-    # Proxy CONNECT failures can return curl 56 even for a transient HTTP 504.
-    # Retry those and interrupted transfers, not only curl's default HTTP errors.
     curl \
         --fail \
         --location \
         --retry 3 \
-        --retry-all-errors \
-        --connect-timeout 30 \
-        --max-time 300 \
         --silent \
         --show-error \
         --output "$temporary_archive" \
