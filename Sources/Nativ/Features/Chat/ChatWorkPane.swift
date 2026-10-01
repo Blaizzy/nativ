@@ -25,9 +25,7 @@ struct ChatWorkPane: View {
                                            isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
                         guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
                         presentFeedback(for: item, annotation: annotation)
-                    }, onAnnotationError: { errorMessage = $0 }, viewMode: {
-                        if item.canEdit { viewModePicker(item) }
-                    }) {
+                    }, onAnnotationError: { errorMessage = $0 }) {
                         browserPageMenu(item)
                     }
                 } else {
@@ -395,8 +393,23 @@ struct ChatWorkPane: View {
     private func browserPageMenu(_ item: ChatWorkItem) -> some View {
         Menu {
             if item.canEdit {
-                Button("Copy source", systemImage: "doc.on.doc") { copyWorkText(item.content) }
-                Button("Copy file name", systemImage: "doc") { copyWorkText(item.title) }
+                Picker("View", selection: Binding(
+                    get: { sourceIDs.contains(item.id) },
+                    set: { showsSource in
+                        selectedText = ""
+                        if showsSource { sourceIDs.insert(item.id) }
+                        else { sourceIDs.remove(item.id) }
+                    }
+                )) {
+                    Label("Preview", systemImage: "eye").tag(false)
+                    Label("Source", systemImage: "chevron.left.forwardslash.chevron.right").tag(true)
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Menu("Copy", systemImage: "doc.on.doc") {
+                    Button("Source") { copyWorkText(item.content) }
+                    Button("File name") { copyWorkText(item.title) }
+                }
                 Button("Download…", systemImage: "arrow.down.to.line") { export(item) }
                 Divider()
             }
