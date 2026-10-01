@@ -438,7 +438,19 @@ struct ChatWorkPane: View {
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } catch { errorMessage = error.localizedDescription }
             }
+            Divider()
+            deleteFileButton(item)
         }
+    }
+
+    private func deleteFileButton(_ item: ChatWorkItem) -> some View {
+        Button("Delete", systemImage: "trash", role: .destructive) {
+            do {
+                try chat.deleteWorkItem(item.id)
+                sourceIDs.remove(item.id)
+            } catch { errorMessage = error.localizedDescription }
+        }
+        .help("Move this file to Trash and remove it from the chat")
     }
 
     private func beginRenaming(_ item: ChatWorkItem) {
@@ -596,6 +608,7 @@ struct ChatWorkPane: View {
                     }
                 }
                 Button("Download…", systemImage: "arrow.down.to.line") { export(item) }
+                deleteFileButton(item)
                 Divider()
             }
             Button("Translate", systemImage: "translate") { translate(item) }

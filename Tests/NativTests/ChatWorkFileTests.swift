@@ -105,6 +105,10 @@ final class ChatWorkFileTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: url, withDestinationURL: outside)
         XCTAssertThrowsError(try files.save(state, previous: state, sessionID: sessionID))
         XCTAssertThrowsError(try files.refreshed(state, sessionID: sessionID))
+        XCTAssertThrowsError(try files.delete(item, sessionID: sessionID, trashFile: { _ in
+            XCTFail("A symbolic link must not be passed to Trash")
+            throw CocoaError(.fileWriteNoPermission)
+        }, save: { XCTFail("An unsafe deletion must not save the chat") }))
         XCTAssertEqual(try String(contentsOf: outside, encoding: .utf8), "Do not touch")
     }
 }

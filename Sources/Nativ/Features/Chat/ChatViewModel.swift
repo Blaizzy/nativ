@@ -798,6 +798,22 @@ final class ChatViewModel: ObservableObject {
         try saveWorkState(state, in: sessionID, updateTimestamp: true)
     }
 
+    func deleteWorkItem(_ id: UUID, trashFile: (URL) throws -> URL = ChatWorkFileStore.moveToTrash) throws {
+        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
+        guard canModifySession(sessionID) else {
+            throw ChatWorkError.invalid("This chat is active in another window.")
+        }
+        var state = workState
+        guard let item = state.items.first(where: { $0.id == id }) else { throw ChatWorkError.missingItem }
+        guard item.canEdit else { throw ChatWorkError.invalid("Only saved files can be deleted.") }
+        state.close(id)
+        state.items.removeAll { $0.id == id }
+        try sessionStore.workFiles.delete(item, sessionID: sessionID, trashFile: trashFile) {
+            try saveWorkState(state, in: sessionID, updateTimestamp: true)
+        }
+        workBrowsers.remove(itemID: id, sessionID: sessionID)
+    }
+
     func renameWorkItem(_ id: UUID, name: String, previousTitle: String) throws {
         guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
