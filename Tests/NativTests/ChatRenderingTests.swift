@@ -9,7 +9,17 @@ final class ChatMarkdownRendererTests: XCTestCase {
         let cases = ["OK", "Hi", "**OK**", String(repeating: "a", count: 72), String(repeating: "b", count: 73)]
         for content in cases {
             let host = NSHostingView(
-                rootView: CompactAssistantMessageFixture(content: content)
+                rootView: ChatMarkdownRenderer(
+                    messageID: UUID(),
+                    content: content,
+                    isStreaming: false,
+                    fontScale: 1
+                )
+                .modifier(ChatMessageTextLayoutModifier(
+                    usesCompactBubble: !content.contains(where: \.isNewline) && content.count <= 72,
+                    textAlignment: .leading,
+                    alignment: .leading
+                ))
                 .frame(width: 560)
                 .fixedSize(horizontal: false, vertical: true)
             )
@@ -215,31 +225,6 @@ final class ChatMarkdownRendererTests: XCTestCase {
 
     private func descendants(of view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants(of: $0) }
-    }
-}
-
-private struct CompactAssistantMessageFixture: View {
-    let content: String
-
-    var body: some View {
-        let usesCompactBubble = !content.contains(where: \.isNewline) && content.count <= 72
-        Group {
-            if usesCompactBubble {
-                ChatMarkdownRenderer(
-                    messageID: UUID(), content: content, isStreaming: false, fontScale: 1
-                )
-                .lineSpacing(2)
-            } else {
-                ChatMarkdownRenderer(
-                    messageID: UUID(), content: content, isStreaming: false, fontScale: 1
-                )
-                .lineSpacing(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(.vertical, 3)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
