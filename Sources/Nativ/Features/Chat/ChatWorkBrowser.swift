@@ -487,24 +487,32 @@ struct ChatWorkNavigationButtons: View {
     }
 }
 
-struct ChatWorkBrowserToolbar<Actions: View>: View {
+struct ChatWorkBrowserToolbar<PageActions: View, Actions: View>: View {
     @ObservedObject var browser: ChatWorkBrowser
+    let showsFileActions: Bool
     let onAnnotate: (ChatWorkPageAnnotation) -> Void
     let onAnnotationError: (String) -> Void
+    @ViewBuilder let pageActions: () -> PageActions
     @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) {
-                navigation.frame(minWidth: 200)
-                actions().fixedSize()
-            }
-            VStack(spacing: 8) {
-                navigation
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    actions()
+        Group {
+            if showsFileActions {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        navigation.frame(minWidth: 200)
+                        actions().fixedSize()
+                    }
+                    VStack(spacing: 8) {
+                        navigation
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 0)
+                            actions()
+                        }
+                    }
                 }
+            } else {
+                navigation
             }
         }
         .padding(8)
@@ -524,6 +532,7 @@ struct ChatWorkBrowserToolbar<Actions: View>: View {
             ChatWorkAddressField(address: browser.address) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
+            pageActions().fixedSize()
             if let url = browser.localPageURL {
                 Button { try? browser.navigate(url.absoluteString) } label: {
                     Image(systemName: "house").frame(width: 30, height: 30)
