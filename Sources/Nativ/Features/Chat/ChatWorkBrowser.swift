@@ -487,38 +487,15 @@ struct ChatWorkNavigationButtons: View {
     }
 }
 
-struct ChatWorkBrowserToolbar<PageActions: View, Actions: View>: View {
+struct ChatWorkBrowserToolbar<ViewMode: View, PageActions: View>: View {
     @ObservedObject var browser: ChatWorkBrowser
-    let showsFileActions: Bool
+    let isShowingSource: Bool
     let onAnnotate: (ChatWorkPageAnnotation) -> Void
     let onAnnotationError: (String) -> Void
+    @ViewBuilder let viewMode: () -> ViewMode
     @ViewBuilder let pageActions: () -> PageActions
-    @ViewBuilder let actions: () -> Actions
 
     var body: some View {
-        Group {
-            if showsFileActions {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) {
-                        navigation.frame(minWidth: 200)
-                        actions().fixedSize()
-                    }
-                    VStack(spacing: 8) {
-                        navigation
-                        HStack(spacing: 8) {
-                            Spacer(minLength: 0)
-                            actions()
-                        }
-                    }
-                }
-            } else {
-                navigation
-            }
-        }
-        .padding(8)
-    }
-
-    private var navigation: some View {
         HStack(spacing: 8) {
             ChatWorkNavigationButtons(
                 canGoBack: browser.canGoBack, canGoForward: browser.canGoForward,
@@ -526,12 +503,15 @@ struct ChatWorkBrowserToolbar<PageActions: View, Actions: View>: View {
                 back: { browser.webView.goBack() }, forward: { browser.webView.goForward() },
                 reload: { if browser.isLoading { browser.webView.stopLoading() } else { browser.webView.reload() } }
             )
+            .disabled(isShowingSource)
             ChatWorkAnnotateButton(annotator: browser.annotator, onSelect: onAnnotate, onError: onAnnotationError)
-                .disabled(browser.isLoading)
+                .disabled(browser.isLoading || isShowingSource)
                 .fixedSize()
+            viewMode().fixedSize()
             ChatWorkAddressField(address: browser.address) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
+            .disabled(isShowingSource)
             pageActions().fixedSize()
             if let url = browser.localPageURL {
                 Button { try? browser.navigate(url.absoluteString) } label: {
@@ -539,10 +519,12 @@ struct ChatWorkBrowserToolbar<PageActions: View, Actions: View>: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12))
+                .disabled(isShowingSource)
                 .help("Open local webpage")
                 .accessibilityLabel("Open local webpage")
             }
         }
+        .padding(8)
     }
 }
 

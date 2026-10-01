@@ -20,22 +20,15 @@ struct ChatWorkPane: View {
             tabBar
             Divider()
             if let item = chat.workState.selectedItem {
-                if item.resolvedKind == .website, !sourceIDs.contains(item.id), let sessionID = chat.currentSessionID {
+                if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
                     ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
-                                           showsFileActions: item.canEdit, onAnnotate: { annotation in
+                                           isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
                         guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
                         presentFeedback(for: item, annotation: annotation)
-                    }, onAnnotationError: { errorMessage = $0 }, pageActions: { browserPageMenu(item) }) {
-                        if item.canEdit {
-                            viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right", isSelected: false) {
-                                sourceIDs.insert(item.id)
-                            }
-                            ChatWorkCopyButton(item: item).id(item.id)
-                            exportButton(item)
-                                .buttonStyle(.plain)
-                                .font(.system(size: 12))
-                                .background(Color.primary.opacity(0.07), in: Capsule())
-                        }
+                    }, onAnnotationError: { errorMessage = $0 }, viewMode: {
+                        if item.canEdit { viewModePicker(item) }
+                    }) {
+                        browserPageMenu(item)
                     }
                 } else {
                     itemToolbar(item)
@@ -328,24 +321,30 @@ struct ChatWorkPane: View {
 
     private func itemToolbar(_ item: ChatWorkItem) -> some View {
         HStack(spacing: 8) {
-            HStack(spacing: 0) {
-                viewModeButton("Preview", symbol: "eye", isSelected: !sourceIDs.contains(item.id)) {
-                    sourceIDs.remove(item.id)
-                }
-                viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right",
-                               isSelected: sourceIDs.contains(item.id)) {
-                    sourceIDs.insert(item.id)
-                }
-            }
-            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("View mode")
+            viewModePicker(item)
             Spacer(minLength: 0)
             ChatWorkCopyButton(item: item).id(item.id)
             itemActions(item)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 8)
+    }
+
+    private func viewModePicker(_ item: ChatWorkItem) -> some View {
+        HStack(spacing: 0) {
+            viewModeButton("Preview", symbol: "eye", isSelected: !sourceIDs.contains(item.id)) {
+                selectedText = ""
+                sourceIDs.remove(item.id)
+            }
+            viewModeButton("Source", symbol: "chevron.left.forwardslash.chevron.right",
+                           isSelected: sourceIDs.contains(item.id)) {
+                selectedText = ""
+                sourceIDs.insert(item.id)
+            }
+        }
+        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("View mode")
     }
 
     private func viewModeButton(_ title: String, symbol: String, isSelected: Bool,
@@ -395,6 +394,12 @@ struct ChatWorkPane: View {
 
     private func browserPageMenu(_ item: ChatWorkItem) -> some View {
         Menu {
+            if item.canEdit {
+                Button("Copy source", systemImage: "doc.on.doc") { copyWorkText(item.content) }
+                Button("Copy file name", systemImage: "doc") { copyWorkText(item.title) }
+                Button("Download…", systemImage: "arrow.down.to.line") { export(item) }
+                Divider()
+            }
             Button("Translate", systemImage: "translate") { translate(item) }
                 .disabled(preparesTranslation)
             Button("Discuss in chat", systemImage: "text.bubble") { presentFeedback(for: item) }
@@ -410,6 +415,11 @@ struct ChatWorkPane: View {
         .help("Page actions")
         .accessibilityLabel("Page actions")
         .translationPresentation(isPresented: $showsTranslation, text: translationText)
+    }
+
+    private func copyWorkText(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // Native macOS menus extract the label image and ignore SwiftUI rotation.
