@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class ChatMarkdownRendererTests: XCTestCase {
+    func testShortAssistantRowsMountVisibleText() throws {
+        let cases = ["OK", "Hi", "**OK**", String(repeating: "a", count: 72), String(repeating: "b", count: 73)]
+        for content in cases {
+            let host = NSHostingView(
+                rootView: CompactAssistantMessageFixture(content: content)
+                .frame(width: 560)
+                .fixedSize(horizontal: false, vertical: true)
+            )
+            let window = NSWindow(
+                contentRect: CGRect(x: 0, y: 0, width: 560, height: 240),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.contentView = host
+            host.layoutSubtreeIfNeeded()
+
+            let surface = try XCTUnwrap(
+                descendants(of: host).compactMap { $0 as? MarkdownSurface }.first,
+                content
+            )
+            surface.layoutSubtreeIfNeeded()
+            surface.refreshVisibleBlocks()
+            let textViews = descendants(of: surface).compactMap { $0 as? MarkdownSelectableTextView }
+
+            XCTAssertGreaterThan(surface.bounds.width, 1, "surface width: \(content.count)")
+            XCTAssertGreaterThan(surface.bounds.height, 1, "surface height: \(content.count)")
+            XCTAssertFalse(textViews.isEmpty, "mounted text: \(content.count)")
+        }
+    }
+
     func testParagraphDoesNotPaintASeparateDocumentCanvas() throws {
         let layout = MarkdownLayouter.layout("Plain **text**", width: 560, style: .init())
         XCTAssertTrue(layout.decorations.isEmpty)
@@ -182,6 +215,32 @@ final class ChatMarkdownRendererTests: XCTestCase {
 
     private func descendants(of view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+}
+
+private struct CompactAssistantMessageFixture: View {
+    let content: String
+
+    var body: some View {
+        let usesCompactBubble = !content.contains(where: \.isNewline) && content.count <= 72
+        Group {
+            if usesCompactBubble {
+                ChatMarkdownRenderer(
+                    messageID: UUID(), content: content, isStreaming: false, fontScale: 1
+                )
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ChatMarkdownRenderer(
+                    messageID: UUID(), content: content, isStreaming: false, fontScale: 1
+                )
+                .lineSpacing(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
