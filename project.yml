@@ -239,6 +239,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatWorkDocument.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkBrowser.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkAnnotation.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkAnnotationReference.swift
       - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift

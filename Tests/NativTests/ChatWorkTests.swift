@@ -267,6 +267,38 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testWorkFeedbackAddsStructuredAnnotationsWhilePreservingTheDraftAndPastedText() async throws {
+        let (root, _, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Game", kind: .website, content: "<canvas></canvas>")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        chat.draft = "Existing request"
+        chat.attachPastedText("Pasted context", replacing: NSRange(location: 16, length: 0), undoManager: nil)
+        let pasted = chat.pendingPastedTexts
+        let target = ChatWorkFeedback(item: item, sessionID: session.id,
+            annotation: ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#game",
+                                               text: "", x: 12, y: 24), selectedText: "")
+        try chat.addWorkFeedback(target, comment: "Make this bigger")
+        XCTAssertTrue(chat.draft.hasPrefix("Existing requestPasted context"))
+        XCTAssertTrue(chat.composerText.hasSuffix("Make this bigger"))
+        XCTAssertFalse(chat.composerText.contains("work item"))
+        XCTAssertFalse(chat.composerText.contains("canvas#game"))
+        XCTAssertEqual(chat.pendingPastedTexts, pasted)
+        XCTAssertEqual(chat.pendingAnnotations.count, 1)
+        XCTAssertEqual(chat.pendingAnnotations.first?.workReference?.itemID, item.id)
+        chat.removeAnnotation(try XCTUnwrap(chat.pendingAnnotations.first?.id))
+        XCTAssertTrue(chat.pendingAnnotations.isEmpty)
+        XCTAssertTrue(chat.composerText.hasSuffix("Make this bigger"))
+        for _ in 0..<ChatAnnotation.maximumCount { try chat.addWorkFeedback(target, comment: "Comment") }
+        let before = chat.draft
+        XCTAssertThrowsError(try chat.addWorkFeedback(target, comment: "Too many"))
+        XCTAssertEqual(chat.draft, before)
+        chat.createSession()
+        XCTAssertTrue(chat.pendingAnnotations.isEmpty)
+        XCTAssertThrowsError(try chat.addWorkFeedback(target, comment: "Wrong chat"))
+    }
+
     func testOmittedUpdateIDUsesReadReceiptAndPreservesRevisionAndConsentTargets() async throws {
         let (root, _, session) = try fixture()
         let chat = subject(root)
