@@ -229,7 +229,6 @@ private struct CompactAssistantMessageFixture: View {
                     messageID: UUID(), content: content, isStreaming: false, fontScale: 1
                 )
                 .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
             } else {
                 ChatMarkdownRenderer(
                     messageID: UUID(), content: content, isStreaming: false, fontScale: 1
