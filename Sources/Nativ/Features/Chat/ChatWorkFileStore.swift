@@ -22,6 +22,42 @@ struct ChatWorkFileStore {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
+    /// Keep the source recoverable, and restore it if removing its chat reference fails.
+    func delete(_ item: ChatWorkItem, sessionID: UUID,
+                trashFile: (URL) throws -> URL, save: () throws -> Void) throws {
+        guard let url = fileURL(for: item, sessionID: sessionID) else {
+            throw ChatWorkError.invalid("Only saved files can be deleted.")
+        }
+        try checkLocation(url)
+        var trashedURL: URL?
+        if fileManager.fileExists(atPath: url.path) {
+            guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw ChatWorkError.invalid("The file location is not a regular file.")
+            }
+            trashedURL = try trashFile(url)
+        }
+        do {
+            try save()
+        } catch {
+            if let trashedURL {
+                do {
+                    try checkLocation(url)
+                    try fileManager.moveItem(at: trashedURL, to: url)
+                } catch {
+                    throw ChatWorkError.invalid("The chat could not be saved and the file could not be restored. Recover it from Trash at \(trashedURL.path).")
+                }
+            }
+            throw error
+        }
+    }
+
+    static func moveToTrash(_ url: URL) throws -> URL {
+        var result: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &result)
+        guard let result else { throw ChatWorkError.invalid("The file's Trash location could not be found.") }
+        return result as URL
+    }
+
     /// Save only changed sources. Ordinary chat saves must not overwrite an external editor's work.
     func save(_ state: ChatWorkState, previous: ChatWorkState?, sessionID: UUID) throws {
         var writes: [(URL, String)] = []

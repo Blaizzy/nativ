@@ -469,6 +469,7 @@ struct ChatWorkWebView: NSViewRepresentable {
 /// Address entry is separate from the web view, so every page has one compact toolbar.
 struct ChatWorkAddressField: View {
     let address: String
+    var isLoading = false
     let onSubmit: (String) throws -> Void
     @State private var text = ""
     @State private var errorMessage: String?
@@ -476,8 +477,16 @@ struct ChatWorkAddressField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            if !address.isEmpty {
-                Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(.secondary)
+            if isLoading || !address.isEmpty {
+                Group {
+                    if isLoading {
+                        ProgressView().controlSize(.mini)
+                            .accessibilityLabel("Loading page")
+                    } else {
+                        Image(systemName: "globe").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 14, height: 14)
             }
             TextField("Search or enter a URL", text: $text)
                 .textFieldStyle(.plain)
@@ -557,7 +566,7 @@ struct ChatWorkBrowserToolbar<PageActions: View>: View {
             ChatWorkAnnotateButton(annotator: browser.annotator, onSelect: onAnnotate, onError: onAnnotationError)
                 .disabled(browser.isLoading || isShowingSource)
                 .fixedSize()
-            ChatWorkAddressField(address: browser.address) { text in
+            ChatWorkAddressField(address: browser.address, isLoading: browser.isLoading) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
             }
             .disabled(isShowingSource)
@@ -591,9 +600,6 @@ struct ChatWorkBrowserView: View {
                     .help(browser.runtimeErrors.joined(separator: "\n"))
             }
             ChatWorkWebView(browser: browser)
-                .overlay(alignment: .top) {
-                    if browser.isLoading { ProgressView().controlSize(.small).padding(8) }
-                }
         }
         .onDisappear { browser.annotator.cancel() }
     }

@@ -814,6 +814,83 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(restored.workState.selectedItem, renamed)
     }
 
+    func testDeleteRemovesOnlyItsFileAndTabAndDoesNotRecreateIt() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let original = root.appendingPathComponent("Imported.md")
+        try "Original import".write(to: original, atomically: true, encoding: .utf8)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original import",
+                                sourceURL: original.absoluteString)
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        try "External edit".write(to: url, atomically: true, encoding: .utf8)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Keep this duplicate name")
+        let kept = try XCTUnwrap(chat.workState.selectedItem)
+        chat.openWorkItem(item.id)
+        let trashURL = root.appendingPathComponent("Trashed.md")
+        try chat.deleteWorkItem(item.id) { source in
+            XCTAssertEqual(source, url)
+            try FileManager.default.moveItem(at: source, to: trashURL)
+            return trashURL
+        }
+        XCTAssertEqual(chat.workState.items, [kept])
+        XCTAssertEqual(chat.workState.openIDs, [kept.id])
+        XCTAssertEqual(chat.workState.selectedItem, kept)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try String(contentsOf: trashURL, encoding: .utf8), "External edit")
+        XCTAssertEqual(try String(contentsOf: original, encoding: .utf8), "Original import")
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState, chat.workState)
+        try chat.refreshWorkFiles()
+        let restored = subject(root)
+        try await loaded(restored)
+        restored.selectSession(session.id)
+        XCTAssertEqual(restored.workState.items, [kept])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        // Deleting from Files also works for an already closed tab.
+        restored.closeWorkItem(kept.id)
+        try restored.deleteWorkItem(kept.id) { source in
+            let destination = root.appendingPathComponent("Trashed second.md")
+            try FileManager.default.moveItem(at: source, to: destination)
+            return destination
+        }
+        XCTAssertTrue(restored.workState.items.isEmpty)
+        XCTAssertTrue(restored.workState.openIDs.isEmpty)
+        XCTAssertNil(restored.workState.selectedID)
+    }
+
+    func testDeleteFailuresKeepFileAndChatReferencesIntact() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Keep me")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        let before = chat.workState
+        XCTAssertThrowsError(try chat.deleteWorkItem(item.id) { _ in
+            throw CocoaError(.fileWriteNoPermission)
+        })
+        XCTAssertEqual(chat.workState, before)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState, before)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "Keep me")
+        // Force the JSON save to fail after the source has moved to Trash.
+        let sessionURL = root.appendingPathComponent("Chat/Sessions/\(session.id.uuidString).json")
+        let backupURL = root.appendingPathComponent("Session backup.json")
+        try FileManager.default.moveItem(at: sessionURL, to: backupURL)
+        try FileManager.default.createDirectory(at: sessionURL, withIntermediateDirectories: false)
+        let trashURL = root.appendingPathComponent("Trashed.md")
+        XCTAssertThrowsError(try chat.deleteWorkItem(item.id) { source in
+            try FileManager.default.moveItem(at: source, to: trashURL)
+            return trashURL
+        })
+        XCTAssertEqual(chat.workState, before)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "Keep me")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: trashURL.path))
+        try FileManager.default.removeItem(at: sessionURL)
+        try FileManager.default.moveItem(at: backupURL, to: sessionURL)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState, before)
+    }
+
     func testFailedFileSaveDoesNotPublishUnsavedWork() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
@@ -858,6 +935,10 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertTrue(activity.begin(resource: .chat(original.id), windowID: firstID, operationID: operationID))
         defer { activity.end(resource: .chat(original.id), operationID: operationID) }
         XCTAssertThrowsError(try second.updateWorkItem(item.id, content: "Blocked", previousContent: "Original"))
+        XCTAssertThrowsError(try second.deleteWorkItem(item.id) { _ in
+            XCTFail("A chat owned by another window must not trash a file")
+            throw CocoaError(.fileWriteNoPermission)
+        })
         XCTAssertEqual(second.workState.selectedItem?.content, "Original")
         try first.updateWorkItem(item.id, content: "Updated", previousContent: "Original")
         XCTAssertEqual(second.workState.selectedItem?.content, "Updated")

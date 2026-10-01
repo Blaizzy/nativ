@@ -73,7 +73,10 @@ the work pane share the right side of chat.
   Selecting a file reopens its existing side-pane tab.
   The **Files options** menu in the header offers
   **Import**, **Refresh files**, **Copy folder path**, and **Show folder in Finder**.
-  Right-click a file for **Rename…**, **Copy file path**, and **Show in Finder**. Renaming updates
+  Right-click a file for **Rename…**, **Copy file path**, **Show in Finder**, and **Delete**.
+  Delete moves the saved file to macOS Trash and removes its tab and entry from this chat;
+  imported originals are kept. Recover a deleted file from Trash and import it to use it again.
+  Renaming updates
   the existing tab and the file on disk while preserving its contents. You can also
   rename from a tab's context menu or the file's toolbar menu. Sources live under the app's
   chat storage at `Files/<chat-id>/<item-id>/<filename>`, so duplicate names do not
