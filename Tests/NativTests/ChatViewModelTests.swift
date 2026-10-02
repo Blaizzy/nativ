@@ -678,14 +678,11 @@ final class ChatSessionSynchronizationTests: XCTestCase {
         let receivers = (0..<3).map { _ in subject(fixture) }
         let reference = subject(fixture, hub: .init())
         try await loaded(sender, receivers[0], receivers[1], receivers[2], reference)
-        let folderID = UUID()
         let operations: [() -> Void] = [
             { sender.renameSession(chats[0].id, to: "Renamed") },
             { sender.setPinned(chats[1].id, pinned: true) },
-            { sender.moveSession(chats[2].id, toFolder: folderID) },
             { sender.applyPinnedOrder([chats[2].id, chats[1].id]) },
             { sender.applySessionOrder(chats.reversed().map(\.id)) },
-            { sender.deleteFolder(folderID) },
         ]
         for operation in operations {
             operation()

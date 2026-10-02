@@ -22,11 +22,8 @@ struct ControlPanelRecentSessionRow: View {
     let onRevealInFinder: () -> Void
     let onRename: (String) -> Void
     let onTogglePin: () -> Void
-    let folders: [ChatFolder]
-    let onMoveToFolder: (UUID?) -> Void
-    let onCreateFolderForSession: () -> Void
     let renameCommitRequests: PassthroughSubject<Void, Never>
-    var allowsFolderOrganization = true
+    var allowsPinning = true
     var alignsContentWithSectionHeader = false
     @State private var isHovering = false
     @State private var isDeleteHovering = false
@@ -180,7 +177,7 @@ struct ControlPanelRecentSessionRow: View {
                 Label("Rename", systemImage: "pencil")
             }
 
-            if allowsFolderOrganization {
+            if allowsPinning {
                 Button {
                     onTogglePin()
                 } label: {
@@ -188,38 +185,6 @@ struct ControlPanelRecentSessionRow: View {
                         recent.pinned ? "Unpin" : "Pin",
                         systemImage: recent.pinned ? "pin.slash" : "pin"
                     )
-                }
-
-                Menu {
-                    if recent.folderID != nil {
-                        Button {
-                            onMoveToFolder(nil)
-                        } label: {
-                            Label("Remove from Folder", systemImage: "folder.badge.minus")
-                        }
-                        Divider()
-                    }
-                    ForEach(folders) { folder in
-                        Button {
-                            onMoveToFolder(folder.id)
-                        } label: {
-                            if folder.id == recent.folderID {
-                                Label(folder.name, systemImage: "checkmark")
-                            } else {
-                                Text(folder.name)
-                            }
-                        }
-                    }
-                    if !folders.isEmpty {
-                        Divider()
-                    }
-                    Button {
-                        onCreateFolderForSession()
-                    } label: {
-                        Label("New Folder", systemImage: "folder.badge.plus")
-                    }
-                } label: {
-                    Label("Move to Folder", systemImage: "folder")
                 }
             }
         }
@@ -373,127 +338,6 @@ struct ControlPanelProjectHeaderView: View {
 
     private func beginRename() {
         renameDraft = project.name
-        isRenaming = true
-        DispatchQueue.main.async {
-            renameFieldFocused = true
-        }
-    }
-
-    private func commitRename() {
-        isRenaming = false
-        onRename(renameDraft)
-    }
-}
-
-struct ControlPanelFolderHeaderView: View {
-    let folder: ChatFolder
-    let count: Int
-    let isSelecting: Bool
-    let isChecked: Bool
-    let onToggleCollapse: () -> Void
-    let onRename: (String) -> Void
-    let onTogglePin: () -> Void
-    let onToggleSelect: () -> Void
-    let onExport: () -> Void
-    let onDelete: () -> Void
-    @State private var isRenaming = false
-    @State private var renameDraft = ""
-    @FocusState private var renameFieldFocused: Bool
-
-    var body: some View {
-        HStack(spacing: 7) {
-            if isSelecting {
-                Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 12))
-                    .foregroundStyle(isChecked ? Color.accentColor : Color.secondary)
-                    .frame(width: 12)
-            } else {
-                Button(action: onToggleCollapse) {
-                    Image(systemName: folder.isCollapsed ? "chevron.right" : "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 12)
-                }
-                .buttonStyle(.plain)
-            }
-
-            Image(systemName: folder.isPinned ? "pin.fill" : "folder")
-                .font(.system(size: 11))
-                .foregroundStyle(folder.isPinned ? Color.blue : Color.secondary)
-                .accessibilityLabel(folder.isPinned ? "Pinned folder" : "Folder")
-
-            if isRenaming {
-                TextField("Name", text: $renameDraft)
-                    .textFieldStyle(.plain)
-                    .focused($renameFieldFocused)
-                    .onSubmit {
-                        commitRename()
-                    }
-                    .onExitCommand {
-                        isRenaming = false
-                    }
-                    .onChange(of: renameFieldFocused) { _, focused in
-                        if !focused, isRenaming { commitRename() }
-                    }
-            } else {
-                Text(folder.name)
-                    .legacyTextStyle(.rowTitle)
-                    .lineLimit(1)
-
-                Spacer(minLength: 4)
-
-                Text("\(count)")
-                    .legacyTextStyle(.metadata)
-                    .foregroundStyle(.secondary.opacity(0.7))
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .contentShape(.rect)
-        .onTapGesture(count: 2) {
-            if !isSelecting {
-                beginRename()
-            }
-        }
-        .onTapGesture {
-            if isSelecting {
-                onToggleSelect()
-            }
-        }
-        .contextMenu {
-            Button {
-                beginRename()
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-
-            Button {
-                onTogglePin()
-            } label: {
-                Label(
-                    folder.isPinned ? "Unpin" : "Pin",
-                    systemImage: folder.isPinned ? "pin.slash" : "pin"
-                )
-            }
-
-            Button {
-                onExport()
-            } label: {
-                Label("Export Folder", systemImage: "square.and.arrow.up")
-            }
-
-            Divider()
-
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Label("Delete Folder", systemImage: "trash")
-            }
-        }
-    }
-
-    private func beginRename() {
-        renameDraft = folder.name
         isRenaming = true
         DispatchQueue.main.async {
             renameFieldFocused = true

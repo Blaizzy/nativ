@@ -750,7 +750,6 @@ final class NativSettingsTests: XCTestCase {
         var settings = NativSettings()
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
         XCTAssertFalse(settings.sidebarProjectsCollapsed)
-        XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
 
@@ -763,9 +762,8 @@ final class NativSettingsTests: XCTestCase {
         )
         XCTAssertTrue(decoded.sidebarPinnedCollapsed)
         XCTAssertTrue(decoded.sidebarProjectsCollapsed)
-        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertTrue(decoded.sidebarSessionsCollapsed)
-        XCTAssertFalse(decoded.allSidebarSectionsCollapsed)
+        XCTAssertTrue(decoded.allSidebarSectionsCollapsed)
     }
 
     func testSetAllSidebarSectionsCollapsedTogglesEveryFlag() {
@@ -773,14 +771,12 @@ final class NativSettingsTests: XCTestCase {
         settings.setAllSidebarSectionsCollapsed(true)
         XCTAssertTrue(settings.sidebarPinnedCollapsed)
         XCTAssertTrue(settings.sidebarProjectsCollapsed)
-        XCTAssertTrue(settings.sidebarFoldersCollapsed)
         XCTAssertTrue(settings.sidebarSessionsCollapsed)
         XCTAssertTrue(settings.allSidebarSectionsCollapsed)
 
         settings.setAllSidebarSectionsCollapsed(false)
         XCTAssertFalse(settings.sidebarPinnedCollapsed)
         XCTAssertFalse(settings.sidebarProjectsCollapsed)
-        XCTAssertFalse(settings.sidebarFoldersCollapsed)
         XCTAssertFalse(settings.sidebarSessionsCollapsed)
         XCTAssertFalse(settings.allSidebarSectionsCollapsed)
     }
@@ -790,7 +786,6 @@ final class NativSettingsTests: XCTestCase {
         let decoded = try JSONDecoder().decode(NativSettings.self, from: legacyJSON)
         XCTAssertFalse(decoded.sidebarPinnedCollapsed)
         XCTAssertFalse(decoded.sidebarProjectsCollapsed)
-        XCTAssertFalse(decoded.sidebarFoldersCollapsed)
         XCTAssertFalse(decoded.sidebarSessionsCollapsed)
     }
 

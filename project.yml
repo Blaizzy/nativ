@@ -316,6 +316,7 @@ targets:
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelSidebarModels.swift
       - path: Sources/Nativ/Features/Windowing/WindowIntent.swift
       - path: Sources/Nativ/Features/Windowing/NativWindowState.swift
       - path: Sources/Nativ/Features/Windowing/NativWindowRegistry.swift

@@ -23,16 +23,19 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
 - The active model is chosen from the model picker; only language-capable models are
   selectable as the conversation model.
 
-## Sessions and folders
+## Sessions
 
 Each conversation is one session, persisted as a JSON file under
 `~/Library/Application Support/Nativ/` and loaded on launch
 ([`ChatSessionStore`](../../Sources/Nativ/Features/Chat/ChatSessionStore.swift)). A session
-carries its title, messages, timestamps, pin state, and an optional folder assignment.
+carries its title, messages, timestamps, pin state, and optional project membership.
 
 - Sessions can be renamed, pinned, and deleted from the sidebar.
-- Folders (`ChatFolder`) group sessions in the sidebar; folder membership is stored on the
-  session (`folderID`) and the folder list persists alongside sessions.
+- Chats previously assigned to folders appear automatically in **Sessions**. Individually
+  pinned chats remain in **Pinned**, and project chats remain with their projects.
+- Older session files load with their obsolete `folderID` ignored; the next save removes
+  that field. Old `folders.json` files are left unused, so missing or damaged folder
+  metadata cannot block chat loading or migration from the legacy cache.
 - Empty, redundant sessions are pruned automatically.
 
 ### Import and export

@@ -138,7 +138,7 @@ extension ControlPanelView {
 
             if !chromeState.sidebarSessionsCollapsed {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(ungroupedSessions) { recent in
+                    ForEach(unpinnedSessions) { recent in
                         draggableRow(recent, isPinnedRow: false)
                             .overlay(alignment: .top) {
                                 pinnedInsertionLine(
@@ -162,130 +162,6 @@ extension ControlPanelView {
                 revealSidebarSection(\.sidebarSessionsCollapsed)
                 _ = handleSessionsDrop([payload])
             }
-        }
-    }
-
-    var foldersSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sidebarFoldersHeader
-                .padding(.leading, 8)
-                .padding(.trailing, 10)
-                .padding(.bottom, 4)
-
-            if !chromeState.sidebarFoldersCollapsed {
-                if sidebarState.recents.folders.isEmpty {
-                    emptyFoldersHint
-                } else {
-                    ForEach(sidebarState.recents.folders) { folder in
-                        folderView(folder, dropTargeted: isFoldersDropTargeted)
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(dropHighlight(isTargeted: isFoldersDropTargeted))
-        .onDrop(of: [.text], isTargeted: $isFoldersDropTargeted) { _ in false }
-    }
-
-    var emptyFoldersHint: some View {
-        Label("No folders yet — create one above", systemImage: "folder")
-            .legacyTextStyle(.body)
-            .foregroundStyle(.secondary.opacity(0.6))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 17)
-            .padding(.vertical, 10)
-    }
-
-    @ViewBuilder
-    func folderView(_ folder: ChatFolder, dropTargeted: Bool) -> some View {
-        ControlPanelFolderHeaderView(
-            folder: folder,
-            count: sessions(inFolder: folder.id).count,
-            isSelecting: isSelectingRecents,
-            isChecked: selectedFolderIDs.contains(folder.id),
-            onToggleCollapse: {
-                chat.setFolderCollapsed(folder.id, collapsed: !folder.isCollapsed)
-            },
-            onRename: { chat.renameFolder(folder.id, to: $0) },
-            onTogglePin: {
-                chat.setFolderPinned(folder.id, pinned: !folder.isPinned)
-            },
-            onToggleSelect: {
-                toggleFolderSelection(folder.id)
-            },
-            onExport: {
-                exportFolder(folder)
-            },
-            onDelete: {
-                pendingDeleteFolder = folder
-            }
-        )
-        .padding(.leading, 9)
-        .padding(.trailing, 10)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-        .onDrag {
-            NSItemProvider(object: "folder:\(folder.id.uuidString)" as NSString)
-        }
-        .onDrop(
-            of: [.text],
-            delegate: FolderDropDelegate(
-                onChatDrop: { chatID in
-                    chat.moveSession(chatID, toFolder: folder.id)
-                },
-                onFolderDrop: { draggedFolderID in
-                    handleFolderReorder(dragged: draggedFolderID, target: folder.id)
-                }
-            ))
-
-        if !folder.isCollapsed {
-            ForEach(sessions(inFolder: folder.id)) { recent in
-                folderChatRow(recent, folderID: folder.id)
-                    .overlay(alignment: .top) {
-                        pinnedInsertionLine(
-                            visible: reorderTargetID == recent.id && !reorderInsertAfter
-                                && dropTargeted)
-                    }
-                    .overlay(alignment: .bottom) {
-                        pinnedInsertionLine(
-                            visible: reorderTargetID == recent.id && reorderInsertAfter
-                                && dropTargeted)
-                    }
-                    .padding(.leading, 12)
-            }
-        }
-    }
-
-    @ViewBuilder
-    func folderChatRow(_ recent: ControlPanelRecentSession, folderID: UUID) -> some View {
-        if let payload = recent.dragPayload, !isSelectingRecents {
-            recentSessionRow(recent)
-                .onDrag {
-                    NSItemProvider(object: payload as NSString)
-                } preview: {
-                    dragPreview(recent)
-                }
-                .onDrop(
-                    of: [.text],
-                    delegate: RowReorderDropDelegate(
-                        targetID: recent.id,
-                        setTarget: { id, after in
-                            if reorderTargetID != id || reorderInsertAfter != after {
-                                reorderTargetID = id
-                                reorderInsertAfter = after
-                            }
-                        },
-                        onDrop: { draggedPayload, after in
-                            handleFolderRowDrop(
-                                draggedPayload: draggedPayload,
-                                target: recent,
-                                insertAfter: after,
-                                folderID: folderID
-                            )
-                        }
-                    ))
-        } else {
-            recentSessionRow(recent)
         }
     }
 
@@ -349,33 +225,6 @@ extension ControlPanelView {
         .onHover { isProjectsHeaderHovering = $0 }
     }
 
-    var sidebarFoldersHeader: some View {
-        sidebarSectionHeader(
-            title: "Folders",
-            isCollapsed: chromeState.sidebarFoldersCollapsed,
-            onToggle: { model.settings.sidebarFoldersCollapsed.toggle() },
-            trailing: {
-                Button {
-                    withAnimation(.snappy(duration: 0.2)) {
-                        model.settings.sidebarFoldersCollapsed = false
-                        _ = chat.createFolder(name: "New Folder")
-                    }
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 15, weight: .medium))
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("New folder")
-                .opacity(isFoldersHeaderHovering ? 1 : 0)
-                .allowsHitTesting(isFoldersHeaderHovering)
-            }
-        )
-        .contentShape(.rect)
-        .onHover { isFoldersHeaderHovering = $0 }
-    }
-
     var sidebarRecentsHeader: some View {
         sidebarSectionHeader(
             title: "Sessions",
@@ -432,10 +281,8 @@ extension ControlPanelView {
     var allSidebarSectionsCollapsed: Bool {
         (pinnedSessions.isEmpty || chromeState.sidebarPinnedCollapsed)
             && chromeState.sidebarProjectsCollapsed
-            && chromeState.sidebarFoldersCollapsed
             && chromeState.sidebarSessionsCollapsed
             && !projects.projects.contains { !$0.isCollapsed }
-            && !sidebarState.recents.folders.contains { !$0.isCollapsed }
     }
 
     func revealSidebarSection(_ keyPath: WritableKeyPath<NativSettings, Bool>) {
@@ -451,7 +298,6 @@ extension ControlPanelView {
         let shouldCollapse = !allSidebarSectionsCollapsed
         withAnimation(.snappy(duration: 0.2)) {
             model.settings.setAllSidebarSectionsCollapsed(shouldCollapse)
-            chat.setAllFoldersCollapsed(shouldCollapse)
             projects.setAllCollapsed(shouldCollapse)
         }
     }
@@ -489,14 +335,6 @@ extension ControlPanelView {
 
     var unpinnedSessions: [ControlPanelRecentSession] {
         sidebarState.recents.unpinnedSessions
-    }
-
-    var ungroupedSessions: [ControlPanelRecentSession] {
-        sidebarState.recents.ungroupedSessions
-    }
-
-    func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
-        sidebarState.recents.sessions(inFolder: folderID)
     }
 
     func sessions(inProject projectID: UUID) -> [ControlPanelRecentSession] {

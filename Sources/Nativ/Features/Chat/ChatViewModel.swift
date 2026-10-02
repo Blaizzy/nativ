@@ -194,7 +194,6 @@ final class ChatViewModel: ObservableObject {
     }
 
     @Published private(set) var sessions: [ChatSessionSummary] = []
-    @Published private(set) var folders: [ChatFolder] = []
     @Published private(set) var currentSessionID: UUID?
     @Published private(set) var workState = ChatWorkState()
     @Published private(set) var currentProjectID: UUID?
@@ -333,7 +332,6 @@ final class ChatViewModel: ObservableObject {
         attachmentValidator = ChatAttachmentValidator(
             extractionCache: documentExtractionCache
         )
-        folders = sessionStore.loadFolders()
         let now = Date()
         applyCurrentSession(
             ChatSession(
@@ -1386,100 +1384,6 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
-    @discardableResult
-    func createFolder(name: String) -> UUID {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folder = ChatFolder(name: trimmed.isEmpty ? "New Folder" : trimmed, isCollapsed: true)
-        folders.append(folder)
-        saveFolders()
-        return folder.id
-    }
-
-    func renameFolder(_ folderID: UUID, to newName: String) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return
-        }
-        folders[index].name = trimmed
-        saveFolders()
-    }
-
-    func deleteFolder(_ folderID: UUID) {
-        let affectedSessionIDs = storedSessions.lazy
-            .filter { $0.folderID == folderID }
-            .map(\.id)
-        guard affectedSessionIDs.allSatisfy(canModifySession) else {
-            return
-        }
-        folders.removeAll { $0.id == folderID }
-        saveFolders()
-        for index in storedSessions.indices where storedSessions[index].folderID == folderID {
-            storedSessions[index].folderID = nil
-            saveSession(storedSessions[index])
-        }
-        if currentSession?.folderID == folderID {
-            currentSession?.folderID = nil
-        }
-        refreshSessionList()
-    }
-
-    func setFolderCollapsed(_ folderID: UUID, collapsed: Bool) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        folders[index].isCollapsed = collapsed
-        saveFolders()
-    }
-
-    func setAllFoldersCollapsed(_ collapsed: Bool) {
-        guard folders.contains(where: { $0.isCollapsed != collapsed }) else {
-            return
-        }
-        for index in folders.indices {
-            folders[index].isCollapsed = collapsed
-        }
-        saveFolders()
-    }
-
-    func moveSession(_ sessionID: UUID, toFolder folderID: UUID?) {
-        guard canModifySession(sessionID),
-            let index = storedSessions.firstIndex(where: { $0.id == sessionID })
-        else {
-            return
-        }
-        storedSessions[index].folderID = folderID
-        if currentSession?.id == sessionID {
-            currentSession?.folderID = folderID
-        }
-        saveSession(storedSessions[index])
-        refreshSessionList()
-    }
-
-    func setFolderPinned(_ folderID: UUID, pinned: Bool) {
-        guard let index = folders.firstIndex(where: { $0.id == folderID }) else {
-            return
-        }
-        folders[index].isPinned = pinned
-        saveFolders()
-    }
-
-    func applyFolderOrder(_ orderedFolderIDs: [UUID]) {
-        var reordered: [ChatFolder] = []
-        for id in orderedFolderIDs {
-            if let folder = folders.first(where: { $0.id == id }) {
-                reordered.append(folder)
-            }
-        }
-        for folder in folders where !orderedFolderIDs.contains(folder.id) {
-            reordered.append(folder)
-        }
-        folders = reordered
-        saveFolders()
-    }
-
     func applyPinnedOrder(_ orderedSessionIDs: [UUID]) {
         guard orderedSessionIDs.allSatisfy(canModifySession) else {
             return
@@ -1627,7 +1531,6 @@ final class ChatViewModel: ObservableObject {
         case .keepChats:
             for index in storedSessions.indices where storedSessions[index].projectID == projectID {
                 storedSessions[index].projectID = nil
-                storedSessions[index].folderID = nil
                 guard saveSession(storedSessions[index]) else {
                     throw ChatGitWorktreeError(message: "The project chats could not be saved. Try removing the project again.")
                 }
@@ -3897,8 +3800,6 @@ final class ChatViewModel: ObservableObject {
             }
         case .artifactDeleted(let id):
             pendingImageAttachments.removeAll { $0.assetID == id }
-        case .chatFolders:
-            folders = sessionStore.loadFolders()
         case .imageGenerationSession:
             break
         }
@@ -3929,11 +3830,6 @@ final class ChatViewModel: ObservableObject {
         sessionStore.deleteSession(id: sessionID)
         searchLibrary.remove(sessionID)
         persistedDataChanges.send(.chatSession(sessionID), originWindowID: windowID)
-    }
-
-    private func saveFolders() {
-        sessionStore.saveFolders(folders)
-        persistedDataChanges.send(.chatFolders, originWindowID: windowID)
     }
 
     private func upsertStoredSession(_ session: ChatSession) {
