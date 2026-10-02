@@ -5,6 +5,7 @@ import argparse
 import ast
 import importlib.metadata
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,64 @@ def _loader_packages(root: Path, *, requires_config_type: bool = True) -> set[st
     return loaders
 
 
+def _runtime_loader_mapping(
+    site_packages: Path, candidate_model_types: set[str]
+) -> dict[str, str]:
+    python = site_packages.parents[2] / "bin" / "python3"
+    if not python.exists():
+        raise FileNotFoundError(f"Missing bundled Python interpreter: {python}")
+
+    resolver = """
+import json
+import sys
+
+from mlx_vlm.utils import get_model_and_args
+
+candidates = json.load(sys.stdin)
+resolved = {}
+for candidate in candidates:
+    module, loader = get_model_and_args({"model_type": candidate})
+    if not hasattr(module, "Model") or not hasattr(module, "ModelConfig"):
+        raise RuntimeError(
+            f"Resolved loader {loader!r} for {candidate!r} does not expose "
+            "Model and ModelConfig"
+        )
+    resolved[candidate] = loader
+json.dump(resolved, sys.stdout, sort_keys=True)
+"""
+    result = subprocess.run(
+        [str(python), "-c", resolver],
+        input=json.dumps(sorted(candidate_model_types)),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(
+            "Could not resolve model types with the bundled MLX runtime"
+            + (f": {details}" if details else "")
+        )
+
+    try:
+        mapping = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Bundled MLX resolver returned invalid JSON") from error
+    if (
+        not isinstance(mapping, dict)
+        or set(mapping) != candidate_model_types
+        or not all(
+            isinstance(candidate, str)
+            and isinstance(loader, str)
+            and candidate.strip().lower() == candidate
+            and loader.strip().lower() == loader
+            for candidate, loader in mapping.items()
+        )
+    ):
+        raise RuntimeError("Bundled MLX resolver returned an invalid loader mapping")
+    return mapping
+
+
 def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
     if not models_root.is_dir():
         raise FileNotFoundError(f"Missing mlx-vlm models directory: {models_root}")
@@ -130,16 +189,42 @@ def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
     editing_types: set[str] = set()
     for model_path in sorted(models_root.glob("*/model.py")):
         module = _parse_module(model_path)
-        for statement in module.body:
-            if not isinstance(statement, ast.ClassDef):
-                continue
-            model_type = _literal_assignment(statement, "model_type")
+        classes = {
+            statement.name: statement
+            for statement in module.body
+            if isinstance(statement, ast.ClassDef)
+        }
+
+        def inherited_literal(
+            class_name: str,
+            name: str,
+            visited: set[str] | None = None,
+        ) -> Any | None:
+            visited = set() if visited is None else visited
+            if class_name in visited:
+                return None
+            visited.add(class_name)
+            statement = classes.get(class_name)
+            if statement is None:
+                return None
+            value = _literal_assignment(statement, name)
+            if value is not None:
+                return value
+            for base in statement.bases:
+                if isinstance(base, ast.Name):
+                    value = inherited_literal(base.id, name, visited)
+                    if value is not None:
+                        return value
+            return None
+
+        for class_name in classes:
+            model_type = inherited_literal(class_name, "model_type")
             if not isinstance(model_type, str) or not model_type.strip():
                 continue
             model_type = model_type.strip().lower()
-            if _literal_assignment(statement, "is_image_generation_model") is True:
+            if inherited_literal(class_name, "is_image_generation_model") is True:
                 generation_types.add(model_type)
-            if _literal_assignment(statement, "is_image_edit_model") is True:
+            if inherited_literal(class_name, "is_image_edit_model") is True:
                 editing_types.add(model_type)
     if not generation_types or not editing_types:
         raise RuntimeError(f"Missing image model capabilities under {models_root}")
@@ -213,9 +298,9 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     mlx_audio_root = site_packages / "mlx_audio"
     vlm_models_root = mlx_vlm_root / "models"
 
-    language_types = _loader_packages(vlm_models_root)
+    language_loaders = _loader_packages(vlm_models_root)
     drafters_root = mlx_vlm_root / "speculative" / "drafters"
-    drafter_types = _loader_packages(drafters_root)
+    drafter_loaders = _loader_packages(drafters_root)
     drafter_initializer = drafters_root / "__init__.py"
     explicit_drafter_kinds = _string_mapping(
         drafter_initializer, "DRAFTER_KIND_BY_MODEL_TYPE"
@@ -234,12 +319,32 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     ):
         raise RuntimeError(f"{drafter_initializer} has invalid drafter kind metadata")
     vlm_alias_mapping = _string_mapping(mlx_vlm_root / "utils.py", "MODEL_REMAPPING")
-    _validate_mapping_targets(vlm_alias_mapping, language_types | drafter_types)
-    language_types = _apply_alias_precedence(language_types, vlm_alias_mapping)
-    drafter_types = _apply_alias_precedence(drafter_types, vlm_alias_mapping)
+    all_loaders = language_loaders | drafter_loaders
+    _validate_mapping_targets(vlm_alias_mapping, all_loaders)
+    resolved_model_types = _runtime_loader_mapping(
+        site_packages,
+        all_loaders | set(vlm_alias_mapping),
+    )
+    if set(resolved_model_types.values()) != all_loaders:
+        missing = all_loaders - set(resolved_model_types.values())
+        unexpected = set(resolved_model_types.values()) - all_loaders
+        details = []
+        if missing:
+            details.append("unresolved loaders: " + ", ".join(sorted(missing)))
+        if unexpected:
+            details.append("unexpected loaders: " + ", ".join(sorted(unexpected)))
+        raise RuntimeError("Bundled MLX loader mapping is incomplete: " + "; ".join(details))
+
+    language_types = _apply_alias_precedence(language_loaders, resolved_model_types)
+    drafter_types = _apply_alias_precedence(drafter_loaders, resolved_model_types)
+    language_aliases = _aliases_for(resolved_model_types, language_types)
+    drafter_aliases = _aliases_for(resolved_model_types, drafter_types)
     resolved_drafter_kinds: dict[str, str] = {}
     for model_type, kind in explicit_drafter_kinds.items():
-        loader = vlm_alias_mapping.get(model_type, model_type)
+        loader = resolved_model_types.get(
+            model_type,
+            vlm_alias_mapping.get(model_type, model_type),
+        )
         existing_kind = resolved_drafter_kinds.get(loader)
         if existing_kind is not None and existing_kind != kind:
             raise RuntimeError(f"Conflicting drafter kinds for loader {loader}")
@@ -286,11 +391,11 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     capabilities = {
         "language": _entry(
             language_types,
-            _aliases_for(vlm_alias_mapping, language_types),
+            language_aliases,
         ),
         "speculative_drafters": _entry(
             drafter_types,
-            _aliases_for(vlm_alias_mapping, drafter_types),
+            drafter_aliases,
             drafter_kinds,
         ),
         "image_generation": _entry(

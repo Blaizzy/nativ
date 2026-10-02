@@ -28,6 +28,12 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
+    var personalizationSnapshot: String? = nil
+
+    mutating func capturePersonalization(_ personalization: NativPersonalization) {
+        guard personalizationSnapshot == nil else { return }
+        personalizationSnapshot = messages.isEmpty ? personalization.systemPrompt : ""
+    }
 
     var summary: ChatSessionSummary {
         ChatSessionSummary(
@@ -165,6 +171,63 @@ struct ChatFolder: Identifiable, Equatable, Codable {
     }
 }
 
+/// Presentation metadata only. `ChatTranscriptMessage.content` remains the request's source of truth.
+struct ChatPastedText: Identifiable, Equatable, Codable {
+    static let minimumCharacterCount = 2_000
+
+    var id = UUID()
+    var location: Int
+    var length: Int
+    let text: String
+
+    var range: NSRange { NSRange(location: location, length: length) }
+
+    var lineCount: Int {
+        text.reduce(into: 1) { count, character in
+            if character.isNewline { count += 1 }
+        }
+    }
+
+    static func shouldCollapse(_ text: String) -> Bool {
+        text.count >= minimumCharacterCount
+    }
+
+    /// Invalid or overlapping metadata must never hide ordinary message content.
+    static func validated(_ items: [Self], in content: String) -> [Self] {
+        var end = 0
+        return items.sorted { $0.location < $1.location }.filter { item in
+            guard item.location >= end, item.length > 0,
+                  item.location <= content.utf16.count,
+                  item.length <= content.utf16.count - item.location,
+                  let range = Range(item.range, in: content),
+                  content[range].trimmingCharacters(in: .whitespacesAndNewlines)
+                    == item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            else { return false }
+            end = NSMaxRange(item.range)
+            return true
+        }
+    }
+
+    /// Match the existing send-time trimming without changing a single request character.
+    /// Keep the original paste for the raw viewer, including its boundary whitespace.
+    static func afterTrimming(_ items: [Self], draft: String) -> [Self] {
+        let source = draft as NSString
+        let nonWhitespace = CharacterSet.whitespacesAndNewlines.inverted
+        let first = source.rangeOfCharacter(from: nonWhitespace)
+        guard first.location != NSNotFound else { return [] }
+        let last = source.rangeOfCharacter(from: nonWhitespace, options: .backwards)
+        let retained = NSRange(location: first.location, length: NSMaxRange(last) - first.location)
+        return validated(items, in: draft).compactMap { item in
+            let intersection = NSIntersectionRange(item.range, retained)
+            guard intersection.length > 0 else { return nil }
+            var result = item
+            result.location = intersection.location - retained.location
+            result.length = intersection.length
+            return result
+        }
+    }
+}
+
 struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     enum Role: String, Equatable, Codable {
         case user
@@ -200,6 +263,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolName: String?
     var toolStatus: ToolStatus?
     var toolArguments: String?
+    var annotations: [ChatAnnotation] = []
+    var pastedTexts: [ChatPastedText] = []
 
     init(
         id: UUID = UUID(),
@@ -254,6 +319,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolName
         case toolStatus
         case toolArguments
+        case annotations
+        case pastedTexts
     }
 
     init(from decoder: Decoder) throws {
@@ -280,6 +347,11 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
+        annotations = try container.decodeIfPresent([ChatAnnotation].self, forKey: .annotations) ?? []
+        pastedTexts = ChatPastedText.validated(
+            try container.decodeIfPresent([ChatPastedText].self, forKey: .pastedTexts) ?? [],
+            in: content
+        )
 
         if role == .error,
             content == NativChatError.missingAssistantContent.localizedDescription,
@@ -308,6 +380,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
         try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
+        if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
+        if !pastedTexts.isEmpty { try container.encode(pastedTexts, forKey: .pastedTexts) }
     }
 
     var apiMessage: MLXChatMessage? {
@@ -320,7 +394,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     ) -> MLXChatMessage? {
         switch role {
         case .user:
-            let requestContent = [content, documentContext ?? ""]
+            let requestContent = [ChatAnnotation.prompt(annotations, request: content), documentContext ?? ""]
                 .filter { !$0.isEmpty }
                 .joined(separator: "\n\n")
             let imageParts =
@@ -407,6 +481,10 @@ struct ChatResponseMetrics: Equatable, Codable {
 struct MediaAssetReference: Equatable, Codable, Hashable, Sendable {
     let relativePath: String
     let byteCount: Int
+
+    var id: UUID? {
+        UUID(uuidString: URL(fileURLWithPath: relativePath).deletingPathExtension().lastPathComponent)
+    }
 }
 
 /// Durable, app-owned media storage. Session JSON owns references; binary payloads live in
@@ -545,9 +623,13 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     var mimeType: String
     private var inlineBase64Data: String?
     private(set) var asset: MediaAssetReference?
+    var generation: ArtifactGeneration? = nil
+    var origin: ArtifactSource? = nil
+
+    var assetID: UUID { asset?.id ?? id }
 
     enum CodingKeys: String, CodingKey {
-        case id, filename, mimeType, base64Data, asset
+        case id, filename, mimeType, base64Data, asset, generation, origin
     }
 
     var base64Data: String {
@@ -561,23 +643,25 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
-    init(id: UUID = UUID(), filename: String, mimeType: String, base64Data: String) {
+    init(id: UUID = UUID(), filename: String, mimeType: String, base64Data: String, origin: ArtifactSource? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.inlineBase64Data = base64Data
         self.asset = nil
+        self.origin = origin
     }
 
-    init(id: UUID, filename: String, mimeType: String, asset: MediaAssetReference) {
+    init(id: UUID, filename: String, mimeType: String, asset: MediaAssetReference, origin: ArtifactSource? = nil) {
         self.id = id
         self.filename = filename
         self.mimeType = mimeType
         self.inlineBase64Data = nil
         self.asset = asset
+        self.origin = origin
     }
 
-    init(contentsOf url: URL) throws {
+    init(contentsOf url: URL, mediaStore: MediaAssetStore = .shared) throws {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer {
             if didAccess {
@@ -589,13 +673,13 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         let type = UTType(filenameExtension: url.pathExtension)
         let id = UUID()
         let mimeType = type?.preferredMIMEType ?? "application/octet-stream"
-        let asset = try MediaAssetStore.shared.store(
+        let asset = try mediaStore.store(
             data,
             id: id,
             mimeType: mimeType,
             filename: url.lastPathComponent
         )
-        self.init(id: id, filename: url.lastPathComponent, mimeType: mimeType, asset: asset)
+        self.init(id: id, filename: url.lastPathComponent, mimeType: mimeType, asset: asset, origin: .uploaded)
     }
 
     var dataURL: String {
@@ -627,6 +711,8 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         filename = try container.decode(String.self, forKey: .filename)
         mimeType = try container.decode(String.self, forKey: .mimeType)
         asset = try container.decodeIfPresent(MediaAssetReference.self, forKey: .asset)
+        generation = try container.decodeIfPresent(ArtifactGeneration.self, forKey: .generation)
+        origin = try container.decodeIfPresent(ArtifactSource.self, forKey: .origin)
         inlineBase64Data = try container.decodeIfPresent(String.self, forKey: .base64Data)
     }
 
@@ -636,6 +722,8 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
         try container.encode(filename, forKey: .filename)
         try container.encode(mimeType, forKey: .mimeType)
         try container.encodeIfPresent(asset, forKey: .asset)
+        try container.encodeIfPresent(generation, forKey: .generation)
+        try container.encodeIfPresent(origin, forKey: .origin)
         if asset == nil { try container.encodeIfPresent(inlineBase64Data, forKey: .base64Data) }
     }
 
@@ -681,7 +769,7 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
             mimeType: "image/png",
             filename: filename
         ) else { return nil }
-        return ChatImageAttachment(id: id, filename: filename, mimeType: "image/png", asset: asset)
+        return ChatImageAttachment(id: id, filename: filename, mimeType: "image/png", asset: asset, origin: .uploaded)
     }
 
     private static func isImageURL(_ url: URL) -> Bool {
@@ -992,6 +1080,30 @@ struct ChatSessionStore {
 
 }
 
+extension ChatTranscriptMessage {
+    var isImageGenerationResult: Bool {
+        role == .tool && [ChatImageToolRegistry.generateToolName, ChatImageToolRegistry.editToolName]
+            .contains(toolName ?? "")
+    }
+
+    func artifactGeneration(for attachment: ChatImageAttachment) -> ArtifactGeneration? {
+        if let generation = attachment.generation { return generation }
+        guard isImageGenerationResult else { return nil }
+        let arguments = toolArguments?.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let result = content.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let images = result?["images"] as? [[String: Any]]
+        let image = images?.first { ($0["attachment_id"] as? String) == attachment.id.uuidString }
+        return ArtifactGeneration(
+            prompt: arguments?["prompt"] as? String,
+            seed: image?["seed"] as? Int,
+            width: image?["width"] as? Int,
+            height: image?["height"] as? Int
+        )
+    }
+}
+
 private extension ChatSession {
     var assetReferences: Set<MediaAssetReference> {
         Set(messages.flatMap(\.imageAttachments).compactMap(\.asset))
@@ -1001,6 +1113,17 @@ private extension ChatSession {
         var changed = false
         for messageIndex in messages.indices {
             for attachmentIndex in messages[messageIndex].imageAttachments.indices {
+                let attachment = messages[messageIndex].imageAttachments[attachmentIndex]
+                if attachment.generation == nil,
+                   let generation = messages[messageIndex].artifactGeneration(for: attachment) {
+                    messages[messageIndex].imageAttachments[attachmentIndex].generation = generation
+                    changed = true
+                }
+                if messages[messageIndex].imageAttachments[attachmentIndex].origin == nil,
+                   messages[messageIndex].imageAttachments[attachmentIndex].generation != nil {
+                    messages[messageIndex].imageAttachments[attachmentIndex].origin = .generated
+                    changed = true
+                }
                 changed = try messages[messageIndex].imageAttachments[attachmentIndex]
                     .externalize(using: store) || changed
             }

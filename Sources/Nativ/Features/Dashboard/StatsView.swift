@@ -15,70 +15,6 @@ struct StatsView: View {
         )
         .equatable()
     }
-
-    private var sessionSubtitle: String? {
-        if let _ = model.metrics {
-            return nil
-        }
-        if model.isRunning {
-            return model.unavailableMetricsText
-        }
-        return "Server is off. Live metrics are paused."
-    }
-
-    private var sessionCards: [SessionCardValue] {
-        let metrics = model.metrics
-
-        return [
-            makeSessionCard(
-                title: "Processed tokens",
-                rawCount: metrics?.summary.totalProcessedTokens
-            ),
-            makeSessionCard(
-                title: "Prompt tokens",
-                rawCount: metrics?.summary.promptTokensTotal
-            ),
-            makeSessionCard(
-                title: "Generated tokens",
-                rawCount: metrics?.summary.generatedTokensTotal
-            ),
-            makeSessionCard(
-                title: "Completed requests",
-                rawCount: metrics?.summary.requestsCompleted
-            ),
-            SessionCardValue(
-                title: "Decode speed",
-                value: NativFormatting.rate(
-                    metrics?.summary.averageDecodeTokensPerSecond
-                ),
-                help: nil
-            ),
-            SessionCardValue(
-                title: "Request speed",
-                value: NativFormatting.rate(
-                    metrics?.summary.averageRequestTokensPerSecond
-                ),
-                help: nil
-            ),
-            SessionCardValue(
-                title: "Server uptime",
-                value: NativFormatting.duration(metrics?.summary.uptimeSeconds),
-                help: nil
-            ),
-        ]
-    }
-
-    private func makeSessionCard(title: String, rawCount: Int?) -> SessionCardValue {
-        guard let rawCount else {
-            return SessionCardValue(title: title, value: NativFormatting.missingValue, help: nil)
-        }
-        let formatted = NativFormatting.compactCount(rawCount)
-        return SessionCardValue(
-            title: title,
-            value: formatted.display,
-            help: formatted.tooltip
-        )
-    }
 }
 
 private struct DashboardModelState: Equatable {
@@ -108,6 +44,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
     @ObservedObject var dashboard: DashboardViewModel
     let titleLeadingInset: CGFloat
     @FocusState private var isModelSearchFocused: Bool
+    @FocusState private var isTokenUsageSearchFocused: Bool
     @State private var selectedChartMetric: DashboardOverviewMetric = .tokens
     @State private var isActivityExpanded = false
 
@@ -131,7 +68,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
                     VStack(alignment: .leading, spacing: 24) {
                         filterBar
                         overviewCards
-                        analyticsGrid
+                        analyticsGrid(availableWidth: min(geometry.size.width, 1500) - 44)
                         modelPerformanceSection
                         recentRequestsSection
                     }
@@ -152,6 +89,7 @@ private struct DashboardContentView: View, @MainActor Equatable {
         .contentShape(Rectangle())
         .onTapGesture {
             isModelSearchFocused = false
+            isTokenUsageSearchFocused = false
         }
         .onAppear {
             syncDashboardState(scanModels: true, reloadHistory: true)
@@ -279,26 +217,24 @@ private struct DashboardContentView: View, @MainActor Equatable {
         }
     }
 
-    private var analyticsGrid: some View {
+    private func analyticsGrid(availableWidth: CGFloat) -> some View {
         Group {
             if isActivityExpanded {
                 userActivityPanel
                     .frame(maxWidth: .infinity)
+            } else if availableWidth >= 680 + 350 + 14 {
+                HStack(alignment: .top, spacing: 14) {
+                    analyticsChart
+
+                    userActivityPanel
+                        .frame(width: 350)
+                }
+                .fixedSize(horizontal: false, vertical: true)
             } else {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .top, spacing: 14) {
-                        analyticsChart
-                            .frame(minWidth: 680, maxWidth: .infinity)
-
-                        userActivityPanel
-                            .frame(width: 350)
-                    }
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        analyticsChart
-                        userActivityPanel
-                            .frame(maxWidth: .infinity)
-                    }
+                VStack(alignment: .leading, spacing: 14) {
+                    analyticsChart
+                    userActivityPanel
+                        .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -309,11 +245,13 @@ private struct DashboardContentView: View, @MainActor Equatable {
         TokenUsagePanel(
             metric: selectedChartMetric,
             points: dashboard.bucketPoints,
-            modelPoints: dashboard.modelTokenPoints,
+            overviewModelPoints: dashboard.modelTokenPoints,
+            tokenUsageModels: dashboard.tokenUsageModels,
             range: dashboard.selectedRange,
-            showsAllModels: dashboard.appliedModelID == DashboardViewModel.ModelOption.allID
+            showsAllModels: dashboard.appliedModelID == DashboardViewModel.ModelOption.allID,
+            searchFocus: $isTokenUsageSearchFocused
         )
-        .frame(maxWidth: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     private var userActivityPanel: some View {
@@ -337,7 +275,8 @@ private struct DashboardContentView: View, @MainActor Equatable {
             ModelPerformanceTable(
                 rows: dashboard.modelPerformance,
                 modelColorDomain: chartModelColorDomain,
-                searchFocus: $isModelSearchFocused
+                searchFocus: $isModelSearchFocused,
+                isFilteredToModel: dashboard.appliedModelID != DashboardViewModel.ModelOption.allID
             )
 
             if let localModelError = dashboard.localModelError {
@@ -423,11 +362,32 @@ private struct DashboardContentView: View, @MainActor Equatable {
     private var modelFilter: some View {
         DashboardPickerContainer(title: "Model") {
             Picker("Model", selection: $dashboard.selectedModelID) {
-                ForEach(dashboard.availableModels) { option in
-                    Text(option.displayTitle).tag(option.id)
+                Text(DashboardViewModel.ModelOption.all.displayTitle)
+                    .tag(DashboardViewModel.ModelOption.allID)
+                if !dashboard.installedModels.isEmpty {
+                    Section("Installed") {
+                        ForEach(dashboard.installedModels) { option in
+                            Text(option.displayTitle).tag(option.id)
+                        }
+                    }
+                }
+                if !dashboard.previouslyUsedModels.isEmpty || dashboard.hiddenPreviouslyUsedModelCount > 0 {
+                    Section(
+                        dashboard.selectedRange.usageWindowTitle.map { "Previously used · \($0)" }
+                            ?? "Previously used"
+                    ) {
+                        ForEach(dashboard.previouslyUsedModels) { option in
+                            Text(option.displayTitle).tag(option.id)
+                        }
+                        if dashboard.hiddenPreviouslyUsedModelCount > 0 {
+                            Text("\(dashboard.hiddenPreviouslyUsedModelCount) more used earlier — choose a longer period")
+                                .selectionDisabled()
+                        }
+                    }
                 }
             }
             .pickerStyle(.menu)
+            .help("Removed models are listed only if they were used in the selected period.")
             .labelsHidden()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -654,6 +614,7 @@ private struct UserActivityPanel: View {
             heatmap
             periodBreakdown
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(18)
         .nativPanelStyle(cornerRadius: .large)
         .animation(.snappy(duration: 0.24), value: isExpanded)
@@ -693,6 +654,7 @@ private struct UserActivityPanel: View {
         .frame(
             maxWidth: .infinity,
             minHeight: isExpanded ? 240 : 180,
+            maxHeight: .infinity,
             alignment: isExpanded ? .center : .leading
         )
         .accessibilityElement(children: .contain)
@@ -1200,6 +1162,128 @@ private struct SuccessRateModelSummary: Identifiable {
     }
 }
 
+private struct TokenUsageModelLegend: View {
+    let page: TokenUsageModelPage
+    let colorDomain: [String]
+    @Binding var query: String
+    @Binding var pageIndex: Int
+    let searchFocus: FocusState<Bool>.Binding
+    @State private var hoveredModelID: String?
+    @ScaledMetric(relativeTo: .callout) private var rowHeight: CGFloat = 18
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if page.showsControls {
+                HStack(spacing: 12) {
+                    TextField("Search models", text: $query)
+                        .textFieldStyle(.roundedBorder)
+                        .focused(searchFocus)
+                        .frame(minWidth: 120, idealWidth: 200, maxWidth: 200)
+                        .accessibilityLabel("Search token usage models")
+                        .accessibilityIdentifier("tokenUsageModelSearch")
+
+                    Spacer(minLength: 0)
+
+                    Text(page.rangeLabel)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .fixedSize()
+                        .accessibilityLabel("Models \(page.rangeLabel)")
+
+                    Button("Previous models", systemImage: "chevron.left", action: previousPage)
+                        .disabled(!page.hasPrevious)
+                        .help("Previous models")
+                    Button("Next models", systemImage: "chevron.right", action: nextPage)
+                        .disabled(!page.hasNext)
+                        .help("Next models")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+            }
+
+            modelGrid
+        }
+        .font(.callout)
+        .onChange(of: page.models.map(\.id)) { _, _ in hoveredModelID = nil }
+        .onDisappear { hoveredModelID = nil }
+    }
+
+    private var modelGrid: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(minimum: 0), spacing: 16), count: 4),
+            alignment: .leading,
+            spacing: 10
+        ) {
+            ForEach(Array(page.models.enumerated()), id: \.element.id) { index, model in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(DashboardModelColorScale.color(for: model.id, in: colorDomain))
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                    Text(model.id)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onHover { isHovering in
+                            if isHovering {
+                                hoveredModelID = model.id
+                            } else if hoveredModelID == model.id {
+                                hoveredModelID = nil
+                            }
+                        }
+                    Text(NativFormatting.compactCount(model.totalTokens).display)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .fixedSize()
+                }
+                .frame(height: rowHeight)
+                .textSelection(.disabled)
+                .overlay(alignment: index.isMultiple(of: 4) ? .topLeading : .topTrailing) {
+                    if hoveredModelID == model.id {
+                        Text(model.id)
+                            .font(.caption)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: 280, alignment: .leading)
+                            .padding(8)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 7)
+                                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.6)
+                            }
+                            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                            .frame(height: 0, alignment: .bottom)
+                            .offset(y: -6)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .zIndex(hoveredModelID == model.id ? 1 : 0)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(model.id)
+                .accessibilityValue("\(model.totalTokens.formatted()) tokens")
+            }
+            if page.showsControls {
+                ForEach(page.models.count..<TokenUsageModelPage.size, id: \.self) { _ in
+                    Color.clear.frame(height: rowHeight).accessibilityHidden(true)
+                }
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity)
+    }
+
+    private func previousPage() {
+        searchFocus.wrappedValue = false
+        pageIndex = page.index - 1
+    }
+
+    private func nextPage() {
+        searchFocus.wrappedValue = false
+        pageIndex = page.index + 1
+    }
+}
+
 private struct TokenUsagePanel: View {
     struct HistogramSegment: Identifiable {
         let modelID: String
@@ -1238,11 +1322,25 @@ private struct TokenUsagePanel: View {
 
     let metric: DashboardOverviewMetric
     let points: [DashboardViewModel.BucketPoint]
-    let modelPoints: [DashboardViewModel.ModelTokenPoint]
+    let overviewModelPoints: [DashboardViewModel.ModelTokenPoint]
+    let tokenUsageModels: [TokenUsageModel]
     let range: DashboardViewModel.RangeOption
     let showsAllModels: Bool
+    let searchFocus: FocusState<Bool>.Binding
     @State private var hoveredPointID: Date?
     @State private var allModelsDisplay: AllModelsDisplay = .lines
+    @State private var modelSearch = ""
+    @State private var modelPageIndex = 0
+
+    private var modelPage: TokenUsageModelPage {
+        TokenUsageModelPage(models: tokenUsageModels, query: modelSearch, index: modelPageIndex)
+    }
+
+    private var showsModelPage: Bool { metric == .tokens && showsAllModels }
+
+    private var modelPoints: [DashboardViewModel.ModelTokenPoint] {
+        showsModelPage ? modelPage.points : overviewModelPoints
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1269,6 +1367,9 @@ private struct TokenUsagePanel: View {
             if points.isEmpty {
                 DashboardEmptyChart()
                     .frame(minHeight: 230)
+            } else if showsModelPage && modelPage.models.isEmpty {
+                ContentUnavailableView.search(text: modelSearch)
+                    .frame(height: 250)
             } else if usesSuccessRateComparison {
                 SuccessRateModelComparisonChart(summaries: modelSuccessSummaries)
             } else {
@@ -1276,7 +1377,7 @@ private struct TokenUsagePanel: View {
                     usageMarks
                     hoverMarks
                 }
-                .chartLegend(showsAllModels ? .visible : .hidden)
+                .chartLegend(showsAllModels && !showsModelPage ? .visible : .hidden)
                 .chartForegroundStyleScale(
                     domain: modelColorDomain,
                     range: DashboardModelColorScale.colors(for: modelColorDomain)
@@ -1406,9 +1507,38 @@ private struct TokenUsagePanel: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: metric)
             }
+
+            if showsModelPage && !tokenUsageModels.isEmpty {
+                Divider()
+                TokenUsageModelLegend(
+                    page: modelPage,
+                    colorDomain: modelColorDomain,
+                    query: $modelSearch,
+                    pageIndex: $modelPageIndex,
+                    searchFocus: searchFocus
+                )
+            }
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(18)
         .nativPanelStyle(cornerRadius: .large)
+        .onChange(of: modelSearch) { _, _ in resetModelPage() }
+        .onChange(of: range) { _, _ in resetModelPage() }
+        .onChange(of: tokenUsageModels.map(\.id)) { _, _ in
+            if tokenUsageModels.count <= TokenUsageModelPage.size { modelSearch = "" }
+            modelPageIndex = modelPage.index
+            hoveredPointID = nil
+        }
+        .onChange(of: modelPageIndex) { _, _ in hoveredPointID = nil }
+        .onChange(of: showsAllModels) { _, _ in
+            modelSearch = ""
+            resetModelPage()
+        }
+    }
+
+    private func resetModelPage() {
+        modelPageIndex = 0
+        hoveredPointID = nil
     }
 
     private var chartTitle: String {
@@ -1867,7 +1997,9 @@ private struct TokenUsagePanel: View {
     }
 
     private var modelColorDomain: [String] {
-        DashboardModelColorScale.domain(for: modelPoints.map(\.modelID))
+        showsModelPage
+            ? tokenUsageModels.map(\.id)
+            : DashboardModelColorScale.domain(for: modelPoints.map(\.modelID))
     }
 
     private var successRatePoints: [DashboardViewModel.BucketPoint] {
@@ -3323,312 +3455,6 @@ private struct ChartLegendDot: View {
     }
 }
 
-private struct RequestHealthPanel: View {
-    let points: [DashboardViewModel.BucketPoint]
-    let completed: Int
-    let failed: Int
-    let range: DashboardViewModel.RangeOption
-    let minimumHeight: CGFloat
-    @State private var hoveredPointID: Date?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            AnalyticsSectionHeader(
-                title: "Request Health",
-                subtitle: "Completion volume and reliability"
-            )
-
-            HStack(alignment: .firstTextBaseline) {
-                Text(total == 0 ? NativFormatting.missingValue : NativFormatting.percent(Double(completed) / Double(total)))
-                    .font(.system(size: 29, weight: .semibold, design: .rounded).monospacedDigit())
-                Text("successful")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if points.isEmpty {
-                DashboardEmptyChart()
-                    .frame(minHeight: 120, maxHeight: .infinity)
-            } else {
-                Chart {
-                    ForEach(points) { point in
-                        BarMark(
-                            x: .value("Time", point.bucketStart),
-                            y: .value("Completed", point.requestsCompleted)
-                        )
-                        .foregroundStyle(DashboardPalette.positive.gradient)
-                        .cornerRadius(2)
-                    }
-
-                    if let hoveredPoint {
-                        RuleMark(x: .value("Selected time", hoveredPoint.bucketStart))
-                            .foregroundStyle(DashboardPalette.axisLabel.opacity(0.8))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-
-                        PointMark(
-                            x: .value("Selected time", hoveredPoint.bucketStart),
-                            y: .value("Completed", hoveredPoint.requestsCompleted)
-                        )
-                        .foregroundStyle(DashboardPalette.positive)
-                        .symbolSize(42)
-                    }
-                }
-                .chartXAxis {
-                    AxisMarks(values: axisDates) { value in
-                        AxisGridLine().foregroundStyle(Color.clear)
-                        AxisTick().foregroundStyle(DashboardPalette.axisTick)
-                        if let date = value.as(Date.self) {
-                            AxisValueLabel(axisLabel(for: date))
-                                .font(.caption2)
-                                .foregroundStyle(DashboardPalette.axisText)
-                        }
-                    }
-                }
-                .chartYAxis(.hidden)
-                .frame(minHeight: 118, maxHeight: .infinity)
-                .chartOverlay { proxy in
-                    GeometryReader { geometry in
-                        ZStack(alignment: .topLeading) {
-                            Rectangle()
-                                .fill(.clear)
-                                .contentShape(Rectangle())
-                                .onContinuousHover { phase in
-                                    switch phase {
-                                    case .active(let location):
-                                        updateHoveredPoint(
-                                            at: location,
-                                            proxy: proxy,
-                                            geometry: geometry
-                                        )
-                                    case .ended:
-                                        hoveredPointID = nil
-                                    }
-                                }
-
-                            if let hoveredPoint,
-                               let tooltipCenter = tooltipCenter(
-                                   for: hoveredPoint,
-                                   proxy: proxy,
-                                   geometry: geometry
-                               ) {
-                                RequestHealthTooltip(
-                                    point: hoveredPoint,
-                                    granularity: granularity
-                                )
-                                .position(tooltipCenter)
-                                .allowsHitTesting(false)
-                                .transition(.identity)
-                            }
-                        }
-                        .transaction { transaction in
-                            transaction.animation = nil
-                        }
-                    }
-                }
-                .onChange(of: points) { _, newPoints in
-                    if let hoveredPointID,
-                       !newPoints.contains(where: { $0.id == hoveredPointID }) {
-                        self.hoveredPointID = nil
-                    }
-                }
-            }
-
-            Divider()
-
-            HStack {
-                RequestHealthStat(title: "Completed", value: completed, color: DashboardPalette.positive)
-                Spacer()
-                RequestHealthStat(title: "Failed", value: failed, color: DashboardPalette.negative)
-            }
-        }
-        .padding(18)
-        .frame(minHeight: minimumHeight, alignment: .top)
-        .nativPanelStyle(cornerRadius: .large)
-    }
-
-    private var total: Int { completed + failed }
-
-    private var hoveredPoint: DashboardViewModel.BucketPoint? {
-        guard let hoveredPointID else { return nil }
-        return points.first { $0.id == hoveredPointID }
-    }
-
-    private var granularity: NativAnalyticsGranularity {
-        points.first?.granularity ?? .hour
-    }
-
-    private var axisDates: [Date] {
-        DashboardChartAxis.markDates(from: points.map(\.bucketStart), maximumCount: 4)
-    }
-
-    private func axisLabel(for date: Date) -> String {
-        DashboardChartAxis.label(
-            for: date,
-            granularity: granularity,
-            range: range
-        )
-    }
-
-    private func updateHoveredPoint(
-        at location: CGPoint,
-        proxy: ChartProxy,
-        geometry: GeometryProxy
-    ) {
-        guard let plotFrameAnchor = proxy.plotFrame else {
-            hoveredPointID = nil
-            return
-        }
-
-        let plotFrame = geometry[plotFrameAnchor]
-        guard plotFrame.contains(location) else {
-            hoveredPointID = nil
-            return
-        }
-
-        let plotX = location.x - plotFrame.minX
-        guard let hoveredDate: Date = proxy.value(atX: plotX) else {
-            hoveredPointID = nil
-            return
-        }
-
-        let nextPoint = points.min {
-            abs($0.bucketStart.timeIntervalSince(hoveredDate))
-                < abs($1.bucketStart.timeIntervalSince(hoveredDate))
-        }
-        guard hoveredPointID != nextPoint?.id else { return }
-        hoveredPointID = nextPoint?.id
-    }
-
-    private func tooltipCenter(
-        for point: DashboardViewModel.BucketPoint,
-        proxy: ChartProxy,
-        geometry: GeometryProxy
-    ) -> CGPoint? {
-        guard let plotFrameAnchor = proxy.plotFrame,
-              let plotX = proxy.position(forX: point.bucketStart),
-              let plotY = proxy.position(forY: point.requestsCompleted) else {
-            return nil
-        }
-
-        let plotFrame = geometry[plotFrameAnchor]
-        let anchor = CGPoint(x: plotFrame.minX + plotX, y: plotFrame.minY + plotY)
-        let tooltipSize = CGSize(width: 210, height: 102)
-        let spacing: CGFloat = 10
-        let showOnLeft = anchor.x > plotFrame.midX
-        let desiredX = showOnLeft
-            ? anchor.x - spacing - tooltipSize.width / 2
-            : anchor.x + spacing + tooltipSize.width / 2
-        let desiredY = anchor.y - spacing - tooltipSize.height / 2
-
-        return CGPoint(
-            x: min(max(desiredX, tooltipSize.width / 2), geometry.size.width - tooltipSize.width / 2),
-            y: min(max(desiredY, tooltipSize.height / 2), geometry.size.height - tooltipSize.height / 2)
-        )
-    }
-}
-
-private struct RequestHealthTooltip: View {
-    let point: DashboardViewModel.BucketPoint
-    let granularity: NativAnalyticsGranularity
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(dateLabel)
-                .font(.caption.weight(.semibold))
-
-            HStack(spacing: 12) {
-                metric("Completed", value: point.requestsCompleted, color: DashboardPalette.positive)
-                metric("Failed", value: point.requestsFailed, color: DashboardPalette.negative)
-            }
-
-            Divider()
-
-            HStack {
-                Text("Total \(NativFormatting.integer(total))")
-                Spacer(minLength: 8)
-                Text(successRate)
-                    .fontWeight(.semibold)
-            }
-            .font(.caption)
-            .monospacedDigit()
-        }
-        .padding(10)
-        .frame(width: 210)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(DashboardPalette.panelStroke, lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.16), radius: 10, y: 4)
-    }
-
-    private var total: Int {
-        point.requestsCompleted + point.requestsFailed
-    }
-
-    private var successRate: String {
-        guard total > 0 else { return NativFormatting.missingValue }
-        return NativFormatting.percent(Double(point.requestsCompleted) / Double(total))
-    }
-
-    private var dateLabel: String {
-        if granularity == .hour {
-            return point.bucketStart.formatted(date: .abbreviated, time: .shortened)
-        }
-        return point.bucketStart.formatted(date: .long, time: .omitted)
-    }
-
-    private func metric(_ title: String, value: Int, color: Color) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .frame(width: 6, height: 6)
-            Text(title)
-                .foregroundStyle(.secondary)
-            Text(NativFormatting.integer(value))
-                .fontWeight(.medium)
-                .monospacedDigit()
-        }
-        .font(.caption)
-    }
-}
-
-private struct TokenUsagePanelHeightReader: View {
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear.preference(
-                key: TokenUsagePanelHeightPreferenceKey.self,
-                value: geometry.size.height
-            )
-        }
-    }
-}
-
-private struct TokenUsagePanelHeightPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-private struct RequestHealthStat: View {
-    let title: String
-    let value: Int
-    let color: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 6, height: 6)
-                Text(title).font(.caption2).foregroundStyle(.secondary)
-            }
-            Text(NativFormatting.compactCount(value).display)
-                .font(.callout.weight(.semibold).monospacedDigit())
-        }
-    }
-}
-
 private struct ModelPerformanceTable: View {
     enum SortColumn: String {
         case model
@@ -3642,6 +3468,7 @@ private struct ModelPerformanceTable: View {
     let rows: [DashboardViewModel.ModelPerformance]
     let modelColorDomain: [String]
     let searchFocus: FocusState<Bool>.Binding
+    let isFilteredToModel: Bool
 
     @State private var searchText = ""
     @State private var sortColumn: SortColumn = .tokens
@@ -3654,7 +3481,9 @@ private struct ModelPerformanceTable: View {
                 ContentUnavailableView(
                     "No model activity",
                     systemImage: "cpu",
-                    description: Text("Model performance will appear after requests are processed.")
+                    description: isFilteredToModel
+                        ? Text("This model has no requests in the selected period.")
+                        : Text("Model performance will appear after requests are processed.")
                 )
                 .frame(maxWidth: .infinity, minHeight: 180)
             } else {
@@ -3885,38 +3714,6 @@ private struct ModelPerformanceTable: View {
     private var minimumTableWidth: CGFloat { 900 }
 }
 
-private struct SessionCardValue: Identifiable {
-    let title: String
-    let value: String
-    let help: String?
-
-    var id: String { title }
-}
-
-private struct SessionMetricCard: View {
-    let card: SessionCardValue
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(card.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-
-            Text(card.value)
-                .font(.title3.monospacedDigit())
-                .fontWeight(.semibold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .accessibilityLabel(NativFormatting.accessibleValue(card.value))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .nativPanelStyle()
-        .help(card.help ?? card.value)
-    }
-}
-
 private struct DashboardPickerContainer<Content: View>: View {
     let title: String
     let content: Content
@@ -3978,90 +3775,6 @@ private struct DashboardPeriodSelector: View {
         )
         .animation(.easeInOut(duration: 0.12), value: selection)
         .accessibilityLabel("Period")
-    }
-}
-
-private struct SummaryPill: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .fontWeight(.semibold)
-                .monospacedDigit()
-        }
-        .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .nativPanelStyle(cornerRadius: .compact)
-        .help(value)
-    }
-}
-
-private struct HistoricalChartCard<Content: View>: View {
-    let title: String
-    let help: String
-    let content: Content
-
-    init(title: String, help: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.help = help
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.headline)
-                DashboardInfoButton(text: help)
-            }
-
-            content
-        }
-        .padding(16)
-        .nativPanelStyle(cornerRadius: .large)
-    }
-}
-
-private struct DashboardInfoButton: View {
-    let text: String
-
-    @State private var isPresented = false
-
-    var body: some View {
-        Button {
-            isPresented.toggle()
-        } label: {
-            Image(systemName: "info.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(width: 18, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(text)
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            DashboardInfoPopover(text: text)
-        }
-        .accessibilityLabel("More information")
-        .accessibilityHint(text)
-    }
-}
-
-private struct DashboardInfoPopover: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.callout)
-            .foregroundStyle(.primary)
-            .frame(width: 260, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(14)
     }
 }
 
@@ -4624,211 +4337,6 @@ private enum DashboardRecentRequestsColumn: CaseIterable {
     }
 }
 
-private enum DashboardChartMetric {
-    case processed
-    case generated
-    case prompt
-
-    func value(for point: DashboardViewModel.BucketPoint) -> Double {
-        switch self {
-        case .processed:
-            Double(point.processedTokensTotal)
-        case .generated:
-            Double(point.generatedTokensTotal)
-        case .prompt:
-            Double(point.promptTokensTotal)
-        }
-    }
-}
-
-private struct DashboardTokenChart: View {
-    let points: [DashboardViewModel.BucketPoint]
-    let range: DashboardViewModel.RangeOption
-    let metric: DashboardChartMetric
-
-    var body: some View {
-        if points.isEmpty {
-            DashboardEmptyChart()
-        } else {
-            Chart {
-                ForEach(points) { point in
-                    BarMark(
-                        x: .value("Bucket", point.bucketStart),
-                        y: .value("Value", metric.value(for: point))
-                    )
-                    .foregroundStyle(DashboardPalette.primaryBar)
-                }
-            }
-            .chartLegend(.hidden)
-            .chartXAxis {
-                AxisMarks(values: xAxisDates) { value in
-                    AxisGridLine().foregroundStyle(Color.clear)
-                    AxisTick().foregroundStyle(Color.clear)
-                    if let date = value.as(Date.self) {
-                        AxisValueLabel {
-                            Text(axisLabel(for: date))
-                                .font(.caption2)
-                                .foregroundStyle(DashboardPalette.axisLabel)
-                        }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                    AxisGridLine().foregroundStyle(Color.clear)
-                    AxisTick().foregroundStyle(Color.clear)
-                    if let rawValue = value.as(Double.self) {
-                        AxisValueLabel(centered: false) {
-                            Text(yAxisLabel(for: rawValue))
-                                .font(.caption2)
-                                .foregroundStyle(DashboardPalette.axisLabel)
-                        }
-                    }
-                }
-            }
-            .frame(height: 180)
-        }
-    }
-
-    private func yAxisLabel(for value: Double) -> String {
-        NativFormatting.compactCount(Int(value.rounded())).display
-    }
-
-    private var chartGranularity: NativAnalyticsGranularity {
-        points.first?.granularity ?? fallbackGranularity
-    }
-
-    private var fallbackGranularity: NativAnalyticsGranularity {
-        switch range {
-        case .last24Hours:
-            .hour
-        case .last7Days, .last30Days, .lastYear, .allTime:
-            .day
-        }
-    }
-
-    private var xAxisDates: [Date] {
-        DashboardChartAxis.markDates(
-            from: points.map(\.bucketStart),
-            maximumCount: chartGranularity == .hour ? 6 : 5
-        )
-    }
-
-    private func axisLabel(for date: Date) -> String {
-        switch chartGranularity {
-        case .hour:
-            DashboardFormatters.hourLabel.string(from: date).lowercased()
-        case .day:
-            DashboardFormatters.dayLabel.string(from: date)
-        }
-    }
-}
-
-private struct DashboardRequestChart: View {
-    let points: [DashboardViewModel.BucketPoint]
-    let range: DashboardViewModel.RangeOption
-
-    var body: some View {
-        if points.isEmpty {
-            DashboardEmptyChart()
-        } else {
-            Chart {
-                ForEach(requestSegments) { segment in
-                    BarMark(
-                        x: .value("Bucket", segment.bucketStart),
-                        y: .value("Requests", segment.count)
-                    )
-                    .foregroundStyle(segment.color)
-                }
-            }
-            .chartLegend(.hidden)
-            .chartXAxis {
-                AxisMarks(values: xAxisDates) { value in
-                    AxisGridLine().foregroundStyle(Color.clear)
-                    AxisTick().foregroundStyle(Color.clear)
-                    if let date = value.as(Date.self) {
-                        AxisValueLabel {
-                            Text(axisLabel(for: date))
-                                .font(.caption2)
-                                .foregroundStyle(DashboardPalette.axisLabel)
-                        }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                    AxisGridLine().foregroundStyle(Color.clear)
-                    AxisTick().foregroundStyle(Color.clear)
-                    if let rawValue = value.as(Double.self) {
-                        AxisValueLabel(centered: false) {
-                            Text(NativFormatting.compactCount(Int(rawValue.rounded())).display)
-                                .font(.caption2)
-                                .foregroundStyle(DashboardPalette.axisLabel)
-                        }
-                    }
-                }
-            }
-            .frame(height: 180)
-        }
-    }
-
-    private var chartGranularity: NativAnalyticsGranularity {
-        points.first?.granularity ?? fallbackGranularity
-    }
-
-    private var fallbackGranularity: NativAnalyticsGranularity {
-        switch range {
-        case .last24Hours:
-            .hour
-        case .last7Days, .last30Days, .lastYear, .allTime:
-            .day
-        }
-    }
-
-    private var xAxisDates: [Date] {
-        DashboardChartAxis.markDates(
-            from: points.map(\.bucketStart),
-            maximumCount: chartGranularity == .hour ? 6 : 5
-        )
-    }
-
-    private var requestSegments: [RequestSegment] {
-        points.flatMap { point in
-            var segments: [RequestSegment] = []
-            if point.requestsFailed > 0 {
-                segments.append(
-                    RequestSegment(
-                        bucketStart: point.bucketStart,
-                        kind: "failed",
-                        count: point.requestsFailed,
-                        color: DashboardPalette.failureBar
-                    )
-                )
-            }
-            if point.requestsCompleted > 0 {
-                segments.append(
-                    RequestSegment(
-                        bucketStart: point.bucketStart,
-                        kind: "completed",
-                        count: point.requestsCompleted,
-                        color: DashboardPalette.successBar
-                    )
-                )
-            }
-            return segments
-        }
-    }
-
-    private func axisLabel(for date: Date) -> String {
-        switch chartGranularity {
-        case .hour:
-            DashboardFormatters.hourLabel.string(from: date).lowercased()
-        case .day:
-            DashboardFormatters.dayLabel.string(from: date)
-        }
-    }
-}
-
 private enum DashboardChartAxis {
     static func markDates(from dates: [Date], maximumCount: Int) -> [Date] {
         guard dates.count > maximumCount, maximumCount > 1 else {
@@ -4865,17 +4373,6 @@ private enum DashboardChartAxis {
     }
 }
 
-private struct RequestSegment: Identifiable {
-    let bucketStart: Date
-    let kind: String
-    let count: Int
-    let color: Color
-
-    var id: String {
-        "\(bucketStart.timeIntervalSince1970)-\(kind)-\(count)"
-    }
-}
-
 private struct DashboardEmptyChart: View {
     var body: some View {
         ContentUnavailableView(
@@ -4894,9 +4391,6 @@ private enum DashboardPalette {
     static let positive = Color(red: 62 / 255, green: 179 / 255, blue: 131 / 255)
     static let negative = Color(red: 225 / 255, green: 91 / 255, blue: 101 / 255)
     static let orange = Color(red: 232 / 255, green: 151 / 255, blue: 65 / 255)
-    static let primaryBar = Color(red: 73 / 255, green: 163 / 255, blue: 176 / 255)
-    static let successBar = Color(red: 68 / 255, green: 157 / 255, blue: 187 / 255)
-    static let failureBar = Color(red: 181 / 255, green: 51 / 255, blue: 63 / 255)
     static let panelStroke = Color(nsColor: .separatorColor).opacity(0.6)
     static let axisLabel = Color(nsColor: .tertiaryLabelColor)
     static let axisText = Color(nsColor: .secondaryLabelColor)

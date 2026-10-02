@@ -18,6 +18,11 @@ enum ControlPanelLayout {
     static let sidebarMaximumWidth: CGFloat = 440
     static let sidebarTransitionDuration: TimeInterval = 0.3
     static let detailMinimumWidth: CGFloat = 720
+
+    static func maximumSidebarWidth(availableWidth: CGFloat) -> CGFloat {
+        min(sidebarMaximumWidth, max(sidebarMinimumWidth, availableWidth - detailMinimumWidth))
+    }
+
     static let sidebarBrandHeight: CGFloat = 40
     static let sidebarBrandIconSize: CGFloat = 24
     static let sidebarBrandBottomClearance: CGFloat = 8

@@ -120,6 +120,11 @@ struct NativAnalyticsBucketPoint: Identifiable, Sendable {
     }
 }
 
+struct NativAnalyticsModelUsage: Sendable {
+    let modelID: String
+    let lastCompletedAt: Date
+}
+
 struct NativAnalyticsRequestEvent: Identifiable, Sendable {
     let requestID: String
     let completedAt: Date
@@ -691,30 +696,37 @@ final class NativAnalyticsStore {
         return rows
     }
 
-    func fetchKnownModelIDs() -> [String] {
+    /// Returns every model with a completed request, most recently used first.
+    func fetchModelUsage() -> [NativAnalyticsModelUsage] {
         guard let connection else {
             return []
         }
 
         guard let statement = try? connection.prepare(
             """
-            SELECT DISTINCT model_id
+            SELECT model_id, MAX(completed_at)
             FROM request_events
             WHERE status = 'completed'
-            ORDER BY model_id COLLATE NOCASE ASC
+            GROUP BY model_id
+            ORDER BY MAX(completed_at) DESC
             """
         ) else {
             return []
         }
 
-        var modelIDs: [String] = []
+        var usage: [NativAnalyticsModelUsage] = []
         while (try? statement.step()) == true {
             if let modelID = statement.string(at: 0), !modelID.isEmpty {
-                modelIDs.append(modelID)
+                usage.append(
+                    NativAnalyticsModelUsage(
+                        modelID: modelID,
+                        lastCompletedAt: Date(timeIntervalSince1970: statement.double(at: 1))
+                    )
+                )
             }
         }
 
-        return modelIDs
+        return usage
     }
 
     private func bindBucketFilters(

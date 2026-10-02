@@ -444,9 +444,9 @@ struct DeveloperView: View {
         case .available:
             return nil
         case .addressInUse:
-            return "\(settings.serverBaseURL.absoluteString) is already in use — Nativ can’t bind to that address."
+            return "\(settings.serverHost):\(settings.serverPort) is already in use — Nativ can’t bind to that address."
         case .invalidAddress:
-            return "\(settings.serverBaseURL.absoluteString) can’t be used — check the host and port."
+            return "\(settings.serverHost):\(settings.serverPort) can’t be used — check the host and port."
         }
     }
 

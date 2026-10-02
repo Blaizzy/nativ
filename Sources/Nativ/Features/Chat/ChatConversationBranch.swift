@@ -151,7 +151,8 @@ enum ChatConversationBranch {
             sessionOrder: nil,
             folderID: source.folderID,
             projectID: source.projectID,
-            imageGenerationModelID: source.imageGenerationModelID
+            imageGenerationModelID: source.imageGenerationModelID,
+            personalizationSnapshot: source.personalizationSnapshot
         )
     }
 }

@@ -50,6 +50,31 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertFalse(model.capabilities.contains(.imageGeneration))
     }
 
+    func testDiscoversFlux2ConversionWithoutRootConfiguration() async throws {
+        let repoID = "mlx-community/FLUX.2-Klein-4B-4bit"
+        let snapshot = snapshotURL(repoID: repoID)
+        let repository = snapshot.deletingLastPathComponent().deletingLastPathComponent()
+
+        try write(snapshot.lastPathComponent, to: repository.appendingPathComponent("refs/main"))
+        for component in ["transformer", "text_encoder", "vae"] {
+            try write(
+                "weights",
+                to: snapshot.appendingPathComponent("\(component)/0.safetensors")
+            )
+        }
+        try write(
+            "{}",
+            to: snapshot.appendingPathComponent("tokenizer/tokenizer.json")
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+        XCTAssertTrue(model.capabilities.contains(.imageGeneration))
+        XCTAssertTrue(model.capabilities.contains(.imageEditing))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
     func testDiscoversModelFromAdditionalSearchFolder() async throws {
         let externalModel = temporaryCache.appendingPathComponent(
             "external/owner/model",
@@ -270,6 +295,77 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
 
         XCTAssertFalse(models.contains { $0.repoID == "org/index-without-weights" })
+    }
+
+    func testReportsSnapshotWithMissingShardsAsIncompleteDownload() throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/missing-shard",
+            shardFilenames: [
+                "model-00001-of-00002.safetensors",
+                "model-00002-of-00002.safetensors",
+            ],
+            availableShardFilenames: ["model-00001-of-00002.safetensors"]
+        )
+
+        let downloads = LocalModelDiscovery.incompleteDownloadsSynchronously(path: temporaryCache.path)
+
+        XCTAssertEqual(downloads.map(\.repoID), ["org/missing-shard"])
+    }
+
+    func testReportsRepositoryWithOnlyPartialBlobsAsIncompleteDownload() throws {
+        let repository = temporaryCache.appendingPathComponent("models--org--no-snapshot-yet")
+        try write(String(repeating: "x", count: 4096), to: repository.appendingPathComponent("blobs/abc.incomplete"))
+        let sharedBlob = temporaryCache.appendingPathComponent("shared/blob")
+        try write(String(repeating: "x", count: 1_000_000), to: sharedBlob)
+        try FileManager.default.createSymbolicLink(
+            at: repository.appendingPathComponent("blobs/linked"),
+            withDestinationURL: sharedBlob
+        )
+
+        let downloads = LocalModelDiscovery.incompleteDownloadsSynchronously(path: temporaryCache.path)
+
+        XCTAssertEqual(downloads, [IncompleteModelDownload(repoID: "org/no-snapshot-yet", sizeBytes: 4096)])
+    }
+
+    func testDoesNotReportInstalledOrUnrelatedRepositoriesAsIncompleteDownloads() throws {
+        try makeShardedTextModelSnapshot(
+            repoID: "org/complete",
+            shardFilenames: ["model-00001-of-00001.safetensors"],
+            availableShardFilenames: ["model-00001-of-00001.safetensors"]
+        )
+        try write(
+            "stale",
+            to: temporaryCache.appendingPathComponent("models--org--complete/blobs/old.incomplete")
+        )
+        try write(
+            "weights",
+            to: snapshotURL(repoID: "org/pytorch-only").appendingPathComponent("pytorch_model.bin")
+        )
+        try write("x", to: temporaryCache.appendingPathComponent("datasets--org--data/blobs/a.incomplete"))
+
+        let downloads = LocalModelDiscovery.incompleteDownloadsSynchronously(path: temporaryCache.path)
+
+        XCTAssertEqual(downloads, [])
+    }
+
+    @MainActor
+    func testDeletingIncompleteDownloadRemovesRepositoryAndLocks() async throws {
+        let repository = temporaryCache.appendingPathComponent("models--org--partial")
+        let locks = temporaryCache.appendingPathComponent(".locks/models--org--partial")
+        try write("x", to: repository.appendingPathComponent("blobs/abc.incomplete"))
+        try write("", to: locks.appendingPathComponent("abc.lock"))
+        let library = LocalModelLibrary()
+        library.scan(searchPaths: searchPaths)
+        while library.isScanning { try await Task.sleep(for: .milliseconds(10)) }
+        let download = try XCTUnwrap(library.incompleteDownloads.first)
+
+        library.delete(repoID: download.repoID, path: temporaryCache.path, volumeIdentifier: nil) {}
+        while !library.deletingModelIDs.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+
+        XCTAssertNil(library.error)
+        XCTAssertEqual(library.incompleteDownloads, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: repository.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: locks.path))
     }
 
     func testSelectsAnyInstalledSpeechToTextModelWithoutKnownModelNames() {

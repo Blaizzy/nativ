@@ -3,14 +3,27 @@ import NativServerKit
 
 struct MLXImageModelResolver: Sendable {
     static let shared = MLXImageModelResolver(
-        supportedModelTypes: (try? Nativ.imageGenerationModelTypes())
-            ?? ["bonsai", "flux2", "ideogram4", "mage_flow"]
+        generationModelTypes: (try? Nativ.imageGenerationModelTypes())
+            ?? [
+                "bonsai", "ernie_image", "flux2", "ideogram4",
+                "llada_image", "mage_flow", "qwen_image", "z_image",
+            ],
+        editingModelTypes: (try? Nativ.imageEditingModelTypes())
+            ?? [
+                "ernie_image", "flux2", "llada_image", "mage_flow",
+                "qwen_image", "z_image",
+            ]
     )
 
-    private let supportedModelTypes: Set<String>
+    private let generationModelTypes: Set<String>
+    private let editingModelTypes: Set<String>
 
-    init(supportedModelTypes: Set<String>) {
-        self.supportedModelTypes = supportedModelTypes
+    init(
+        generationModelTypes: Set<String>,
+        editingModelTypes: Set<String>
+    ) {
+        self.generationModelTypes = generationModelTypes
+        self.editingModelTypes = editingModelTypes
     }
 
     func isImageGenerationModel(
@@ -21,7 +34,8 @@ struct MLXImageModelResolver: Sendable {
         guard let modelType = supportedModelType(
             model: model,
             at: root,
-            fileManager: fileManager
+            fileManager: fileManager,
+            supportedModelTypes: generationModelTypes
         ) else {
             return false
         }
@@ -41,24 +55,19 @@ struct MLXImageModelResolver: Sendable {
         guard let modelType = supportedModelType(
             model: model,
             at: root,
-            fileManager: fileManager
+            fileManager: fileManager,
+            supportedModelTypes: editingModelTypes
         ) else {
             return false
         }
-        switch modelType {
-        case "flux2":
-            // Every FLUX.2 variant supported by the bundled backend can use
-            // reference images as well as generate from text.
-            return true
-        case "mage_flow":
+        if modelType == "mage_flow" {
             return isMageFlowEditModel(
                 model: model,
                 at: root,
                 fileManager: fileManager
             )
-        default:
-            return false
         }
+        return true
     }
 
     func isSupportedImageModel(
@@ -69,7 +78,8 @@ struct MLXImageModelResolver: Sendable {
         supportedModelType(
             model: model,
             at: root,
-            fileManager: fileManager
+            fileManager: fileManager,
+            supportedModelTypes: generationModelTypes.union(editingModelTypes)
         ) != nil
     }
 
@@ -84,7 +94,8 @@ struct MLXImageModelResolver: Sendable {
     private func supportedModelType(
         model: String,
         at root: URL,
-        fileManager: FileManager
+        fileManager: FileManager,
+        supportedModelTypes: Set<String>
     ) -> String? {
         var candidates = localModelTypes(at: root, fileManager: fileManager)
         addModelType(modelType(from: model), to: &candidates)
@@ -140,6 +151,12 @@ struct MLXImageModelResolver: Sendable {
             isBonsaiManifest(manifest)
         {
             addModelType("bonsai", to: &candidates)
+        }
+
+        if Self.qwenImageWeightMarkers.isSubset(
+            of: transformerWeightNames(at: root, fileManager: fileManager)
+        ) {
+            addModelType("qwen_image", to: &candidates)
         }
 
         let componentURLs =
@@ -245,10 +262,11 @@ struct MLXImageModelResolver: Sendable {
         guard let normalizedName = Self.normalizedModelName(model) else {
             return nil
         }
-        if normalizedName == "mage_flow"
-            || normalizedName.hasPrefix("mage_flow_")
-        {
-            return "mage_flow"
+        for modelType in generationModelTypes.union(editingModelTypes)
+            .sorted(by: { $0.count > $1.count })
+        where normalizedName == modelType
+            || normalizedName.hasPrefix("\(modelType)_") {
+            return modelType
         }
         let name = Substring(normalizedName)
         let modelType = String(name.split(separator: "_", maxSplits: 1).first ?? name)
@@ -257,6 +275,8 @@ struct MLXImageModelResolver: Sendable {
             return "bonsai"
         case "flux.2", "flux2", "klein":
             return "flux2"
+        case "qwen", "qwenimage":
+            return "qwen_image"
         default:
             return normalizedModelType(modelType)
         }
@@ -274,6 +294,25 @@ struct MLXImageModelResolver: Sendable {
         let normalizedName = String(name)
             .replacingOccurrences(of: "-", with: "_")
         return normalizedName.isEmpty ? nil : normalizedName
+    }
+
+    private func transformerWeightNames(
+        at root: URL,
+        fileManager: FileManager
+    ) -> Set<String> {
+        for filename in [
+            "diffusion_pytorch_model.safetensors.index.json",
+            "model.safetensors.index.json",
+        ] {
+            let url = root.appendingPathComponent("transformer/\(filename)")
+            guard let index = loadJSONObject(at: url, fileManager: fileManager),
+                let weightMap = index["weight_map"] as? [String: Any]
+            else {
+                continue
+            }
+            return Set(weightMap.keys)
+        }
+        return []
     }
 
     private func isBonsaiManifest(_ manifest: [String: Any]) -> Bool {
@@ -369,6 +408,29 @@ struct MLXImageModelResolver: Sendable {
                         "tokenizer/tokenizer.json"
                     ).path
                 )
+        case "llada_image":
+            return [
+                "model_index.json",
+                "scheduler/scheduler_config.json",
+                "tokenizer/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(
+                    atPath: root.appendingPathComponent($0).path
+                )
+            }
+                && [
+                    "queryformer", "sigvq", "text_encoder", "text_projection",
+                    "transformer",
+                ].allSatisfy {
+                    fileManager.fileExists(
+                        atPath: root.appendingPathComponent("\($0)/config.json").path
+                    )
+                        && hasSafetensors(
+                            in: $0,
+                            at: root,
+                            fileManager: fileManager
+                        )
+                }
         case "mage_flow":
             return [
                 "model_index.json",
@@ -376,6 +438,28 @@ struct MLXImageModelResolver: Sendable {
                 "vae/config.json",
                 "text_encoder/config.json",
                 "text_encoder/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(
+                    atPath: root.appendingPathComponent($0).path
+                )
+            }
+                && [
+                    "transformer",
+                    "vae",
+                    "text_encoder",
+                ].allSatisfy {
+                    hasSafetensors(
+                        in: $0,
+                        at: root,
+                        fileManager: fileManager
+                    )
+                }
+        case "qwen_image":
+            return [
+                "transformer/config.json",
+                "vae/config.json",
+                "text_encoder/config.json",
+                "processor/tokenizer.json",
             ].allSatisfy {
                 fileManager.fileExists(
                     atPath: root.appendingPathComponent($0).path
@@ -413,6 +497,12 @@ struct MLXImageModelResolver: Sendable {
             )) ?? []
         return contents.contains { $0.pathExtension == "safetensors" }
     }
+
+    private static let qwenImageWeightMarkers: Set<String> = [
+        "transformer_blocks.0.img_mlp.gate_layer.weight",
+        "txt_in.text_norm.weight",
+        "txt_in.in_layer.weight",
+    ]
 
     private static let pascalCaseTokenRegex = try! NSRegularExpression(
         pattern: #"[A-Z][a-z0-9]*|[A-Z]+(?=[A-Z]|$)"#

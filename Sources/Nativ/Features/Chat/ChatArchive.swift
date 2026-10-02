@@ -9,12 +9,13 @@ struct ChatArchive: Codable, Equatable {
     let exportedAt: Date
     let modelRepositoryID: String
     let systemPrompt: String
-    let chat: ChatArchiveConversation
+    var chat: ChatArchiveConversation
 
     init(
         chat: ChatSession,
         modelRepositoryID: String,
         systemPrompt: String,
+        includePersonalization: Bool = false,
         exportedAt: Date = .now
     ) {
         format = Self.format
@@ -22,7 +23,7 @@ struct ChatArchive: Codable, Equatable {
         self.exportedAt = exportedAt
         self.modelRepositoryID = modelRepositoryID
         self.systemPrompt = systemPrompt
-        self.chat = ChatArchiveConversation(chat)
+        self.chat = ChatArchiveConversation(chat, includePersonalization: includePersonalization)
     }
 }
 
@@ -31,16 +32,18 @@ struct ChatArchiveConversation: Codable, Equatable {
     let customTitle: String?
     let createdAt: Date
     let updatedAt: Date
-    let messages: [ChatTranscriptMessage]
+    var messages: [ChatTranscriptMessage]
     let imageGenerationModelID: String?
+    let personalizationSnapshot: String?
 
-    init(_ chat: ChatSession) {
+    init(_ chat: ChatSession, includePersonalization: Bool = false) {
         title = chat.title
         customTitle = chat.customTitle
         createdAt = chat.createdAt
         updatedAt = chat.updatedAt
         messages = chat.messages
         imageGenerationModelID = chat.imageGenerationModelID
+        personalizationSnapshot = includePersonalization ? chat.personalizationSnapshot : nil
     }
 }
 
@@ -48,6 +51,7 @@ enum ChatArchiveError: Error, Equatable, LocalizedError {
     case invalidFormat
     case unsupportedVersion(Int)
     case missingModelRepositoryID
+    case duplicateMessageIDs
     case invalidAttachment(String)
 
     var errorDescription: String? {
@@ -58,8 +62,10 @@ enum ChatArchiveError: Error, Equatable, LocalizedError {
             "This chat export uses unsupported version \(version)."
         case .missingModelRepositoryID:
             "The chat export does not identify its model."
+        case .duplicateMessageIDs:
+            "The chat export contains duplicate message identifiers."
         case let .invalidAttachment(filename):
-            "The attachment “\(filename)” contains invalid data."
+            "The attachment “\(filename)” contains missing or invalid data."
         }
     }
 }
@@ -71,11 +77,33 @@ enum ChatContinuationAvailability: Equatable {
 }
 
 enum ChatArchiveCodec {
-    static func encode(_ archive: ChatArchive) throws -> Data {
+    static func encode(_ archive: ChatArchive, mediaStore: MediaAssetStore = .shared) throws -> Data {
+        var portable = archive
+        portable.chat.messages = try archive.chat.messages.map { message in
+            var exported = message
+            exported.imageAttachments = try message.imageAttachments.map { attachment in
+                let data: Data?
+                if let asset = attachment.asset {
+                    data = mediaStore.data(for: asset)
+                } else {
+                    data = attachment.imageData
+                }
+                guard let data else { throw ChatArchiveError.invalidAttachment(attachment.filename) }
+                var exported = ChatImageAttachment(
+                    id: attachment.assetID, filename: attachment.filename,
+                    mimeType: attachment.mimeType, base64Data: data.base64EncodedString(),
+                    origin: attachment.origin
+                )
+                exported.generation = message.artifactGeneration(for: attachment)
+                return exported
+            }
+            return exported
+        }
+        try validate(portable)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(archive)
+        return try encoder.encode(portable)
     }
 
     static func decode(_ data: Data) throws -> ChatArchive {
@@ -89,8 +117,12 @@ enum ChatArchiveCodec {
     static func importedSession(from archive: ChatArchive, now: Date = .now) throws -> ChatSession {
         try validate(archive)
 
+        let messageIDs = Dictionary(uniqueKeysWithValues: archive.chat.messages.map { ($0.id, UUID()) })
+        let assetIDs = Set(archive.chat.messages.flatMap(\.imageAttachments).map(\.assetID))
+        let attachmentIDs = Dictionary(uniqueKeysWithValues: assetIDs.map { ($0, UUID()) })
         let messages = archive.chat.messages.map { message in
-            ChatTranscriptMessage(
+            var imported = ChatTranscriptMessage(
+                id: messageIDs[message.id] ?? UUID(),
                 role: message.role,
                 content: message.content,
                 reasoningContent: message.reasoningContent,
@@ -98,12 +130,16 @@ enum ChatArchiveCodec {
                 createdAt: message.createdAt,
                 isThinkingEnabled: message.isThinkingEnabled,
                 thinkingDuration: message.thinkingDuration,
-                imageAttachments: message.imageAttachments.map {
-                    ChatImageAttachment(
-                        filename: $0.filename,
-                        mimeType: $0.mimeType,
-                        base64Data: $0.base64Data
+                imageAttachments: message.imageAttachments.map { attachment in
+                    var imported = ChatImageAttachment(
+                        id: attachmentIDs[attachment.assetID] ?? UUID(),
+                        filename: attachment.filename,
+                        mimeType: attachment.mimeType,
+                        base64Data: attachment.base64Data
                     )
+                    imported.generation = message.artifactGeneration(for: attachment)
+                    imported.origin = attachment.origin ?? (imported.generation == nil ? nil : .generated)
+                    return imported
                 },
                 responseMetrics: message.responseMetrics,
                 toolCalls: message.toolCalls,
@@ -112,6 +148,12 @@ enum ChatArchiveCodec {
                 toolStatus: historicalStatus(message.toolStatus),
                 toolArguments: message.toolArguments
             )
+            imported.annotations = message.annotations.map { annotation in
+                var annotation = annotation
+                annotation.sourceMessageID = messageIDs[annotation.sourceMessageID] ?? annotation.sourceMessageID
+                return annotation
+            }
+            return imported
         }
 
         return ChatSession(
@@ -123,7 +165,9 @@ enum ChatArchiveCodec {
             messages: messages,
             imageGenerationModelID: archive.chat.imageGenerationModelID,
             importedModelRepositoryID: archive.modelRepositoryID,
-            importedSystemPrompt: archive.systemPrompt
+            importedSystemPrompt: archive.systemPrompt,
+            // An omitted profile must not be replaced with the recipient's profile on the next send.
+            personalizationSnapshot: archive.chat.personalizationSnapshot ?? ""
         )
     }
 
@@ -170,11 +214,17 @@ enum ChatArchiveCodec {
         guard !archive.modelRepositoryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ChatArchiveError.missingModelRepositoryID
         }
+        guard Set(archive.chat.messages.map(\.id)).count == archive.chat.messages.count else {
+            throw ChatArchiveError.duplicateMessageIDs
+        }
 
+        var payloads: [UUID: Data] = [:]
         for attachment in archive.chat.messages.flatMap(\.imageAttachments) {
-            guard Data(base64Encoded: attachment.base64Data) != nil else {
+            guard attachment.asset == nil, let data = attachment.imageData,
+                  payloads[attachment.id].map({ $0 == data }) ?? true else {
                 throw ChatArchiveError.invalidAttachment(attachment.filename)
             }
+            payloads[attachment.id] = data
         }
     }
 

@@ -91,7 +91,7 @@ enum IssueDiagnostics {
 
     private static func environmentSection(runtime: SystemRuntimeMonitor) -> IssueDiagnosticsSection {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let version = ReleaseVersion.displayString(in: info)
         let build = info?["CFBundleVersion"] as? String ?? "unknown"
         let totalMemory = ByteCountFormatter.string(
             fromByteCount: Int64(clamping: runtime.totalMemoryBytes),

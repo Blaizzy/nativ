@@ -10,7 +10,11 @@ private enum ModelConfigurationLayoutMetrics {
     static let topInset: CGFloat = 32
     static let transitionDuration: TimeInterval = 0.3
     static let resizeHandleWidth: CGFloat = 9
-    static let headerTrailingControlClearance: CGFloat = 52
+    /// The panel toggle is drawn over this panel's top-trailing corner with the
+    /// safe area ignored, so ``topInset`` has to clear its band in every window
+    /// state -- not just full screen -- for the header's own trailing control to
+    /// sit under it rather than on it.
+    static let headerTopPadding: CGFloat = 4
 }
 
 struct ModelConfigurationLayout<Content: View>: View {
@@ -42,7 +46,6 @@ struct ModelConfigurationLayout<Content: View>: View {
 
 struct ModelConfigurationLayoutContent<Content: View>: View {
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.controlPanelIsFullScreen) private var isFullScreen
     @Environment(\.displayScale) private var displayScale
     @Binding var settings: NativSettings
     let settingsRequireRestart: Bool
@@ -106,7 +109,7 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
                 settingsRequireRestart: settingsRequireRestart,
                 onReset: onReset
             )
-            .padding(.top, isFullScreen ? ModelConfigurationLayoutMetrics.topInset : 0)
+            .padding(.top, ModelConfigurationLayoutMetrics.topInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -230,6 +233,8 @@ struct ModelConfigurationView: View {
             HStack(spacing: 8) {
                 Label("Model Configuration", systemImage: "slider.horizontal.3")
                     .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
 
                 Spacer(minLength: 0)
 
@@ -238,6 +243,7 @@ struct ModelConfigurationView: View {
                 }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.borderless)
+                .frame(width: ControlPanelLayout.topControlSize)
                 .help("Reset model configuration")
                 .confirmationDialog(
                     "Reset model configuration?",
@@ -262,8 +268,8 @@ struct ModelConfigurationView: View {
             }
         }
         .padding(.leading, 16)
-        .padding(.trailing, ModelConfigurationLayoutMetrics.headerTrailingControlClearance)
-        .padding(.top, 13)
+        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding)
+        .padding(.top, ModelConfigurationLayoutMetrics.headerTopPadding)
         .padding(.bottom, 16)
     }
 
@@ -312,6 +318,33 @@ struct ModelConfigurationView: View {
 
                 Text(systemPromptHint)
                     .configurationHintStyle()
+
+                let personalizationPrompt = settings.personalization.systemPrompt
+                if !personalizationPrompt.isEmpty {
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(verbatim: personalizationPrompt)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 7)
+                                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                                }
+
+                            Text("Added to the system prompt for new chats. Existing chats keep their original personalization. Edit in Settings → Personalization.")
+                                .configurationHintStyle()
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        Text("Personalization")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }

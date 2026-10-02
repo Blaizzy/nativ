@@ -17,6 +17,8 @@ Options:
   --marketing-version VERSION
                         CFBundleShortVersionString for this archive.
   --build-number NUMBER CFBundleVersion for this archive.
+  --release-version VERSION
+                        Public release label, including an optional rcN suffix.
   --skip-generate       Do not run xcodegen before archiving.
   --sign                Sign after archiving, inferring DEVELOPMENT_TEAM from
                         the Release build settings.
@@ -43,6 +45,7 @@ identity=""
 team_id=""
 no_timestamp=false
 marketing_version=""
+release_version=""
 build_number=""
 
 while (($# > 0)); do
@@ -65,6 +68,11 @@ while (($# > 0)); do
         --build-number)
             (($# >= 2)) || fail "--build-number requires a value"
             build_number="$2"
+            shift 2
+            ;;
+        --release-version)
+            (($# >= 2)) || fail "--release-version requires a value"
+            release_version="$2"
             shift 2
             ;;
         --skip-generate)
@@ -113,6 +121,12 @@ fi
 if [[ -n "$build_number" && ! "$build_number" =~ ^[1-9][0-9]*$ ]]; then
     fail "build number must be a positive integer: $build_number"
 fi
+if [[ -n "$release_version" ]]; then
+    metadata="$(python3 "$script_directory/macos_release.py" version "$release_version")" || fail "invalid release version"
+    read -r release_version release_marketing_version release_channel release_tag <<< "$metadata"
+    [[ -z "$marketing_version" || "$marketing_version" == "$release_marketing_version" ]] || fail "release and marketing versions disagree"
+    marketing_version="$release_marketing_version"
+fi
 
 command -v xcodebuild >/dev/null 2>&1 || fail "xcodebuild is required"
 if [[ "$generate_project" == true ]]; then
@@ -157,6 +171,9 @@ fi
 if [[ -n "$build_number" ]]; then
     xcodebuild_arguments+=(CURRENT_PROJECT_VERSION="$build_number")
 fi
+if [[ -n "$release_version" ]]; then
+    xcodebuild_arguments+=(NATIV_RELEASE_VERSION="$release_version")
+fi
 xcodebuild \
     "${xcodebuild_arguments[@]}" \
     archive
@@ -179,6 +196,10 @@ if [[ -n "$marketing_version" && "$archived_marketing_version" != "$marketing_ve
 fi
 if [[ -n "$build_number" && "$archived_build_number" != "$build_number" ]]; then
     fail "archived build number is $archived_build_number, expected $build_number"
+fi
+if [[ -n "$release_version" ]]; then
+    archived_release_version="$(/usr/libexec/PlistBuddy -c 'Print :NativReleaseVersion' "$app_path/Contents/Info.plist")"
+    [[ "$archived_release_version" == "$release_version" ]] || fail "archived release version is $archived_release_version, expected $release_version"
 fi
 
 if [[ "$sign_archive" == true ]]; then

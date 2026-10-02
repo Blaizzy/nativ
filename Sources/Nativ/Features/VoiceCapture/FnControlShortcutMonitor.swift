@@ -156,8 +156,9 @@ final class FnControlShortcutMonitor {
     private var localMonitor: Any?
     private var globalMonitor: Any?
     private var modifierPollTask: Task<Void, Never>?
-    private var preferenceObserver: NSObjectProtocol?
+    private var preferenceObserver: NotificationCenter.ObservationToken?
     private var recordIsHeld = false
+    private var isAwaitingCaptureModifierRelease = false
     private var retryModifierIsHeld = false
     private var retryState = FnRetryShortcutState()
     private var recordModifierToggleState = VoiceModifierToggleShortcutState()
@@ -187,6 +188,9 @@ final class FnControlShortcutMonitor {
         guard localMonitor == nil, globalMonitor == nil else {
             return
         }
+        if preferences.isCapturingShortcut {
+            isAwaitingCaptureModifierRelease = true
+        }
 
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.flagsChanged, .keyDown]
@@ -205,13 +209,9 @@ final class FnControlShortcutMonitor {
         }
         startModifierPolling()
         preferenceObserver = NotificationCenter.default.addObserver(
-            forName: .voiceShortcutPreferencesDidChange,
-            object: preferences,
-            queue: .main
+            of: preferences, for: VoiceShortcutPreferences.DidChange.self
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.reloadShortcuts()
-            }
+            self?.reloadShortcuts()
         }
         installHotKeys()
     }
@@ -299,6 +299,13 @@ final class FnControlShortcutMonitor {
     }
 
     private func consume(_ activeModifiers: VoiceShortcutModifiers) {
+        guard !preferences.isCapturingShortcut else { return }
+        if isAwaitingCaptureModifierRelease {
+            if activeModifiers.isEmpty {
+                isAwaitingCaptureModifierRelease = false
+            }
+            return
+        }
         if preferences.recordShortcut.keyCode == nil {
             if preferences.isHandsFreeEnabled {
                 if recordModifierToggleState.update(
@@ -331,7 +338,10 @@ final class FnControlShortcutMonitor {
         }
     }
 
-    fileprivate func consumeHotKeyEvent(id: UInt32, kind: UInt32) {
+    func consumeHotKeyEvent(id: UInt32, kind: UInt32) {
+        guard !preferences.isCapturingShortcut, !isAwaitingCaptureModifierRelease else {
+            return
+        }
         let isPressed: Bool
         switch kind {
         case UInt32(kEventHotKeyPressed):
@@ -369,6 +379,9 @@ final class FnControlShortcutMonitor {
     }
 
     private func reloadShortcuts() {
+        if preferences.isCapturingShortcut {
+            isAwaitingCaptureModifierRelease = true
+        }
         if recordIsHeld {
             updateRecordState(false)
         }
@@ -383,7 +396,7 @@ final class FnControlShortcutMonitor {
     }
 
     private func installHotKeys() {
-        guard hotKeys.isEmpty, hotKeyEventHandler == nil else {
+        guard !preferences.isCapturingShortcut, hotKeys.isEmpty, hotKeyEventHandler == nil else {
             return
         }
 

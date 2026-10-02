@@ -45,19 +45,34 @@ extension ControlPanelView {
     }
 
     func exportRecentConversation(_ recent: ControlPanelRecentSession) {
-        guard case .chat(let sessionID) = recent.selection,
-            let archive = chat.archive(
-                for: sessionID,
-                selectedModelID: model.settings.normalized().languageModelID,
-                systemPrompt: model.settings.systemPrompt
-            )
-        else {
-            return
-        }
+        guard case .chat(let sessionID) = recent.selection else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = chatExportFileName(for: recent.title)
         panel.allowedContentTypes = [.json]
+        let includePersonalization = NSButton(checkboxWithTitle: "Include personalization", target: nil, action: nil)
+        includePersonalization.state = .off
+        let explanation = NSTextField(wrappingLabelWithString:
+            "Includes the saved profile and response preferences. Anyone with this file can read them.")
+        explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        explanation.textColor = .secondaryLabelColor
+        let options = NSStackView(views: [includePersonalization, explanation])
+        options.orientation = .vertical
+        options.alignment = .leading
+        options.spacing = 4
+        options.edgeInsets = NSEdgeInsets(top: 8, left: 20, bottom: 8, right: 20)
+        explanation.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        options.setFrameSize(options.fittingSize)
+        panel.accessoryView = options
         guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        guard let archive = chat.archive(
+            for: sessionID,
+            selectedModelID: model.settings.normalized().languageModelID,
+            systemPrompt: model.settings.systemPrompt,
+            includePersonalization: includePersonalization.state == .on
+        ) else {
+            chatImportAlert = .failed("The chat could not be exported. Make sure it is still available and a model is selected.")
             return
         }
         do {

@@ -7,9 +7,10 @@ usage() {
 Usage: generate_macos_appcast.sh [options] RELEASE_ARCHIVE
 
 Creates a signed Sparkle appcast for a notarized .dmg or .zip release archive.
-The contained app version determines the GitHub Release tag and download URL.
+The embedded NativReleaseVersion determines the GitHub tag and download URL.
 
 Options:
+  --tag TAG             Expected GitHub tag (for example v0.4.0rc1).
   --release-notes PATH  Markdown, HTML, or plain-text release notes to embed.
   --output PATH         Output feed. Defaults to dist/release/appcast.xml.
   --account NAME        Sparkle signing-key Keychain account. Defaults to
@@ -33,6 +34,7 @@ fail() {
 script_directory="$(cd "$(dirname "$0")" && pwd -P)"
 repository_root="$(cd "$script_directory/.." && pwd -P)"
 release_notes=""
+release_tag=""
 output_path="dist/release/appcast.xml"
 account="${SPARKLE_KEY_ACCOUNT:-Marvis-Labs}"
 private_key_path=""
@@ -40,6 +42,11 @@ derived_data_path="${NATIV_DERIVED_DATA:-build/XcodeDerivedData}"
 
 while (($# > 0)); do
     case "$1" in
+        --tag)
+            (($# >= 2)) || fail "--tag requires a value"
+            release_tag="$2"
+            shift 2
+            ;;
         --release-notes)
             (($# >= 2)) || fail "--release-notes requires a value"
             release_notes="$2"
@@ -145,6 +152,14 @@ version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$arch
 build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$archive_plist" 2>/dev/null || true)"
 [[ "$version" =~ ^[0-9]+([.][0-9]+){1,2}$ ]] || fail "invalid or missing app version in release archive: $version"
 [[ "$build_number" =~ ^[1-9][0-9]*$ ]] || fail "invalid or missing build number in release archive: $build_number"
+embedded_release="$(/usr/libexec/PlistBuddy -c 'Print :NativReleaseVersion' "$archive_plist" 2>/dev/null || true)"
+embedded_release="${embedded_release:-$version}"
+metadata="$(python3 "$script_directory/macos_release.py" version "$embedded_release")" || fail "invalid embedded release version"
+read -r public_version marketing_version release_channel expected_tag <<< "$metadata"
+[[ "$marketing_version" == "$version" ]] || fail "embedded release and marketing versions disagree"
+[[ -z "$release_tag" || "$release_tag" == "$expected_tag" ]] || fail "release tag does not match the signed app"
+release_tag="$expected_tag"
+[[ "$(basename "$release_archive")" == "Nativ-${public_version}.${release_archive##*.}" ]] || fail "archive filename must match the public release version"
 
 mkdir -p "$(dirname "$output_path")"
 staging_directory="$temporary_directory/releases"
@@ -159,8 +174,8 @@ fi
 github_repository="${NATIV_GITHUB_REPOSITORY:-${GITHUB_REPOSITORY:-Blaizzy/nativ}}"
 [[ "$github_repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || \
     fail "invalid GitHub repository: $github_repository"
-download_prefix="https://github.com/${github_repository}/releases/download/v${version}/"
-release_link="https://github.com/${github_repository}/releases/tag/v${version}"
+download_prefix="https://github.com/${github_repository}/releases/download/${release_tag}/"
+release_link="https://github.com/${github_repository}/releases/tag/${release_tag}"
 appcast_arguments=(
     --download-url-prefix "$download_prefix"
     --embed-release-notes
@@ -170,6 +185,9 @@ appcast_arguments=(
     -o "$staging_directory/appcast.xml"
     "$staging_directory"
 )
+if [[ "$release_channel" == rc ]]; then
+    appcast_arguments=(--channel rc "${appcast_arguments[@]}")
+fi
 
 echo "Generating signed appcast for Nativ $version ($build_number)..."
 if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
@@ -190,6 +208,11 @@ grep -Fq "<sparkle:shortVersionString>$version</sparkle:shortVersionString>" "$g
     fail "generated feed does not contain version $version"
 grep -Fq "<sparkle:version>$build_number</sparkle:version>" "$generated_appcast" || \
     fail "generated feed does not contain build $build_number"
+
+# The archive retains its numeric marketing version; display the full RC label
+# in the feed without changing the signed archive or its enclosure signature.
+python3 "$script_directory/macos_release.py" finalize-appcast "$generated_appcast" \
+    --tag "$release_tag" --repository "$github_repository"
 
 mv "$generated_appcast" "$output_path"
 echo "Sparkle appcast: $output_path"

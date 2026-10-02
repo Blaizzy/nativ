@@ -131,15 +131,21 @@ struct VoiceShortcut: Codable, Equatable, Sendable {
     }
 }
 
-extension Notification.Name {
-    static let voiceShortcutPreferencesDidChange = Notification.Name(
-        "VoiceShortcutPreferencesDidChange"
-    )
-}
-
 @MainActor
 final class VoiceShortcutPreferences: ObservableObject {
+    struct DidChange: NotificationCenter.MainActorMessage {
+        typealias Subject = VoiceShortcutPreferences
+    }
+
     static let shared = VoiceShortcutPreferences()
+
+    // Transient UI state; never saved with the shortcut preferences.
+    var isCapturingShortcut = false {
+        didSet {
+            guard isCapturingShortcut != oldValue else { return }
+            NotificationCenter.default.post(DidChange(), subject: self)
+        }
+    }
 
     @Published var recordShortcut: VoiceShortcut {
         didSet { preferencesDidChange() }
@@ -150,11 +156,29 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var isHandsFreeEnabled: Bool {
         didSet { preferencesDidChange() }
     }
+    @Published var isWakeWordEnabled: Bool {
+        didSet { persistCurrent() }
+    }
+    // Spoken command edits do not require re-registering global keyboard shortcuts.
+    @Published var isReturnCommandEnabled: Bool {
+        didSet { persistCurrent() }
+    }
+    @Published var returnCommandTrigger: String {
+        didSet { persistCurrent() }
+    }
+
+    var activeReturnCommandTrigger: String? {
+        let trigger = returnCommandTrigger.trimmingCharacters(in: .whitespacesAndNewlines)
+        return isReturnCommandEnabled && !trigger.isEmpty ? trigger : nil
+    }
 
     private struct Payload: Codable {
         let recordShortcut: VoiceShortcut
         let retryShortcut: VoiceShortcut
         let isHandsFreeEnabled: Bool?
+        let isWakeWordEnabled: Bool?
+        let isReturnCommandEnabled: Bool?
+        let returnCommandTrigger: String?
     }
 
     private let defaults: UserDefaults
@@ -174,10 +198,17 @@ final class VoiceShortcutPreferences: ObservableObject {
             recordShortcut = payload.recordShortcut
             retryShortcut = payload.retryShortcut
             isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
+            isWakeWordEnabled = payload.isWakeWordEnabled ?? false
+            isReturnCommandEnabled = payload.isReturnCommandEnabled ?? true
+            returnCommandTrigger = payload.returnCommandTrigger
+                ?? VoiceDictationTranscript.defaultReturnCommandTrigger
         } else {
             recordShortcut = .recordDefault
             retryShortcut = .retryDefault
             isHandsFreeEnabled = true
+            isWakeWordEnabled = false
+            isReturnCommandEnabled = true
+            returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
         }
     }
 
@@ -193,7 +224,10 @@ final class VoiceShortcutPreferences: ObservableObject {
         let payload = Payload(
             recordShortcut: recordShortcut,
             retryShortcut: retryShortcut,
-            isHandsFreeEnabled: isHandsFreeEnabled
+            isHandsFreeEnabled: isHandsFreeEnabled,
+            isWakeWordEnabled: isWakeWordEnabled,
+            isReturnCommandEnabled: isReturnCommandEnabled,
+            returnCommandTrigger: returnCommandTrigger
         )
         if let data = try? JSONEncoder().encode(payload) {
             defaults.set(data, forKey: storageKey)
@@ -202,9 +236,6 @@ final class VoiceShortcutPreferences: ObservableObject {
 
     private func preferencesDidChange() {
         persistCurrent()
-        NotificationCenter.default.post(
-            name: .voiceShortcutPreferencesDidChange,
-            object: self
-        )
+        NotificationCenter.default.post(DidChange(), subject: self)
     }
 }

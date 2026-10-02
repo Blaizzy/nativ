@@ -16,7 +16,12 @@ private final class RuntimeMCPHost: ChatToolMCPHost {
         id == server.id ? definitions : []
     }
 
-    func callTool(named name: String, argumentsJSON: String?) async throws -> String {
+    func callTool(
+        named name: String,
+        argumentsJSON: String?,
+        projectScope: ChatToolScope?,
+        currentProjectScope: (() -> ChatToolScope)?
+    ) async throws -> String {
         calls.append(name)
         return try await operation?() ?? #"{"commits":["first"]}"#
     }

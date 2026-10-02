@@ -218,8 +218,6 @@ struct ChatImageToolExecutor {
             count: min(max(request.count ?? 1, 1), 4),
             width: boundedDimension(request.width ?? sourceSize?.width ?? 512),
             height: boundedDimension(request.height ?? sourceSize?.height ?? 512),
-            steps: 4,
-            guidance: 1,
             seedText: request.seed.map(String.init) ?? ""
         )
         let outputs = try await ImageGenerationExecutor().run(
@@ -231,7 +229,12 @@ struct ChatImageToolExecutor {
             settings: settings,
             seed: request.seed
         )
-        let attachments = outputs.map(\.attachment)
+        let attachments = outputs.map { output in
+            var attachment = output.attachment
+            attachment.generation?.prompt = output.revisedPrompt ?? request.prompt
+            attachment.generation?.modelID = modelID
+            return attachment
+        }
         let payload = ChatImageToolResultPayload(
             ok: true,
             operation: request.operation.rawValue,

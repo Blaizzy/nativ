@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -86,6 +87,12 @@ struct ImageGenerationView: View {
             : nil
     }
 
+    private var selectedModelSupportsEditing: Bool {
+        guard let selectedModelID else { return false }
+        return imageModels.first(where: { $0.repoID == selectedModelID })?
+            .capabilities.contains(.imageEditing) == true
+    }
+
     private var modelScanKey: String {
         model.settings.localModelSearchPaths.cacheKey
     }
@@ -111,6 +118,7 @@ struct ImageGenerationView: View {
                             activeReferenceID: viewModel.activeReference?.id,
                             isGenerating: viewModel.isGenerating,
                             progressText: viewModel.statusText,
+                            allowsEditing: selectedModelSupportsEditing,
                             onUseOutput: viewModel.useAsReference,
                             onUseInput: viewModel.useAsReference,
                             onSave: viewModel.save
@@ -155,6 +163,11 @@ private struct ImageGenerationComposer: View {
     @State private var editorContentHeight: CGFloat = 0
     @State private var showsSettings = false
     @State private var isDropTargeted = false
+    @State private var isEditorDropTargeted = false
+
+    private var showsDropTarget: Bool {
+        isDropTargeted || isEditorDropTargeted
+    }
 
     private let textInset = EdgeInsets(top: 14, leading: 14, bottom: 10, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
@@ -177,7 +190,10 @@ private struct ImageGenerationComposer: View {
                         isEnabled: canCompose,
                         onSubmit: submit,
                         onPasteImage: viewModel.attachImages,
-                        onContentHeightChange: { editorContentHeight = $0 }
+                        onContentHeightChange: { editorContentHeight = $0 },
+                        acceptsImageDrops: true,
+                        onImageDropTargetChange: { isEditorDropTargeted = $0 },
+                        maximumHeight: editorMaximumHeight
                     )
 
                     if viewModel.prompt.isEmpty {
@@ -219,7 +235,11 @@ private struct ImageGenerationComposer: View {
                     .help("Image settings")
                     .disabled(viewModel.isCurrentSessionActiveInAnotherWindow)
                     .popover(isPresented: $showsSettings, arrowEdge: .bottom) {
-                        ImageGenerationSettingsView(viewModel: viewModel)
+                        ImageGenerationSettingsView(
+                            model: model,
+                            viewModel: viewModel,
+                            modelIsEditOnly: selectedModelIsEditOnly
+                        )
                     }
 
                     Spacer(minLength: 12)
@@ -246,7 +266,7 @@ private struct ImageGenerationComposer: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: isDropTargeted ? 2 : 0.75)
+                    .stroke(showsDropTarget ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: showsDropTarget ? 2 : 0.75)
             }
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             .onDrop(
@@ -363,6 +383,12 @@ private struct ImageGenerationComposer: View {
             : nil
     }
 
+    private var selectedModelSupportsEditing: Bool {
+        guard let selectedModelID else { return false }
+        return imageModels.first(where: { $0.repoID == selectedModelID })?
+            .capabilities.contains(.imageEditing) == true
+    }
+
     private var selectedModelIsEditOnly: Bool {
         guard let selectedModelID,
               let selectedModel = imageModels.first(where: {
@@ -433,7 +459,8 @@ private struct ImageGenerationComposer: View {
         }
         viewModel.run(
             using: model,
-            modelIsInstalled: imageModels.contains { $0.repoID == viewModel.modelID }
+            modelIsInstalled: imageModels.contains { $0.repoID == viewModel.modelID },
+            modelSupportsEditing: selectedModelSupportsEditing
         )
     }
 
@@ -471,7 +498,35 @@ private struct ImageGenerationComposer: View {
 }
 
 private struct ImageGenerationSettingsView: View {
+    var model: NativModel
     @ObservedObject var viewModel: ImageGenerationViewModel
+    let modelIsEditOnly: Bool
+    @State private var loadedDefaults: MLXImageSamplingDefaults?
+    @State private var loadedContext: DefaultsContext?
+    @State private var defaultsUnavailable = false
+
+    private struct DefaultsContext: Hashable {
+        let modelID: String
+        let task: MLXImageTask
+        let baseURL: URL
+        let apiKey: String?
+        let isRunning: Bool
+    }
+
+    private var defaultsContext: DefaultsContext {
+        let settings = model.settings.normalized()
+        return DefaultsContext(
+            modelID: viewModel.modelID,
+            task: viewModel.nextRequestIsEdit || modelIsEditOnly ? .edit : .generate,
+            baseURL: settings.serverBaseURL,
+            apiKey: settings.serverAPIKey,
+            isRunning: model.isRunning
+        )
+    }
+
+    private var samplingDefaults: MLXImageSamplingDefaults? {
+        loadedContext == defaultsContext ? loadedDefaults : nil
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -502,19 +557,44 @@ private struct ImageGenerationSettingsView: View {
             }
 
             settingRow("Steps") {
-                TextField("", value: $viewModel.requestSettings.steps, format: .number)
-                    .frame(width: 72)
-                Stepper("", value: $viewModel.requestSettings.steps, in: 1...1_000)
+                TextField(
+                    samplingDefaults.map { "Auto (\($0.steps))" } ?? "Auto",
+                    value: $viewModel.requestSettings.steps,
+                    format: .number
+                )
+                    .frame(width: 110)
+                Stepper("Steps", value: Binding(
+                    get: { viewModel.requestSettings.steps ?? samplingDefaults?.steps ?? 1 },
+                    set: { viewModel.requestSettings.steps = $0 }
+                ), in: 1...1_000)
                     .labelsHidden()
+                    .disabled(viewModel.requestSettings.steps == nil && samplingDefaults == nil)
+                Button("Auto") { viewModel.requestSettings.steps = nil }
+                    .disabled(viewModel.requestSettings.steps == nil)
             }
 
             settingRow("Guidance") {
-                Slider(value: $viewModel.requestSettings.guidance, in: 0...20, step: 0.1)
-                    .frame(width: 150)
-                Text(viewModel.requestSettings.guidance, format: .number.precision(.fractionLength(1)))
-                    .monospacedDigit()
-                    .frame(width: 34, alignment: .trailing)
+                TextField(
+                    samplingDefaults.map { "Auto (\($0.guidance.formatted()))" } ?? "Auto",
+                    value: $viewModel.requestSettings.guidance,
+                    format: .number
+                )
+                    .frame(width: 110)
+                Stepper("Guidance", value: Binding(
+                    get: { viewModel.requestSettings.guidance ?? samplingDefaults?.guidance ?? 0 },
+                    set: { viewModel.requestSettings.guidance = $0 }
+                ), in: 0...100, step: 0.1)
+                    .labelsHidden()
+                    .disabled(viewModel.requestSettings.guidance == nil && samplingDefaults == nil)
+                Button("Auto") { viewModel.requestSettings.guidance = nil }
+                    .disabled(viewModel.requestSettings.guidance == nil)
             }
+
+            Text(defaultsUnavailable && loadedContext == defaultsContext
+                 ? "Default values are unavailable. Auto still uses the model’s defaults when generating."
+                 : "Auto uses the model’s recommended steps and guidance.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             settingRow("Seed") {
                 TextField("Random", text: $viewModel.requestSettings.seedText)
@@ -524,6 +604,24 @@ private struct ImageGenerationSettingsView: View {
         .textFieldStyle(.roundedBorder)
         .padding(18)
         .frame(width: 390)
+        .task(id: defaultsContext) {
+            let context = defaultsContext
+            loadedContext = context
+            loadedDefaults = nil
+            defaultsUnavailable = false
+            guard context.isRunning else { return }
+            do {
+                let defaults = try await NativImageClient(
+                    baseURL: context.baseURL, apiKey: context.apiKey, timeout: 30
+                ).samplingDefaults(model: context.modelID, task: context.task)
+                try Task.checkCancellation()
+                guard defaultsContext == context else { return }
+                loadedDefaults = defaults
+            } catch {
+                guard !Task.isCancelled, defaultsContext == context else { return }
+                defaultsUnavailable = true
+            }
+        }
     }
 
     private func settingRow<Content: View>(
@@ -545,6 +643,7 @@ private struct ImageGenerationTurnView: View {
     let activeReferenceID: UUID?
     let isGenerating: Bool
     let progressText: String?
+    let allowsEditing: Bool
     let onUseOutput: (GeneratedImage) -> Void
     let onUseInput: (ChatImageAttachment) -> Void
     let onSave: (GeneratedImage) -> Void
@@ -618,6 +717,7 @@ private struct ImageGenerationTurnView: View {
                         result: output,
                         isActiveReference: activeReferenceID == output.id,
                         isGenerating: isGenerating,
+                        allowsEditing: allowsEditing,
                         onUseAsReference: { onUseOutput(output) },
                         onSave: { onSave(output) }
                     )
@@ -631,6 +731,7 @@ private struct GeneratedImageCard: View {
     let result: GeneratedImage
     let isActiveReference: Bool
     let isGenerating: Bool
+    let allowsEditing: Bool
     let onUseAsReference: () -> Void
     let onSave: () -> Void
 
@@ -657,15 +758,17 @@ private struct GeneratedImageCard: View {
 
                 Spacer(minLength: 0)
 
-                Button(action: onUseAsReference) {
-                    Label(
-                        isActiveReference ? "Selected" : "Continue",
-                        systemImage: isActiveReference ? "checkmark.circle.fill" : "arrow.turn.down.right"
-                    )
+                if allowsEditing {
+                    Button(action: onUseAsReference) {
+                        Label(
+                            isActiveReference ? "Selected" : "Edit",
+                            systemImage: isActiveReference ? "checkmark.circle.fill" : "arrow.turn.down.right"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isGenerating || isActiveReference)
+                    .help("Use this image as the next edit reference")
                 }
-                .buttonStyle(.bordered)
-                .disabled(isGenerating || isActiveReference)
-                .help("Use this image as the next edit reference")
 
                 Button(action: onSave) {
                     Image(systemName: "square.and.arrow.down")

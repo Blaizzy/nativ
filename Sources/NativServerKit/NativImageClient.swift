@@ -38,9 +38,9 @@ public struct MLXImageGenerationRequest: Encodable, Equatable, Sendable {
     public var n: Int
     public var width: Int
     public var height: Int
-    public var steps: Int
+    public var steps: Int?
     public var seed: Int?
-    public var guidance: Double
+    public var guidance: Double?
     public var responseFormat: String
     public var outputFormat: String
 
@@ -50,9 +50,9 @@ public struct MLXImageGenerationRequest: Encodable, Equatable, Sendable {
         n: Int = 1,
         width: Int = 1024,
         height: Int = 1024,
-        steps: Int = 28,
+        steps: Int? = nil,
         seed: Int? = nil,
-        guidance: Double = 3.5,
+        guidance: Double? = nil,
         responseFormat: String = "b64_json",
         outputFormat: String = "png"
     ) {
@@ -89,9 +89,9 @@ public struct MLXImageEditRequest: Encodable, Equatable, Sendable {
     public var n: Int
     public var width: Int?
     public var height: Int?
-    public var steps: Int
+    public var steps: Int?
     public var seed: Int?
-    public var guidance: Double
+    public var guidance: Double?
     public var responseFormat: String
     public var outputFormat: String
 
@@ -102,9 +102,9 @@ public struct MLXImageEditRequest: Encodable, Equatable, Sendable {
         n: Int = 1,
         width: Int? = nil,
         height: Int? = nil,
-        steps: Int = 28,
+        steps: Int? = nil,
         seed: Int? = nil,
-        guidance: Double = 3.5,
+        guidance: Double? = nil,
         responseFormat: String = "b64_json",
         outputFormat: String = "png"
     ) {
@@ -134,6 +134,16 @@ public struct MLXImageEditRequest: Encodable, Equatable, Sendable {
         case responseFormat = "response_format"
         case outputFormat = "output_format"
     }
+}
+
+public enum MLXImageTask: String, Sendable {
+    case generate
+    case edit
+}
+
+public struct MLXImageSamplingDefaults: Decodable, Equatable, Sendable {
+    public let steps: Int
+    public let guidance: Double
 }
 
 public struct MLXImageResponse: Decodable, Equatable, Sendable {
@@ -210,6 +220,45 @@ public final class NativImageClient {
             request,
             paths: ["v1/images/edits", "v1/images/edit"]
         )
+    }
+
+    public func samplingDefaults(
+        model: String,
+        task: MLXImageTask = .generate
+    ) async throws -> MLXImageSamplingDefaults {
+        let request = try makeSamplingDefaultsURLRequest(model: model, task: task)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativImageError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativImageError.httpStatus(httpResponse.statusCode, String(decoding: data, as: UTF8.self))
+        }
+        return try decoder.decode(MLXImageSamplingDefaults.self, from: data)
+    }
+
+    func makeSamplingDefaultsURLRequest(model: String, task: MLXImageTask) throws -> URLRequest {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("v1/images/defaults"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "model", value: model),
+            URLQueryItem(name: "task", value: task.rawValue),
+        ]
+        // Query parsers otherwise treat literal plus signs in model paths as spaces.
+        let encodedQuery = components?.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        components?.percentEncodedQuery = encodedQuery
+        guard let url = components?.url else {
+            throw NativImageError.invalidResponse
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
+        return request
     }
 
     private func post<Payload: Encodable>(

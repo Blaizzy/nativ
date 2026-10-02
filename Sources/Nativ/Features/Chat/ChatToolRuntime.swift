@@ -4,7 +4,12 @@ import NativServerKit
 @MainActor
 protocol ChatToolMCPHost: AnyObject {
     func toolDefinitions(forServer id: UUID) -> [MLXChatToolDefinition]
-    func callTool(named name: String, argumentsJSON: String?) async throws -> String
+    func callTool(
+        named name: String,
+        argumentsJSON: String?,
+        projectScope: ChatToolScope?,
+        currentProjectScope: (() -> ChatToolScope)?
+    ) async throws -> String
 }
 
 extension MCPHostManager: ChatToolMCPHost {}
@@ -170,6 +175,7 @@ final class ChatToolRuntime {
         context: ChatToolExecutionContext,
         mcpHost: (any ChatToolMCPHost)? = nil,
         model: (any ChatModelSwitchingSurface)? = nil,
+        currentProjectScope: (() -> ChatToolScope)? = nil,
         requestApproval: @escaping @MainActor () async -> Bool = { false }
     ) async throws -> ChatToolExecutionOutcome {
         try Task.checkCancellation()
@@ -213,7 +219,10 @@ final class ChatToolRuntime {
             case .mcp:
                 guard let mcpHost else { throw ChatToolAccessError.unavailable(name) }
                 let content = try await mcpHost.callTool(
-                    named: name, argumentsJSON: call.function?.arguments
+                    named: name,
+                    argumentsJSON: call.function?.arguments,
+                    projectScope: request.scope,
+                    currentProjectScope: currentProjectScope
                 )
                 result = ChatToolExecutionOutcome(content: content, attachments: [])
             case .builtIn:

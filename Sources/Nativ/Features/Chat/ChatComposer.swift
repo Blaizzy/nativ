@@ -218,6 +218,7 @@ struct ChatComposer: View {
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
     @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection
+    @Environment(\.undoManager) private var undoManager
     @StateObject private var localLibrary = LocalModelLibrary()
     let unavailableReason: String?
     let canCompose: Bool
@@ -252,22 +253,24 @@ struct ChatComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let elapsed = context.date.timeIntervalSince(sendingStartedAt)
-                    Text(workingStatus(elapsed: elapsed))
+            Group {
+                if viewModel.isCurrentSessionSending, let sendingStartedAt = viewModel.sendingStartedAt {
+                    ChatGenerationStatusRow(
+                        startedAt: sendingStartedAt,
+                        metrics: viewModel.currentSessionLiveResponseMetrics
+                    )
+                    .equatable()
+                    .padding(.horizontal, textInset.leading + 4)
+                    .transition(.opacity)
+                } else if let unavailableReason {
+                    Text(unavailableReason)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .padding(.leading, textInset.leading + 4)
                 }
-                .padding(.leading, textInset.leading + 4)
-            } else if let unavailableReason {
-                Text(unavailableReason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .padding(.leading, textInset.leading + 4)
             }
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isCurrentSessionSending)
 
             if !viewModel.currentSessionQueuedPrompts.isEmpty {
                 ChatQueueTray(
@@ -280,27 +283,65 @@ struct ChatComposer: View {
             }
 
             VStack(alignment: .leading, spacing: 0) {
+                if !viewModel.pendingPastedTexts.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(viewModel.pendingPastedTexts) { item in
+                                ChatPastedTextCard(pastedText: item, onRemove: {
+                                    viewModel.removePendingPastedText(item.id, undoManager: undoManager)
+                                })
+                            }
+                        }
+                        .padding(2)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                }
+                if !viewModel.pendingAnnotations.isEmpty {
+                    ChatAnnotationCards(
+                        annotations: viewModel.pendingAnnotations,
+                        allowsRemoval: true
+                    )
+                    .padding(12)
+                }
                 ZStack(alignment: .topLeading) {
                     ChatComposerTextEditor(
-                        text: $viewModel.draft,
+                        text: $viewModel.composerText,
                         isEnabled: canCompose,
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
+                        onRecallPrevious: recallPreviousPrompt,
                         onPasteImage: { viewModel.attachImages(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
                         },
+                        maximumHeight: editorMaximumHeight,
                         fontScale: model.settings.chatFontScale,
-                        focusToken: viewModel.composerFocusToken
+                        focusToken: viewModel.composerFocusToken,
+                        forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
+                            .isEmpty
+                            && viewModel.pendingPastedTexts.isEmpty
+                            && viewModel.promptEditContext == nil,
+                        onNavigatePendingSelection: viewModel.moveImageModelHighlight,
+                        onCancelPendingDecision: viewModel.cancelPendingToolDecision,
+                        onPasteText: viewModel.attachPastedText,
+                        onTextEdit: viewModel.editComposerText,
+                        onTextCommit: viewModel.commitComposerText,
+                        resetToken: viewModel.composerResetToken
                     )
 
-                    if viewModel.draft.isEmpty {
-                        Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
-                            .foregroundStyle(.tertiary)
-                            .padding(textInset)
-                            .offset(x: 4)
-                            .allowsHitTesting(false)
+                    if viewModel.composerText.isEmpty {
+                        HStack(spacing: 8) {
+                            Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                            if showsRecallHint {
+                                ChatRecallHint()
+                            }
+                        }
+                        .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
+                        .foregroundStyle(.tertiary)
+                        .padding(textInset)
+                        .offset(x: 4)
+                        .allowsHitTesting(false)
                     }
                 }
                 .frame(height: editorHeight)
@@ -1124,6 +1165,21 @@ struct ChatComposer: View {
         return Color(nsColor: .tertiaryLabelColor)
     }
 
+    /// The hint is a first-run affordance: once the gesture has been used it has
+    /// taught what it was there to teach, and a permanent label in the
+    /// placeholder is just noise.
+    private var showsRecallHint: Bool {
+        viewModel.canRecallPreviousPrompt && !model.settings.hasUsedPromptRecall
+    }
+
+    private func recallPreviousPrompt() -> Bool {
+        guard viewModel.recallPreviousPrompt() else { return false }
+        if !model.settings.hasUsedPromptRecall {
+            model.settings.hasUsedPromptRecall = true
+        }
+        return true
+    }
+
     private var cancelPromptEditingAction: (() -> Void)? {
         guard viewModel.promptEditContext != nil else {
             return nil
@@ -1150,10 +1206,6 @@ struct ChatComposer: View {
         viewModel.isCurrentSessionSending && !canSend
     }
 
-    private func workingStatus(elapsed: TimeInterval) -> String {
-        "Working for \(NativFormatting.elapsedDuration(elapsed))…"
-    }
-
     private func send() {
         guard effectiveCanSend else { return }
         onSend(
@@ -1178,49 +1230,146 @@ struct ChatComposer: View {
     }
 }
 
+private struct ChatGenerationStatusRow: View, Equatable {
+    let startedAt: Date
+    let metrics: ChatResponseMetrics?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if let metrics {
+                ChatLiveDecodeMetricsBadge(metrics: metrics)
+                    .equatable()
+                    .layoutPriority(1)
+                    .transition(.opacity)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let elapsed = context.date.timeIntervalSince(startedAt)
+                Text("Working for \(NativFormatting.elapsedDuration(elapsed))…")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 26)
+        // Animate presence changes, not the frequent token and speed updates.
+        .animation(.easeInOut(duration: 0.2), value: metrics != nil)
+    }
+}
+
+private struct ChatLiveDecodeMetricsBadge: View, Equatable {
+    let metrics: ChatResponseMetrics
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: 6, height: 6)
+
+            Text("Decode")
+                .foregroundStyle(.secondary)
+
+            if let generatedTokens = metrics.generatedTokens {
+                Text("\(NativFormatting.integer(generatedTokens)) tokens")
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+
+            if metrics.generatedTokens != nil,
+                metrics.decodeTokensPerSecond != nil
+            {
+                Text("·")
+                    .foregroundStyle(.tertiary)
+            }
+
+            if let decodeTokensPerSecond = metrics.decodeTokensPerSecond {
+                Text(NativFormatting.rate(decodeTokensPerSecond))
+                    .fontWeight(.medium)
+                    .monospacedDigit()
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor.opacity(0.1))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Decode metrics")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        [
+            metrics.generatedTokens.map { "\($0) generated tokens" },
+            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+    }
+}
+
+/// Tells you the gesture exists, in the one place you would be about to use it.
+private struct ChatRecallHint: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.up")
+                .imageScale(.small)
+            Text("to show last")
+        }
+        .font(.caption)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.primary.opacity(0.05), in: Capsule())
+    }
+}
+
 private struct ChatPromptEditBanner: View {
     let onCancel: () -> Void
     @State private var isCancelHovered = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             Image(systemName: "pencil")
-                .foregroundStyle(Color.accentColor)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Editing prompt")
-                    .fontWeight(.medium)
-                Text("Sending will replace the latest response.")
-                    .foregroundStyle(.secondary)
-            }
+            Text("Edit last message")
 
             Spacer(minLength: 12)
 
             Button(action: onCancel) {
                 Text("Cancel")
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(
-                        isCancelHovered ? Color.accentColor.opacity(0.12) : .clear,
-                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        isCancelHovered ? Color.primary.opacity(0.07) : .clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous)
                     )
                     .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
             .keyboardShortcut(.cancelAction)
             .onHover { isCancelHovered = $0 }
             .animation(.easeOut(duration: 0.12), value: isCancelHovered)
             .help("Cancel editing")
         }
         .font(.caption)
+        // Uniformly secondary and unaccented. This sits directly above the
+        // composer while you are typing into it, so it should read as a state
+        // the editor is in, not as something asking to be dealt with.
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 6)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
         .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.accentColor.opacity(0.22), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
     }
 }
@@ -2367,16 +2516,28 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     let isEnabled: Bool
     let onSubmit: () -> Void
     var onCancel: (() -> Void)?
+    var onRecallPrevious: (() -> Bool)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
+    var acceptsImageDrops = false
+    var onImageDropTargetChange: ((Bool) -> Void)?
+    var maximumHeight: CGFloat = .infinity
     var fontScale: Double = 1.0
     var focusToken: Int = 0
+    var forwardsKeysToPendingDecision = false
+    var onNavigatePendingSelection: ((Int) -> Bool)?
+    var onCancelPendingDecision: (() -> Void)?
+    var onPasteText: ((String, NSRange, UndoManager?) -> Void)?
+    var onTextEdit: ((NSRange, String, UndoManager?) -> Void)?
+    var onTextCommit: ((String, UndoManager?) -> Void)?
+    var resetToken = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             text: $text,
             onSubmit: onSubmit,
             onCancel: onCancel,
+            onRecallPrevious: onRecallPrevious,
             onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange,
             focusToken: focusToken
@@ -2388,14 +2549,19 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = context.coordinator.handleSubmit
         textView.onCancel = context.coordinator.handleCancel
+        textView.onRecallPrevious = context.coordinator.handleRecallPrevious
         textView.onPasteImage = context.coordinator.handlePasteImage
+        textView.onPasteText = context.coordinator.handlePasteText
+        textView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
+        textView.onNavigatePendingSelection = onNavigatePendingSelection
+        textView.onCancelPendingDecision = onCancelPendingDecision
         textView.isEditable = isEnabled
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
         textView.textColor = NSColor.labelColor
         textView.backgroundColor = .clear
         textView.drawsBackground = false
-        textView.allowsUndo = true
+        textView.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
         textView.isRichText = false
         textView.importsGraphics = false
         textView.isVerticallyResizable = true
@@ -2404,10 +2570,12 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 14, height: 12)
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
+        textView.acceptsImageDrops = acceptsImageDrops
+        textView.onImageDropTargetChange = onImageDropTargetChange
 
         let scrollView = ChatComposerNSScrollView()
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
@@ -2415,6 +2583,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         scrollView.onLayout = context.coordinator.reportContentHeight
 
         context.coordinator.textView = textView
+        context.coordinator.maximumHeight = maximumHeight
+        context.coordinator.onPasteText = onPasteText
+        context.coordinator.onTextEdit = onTextEdit
+        context.coordinator.onTextCommit = onTextCommit
         context.coordinator.reportContentHeight()
         return scrollView
     }
@@ -2423,7 +2595,11 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onCancel = onCancel
         context.coordinator.onPasteImage = onPasteImage
+        context.coordinator.onPasteText = onPasteText
+        context.coordinator.onTextEdit = onTextEdit
+        context.coordinator.onTextCommit = onTextCommit
         context.coordinator.onContentHeightChange = onContentHeightChange
+        context.coordinator.maximumHeight = maximumHeight
 
         guard let textView = context.coordinator.textView else {
             return
@@ -2433,8 +2609,21 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.isSelectable = isEnabled
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
+        if let composerTextView = textView as? ChatComposerNSTextView {
+            composerTextView.acceptsImageDrops = acceptsImageDrops
+            composerTextView.onImageDropTargetChange = onImageDropTargetChange
+            composerTextView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
+            composerTextView.onNavigatePendingSelection = onNavigatePendingSelection
+            composerTextView.onCancelPendingDecision = onCancelPendingDecision
+        }
+        (textView as? ChatComposerNSTextView)?.usesDraftUndo = onTextEdit != nil || onTextCommit != nil
+
         if !textView.hasMarkedText(), textView.string != text {
             textView.string = text
+        }
+        if context.coordinator.lastResetToken != resetToken {
+            context.coordinator.lastResetToken = resetToken
+            textView.composerUndoManager?.removeAllActions()
         }
         context.coordinator.reportContentHeight()
         context.coordinator.requestFocus(ifNeeded: focusToken)
@@ -2445,8 +2634,15 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         @Binding private var text: String
         var onSubmit: () -> Void
         var onCancel: (() -> Void)?
+        var onRecallPrevious: (() -> Bool)?
         var onPasteImage: (NSPasteboard) -> Bool
+        var onPasteText: ((String, NSRange, UndoManager?) -> Void)?
+        var onTextEdit: ((NSRange, String, UndoManager?) -> Void)?
+        var onTextCommit: ((String, UndoManager?) -> Void)?
+        var lastResetToken = 0
+        private var pendingEdit: (range: NSRange, replacement: String)?
         var onContentHeightChange: (CGFloat) -> Void
+        var maximumHeight: CGFloat = .infinity
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
         private var lastFocusToken: Int
@@ -2455,6 +2651,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             text: Binding<String>,
             onSubmit: @escaping () -> Void,
             onCancel: (() -> Void)?,
+            onRecallPrevious: (() -> Bool)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void,
             focusToken: Int
@@ -2462,6 +2659,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             _text = text
             self.onSubmit = onSubmit
             self.onCancel = onCancel
+            self.onRecallPrevious = onRecallPrevious
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
             lastFocusToken = focusToken
@@ -2481,16 +2679,48 @@ struct ChatComposerTextEditor: NSViewRepresentable {
                 return
             }
 
-            text = textView.string
+            defer { pendingEdit = nil }
+            if onTextEdit != nil || onTextCommit != nil,
+               textView.composerUndoManager?.isUndoing == true || textView.composerUndoManager?.isRedoing == true {
+                reportContentHeight()
+                return
+            }
+            if let onTextEdit, let edit = pendingEdit,
+               Range(edit.range, in: text) != nil,
+               (text as NSString).replacingCharacters(in: edit.range, with: edit.replacement) == textView.string {
+                onTextEdit(edit.range, edit.replacement, textView.composerUndoManager)
+            } else if let onTextCommit {
+                onTextCommit(textView.string, textView.composerUndoManager)
+            } else {
+                text = textView.string
+            }
             reportContentHeight()
+        }
+
+        func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
+                      replacementString: String?) -> Bool {
+            pendingEdit = replacementString.map { (affectedCharRange, $0) }
+            return true
+        }
+
+        func handlePasteText(_ pastedText: String, range: NSRange) -> Bool {
+            guard let onPasteText else { return false }
+            onPasteText(pastedText, range, textView?.composerUndoManager)
+            return true
         }
 
         func handleSubmit() {
             onSubmit()
         }
 
-        func handleCancel() {
-            onCancel?()
+        func handleCancel() -> Bool {
+            guard let onCancel else { return false }
+            onCancel()
+            return true
+        }
+
+        func handleRecallPrevious() -> Bool {
+            onRecallPrevious?() ?? false
         }
 
         func requestFocus(ifNeeded focusToken: Int) {
@@ -2520,6 +2750,17 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             let usedRect = layoutManager.usedRect(for: textContainer)
             let measuredHeight = ceil(usedRect.maxY + (textView.textContainerInset.height * 2))
 
+            // Enable the scroller only once the editor is capped and the text can
+            // actually scroll. Letting AppKit auto-toggle it while the editor is
+            // still growing loops with legacy scrollers ("Show scroll bars:
+            // Always"): the scroller takes width, the text rewraps, the height
+            // changes, the editor resizes, and the scroller toggles again.
+            let needsScroller = measuredHeight > maximumHeight
+            if let scrollView = textView.enclosingScrollView,
+               scrollView.hasVerticalScroller != needsScroller {
+                scrollView.hasVerticalScroller = needsScroller
+            }
+
             guard lastReportedHeight.map({ abs($0 - measuredHeight) >= 0.5 }) ?? true else {
                 return
             }
@@ -2544,10 +2785,107 @@ private final class ChatComposerNSScrollView: NSScrollView {
     }
 }
 
+private extension NSTextView {
+    var composerUndoManager: UndoManager? {
+        (self as? ChatComposerNSTextView)?.draftHistory ?? undoManager
+    }
+}
+
 private final class ChatComposerNSTextView: NSTextView {
+    var usesDraftUndo = false {
+        didSet { allowsUndo = !usesDraftUndo }
+    }
+    private let draftUndoManager = UndoManager()
+
+    var draftHistory: UndoManager? {
+        usesDraftUndo ? (window?.undoManager ?? draftUndoManager) : super.undoManager
+    }
+
+    @objc func undo(_ sender: Any?) {
+        composerUndoManager?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        composerUndoManager?.redo()
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(undo(_:)): return composerUndoManager?.canUndo == true
+        case #selector(redo(_:)): return composerUndoManager?.canRedo == true
+        default: return super.validateMenuItem(menuItem)
+        }
+    }
+
     var onSubmit: (() -> Void)?
-    var onCancel: (() -> Void)?
+    var onCancel: (() -> Bool)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    var onImageDropTargetChange: ((Bool) -> Void)?
+    var acceptsImageDrops = false {
+        didSet {
+            if acceptsImageDrops {
+                registerForDraggedTypes([.fileURL] + NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) })
+            }
+        }
+    }
+    var forwardsKeysToPendingDecision = false
+    var onNavigatePendingSelection: ((Int) -> Bool)?
+    var onCancelPendingDecision: (() -> Void)?
+    var onPasteText: ((String, NSRange) -> Bool)?
+    /// Returns whether the recall happened, so an Up key that recalls nothing
+    /// still moves the caret.
+    var onRecallPrevious: (() -> Bool)?
+
+    private func isImageDrop(_ sender: NSDraggingInfo) -> Bool {
+        acceptsImageDrops && ChatImageAttachment.canReadImages(from: sender.draggingPasteboard)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onImageDropTargetChange?(false)
+        super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onImageDropTargetChange?(false)
+        super.draggingEnded(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if isImageDrop(sender) {
+            return isEditable && sender.draggingSourceOperationMask.contains(.copy)
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { onImageDropTargetChange?(false) }
+        if isImageDrop(sender) {
+            // NSTextView otherwise inserts the file path into this plain-text editor.
+            guard isEditable, sender.draggingSourceOperationMask.contains(.copy) else { return false }
+            return onPasteImage?(sender.draggingPasteboard) ?? false
+        }
+        return super.performDragOperation(sender)
+    }
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese
@@ -2558,13 +2896,34 @@ private final class ChatComposerNSTextView: NSTextView {
             return
         }
 
-        if event.keyCode == 53, onCancel != nil {
-            onCancel?()
+        if event.keyCode == 53 {
+            if onCancel?() != true {
+                onCancelPendingDecision?()
+            }
+            return
+        }
+
+        let arrow = string.isEmpty ? ComposerArrowKey(event) : nil
+
+        if forwardsKeysToPendingDecision, let arrow,
+            onNavigatePendingSelection?(arrow.offset) == true {
+            return
+        }
+
+        // Up in an empty composer recalls the last prompt. Guarded on empty
+        // rather than on caret position so that Up never stops being Up while
+        // there is text to move through.
+        if arrow == .up, onRecallPrevious?() == true {
             return
         }
 
         switch ComposerReturnBehavior.resolve(for: event) {
         case .submit:
+            if forwardsKeysToPendingDecision, string.isEmpty,
+                window?.performKeyEquivalent(with: event) == true
+            {
+                return
+            }
             onSubmit?()
         case .insertNewline:
             insertText("\n", replacementRange: selectedRange())
@@ -2574,10 +2933,52 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     override func paste(_ sender: Any?) {
+        guard isEditable else { return }
         if onPasteImage?(NSPasteboard.general) == true {
             return
         }
-        super.paste(sender)
+        guard let text = NSPasteboard.general.string(forType: .string),
+              ChatPastedText.shouldCollapse(text), let onPasteText else {
+            super.paste(sender)
+            return
+        }
+        breakUndoCoalescing()
+        let range = selectedRange()
+        guard onPasteText(text, range) else {
+            super.paste(sender)
+            return
+        }
+        // The attachment lives outside NSTextView. Only the selected ordinary text disappears.
+        if range.length > 0 {
+            string = (string as NSString).replacingCharacters(in: range, with: "")
+            setSelectedRange(NSRange(location: range.location, length: 0))
+        }
+        breakUndoCoalescing()
+    }
+}
+
+/// Whether an Up key should recall the previous prompt.
+private enum ComposerArrowKey {
+    case up
+    case down
+
+    init?(_ event: NSEvent) {
+        guard
+            event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask)
+                .isDisjoint(with: [.command, .option, .control, .shift])
+        else {
+            return nil
+        }
+        switch event.keyCode {
+        case 126: self = .up
+        case 125: self = .down
+        default: return nil
+        }
+    }
+
+    var offset: Int {
+        self == .up ? -1 : 1
     }
 }
 
@@ -2607,6 +3008,114 @@ private enum ComposerReturnBehavior {
 
     private static func relevantModifiers(for event: NSEvent) -> NSEvent.ModifierFlags {
         event.modifierFlags.intersection([.command, .control, .option, .shift])
+    }
+}
+
+struct ChatPastedTextCard: View {
+    let pastedText: ChatPastedText
+    var onRemove: (() -> Void)?
+    @State private var showsPreview = false
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Button { showsPreview = true } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .help("View pasted text")
+
+            if let onRemove {
+                Button("Remove pasted text", systemImage: "xmark", action: onRemove)
+                    .labelStyle(.iconOnly)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(.rect)
+                    .buttonStyle(.plain)
+                    .padding(4)
+                    .help("Remove pasted text")
+            }
+        }
+        .sheet(isPresented: $showsPreview) {
+            preview
+                .frame(width: 640, height: 480)
+        }
+    }
+
+    private var label: some View {
+        let lineCount = pastedText.lineCount
+        return HStack(spacing: 10) {
+            Image(systemName: "doc.text")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Pasted text")
+                    .font(.callout.weight(.medium))
+                Text(lineCount == 1 ? "1 line" : "\(lineCount) lines")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(width: 180)
+        .foregroundStyle(.primary)
+        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var preview: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Pasted text")
+                    .font(.headline)
+                Text(pastedText.lineCount == 1 ? "1 line" : "\(pastedText.lineCount) lines")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Copy", systemImage: "document.on.document") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(pastedText.text, forType: .string)
+                }
+                .labelStyle(.iconOnly)
+                .help("Copy raw text")
+                Button("Close", systemImage: "xmark") { showsPreview = false }
+                    .labelStyle(.iconOnly)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .buttonStyle(.borderless)
+            .padding(16)
+            Divider()
+            ChatPastedTextRawView(text: pastedText.text)
+        }
+    }
+}
+
+/// A plain, selectable text view keeps large pastes out of the Markdown renderer.
+private struct ChatPastedTextRawView: NSViewRepresentable {
+    let text: String
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSTextView.scrollableTextView()
+        if let textView = scrollView.documentView as? NSTextView {
+            textView.isEditable = false
+            textView.isRichText = false
+            textView.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            textView.textContainerInset = NSSize(width: 16, height: 16)
+            textView.setAccessibilityLabel("Raw pasted text")
+            textView.string = text
+        }
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? NSTextView, textView.string != text else { return }
+        textView.string = text
     }
 }
 
