@@ -246,6 +246,7 @@ final class VoiceCaptureCoordinator {
             } catch is CancellationError {
                 return
             } catch {
+                guard !Task.isCancelled else { return }
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.clearFailedCaptureState()
                 self.overlay.showFailure()

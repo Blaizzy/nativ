@@ -196,7 +196,8 @@ final class AudioInputCaptureSession {
             guard generation == id else { throw CancellationError() }
             try Task.checkCancellation()
         } catch {
-            if generation == id { stop() }
+            guard generation == id else { throw CancellationError() }
+            stop()
             throw error
         }
     }
