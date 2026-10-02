@@ -16,8 +16,9 @@ enum ChatDocumentFormat: Hashable, Sendable {
 extension ChatDocumentFormat {
     /// File extensions that have a dedicated extractor.
     ///
-    /// CSV is absent on purpose: `read_file` returns it as raw numbered lines so that
-    /// line offsets keep matching the file on disk.
+    /// CSV is absent because its extractor is a pass-through to plain text; only the
+    /// attachment path treats it specially, by pinning the header row when selecting
+    /// sections.
     static func forFileExtension(_ fileExtension: String) -> ChatDocumentFormat? {
         switch fileExtension.lowercased() {
         case "pdf": .pdf

@@ -440,7 +440,7 @@ struct ChatReadFileToolExecutor {
                 return ExtractedReadFileText(
                     text: rendered,
                     isDocument: true,
-                    isDenseGrid: format == .spreadsheet,
+                    isDenseGrid: FileReadContentPolicy.isDenseGrid(extensionName: extensionName),
                     warnings: warnings
                 )
             } catch let error as DocumentTextExtractionError {
@@ -465,7 +465,12 @@ struct ChatReadFileToolExecutor {
         guard let text = FileReadContentPolicy.decodeText(snapshot.data) else {
             throw ChatReadFileToolError.binaryFile
         }
-        return ExtractedReadFileText(text: text, isDocument: false, warnings: [])
+        return ExtractedReadFileText(
+            text: text,
+            isDocument: false,
+            isDenseGrid: FileReadContentPolicy.isDenseGrid(extensionName: extensionName),
+            warnings: []
+        )
     }
 
     private static func logicalLines(in text: String) -> [String] {
@@ -659,11 +664,15 @@ private enum FileReadContentPolicy {
         "xls", "ppt",
     ]
 
-    /// Grid content costs roughly one token per character, around four times ordinary prose,
-    /// so the same character budget would produce four times the prefill. Scale it down for
-    /// that content only rather than lowering the limit for every file.
+    /// Rows of short values cost roughly one token per character, around four times ordinary
+    /// prose, so the same character budget would produce four times the prefill. Scale it down
+    /// for that content only rather than lowering the limit for every file.
     static func resultCharacterBudget(base: Int, isDenseGrid: Bool) -> Int {
         isDenseGrid ? base / 4 : base
+    }
+
+    static func isDenseGrid(extensionName: String) -> Bool {
+        ["xlsx", "ods", "csv", "tsv"].contains(extensionName)
     }
 
     static func documentFormat(extensionName: String, data: Data) -> ChatDocumentFormat? {
