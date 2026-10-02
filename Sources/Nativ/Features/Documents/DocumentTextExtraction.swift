@@ -7,6 +7,7 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case richText
     case wordProcessing
     case presentation
+    case notebook
 }
 
 extension ChatDocumentFormat {
@@ -20,6 +21,7 @@ extension ChatDocumentFormat {
         case "rtf": .richText
         case "doc", "docx": .wordProcessing
         case "pptx": .presentation
+        case "ipynb": .notebook
         default: nil
         }
     }
@@ -29,6 +31,7 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
     case page(Int)
     case slide(Int)
     case lines(Int, Int)
+    case named(String)
 
     var label: String {
         switch self {
@@ -38,6 +41,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             "Slide \(number)"
         case .lines(let first, let last):
             first == last ? "Line \(first)" : "Lines \(first)–\(last)"
+        case .named(let label):
+            label
         }
     }
 
@@ -49,6 +54,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             slides.contains(number)
         case .lines(let first, let last):
             lines.contains { first...last ~= $0 }
+        case .named:
+            false
         }
     }
 }
@@ -147,6 +154,7 @@ struct DocumentTextExtractionRouter: Sendable {
             CSVDocumentTextExtractor(),
             RichTextDocumentTextExtractor(),
             PowerPointDocumentTextExtractor(),
+            NotebookDocumentTextExtractor(),
         ]
     }
 }
