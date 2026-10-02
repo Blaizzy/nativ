@@ -87,7 +87,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        switch Self.localName(elementName) {
+        switch ElementTextParser.localName(elementName) {
         case "t": readsText = true
         case "br": paragraph.append("\n")
         case "tab": paragraph.append("\t")
@@ -105,7 +105,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        switch Self.localName(elementName) {
+        switch ElementTextParser.localName(elementName) {
         case "t":
             readsText = false
         case "p":
@@ -116,9 +116,6 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         }
     }
 
-    private static func localName(_ name: String) -> Substring {
-        name.split(separator: ":").last ?? Substring(name)
-    }
 }
 
 private extension String {

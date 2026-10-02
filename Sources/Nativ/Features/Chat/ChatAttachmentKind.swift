@@ -98,6 +98,12 @@ extension ChatImageAttachment {
         if type?.conforms(to: .rtf) == true {
             return .document(.richText)
         }
+        // A notebook is JSON, so it conforms to .text wherever .ipynb is registered. The
+        // extension is the only thing that separates it from an ordinary JSON file, and
+        // plain text extraction would keep its base64 image outputs.
+        if fileExtension == "ipynb" {
+            return .document(.notebook)
+        }
         if type?.conforms(to: .text) == true || type?.conforms(to: .sourceCode) == true {
             return .document(.plainText)
         }

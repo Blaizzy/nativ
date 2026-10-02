@@ -27,6 +27,25 @@ final class ChatAttachmentFormatTests: XCTestCase {
         }
     }
 
+    func testKnownExtensionWinsOverGenericTextConformance() {
+        // A notebook is JSON, which conforms to UTType.text. Resolving by conformance before
+        // the extension would send it to plain text extraction with its base64 image outputs
+        // intact, which is the thing the notebook extractor exists to avoid.
+        let notebook = ChatImageAttachment(
+            filename: "run.ipynb",
+            mimeType: "application/json",
+            base64Data: Data("stub".utf8).base64EncodedString()
+        )
+        XCTAssertEqual(notebook.chatAttachmentKind, .document(.notebook))
+
+        let csv = ChatImageAttachment(
+            filename: "table.csv",
+            mimeType: "text/csv",
+            base64Data: Data("stub".utf8).base64EncodedString()
+        )
+        XCTAssertEqual(csv.chatAttachmentKind, .document(.csv))
+    }
+
     func testUnsupportedDocumentsStayUnsupported() {
         for filename in ["legacy.xls", "legacy.ppt", "book.azw3", "archive.7z"] {
             XCTAssertEqual(
