@@ -1,7 +1,56 @@
+import AppKit
+import SwiftUI
 import XCTest
 @testable import NativServerKit
 
 final class MCPServerCatalogTests: XCTestCase {
+    func testBundledCatalogLoadsEveryEntry() throws {
+        XCTAssertFalse(MCPServerCatalog.bundled.entries.isEmpty)
+        XCTAssertEqual(MCPServerCatalog.bundled.entries.count, try rawCatalogEntries().count)
+    }
+
+    func testCatalogEntriesUseOnlyKnownFields() throws {
+        let appFields: Set = [
+            "id", "name", "summary", "command", "args", "symbol", "tint", "sourceURL",
+            "requiredEnv", "excludedEnv", "legacyLaunchConfigurations",
+        ]
+        let verifierFields: Set = ["requiresFolder", "verificationEnv", "ciSkip", "ciSkipReason"]
+        for entry in try rawCatalogEntries() {
+            let unknown = Set(entry.keys).subtracting(appFields).subtracting(verifierFields)
+            XCTAssertTrue(unknown.isEmpty, "\(entry["id"] ?? "?") has unknown fields \(unknown.sorted())")
+        }
+    }
+
+    func testCatalogEntriesAreWellFormed() {
+        for entry in MCPServerCatalog.bundled.entries {
+            XCTAssertNotNil(entry.id.wholeMatch(of: /[a-z0-9]+(-[a-z0-9]+)*/), "\(entry.id) id")
+            for (field, value) in [("name", entry.name), ("summary", entry.summary), ("command", entry.command)] {
+                XCTAssertFalse(value.trimmingCharacters(in: .whitespaces).isEmpty, "\(entry.id) \(field)")
+            }
+            XCTAssertFalse(entry.summary.contains("\n"), "\(entry.id) summary must be one line")
+            XCTAssertNotNil(
+                NSImage(systemSymbolName: entry.symbol, accessibilityDescription: nil),
+                "\(entry.id) symbol \(entry.symbol) is not an SF Symbol"
+            )
+            XCTAssertNotEqual(
+                Color.nativTint(entry.tintName),
+                .accentColor,
+                "\(entry.id) tint \(entry.tintName) is not a supported tint"
+            )
+            if let sourceURL = entry.sourceURL {
+                let url = URL(string: sourceURL)
+                XCTAssertEqual(url?.scheme, "https", "\(entry.id) sourceURL")
+                XCTAssertNotNil(url?.host(), "\(entry.id) sourceURL")
+            }
+            if entry.command == "uvx" {
+                XCTAssertTrue(
+                    entry.arguments.contains { $0.hasPrefix("mcp==") },
+                    "\(entry.id) must pin the MCP SDK, e.g. --with mcp==1.12.0"
+                )
+            }
+        }
+    }
+
     func testBundledGitHubServerUsesOAuthWithoutPATSetup() throws {
         let github = try XCTUnwrap(MCPServerCatalog.bundled.entry(id: "github"))
 
@@ -72,6 +121,14 @@ final class MCPServerCatalogTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    private func rawCatalogEntries() throws -> [[String: Any]] {
+        let url = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "MCPCatalog", withExtension: "json")
+        )
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+        return try XCTUnwrap(object as? [[String: Any]])
     }
 }
 

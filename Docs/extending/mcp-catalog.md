@@ -57,10 +57,29 @@ These are read by the verifier, not the app:
 Drop a square image into `Assets.xcassets` as `MCPLogo-<name>` (matching the
 entry's `name`). Without one, the card shows the tinted `symbol` tile.
 
-## Run the check locally
+## Run the checks locally
+
+The live check starts your server and lists its tools:
 
 ```sh
 pip install "mcp>=1.0"
 python scripts/verify_mcp_catalog.py            # all entries
 python scripts/verify_mcp_catalog.py --only fetch
 ```
+
+`MCPServerCatalogTests` validate every entry without launching it: the `id` is
+lowercase and hyphenated, fields are known (a misspelled key fails instead of being
+ignored), `symbol` is a real SF Symbol, `tint` is one of the names above, `sourceURL`
+uses `https`, and `uvx` servers pin the MCP SDK:
+
+```sh
+xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
+  -derivedDataPath build/NativDevelopmentDerivedData \
+  CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
+  -only-testing:NativTests/MCPServerCatalogTests test
+```
+
+## Open the pull request
+
+Use the [MCP catalog template](https://github.com/Blaizzy/nativ/compare?expand=1&template=mcp_catalog.md),
+which lists everything reviewers check.
