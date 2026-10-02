@@ -1594,16 +1594,15 @@ final class ChatViewModel: ObservableObject {
                 continue
             }
 
-            guard let typeIdentifier = Self.preferredDroppedImageType(for: provider) else {
+            guard provider.canLoadObject(ofClass: NSImage.self) else {
                 continue
             }
             accepted = true
-            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [weak self] data, _ in
-                guard let data,
-                    let image = NSImage(data: data),
+            provider.loadObject(ofClass: NSImage.self) { [weak self] object, _ in
+                guard let image = object as? NSImage,
                     let attachment = ChatImageAttachment.attachment(
                         from: image,
-                        filename: Self.droppedImageFilename(for: typeIdentifier)
+                        filename: "Dropped Image.png"
                     )
                 else {
                     Task { @MainActor in
@@ -1679,18 +1678,6 @@ final class ChatViewModel: ObservableObject {
                 + "Check that they still exist and that you have permission to open them."
         }
         return attachments
-    }
-
-    private static func preferredDroppedImageType(for provider: NSItemProvider) -> String? {
-        let fallbackTypes: [UTType] = [.png, .jpeg, .tiff, .gif, .image]
-        return provider.registeredTypeIdentifiers.first(where: { identifier in
-            UTType(identifier)?.conforms(to: .image) == true
-        }) ?? fallbackTypes.map(\.identifier).first(where: provider.hasItemConformingToTypeIdentifier)
-    }
-
-    nonisolated private static func droppedImageFilename(for typeIdentifier: String) -> String {
-        let fileExtension = UTType(typeIdentifier)?.preferredFilenameExtension ?? "png"
-        return "Dropped Image.\(fileExtension)"
     }
 
     private nonisolated static func fileURL(from item: NSSecureCoding?) -> URL? {

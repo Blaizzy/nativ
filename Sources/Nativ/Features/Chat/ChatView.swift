@@ -16,6 +16,7 @@ struct ChatView: View {
     @Binding var showsConfiguration: Bool
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
+    @State private var isDropTargeted = false
     @State private var previewedAttachment: ChatImageAttachment?
 
     var body: some View {
@@ -34,8 +35,22 @@ struct ChatView: View {
                 onSelectWorkspaceMode: onSelectWorkspaceMode,
                 onExploreImageModels: onExploreImageModels,
                 onFindDraftModels: onFindDraftModels,
+                onAttachmentDropTargetChange: { isDropTargeted = $0 },
                 onPreviewAttachment: { previewedAttachment = $0 }
             )
+            .onDrop(
+                of: [UTType.fileURL.identifier, UTType.image.identifier],
+                isTargeted: $isDropTargeted,
+                perform: chat.loadAttachments
+            )
+            .overlay {
+                if isDropTargeted {
+                    dropOverlay
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
         .overlay {
@@ -67,6 +82,28 @@ struct ChatView: View {
         .environment(\.chatFontScale, model.settings.chatFontScale)
     }
 
+    private var dropOverlay: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor).opacity(0.72)
+            VStack(spacing: 14) {
+                Image(systemName: "plus")
+                    .font(.system(size: 34, weight: .semibold))
+                Text("Drop files here")
+                    .legacyTextStyle(.emptyStateTitle)
+            }
+            .foregroundStyle(.secondary)
+            .padding(44)
+            .frame(maxWidth: 320)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        Color.secondary.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                    )
+            )
+        }
+        .ignoresSafeArea()
+    }
 }
 
 private enum ChatTranscriptLayout {
@@ -127,10 +164,10 @@ private struct ChatTranscriptView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
-    @State private var isDropTargeted = false
     @State private var search: ChatSearchState
     @Environment(\.chatLibrarySearch) private var librarySearch
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -140,6 +177,7 @@ private struct ChatTranscriptView: View {
          onSelectWorkspaceMode: @escaping (ChatWorkspaceMode) -> Void,
          onExploreImageModels: @escaping (ChatImageOperation) -> Void,
          onFindDraftModels: @escaping (String) -> Void,
+         onAttachmentDropTargetChange: @escaping (Bool) -> Void,
          onPreviewAttachment: @escaping (ChatImageAttachment) -> Void) {
         self.model = model
         self.chat = chat
@@ -150,6 +188,7 @@ private struct ChatTranscriptView: View {
         self.onSelectWorkspaceMode = onSelectWorkspaceMode
         self.onExploreImageModels = onExploreImageModels
         self.onFindDraftModels = onFindDraftModels
+        self.onAttachmentDropTargetChange = onAttachmentDropTargetChange
         self.onPreviewAttachment = onPreviewAttachment
         _search = State(initialValue: ChatSearchState(library: chat.searchLibrary))
     }
@@ -175,19 +214,6 @@ private struct ChatTranscriptView: View {
             }
         }
         .background(Color.nativMainContentBackground)
-        .onDrop(
-            of: [UTType.fileURL.identifier, UTType.image.identifier],
-            isTargeted: $isDropTargeted,
-            perform: chat.loadAttachments
-        )
-        .overlay {
-            if isDropTargeted {
-                dropOverlay
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         .environment(\.chatAnnotationActions, chat.annotationActions)
         .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
         .environment(\.chatSearchState, search)
@@ -367,7 +393,7 @@ private struct ChatTranscriptView: View {
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
-            onAttachmentDropTargetChange: { isDropTargeted = $0 },
+            onAttachmentDropTargetChange: onAttachmentDropTargetChange,
             onBackdropHeightChange: { composerBackdropHeight = $0 }
         )
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -397,29 +423,6 @@ private struct ChatTranscriptView: View {
         .padding(.trailing, ChatTranscriptLayout.scrollIndicatorClearance)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-
-    private var dropOverlay: some View {
-        ZStack {
-            Color(nsColor: .windowBackgroundColor).opacity(0.72)
-            VStack(spacing: 14) {
-                Image(systemName: "plus")
-                    .font(.system(size: 34, weight: .semibold))
-                Text("Drop files here")
-                    .legacyTextStyle(.emptyStateTitle)
-            }
-            .foregroundStyle(.secondary)
-            .padding(44)
-            .frame(maxWidth: 320)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(
-                        Color.secondary.opacity(0.55),
-                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
-                    )
-            )
-        }
-        .ignoresSafeArea()
     }
 
     private func imageModelSelectionRequests(
