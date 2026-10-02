@@ -18,19 +18,22 @@ extension ChatDocumentFormat {
     ///
     /// CSV maps to plain text extraction; the separate case exists only so the context
     /// builder can pin a table's header row when it selects sections.
+    static let formatsByFileExtension: [String: ChatDocumentFormat] = [
+        "pdf": .pdf,
+        "csv": .csv,
+        "rtf": .richText,
+        "doc": .wordProcessing,
+        "docx": .wordProcessing,
+        "pptx": .presentation,
+        "ipynb": .notebook,
+        "odt": .openDocument,
+        "ods": .openDocument,
+        "epub": .ebook,
+        "xlsx": .spreadsheet,
+    ]
+
     static func forFileExtension(_ fileExtension: String) -> ChatDocumentFormat? {
-        switch fileExtension.lowercased() {
-        case "pdf": .pdf
-        case "csv": .csv
-        case "rtf": .richText
-        case "doc", "docx": .wordProcessing
-        case "pptx": .presentation
-        case "ipynb": .notebook
-        case "odt", "ods": .openDocument
-        case "epub": .ebook
-        case "xlsx": .spreadsheet
-        default: nil
-        }
+        formatsByFileExtension[fileExtension.lowercased()]
     }
 }
 

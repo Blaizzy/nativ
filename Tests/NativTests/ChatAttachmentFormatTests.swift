@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 import XCTest
 
 /// Covers the attachment side of document support: which files are accepted, which are
@@ -127,6 +128,49 @@ final class ChatAttachmentFormatTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testEveryMappedExtensionCanBeOfferedInTheFilePicker() {
+        // chooseAttachments builds its allowed types from this map. An extension with no
+        // resolvable UTType would be silently unselectable in the picker, which is how
+        // notebooks ended up never reaching the model.
+        for fileExtension in ChatDocumentFormat.formatsByFileExtension.keys {
+            XCTAssertNotNil(
+                UTType(filenameExtension: fileExtension),
+                "\(fileExtension) has no UTType, so the picker cannot offer it"
+            )
+        }
+    }
+
+    func testNotebookAttachmentReachesTheRequestContext() async throws {
+        let notebook = """
+        {"cells":[{"cell_type":"code","source":["import numpy as np\\n","print(42)"],\
+        "outputs":[{"output_type":"display_data","data":{"image/png":"iVBORw0KGgoAAAA"}}]}]}
+        """
+        let attachment = ChatImageAttachment(
+            filename: "run.ipynb",
+            mimeType: "application/json",
+            base64Data: Data(notebook.utf8).base64EncodedString()
+        )
+        XCTAssertEqual(attachment.chatAttachmentKind, .document(.notebook))
+
+        let cache = ChatDocumentExtractionCache()
+        let validator = ChatAttachmentValidator(extractionCache: cache)
+        let validation = try await validator.validateDocument(attachment)
+        XCTAssertEqual(validation, .ready)
+
+        let message = ChatTranscriptMessage(
+            id: UUID(),
+            role: .user,
+            content: "what does this notebook do?",
+            imageAttachments: [attachment]
+        )
+        let result = try await ChatDocumentContextBuilder(extractionCache: cache)
+            .contexts(for: [message])
+        let context = try XCTUnwrap(result[message.id])
+
+        XCTAssertTrue(context.contains("import numpy as np"))
+        XCTAssertFalse(context.contains("iVBORw0KGgo"))
     }
 
     private func attachment(filename: String) -> ChatImageAttachment {
