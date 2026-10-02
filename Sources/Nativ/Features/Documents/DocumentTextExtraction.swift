@@ -10,6 +10,7 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case notebook
     case openDocument
     case ebook
+    case spreadsheet
 }
 
 extension ChatDocumentFormat {
@@ -26,6 +27,7 @@ extension ChatDocumentFormat {
         case "ipynb": .notebook
         case "odt", "ods": .openDocument
         case "epub": .ebook
+        case "xlsx": .spreadsheet
         default: nil
         }
     }
@@ -161,6 +163,7 @@ struct DocumentTextExtractionRouter: Sendable {
             NotebookDocumentTextExtractor(),
             OpenDocumentTextExtractor(),
             EPUBDocumentTextExtractor(),
+            SpreadsheetDocumentTextExtractor(),
         ]
     }
 }
