@@ -2,20 +2,7 @@ import AppKit
 import Foundation
 
 struct PlainTextDocumentTextExtractor: DocumentTextExtracting {
-    let formats: Set<ChatDocumentFormat> = [.plainText]
-
-    func extract(
-        data: Data,
-        filename: String,
-        mimeType: String
-    ) async throws -> ExtractedDocumentContent {
-        try Task.checkCancellation()
-        return try TextDocumentContent.make(data: data, filename: filename, mimeType: mimeType)
-    }
-}
-
-struct CSVDocumentTextExtractor: DocumentTextExtracting {
-    let formats: Set<ChatDocumentFormat> = [.csv]
+    let formats: Set<ChatDocumentFormat> = [.plainText, .csv]
 
     func extract(
         data: Data,

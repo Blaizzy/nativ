@@ -158,7 +158,6 @@ struct DocumentTextExtractionRouter: Sendable {
         [
             PDFDocumentTextExtractor(),
             PlainTextDocumentTextExtractor(),
-            CSVDocumentTextExtractor(),
             RichTextDocumentTextExtractor(),
             PowerPointDocumentTextExtractor(),
             NotebookDocumentTextExtractor(),
