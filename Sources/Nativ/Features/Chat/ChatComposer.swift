@@ -226,6 +226,7 @@ struct ChatComposer<ContextHeader: View>: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
     let contextHeader: ContextHeader
@@ -316,10 +317,12 @@ struct ChatComposer<ContextHeader: View>: View {
                             onSubmit: send,
                             onCancel: cancelPromptEditingAction,
                             onRecallPrevious: recallPreviousPrompt,
-                            onPasteImage: { viewModel.attachImages(from: $0) },
+                            onPasteImage: { viewModel.attachAttachments(from: $0) },
                             onContentHeightChange: { height in
                                 editorContentHeight = height
                             },
+                            acceptsImageDrops: true,
+                            onImageDropTargetChange: onAttachmentDropTargetChange,
                             maximumHeight: editorMaximumHeight,
                             fontScale: model.settings.chatFontScale,
                             focusToken: viewModel.composerFocusToken,

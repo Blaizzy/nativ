@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
@@ -74,9 +75,54 @@ final class ChatViewModelTests: XCTestCase {
         pasteboard.clearContents()
         pasteboard.setString("Plain text", forType: .string)
 
-        XCTAssertFalse(subject.attachImages(from: pasteboard))
+        XCTAssertFalse(subject.attachAttachments(from: pasteboard))
         XCTAssertNil(subject.attachmentImportError)
         XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
+    }
+
+    func testDroppedImageProviderStagesAttachment() async throws {
+        let subject = ChatViewModel()
+        let provider = NSItemProvider()
+        let png = try XCTUnwrap(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ))
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.png.identifier,
+            visibility: .all
+        ) { completion in
+            completion(png, nil)
+            return nil
+        }
+        let attachmentStaged = expectation(description: "Dropped image is staged")
+        let subscription = subject.$pendingImageAttachments.dropFirst().sink { attachments in
+            if !attachments.isEmpty {
+                attachmentStaged.fulfill()
+            }
+        }
+        defer { subscription.cancel() }
+
+        XCTAssertTrue(subject.loadAttachments(from: [provider]))
+        await fulfillment(of: [attachmentStaged], timeout: 1)
+        XCTAssertEqual(subject.pendingImageAttachments.count, 1)
+        XCTAssertEqual(subject.pendingImageAttachments[0].filename, "Dropped Image.png")
+        XCTAssertNil(subject.attachmentImportError)
+    }
+
+    func testDroppedDocumentURLStagesAttachmentInsteadOfPastingPath() throws {
+        let subject = ChatViewModel()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nativ-Dropped-Document-\(UUID().uuidString).txt")
+        try Data("Document contents".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+
+        XCTAssertTrue(subject.attachAttachments(from: pasteboard))
+        XCTAssertEqual(subject.pendingImageAttachments.count, 1)
+        XCTAssertEqual(subject.pendingImageAttachments[0].filename, url.lastPathComponent)
+        XCTAssertEqual(subject.pendingImageAttachments[0].chatAttachmentKind, .document(.plainText))
+        XCTAssertNil(subject.attachmentImportError)
     }
 
     func testUnavailableReasonUsesServerAndModelPreconditions() {

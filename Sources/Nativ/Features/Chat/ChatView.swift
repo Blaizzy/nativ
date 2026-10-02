@@ -88,13 +88,14 @@ struct ChatView: View {
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onExploreImageModels: onExploreImageModels,
             onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: { isDropTargeted = $0 },
             onPreviewAttachment: { previewedAttachment = $0 }
         )
-        .dropDestination(for: URL.self) { urls, _ in
-            chat.attachFiles(fromURLs: urls)
-        } isTargeted: {
-            isDropTargeted = $0
-        }
+        .onDrop(
+            of: [UTType.fileURL.identifier, UTType.image.identifier],
+            isTargeted: $isDropTargeted,
+            perform: chat.loadAttachments
+        )
         .overlay {
             if isDropTargeted {
                 dropOverlay
@@ -342,6 +343,7 @@ private struct ChatTranscriptView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
@@ -354,6 +356,7 @@ private struct ChatTranscriptView: View {
          onSelectWorkspaceMode: @escaping (ChatWorkspaceMode) -> Void,
          onExploreImageModels: @escaping (ChatImageOperation) -> Void,
          onFindDraftModels: @escaping (String) -> Void,
+         onAttachmentDropTargetChange: @escaping (Bool) -> Void,
          onPreviewAttachment: @escaping (ChatImageAttachment) -> Void) {
         self.model = model
         self.chat = chat
@@ -364,6 +367,7 @@ private struct ChatTranscriptView: View {
         self.onSelectWorkspaceMode = onSelectWorkspaceMode
         self.onExploreImageModels = onExploreImageModels
         self.onFindDraftModels = onFindDraftModels
+        self.onAttachmentDropTargetChange = onAttachmentDropTargetChange
         self.onPreviewAttachment = onPreviewAttachment
         _search = State(initialValue: ChatSearchState(library: chat.searchLibrary))
     }
@@ -568,6 +572,7 @@ private struct ChatTranscriptView: View {
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: onAttachmentDropTargetChange,
             onBackdropHeightChange: { composerBackdropHeight = $0 }
         )
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -643,6 +648,7 @@ private struct ChatComposerContainer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
@@ -668,6 +674,7 @@ private struct ChatComposerContainer: View {
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: onAttachmentDropTargetChange,
             onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,

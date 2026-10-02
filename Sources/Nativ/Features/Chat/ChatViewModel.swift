@@ -2122,7 +2122,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
-    func attachImages(from pasteboard: NSPasteboard) -> Bool {
+    func attachAttachments(from pasteboard: NSPasteboard) -> Bool {
+        let urls = ChatImageAttachment.fileURLs(from: pasteboard)
+        if !urls.isEmpty {
+            return attachFiles(fromURLs: urls)
+        }
         guard ChatImageAttachment.canReadImages(from: pasteboard) else {
             return false
         }
@@ -2146,8 +2150,58 @@ final class ChatViewModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func loadAttachments(from providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                accepted = true
+                provider.loadItem(
+                    forTypeIdentifier: UTType.fileURL.identifier,
+                    options: nil
+                ) { [weak self] item, _ in
+                    guard let url = Self.fileURL(from: item) else {
+                        Task { @MainActor in
+                            self?.attachmentImportError = "The dropped file couldn’t be read."
+                        }
+                        return
+                    }
+                    Task { @MainActor in
+                        _ = self?.attachFiles(fromURLs: [url])
+                    }
+                }
+                continue
+            }
+
+            guard provider.canLoadObject(ofClass: NSImage.self) else {
+                continue
+            }
+            accepted = true
+            provider.loadObject(ofClass: NSImage.self) { [weak self] object, _ in
+                guard let image = object as? NSImage,
+                    let attachment = ChatImageAttachment.attachment(
+                        from: image,
+                        filename: "Dropped Image.png"
+                    )
+                else {
+                    Task { @MainActor in
+                        self?.attachmentImportError = "The dropped image couldn’t be read."
+                    }
+                    return
+                }
+                Task { @MainActor in
+                    self?.attachmentImportError = nil
+                    self?.pendingImageAttachments.append(attachment)
+                }
+            }
+        }
+
+        return accepted
+    }
+
     func pasteImageFromClipboard() {
-        attachImages(from: .general)
+        attachAttachments(from: .general)
     }
 
     func captureScreenshot() {
@@ -2204,6 +2258,22 @@ final class ChatViewModel: ObservableObject {
                 + "Check that they still exist and that you have permission to open them."
         }
         return attachments
+    }
+
+    private nonisolated static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+        if let url = item as? NSURL {
+            return url as URL
+        }
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+        if let string = item as? String {
+            return URL(string: string) ?? URL(fileURLWithPath: string)
+        }
+        return nil
     }
 
     private var hasBlockingAttachmentValidation: Bool {

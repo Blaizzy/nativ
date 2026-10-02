@@ -708,16 +708,24 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     }
 
     static func canReadImages(from pasteboard: NSPasteboard) -> Bool {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-            urls.contains(where: isImageURL)
-        {
+        if fileURLs(from: pasteboard).contains(where: isImageURL) {
             return true
         }
         return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
+    static func canReadAttachments(from pasteboard: NSPasteboard) -> Bool {
+        !fileURLs(from: pasteboard).isEmpty || canReadImages(from: pasteboard)
+    }
+
+    static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?
+            .filter(\.isFileURL) ?? []
+    }
+
     static func imageAttachments(from pasteboard: NSPasteboard) -> [ChatImageAttachment] {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] {
+        let urls = fileURLs(from: pasteboard)
+        if !urls.isEmpty {
             let fileAttachments =
                 urls
                 .filter(isImageURL)
