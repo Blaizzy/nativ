@@ -39,7 +39,7 @@ extension NativSkill {
         - Read each tool's name and description, pick the most specific one, and \
         pass complete, valid JSON arguments that match its schema.
         - If the visible tools do not cover the user's request, use tool_search \
-        with a short capability query. Matching Auto tools will become available \
+        with a short capability query. Matching Discoverable tools will become available \
         for the next step. Only call tools listed in the current request; earlier \
         tool results do not establish current availability. If a search misses, \
         rephrase it using the capability or service name.

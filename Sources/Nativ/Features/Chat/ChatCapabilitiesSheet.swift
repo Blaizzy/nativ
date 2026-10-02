@@ -110,7 +110,7 @@ struct ChatCapabilitiesSheet: View {
             id: "native-tool-\(ChatToolDiscoveryRegistry.toolName)",
             target: .nativeTools([ChatToolDiscoveryRegistry.toolName]),
             title: "Tool Search",
-            detail: "Find Auto tools without adding every tool to each prompt.",
+            detail: "Find Discoverable tools without adding every tool to each prompt.",
             kind: .tool,
             systemImage: "magnifyingglass",
             isAvailable: true,

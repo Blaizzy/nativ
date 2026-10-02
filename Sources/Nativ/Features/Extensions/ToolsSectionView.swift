@@ -127,11 +127,11 @@ struct ToolsSectionView: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if showsModeHint {
-                    Text("Click to cycle")
+                    Text("Access")
                         .legacyTextStyle(.metadata)
                         .foregroundStyle(.tertiary)
                         .fixedSize()
-                        .frame(width: 30)
+                        .frame(width: 104)
                 }
             }
             .padding(.bottom, 6)
@@ -177,7 +177,7 @@ struct ToolsSectionView: View {
             name: ChatToolDiscoveryRegistry.toolName,
             toolNames: [ChatToolDiscoveryRegistry.toolName],
             title: "Tool Search",
-            detail: "Find Auto tools without adding every tool to each prompt.",
+            detail: "Find Discoverable tools without adding every tool to each prompt.",
             parameters: ChatToolDiscoveryRegistry.definition.function.parameters,
             isBuiltIn: true
         )

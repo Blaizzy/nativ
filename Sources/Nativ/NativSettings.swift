@@ -421,7 +421,7 @@ enum ToolExposureMode: String, Codable, CaseIterable, Equatable, Sendable {
     var title: String {
         switch self {
         case .off: "Off"
-        case .automatic: "Auto"
+        case .automatic: "Discoverable"
         case .on: "On"
         }
     }

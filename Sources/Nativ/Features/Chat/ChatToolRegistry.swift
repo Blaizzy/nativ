@@ -201,7 +201,7 @@ enum ChatToolDiscoveryRegistry {
         function: MLXChatFunctionDefinition(
             name: toolName,
             description:
-                "Find tools by capability, service, tool name, or parameter when the provided tools do not cover the task. Already available matches can be used immediately. Up to three matching Auto tools become available in the next step, replacing the previous Auto selection. If nothing matches, rephrase the query.",
+                "Find tools by capability, service, tool name, or parameter when the provided tools do not cover the task. Already available matches can be used immediately. Up to three matching Discoverable tools become available in the next step, replacing the previous Discoverable selection. If nothing matches, rephrase the query.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -694,7 +694,7 @@ enum ChatToolDispatcher {
             },
             alreadyAvailable: alreadyAvailable,
             message: matches.isEmpty
-                ? "No matching available or Auto tools were found. Rephrase the query or ask the user to check tool access."
+                ? "No matching available or Discoverable tools were found. Rephrase the query or ask the user to check tool access."
                 : "Use already_available tools with their provided schemas. Matches become available next step, replacing the previous Auto selection."
         )
         let encoder = JSONEncoder()

@@ -210,6 +210,7 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(ToolExposureMode.off.next, .automatic)
         XCTAssertEqual(ToolExposureMode.off.next.next, .on)
         XCTAssertEqual(ToolExposureMode.off.next.next.next, .off)
+        XCTAssertEqual(ToolExposureMode.automatic.title, "Discoverable")
     }
 
     func testToolSearchDefaultsToOn() {

@@ -373,7 +373,7 @@ private struct KitDetailView: View {
 
     private func caption(for section: KitComponentSection) -> String? {
         switch section {
-        case .mcp: "These servers connect in Auto mode so agents can discover their tools."
+        case .mcp: "These servers connect as Discoverable so agents can find their tools."
         case .tools: "Built-in and custom tools included directly."
         case .skills: "Guidance added to the model when tools are available."
         case .extensions: nil
