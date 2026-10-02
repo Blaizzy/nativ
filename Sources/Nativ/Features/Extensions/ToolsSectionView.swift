@@ -326,6 +326,7 @@ private struct ToolRow: View {
                 }
             }
             .buttonStyle(.plain)
+            .opacity(exposureMode?.wrappedValue == .off ? 0.5 : 1)
             .help(tool.configuration == nil ? "Inspect / try" : "Configure")
             if let exposureMode {
                 ToolExposureModeControl(

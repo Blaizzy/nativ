@@ -12,17 +12,11 @@ struct ToolExposureModeControl: View {
                 Button {
                     select(option)
                 } label: {
-                    Label(
-                        option.title,
-                        systemImage: option == mode ? "checkmark" : option.systemImage
-                    )
+                    Text(option.title)
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: mode.systemImage)
-                Text(mode.title)
-            }
+            Text(mode.title)
             .font(.system(size: 11, weight: mode == .on ? .semibold : .medium))
             .foregroundStyle(mode.tint)
             .padding(.horizontal, 8)
@@ -38,7 +32,6 @@ struct ToolExposureModeControl: View {
             .contentShape(.rect)
         }
         .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .fixedSize()
         .help(mode.hoverExplanation)
         .accessibilityLabel("Agent access for \(title)")
