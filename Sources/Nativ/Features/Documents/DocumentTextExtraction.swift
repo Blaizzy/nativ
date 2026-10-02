@@ -8,6 +8,8 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case wordProcessing
     case presentation
     case notebook
+    case openDocument
+    case ebook
 }
 
 extension ChatDocumentFormat {
@@ -22,6 +24,8 @@ extension ChatDocumentFormat {
         case "doc", "docx": .wordProcessing
         case "pptx": .presentation
         case "ipynb": .notebook
+        case "odt", "ods": .openDocument
+        case "epub": .ebook
         default: nil
         }
     }
@@ -155,6 +159,8 @@ struct DocumentTextExtractionRouter: Sendable {
             RichTextDocumentTextExtractor(),
             PowerPointDocumentTextExtractor(),
             NotebookDocumentTextExtractor(),
+            OpenDocumentTextExtractor(),
+            EPUBDocumentTextExtractor(),
         ]
     }
 }

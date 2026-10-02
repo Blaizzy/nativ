@@ -65,7 +65,7 @@ actor RichTextDocumentTextExtractor: DocumentTextExtracting {
     }
 }
 
-private enum TextDocumentContent {
+enum TextDocumentContent {
     private static let sectionLimit = 4_000
 
     static func make(
