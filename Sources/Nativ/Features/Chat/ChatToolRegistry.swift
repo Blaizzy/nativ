@@ -36,6 +36,7 @@ struct ChatToolExecutionContext: Sendable {
     var availableTools: [ChatToolDiscoveryCandidate] = []
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
+    var workAction: (@MainActor @Sendable (ChatWorkRequest) async throws -> String)? = nil
 }
 
 struct ChatToolExecutionOutcome: Sendable {
@@ -228,13 +229,15 @@ enum ChatToolDiscoveryRegistry {
         guard !normalizedQuery.isEmpty, !queryTerms.isEmpty, limit > 0 else { return [] }
 
         return candidates.compactMap { candidate -> (ChatToolDiscoveryCandidate, Int)? in
+            let nameTerms = terms(in: normalized(candidate.name))
             let fields = [
-                (terms(in: normalized(candidate.name)), 40),
+                (nameTerms, 40),
                 (terms(in: normalized(candidate.title + " " + candidate.source)), 30),
                 (terms(in: normalized(candidate.description)), 20),
                 (terms(in: normalized(parameterText(candidate.parameters))), 10),
             ]
             var score = normalized(candidate.name) == normalizedQuery ? 200 : 0
+            score += queryTerms.intersection(nameTerms).count * 30
             var matchedTerms = 0
             for term in queryTerms {
                 let weight = fields.map { words, weight in
@@ -417,6 +420,11 @@ enum ChatToolRegistry {
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
             ))
+        tools.append(ChatNativeToolDescriptor(
+            definition: ChatWorkToolRegistry.definition,
+            displayDescription: "Work on documents, code, websites, and shared terminals beside chat.",
+            configuration: nil
+        ))
         return tools
     }
 }
@@ -505,6 +513,9 @@ enum ChatToolDispatcher {
     private static let handlers: [String: Handler] = [
         ChatToolDiscoveryRegistry.toolName: { call, context in
             try await executeToolDiscovery(call: call, context: context)
+        },
+        ChatWorkToolRegistry.toolName: { call, context in
+            try await executeWorkTool(call: call, context: context)
         },
         ChatImageToolRegistry.generateToolName: { call, context in
             try await executeImageTool(call: call, context: context)
@@ -798,6 +809,17 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWorkTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        guard let action = context.workAction else { throw ChatWorkError.unavailable }
+        let request = try ChatWorkRequest.decode(call)
+        try Task.checkCancellation()
+        let content = try await action(request)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -895,6 +917,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatWorkToolRegistry.toolName:
+            return "Work pane"
         case ChatWebSearchToolRegistry.toolName:
             return webSearchTitle(status: status)
         case ChatWebReadToolRegistry.toolName:
@@ -941,6 +965,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatWorkToolRegistry.toolName:
+                return "sidebar.right"
             case ChatWebSearchToolRegistry.toolName:
                 return "globe"
             case ChatWebReadToolRegistry.toolName:

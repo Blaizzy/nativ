@@ -11,7 +11,7 @@ enum ChatTerminalToolRegistry {
         function: MLXChatFunctionDefinition(
             name: toolName,
             description:
-                "Run a non-interactive local zsh command on the user's Mac. Every call requires explicit user approval. Prefer read_file, search_files, write_file, and patch for file operations.",
+                "Run a non-interactive local zsh command on the user's Mac. Every call requires explicit user approval. Commands and live output appear in an agent terminal tab beside chat. Each command is a separate process; pass cwd when needed. Prefer read_file, search_files, write_file, and patch for file operations.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -697,8 +697,9 @@ struct TerminalProcessRunner: Sendable {
     static let maximumStandardOutputBytes = 64 * 1_024
     static let maximumStandardErrorBytes = 32 * 1_024
 
-    func run(_ request: TerminalProcessRequest) async throws -> TerminalProcessResult {
-        let controller = TerminalProcessController(request: request)
+    func run(_ request: TerminalProcessRequest,
+             onOutput: (@Sendable (Data) -> Void)? = nil) async throws -> TerminalProcessResult {
+        let controller = TerminalProcessController(request: request, onOutput: onOutput)
         return try await withTaskCancellationHandler {
             try await Task.detached(priority: .userInitiated) {
                 try controller.run()
@@ -711,12 +712,14 @@ struct TerminalProcessRunner: Sendable {
 
 private final class TerminalProcessController: @unchecked Sendable {
     private let request: TerminalProcessRequest
+    private let onOutput: (@Sendable (Data) -> Void)?
     private let lock = NSLock()
     private var process: Process?
     private var cancelled = false
 
-    init(request: TerminalProcessRequest) {
+    init(request: TerminalProcessRequest, onOutput: (@Sendable (Data) -> Void)?) {
         self.request = request
+        self.onOutput = onOutput
     }
 
     func cancel() {
@@ -734,10 +737,10 @@ private final class TerminalProcessController: @unchecked Sendable {
         let standardOutput = Pipe()
         let standardError = Pipe()
         let outputBuffer = TerminalOutputBuffer(
-            limit: TerminalProcessRunner.maximumStandardOutputBytes
+            limit: TerminalProcessRunner.maximumStandardOutputBytes, onAppend: onOutput
         )
         let errorBuffer = TerminalOutputBuffer(
-            limit: TerminalProcessRunner.maximumStandardErrorBytes
+            limit: TerminalProcessRunner.maximumStandardErrorBytes, onAppend: onOutput
         )
 
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
@@ -820,21 +823,26 @@ private final class TerminalProcessController: @unchecked Sendable {
 
 private final class TerminalOutputBuffer: @unchecked Sendable {
     private let limit: Int
+    private let onAppend: (@Sendable (Data) -> Void)?
     private let lock = NSLock()
     private var storage = Data()
     private var truncated = false
 
-    init(limit: Int) {
+    init(limit: Int, onAppend: (@Sendable (Data) -> Void)? = nil) {
         self.limit = limit
+        self.onAppend = onAppend
     }
 
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
-        lock.withLock {
+        let accepted = lock.withLock { () -> Data in
             let remaining = max(0, limit - storage.count)
-            storage.append(data.prefix(remaining))
+            let accepted = Data(data.prefix(remaining))
+            storage.append(accepted)
             if data.count > remaining { truncated = true }
+            return accepted
         }
+        if !accepted.isEmpty { onAppend?(accepted) }
     }
 
     var text: String {

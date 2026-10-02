@@ -56,6 +56,7 @@ struct ControlPanelView: View {
     @State var pendingDeleteFolder: ChatFolder?
     @State var pendingDeleteProject: ChatProject?
     @State var projectErrorMessage: String?
+    @State var chatDeletionErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
     @State var chatLibrarySearch = ChatLibrarySearchState()
@@ -322,7 +323,13 @@ struct ControlPanelView: View {
 
             Spacer(minLength: 0)
 
-            if showsModelConfigurationToggle {
+            if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
+                ChatWorkWindowControls(
+                    chat: chat,
+                    isConfigurationVisible: isModelConfigurationVisible,
+                    toggleConfiguration: toggleModelConfigurationVisibility
+                )
+            } else if showsModelConfigurationToggle {
                 controlPanelTopButton(
                     systemName: "sidebar.right",
                     help: isModelConfigurationVisible

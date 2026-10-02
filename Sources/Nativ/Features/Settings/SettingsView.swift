@@ -46,11 +46,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    var onOpenChat: (UUID) -> Void
     @ObservedObject var softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
     @State private var showsPersonalization = false
+    @State private var showsWorktreeRecovery = false
     @ObservedObject private var notifications = NativNotificationService.shared
     @State private var confirmsEnablingProjectTools = false
 
@@ -72,6 +75,9 @@ struct SettingsView: View {
         .background(Color.nativMainContentBackground)
         .sheet(isPresented: $showsPersonalization) {
             PersonalizationView(model: model)
+        }
+        .sheet(isPresented: $showsWorktreeRecovery) {
+            ChatWorktreeRecoveryView(chat: chat, onOpenChat: onOpenChat)
         }
     }
 
@@ -294,6 +300,16 @@ struct SettingsView: View {
                             .buttonStyle(.bordered)
                             .accessibilityLabel("Enable disabled project tools")
                     }
+                }
+                Divider().padding(.leading, 52)
+                settingsRow(
+                    title: "Recently deleted worktrees",
+                    description: "Restore saved work or permanently delete its snapshot.",
+                    systemImage: "archivebox"
+                ) {
+                    Button("Manage…") { showsWorktreeRecovery = true }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Manage recently deleted worktrees")
                 }
             }
             .background(Color(nsColor: .controlBackgroundColor))

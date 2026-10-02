@@ -150,7 +150,9 @@ enum ChatArchiveCodec {
             )
             imported.annotations = message.annotations.map { annotation in
                 var annotation = annotation
-                annotation.sourceMessageID = messageIDs[annotation.sourceMessageID] ?? annotation.sourceMessageID
+                if let sourceID = annotation.sourceMessageID {
+                    annotation.sourceMessageID = messageIDs[sourceID] ?? sourceID
+                }
                 return annotation
             }
             return imported

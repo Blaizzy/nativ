@@ -1393,6 +1393,7 @@ struct NativSettings: Codable, Equatable {
         "write_file",
         "patch",
         "terminal",
+        ChatWorkToolRegistry.toolName,
     ]
 
     static func defaultToolExposureMode(for toolName: String) -> ToolExposureMode {

@@ -98,13 +98,19 @@ final class ChatToolRuntimeTests: XCTestCase {
         let runtime = ChatToolRuntime(settings: settings)
         let request = prepareProject(runtime)
 
-        XCTAssertEqual(Set(request.definitions.map(\.function.name)), ChatToolScope.projectToolNames)
+        XCTAssertEqual(
+            Set(request.definitions.map(\.function.name)),
+            ChatToolScope.projectToolNames.union([ChatWorkToolRegistry.toolName])
+        )
         XCTAssertNil(settings.fileReadRootPath)
         XCTAssertNil(settings.fileWriteRootPath)
         for name in ChatToolScope.projectToolNames {
             XCTAssertEqual(settings.toolExposureMode(for: name), .automatic)
         }
-        XCTAssertTrue(prepare(runtime).definitions.isEmpty)
+        XCTAssertEqual(
+            prepare(runtime).definitions.map(\.function.name),
+            [ChatWorkToolRegistry.toolName]
+        )
     }
 
     func testProjectPromotionDoesNotExposeUnrelatedAutoTools() {
@@ -116,7 +122,10 @@ final class ChatToolRuntimeTests: XCTestCase {
             scope: ChatToolScope(projectID: UUID(), projectName: "Test", rootPath: "/tmp", projectToolsEnabled: true),
             canEditImage: false, selection: ChatToolSelection(), mcpHost: host
         )
-        let expectedNames = ChatToolScope.projectToolNames.union([ChatToolDiscoveryRegistry.toolName])
+        let expectedNames = ChatToolScope.projectToolNames.union([
+            ChatToolDiscoveryRegistry.toolName,
+            ChatWorkToolRegistry.toolName,
+        ])
         XCTAssertEqual(Set(request.definitions.map(\.function.name)), expectedNames)
     }
 
@@ -193,7 +202,10 @@ final class ChatToolRuntimeTests: XCTestCase {
             )
             let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.content.utf8)) as? [String: Any])
             let available = try XCTUnwrap(payload["already_available"] as? [String])
-            XCTAssertTrue(available.contains(query == "terminal" ? "terminal" : "write_file"))
+            XCTAssertTrue(
+                available.contains(query == "terminal" ? "terminal" : "write_file"),
+                result.content
+            )
             XCTAssertTrue(result.activatedToolNames.isEmpty)
             XCTAssertFalse(result.content.contains("generate_image"))
         }
