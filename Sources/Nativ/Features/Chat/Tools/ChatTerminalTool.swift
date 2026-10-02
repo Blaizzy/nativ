@@ -740,8 +740,21 @@ private final class TerminalProcessController: @unchecked Sendable {
             limit: TerminalProcessRunner.maximumStandardErrorBytes
         )
 
+        // Process passes arguments in decomposed (NFD) form, which corrupts
+        // precomposed text such as Hangul, so the command runs from a script file.
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nativ-terminal-\(UUID().uuidString).zsh")
+        guard FileManager.default.createFile(
+            atPath: scriptURL.path,
+            contents: Data(request.command.utf8),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        defer { try? FileManager.default.removeItem(at: scriptURL) }
+
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-f", "-c", request.command]
+        process.arguments = ["-f", scriptURL.path]
         process.environment = request.environment
         process.currentDirectoryURL = request.currentDirectoryURL
         process.standardInput = FileHandle.nullDevice

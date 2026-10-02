@@ -251,6 +251,23 @@ final class ChatTerminalToolTests: XCTestCase {
         XCTAssertEqual(result.stderr, "warning")
     }
 
+    func testLiveRunnerPreservesPrecomposedUnicodeInCommand() async throws {
+        // Process arguments are passed in decomposed (NFD) form, which breaks
+        // lookups such as pandas column names written in precomposed Hangul.
+        let request = TerminalProcessRequest(
+            command: "printf '%s' '번호1' | xxd -p",
+            currentDirectoryURL: FileManager.default.temporaryDirectory,
+            timeout: 5,
+            environment: ChatTerminalToolExecutor.scrubbedEnvironment(
+                resolvedPath: "/usr/bin:/bin"
+            )
+        )
+        let result = try await TerminalProcessRunner().run(request)
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "ebb288ed98b831")
+    }
+
     func testExecutorUsesProjectDirectoryAsDefaultWorkingDirectory() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
