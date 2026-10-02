@@ -138,78 +138,94 @@ private enum ChatTranscriptLayout {
     static let scrollIndicatorClearance: CGFloat = 17
 }
 
-private struct ChatProjectContextBanner: View {
+private struct ChatProjectContextControls: View {
     let project: ChatProject?
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
     @ObservedObject var chat: ChatViewModel
     @State private var showsWorktreeSetup = false
     @State private var setupError: String?
+    @State private var gitHead: ChatGitHead?
+    var isSummary = false
 
     private var path: String { chat.currentWorktree?.projectPath ?? project?.rootPath ?? "" }
     private var available: Bool { chat.currentWorktree.map { $0.availableRootPath != nil } ?? rootIsAvailable }
 
+    private var branch: String? { gitHead?.displayName }
+
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: available ? "folder.fill" : "folder.badge.questionmark")
-                .foregroundStyle(available ? Color.accentColor : Color.orange)
-            Text(project?.name ?? "Worktree")
-                .legacyTextStyle(.rowTitleEmphasized)
-                .lineLimit(1)
-            Text(path)
-                .legacyTextStyle(.metadata)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 8)
-            if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
-                ProgressView().controlSize(.small)
-                Text(chat.isDeletingCurrentSession ? "Deleting worktree…" : "Creating worktree…")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Menu {
-                    if let worktree = chat.currentWorktree {
-                        Text(worktree.branch)
-                        Button("Copy branch name", systemImage: "doc.on.doc") { copy(worktree.branch) }
-                        if !worktree.isReady {
-                            Button("Retry worktree setup…") { showsWorktreeSetup = true }
-                                .disabled(!chat.canCreateCurrentWorktree)
-                        }
-                    } else {
-                        Label("Local", systemImage: "checkmark")
-                        Button("Worktree…", systemImage: "arrow.triangle.branch") { showsWorktreeSetup = true }
-                            .disabled(!chat.canCreateCurrentWorktree)
-                    }
-                    Divider()
-                    Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
-                    Button("Show in Finder", systemImage: "folder") {
-                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
-                    }.disabled(!available)
-                } label: {
-                    Label(chat.currentWorktree == nil ? "Local" : "Worktree",
-                          systemImage: chat.currentWorktree == nil ? "desktopcomputer" : "arrow.triangle.branch")
-                        .font(.system(size: 12))
-                }
-                .fixedSize()
-                .help(chat.currentWorktree?.branch ?? "Choose Local or Worktree before starting a project chat")
-                .accessibilityLabel("Chat environment")
-            }
-            if !chat.isPreparingCurrentWorktree && (!available || !toolsEnabled) {
-                Text(available ? "Tools Off" : "Unavailable")
-                    .legacyTextStyle(.badgeMuted)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: available ? "folder" : "folder.badge.questionmark")
                     .foregroundStyle(available ? Color.secondary : Color.orange)
+                Text(project?.name ?? "Worktree")
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(path)
+                Spacer(minLength: 4)
+                if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
+                    ProgressView().controlSize(.small)
+                    Text(chat.isDeletingCurrentSession ? "Deleting…" : "Creating…")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    environmentMenu
+                }
+                if !isSummary, let branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(branch)
+                }
+                if !isSummary && (!available || !toolsEnabled) {
+                    Image(systemName: "exclamationmark.circle")
+                        .foregroundStyle(available ? Color.secondary : Color.orange)
+                        .help(available ? "Project tools are off" : "Project folder unavailable")
+                        .accessibilityLabel(available ? "Project tools are off" : "Project folder unavailable")
+                }
+            }
+            if isSummary {
+                Divider()
+                if let branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .lineLimit(2).textSelection(.enabled)
+                }
+                Text(path)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Divider()
+                LabeledContent("Project tools", value: available ? (toolsEnabled ? "Enabled" : "Off") : "Folder unavailable")
+                LabeledContent("Files", value: "\(chat.workState.items.filter(\.canEdit).count)")
             }
         }
-        .padding(.leading, ChatTranscriptLayout.horizontalPadding)
-        .padding(.trailing, chat.workState.isVisible
-                 ? ChatTranscriptLayout.horizontalPadding
-                 : ControlPanelLayout.topControlsTrailingPadding
-                    + ControlPanelLayout.topControlSize * 2 + 12)
-        .padding(.vertical, 10)
+        .font(.system(size: 12))
+        .padding(isSummary ? 0 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.nativMainContentBackground)
-        .overlay(alignment: .bottom) { Divider() }
-        .help(path)
+        .background {
+            if !isSummary {
+                UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
+                    .fill(Color.primary.opacity(0.035))
+            }
+        }
+        .task(id: path) {
+            gitHead = nil
+            guard !path.isEmpty else { return }
+            let directory = path
+            let worktree = chat.currentWorktree
+            // This runs only while the controls are visible. It also catches branch changes
+            // from the user's shell, not just commands invoked by the agent.
+            while !Task.isCancelled {
+                let head = await Task.detached {
+                    if let worktree { return worktree.currentHead }
+                    return try? ChatGitWorktreeStore(root: URL(fileURLWithPath: directory)).currentHead(at: directory)
+                }.value
+                guard !Task.isCancelled else { return }
+                gitHead = head
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
         .sheet(isPresented: $showsWorktreeSetup) {
             VStack(alignment: .leading, spacing: 16) {
                 Label("Create worktree", systemImage: "arrow.triangle.branch").font(.headline)
@@ -241,9 +257,78 @@ private struct ChatProjectContextBanner: View {
         }
     }
 
+    private var environmentMenu: some View {
+        Menu {
+            if let worktree = chat.currentWorktree {
+                Text(gitHead?.displayName ?? "Branch unavailable")
+                switch gitHead {
+                case .branch(let name):
+                    Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
+                case .detached(let commit):
+                    Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
+                case nil: EmptyView()
+                }
+                if !worktree.isReady {
+                    Button("Retry worktree setup…") { showsWorktreeSetup = true }
+                        .disabled(!chat.canCreateCurrentWorktree)
+                }
+            } else {
+                Label("Local", systemImage: "checkmark")
+                Button("Worktree…", systemImage: "arrow.triangle.branch") { showsWorktreeSetup = true }
+                    .disabled(!chat.canCreateCurrentWorktree)
+            }
+            Divider()
+            Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
+            Button("Show in Finder", systemImage: "folder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+            }.disabled(!available)
+        } label: {
+            Label(chat.currentWorktree == nil ? "Local" : "Worktree",
+                  systemImage: chat.currentWorktree == nil ? "desktopcomputer" : "arrow.triangle.branch")
+                .font(.system(size: 12))
+        }
+        .fixedSize()
+        .help(branch ?? "Choose Local or Worktree before starting a project chat")
+        .accessibilityLabel("Chat environment")
+    }
+
     private func copy(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+}
+
+private struct ChatPinnedSummaryToggle: View {
+    let project: ChatProject?
+    let rootIsAvailable: Bool
+    let toolsEnabled: Bool
+    @ObservedObject var chat: ChatViewModel
+    @State private var isPresented = false
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isPresented ? Color.primary : Color.secondary)
+                .frame(width: ControlPanelLayout.topControlSize, height: ControlPanelLayout.topControlSize)
+                .background(isPresented ? Color.primary.opacity(0.08) : .clear,
+                            in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(isPresented ? "Hide pinned summary" : "Show pinned summary")
+        .accessibilityLabel("Pinned summary")
+        .accessibilityValue(isPresented ? "Shown" : "Hidden")
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Pinned summary").font(.headline)
+                ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
+                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true)
+            }
+            .padding(20)
+            .frame(width: 340)
+        }
+        .onChange(of: chat.currentSessionID) { _, _ in isPresented = false }
     }
 }
 
@@ -344,16 +429,7 @@ private struct ChatTranscriptView: View {
                 composerHeight,
                 composerBackdropHeight + ChatTranscriptLayout.composerFadeExtension
             ),
-            topInset: {
-                if project != nil || chat.currentWorktree != nil {
-                    ChatProjectContextBanner(
-                        project: project,
-                        rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: model.settings.projectToolsEnabled,
-                        chat: chat
-                    )
-                }
-            }
+            topInset: { EmptyView() }
         ) { attachedRange in
             ChatTranscriptStack(items: Array(items[attachedRange])) {
                 if chat.messages.isEmpty {
@@ -396,11 +472,18 @@ private struct ChatTranscriptView: View {
         }
         .overlay(alignment: .topTrailing) {
             ZStack(alignment: .topTrailing) {
+                if !chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
+                    ChatPinnedSummaryToggle(project: project, rootIsAvailable: projectRootIsAvailable,
+                                            toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
+                        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                 + (chat.workState.isVisible ? 0 : ControlPanelLayout.topControlSize * 2))
+                        .padding(.top, ControlPanelLayout.topControlsTopPadding)
+                }
                 if search.isPresented {
                     ChatSearchBar(search: search)
                         .padding(.leading, 16)
                         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
-                                 + ControlPanelLayout.topControlSize + 12)
+                                 + ControlPanelLayout.topControlSize * (chat.workState.isVisible ? 1 : 3) + 12)
                         .padding(.top, 8)
                         .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
                 }
@@ -481,6 +564,8 @@ private struct ChatTranscriptView: View {
             model: model,
             chat: chat,
             extensionManager: extensionManager,
+            project: project,
+            projectRootIsAvailable: projectRootIsAvailable,
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
@@ -554,6 +639,8 @@ private struct ChatComposerContainer: View {
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
+    let project: ChatProject?
+    let projectRootIsAvailable: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
@@ -589,13 +676,22 @@ private struct ChatComposerContainer: View {
                     languageModelSupportsVision: languageModelSupportsVision
                 )
             },
-            onBackdropHeightChange: onBackdropHeightChange
+            onBackdropHeightChange: onBackdropHeightChange,
+            contextHeader: contextHeader
         )
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
         .transformPreference(ChatComposerMinimumWidthKey.self) { width in
             if width > 0 { width += ChatTranscriptLayout.horizontalPadding * 2 }
+        }
+    }
+
+    @ViewBuilder
+    private var contextHeader: some View {
+        if chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
+            ChatProjectContextControls(project: project, rootIsAvailable: projectRootIsAvailable,
+                                       toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
         }
     }
 }

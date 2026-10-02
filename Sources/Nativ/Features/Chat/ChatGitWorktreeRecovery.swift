@@ -12,6 +12,8 @@ struct ChatWorktreeSnapshot: Codable, Identifiable, Equatable, Sendable {
     let indexTree: String
     let workingTree: String
     let ignoredFiles: [String]
+    var workState: ChatWorkState? = nil
+    var checkoutHead: ChatGitHead? = nil
 
     var ref: String { "refs/nativ/recovery/\(id.uuidString.lowercased())" }
 }
@@ -49,11 +51,11 @@ extension ChatGitWorktreeStore {
     }
 
     func snapshot(_ worktree: ChatGitWorktree, sessionID: UUID, title: String,
-                  state: ChatGitWorktreeRemoval) throws -> ChatWorktreeSnapshot? {
+                  state: ChatGitWorktreeRemoval, workState: ChatWorkState? = nil) throws -> ChatWorktreeSnapshot? {
         // A retry after successful cleanup must not replace the previous snapshot with an empty one.
         let exists = FileManager.default.fileExists(atPath: worktree.path)
-        guard let head = state.branchCommit else {
-            guard !exists else { throw ChatGitWorktreeError(message: "The checkout has no readable branch tip. Its files have been kept.") }
+        guard let head = state.headCommit else {
+            guard !exists else { throw ChatGitWorktreeError(message: "The checkout has no readable HEAD. Its files have been kept.") }
             return nil
         }
         let indexTree = try exists ? git(["write-tree"], at: worktree.path)
@@ -71,9 +73,18 @@ extension ChatGitWorktreeStore {
                                   at: worktree.repositoryPath, environment: identity)
         let commit = try git(["commit-tree", tree, "-p", indexCommit, "-m", "Nativ worktree recovery"],
                              at: worktree.repositoryPath, environment: identity)
+        // Only file-tab metadata belongs in the record. Contents come from the verified bundle,
+        // so ignored or deleted files cannot be resurrected from stale chat JSON.
+        var fileTabs = workState
+        fileTabs?.items = workState?.items.filter(\.canEdit).map { item in
+            var metadata = item
+            metadata.title = item.storedFilename
+            metadata.content = ""
+            return metadata
+        } ?? []
         let record = ChatWorktreeSnapshot(id: UUID(), sessionID: sessionID, title: title, createdAt: Date(),
             worktree: worktree, head: head, commit: commit, indexTree: indexTree, workingTree: tree,
-            ignoredFiles: state.ignoredFiles)
+            ignoredFiles: state.ignoredFiles, workState: fileTabs, checkoutHead: state.checkoutHead)
         try FileManager.default.createDirectory(at: recoveryRoot, withIntermediateDirectories: true)
         let staging = recoveryRoot.appendingPathComponent(".saving-\(record.id.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)

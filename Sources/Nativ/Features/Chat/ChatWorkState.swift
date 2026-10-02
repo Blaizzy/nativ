@@ -1,8 +1,8 @@
 import Foundation
 
 /// Shared, session-owned work. Closing a tab never deletes its contents.
-struct ChatWorkItem: Identifiable, Codable, Equatable {
-    enum Kind: String, Codable, CaseIterable {
+struct ChatWorkItem: Identifiable, Codable, Equatable, Sendable {
+    enum Kind: String, Codable, CaseIterable, Sendable {
         case document, code, website, terminal
 
         var symbol: String {
@@ -54,7 +54,7 @@ struct ChatWorkItem: Identifiable, Codable, Equatable {
     }
 }
 
-struct ChatWorkState: Codable, Equatable {
+struct ChatWorkState: Codable, Equatable, Sendable {
     static let maximumContentBytes = 256_000
     static let maximumItems = 24
     var items: [ChatWorkItem] = []
