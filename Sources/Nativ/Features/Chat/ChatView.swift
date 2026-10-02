@@ -428,8 +428,7 @@ private struct ChatTranscriptView: View {
             bottomOverlayClearance: max(
                 composerHeight,
                 composerBackdropHeight + ChatTranscriptLayout.composerFadeExtension
-            ),
-            topInset: { EmptyView() }
+            )
         ) { attachedRange in
             ChatTranscriptStack(items: Array(items[attachedRange])) {
                 if chat.messages.isEmpty {
