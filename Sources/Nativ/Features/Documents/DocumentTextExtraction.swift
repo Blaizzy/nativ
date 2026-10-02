@@ -14,14 +14,14 @@ enum ChatDocumentFormat: Hashable, Sendable {
 }
 
 extension ChatDocumentFormat {
-    /// File extensions that have a dedicated extractor.
+    /// File extensions that resolve to a document format.
     ///
-    /// CSV is absent because its extractor is a pass-through to plain text; only the
-    /// attachment path treats it specially, by pinning the header row when selecting
-    /// sections.
+    /// CSV maps to plain text extraction; the separate case exists only so the context
+    /// builder can pin a table's header row when it selects sections.
     static func forFileExtension(_ fileExtension: String) -> ChatDocumentFormat? {
         switch fileExtension.lowercased() {
         case "pdf": .pdf
+        case "csv": .csv
         case "rtf": .richText
         case "doc", "docx": .wordProcessing
         case "pptx": .presentation

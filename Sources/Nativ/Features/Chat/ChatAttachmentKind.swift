@@ -107,7 +107,6 @@ extension ChatImageAttachment {
         }
 
         switch fileExtension {
-        case "csv": return .document(.csv)
         case "txt", "md", "markdown", "json", "jsonl", "xml", "html", "htm",
              "css", "js", "jsx", "ts", "tsx", "swift", "py", "rb", "rs", "go",
              "java", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "m", "mm",
