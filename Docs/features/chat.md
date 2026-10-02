@@ -157,7 +157,8 @@ the work pane share the right side of chat.
   directory, and environment while switching tabs or chats. Closing the tab stops
   the shell and saves a bounded, redacted output snapshot; reopening it or
   restarting the app starts a fresh shell. Approved agent `terminal` commands stream
-  into a separate, output-only **Agent terminal** tab. Each native `terminal` command
+  into a separate, output-only **Agent terminal** tab without changing the selected
+  tab or opening a hidden work pane. Each native `terminal` command
   still runs in its own process and uses the existing command approval flow.
   Agents can also run commands in an existing interactive tab with `chat_work.run`,
   including in standalone chats. Each command shows its target and arguments for
