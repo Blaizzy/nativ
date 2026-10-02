@@ -1,4 +1,5 @@
-@preconcurrency import AVFoundation
+import AVFoundation
+import CoreAudio
 import Foundation
 
 @MainActor
@@ -264,6 +265,13 @@ private actor SystemAudioInputCapture: AudioInputCaptureDriving {
     private var input: AVCaptureDeviceInput?
     private var receiver: AudioInputSampleReceiver?
     private var observers: [NSObjectProtocol] = []
+    private var followsSystemDefault = false
+    private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var defaultInputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
 
     func start(
         deviceUniqueID: String?,
@@ -280,6 +288,16 @@ private actor SystemAudioInputCapture: AudioInputCaptureDriving {
         }
         session.addOutput(output)
         session.commitConfiguration()
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { await self?.defaultInputChanged(onFailure: onFailure) }
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &defaultInputAddress, nil, listener
+        )
+        guard status == noErr else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+        defaultInputListener = listener
         try select(deviceUniqueID: deviceUniqueID)
         observers.append(NotificationCenter.default.addObserver(
             forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil
@@ -309,6 +327,11 @@ private actor SystemAudioInputCapture: AudioInputCaptureDriving {
             device = AVCaptureDevice.default(for: .audio)
         }
         guard let device else { throw VoiceAudioRecorderError.inputDeviceUnavailable }
+        try setInput(device)
+        followsSystemDefault = deviceUniqueID?.isEmpty ?? true
+    }
+
+    private func setInput(_ device: AVCaptureDevice) throws {
         guard input?.device.uniqueID != device.uniqueID else { return }
         let replacement = try AVCaptureDeviceInput(device: device)
         session.beginConfiguration()
@@ -324,6 +347,13 @@ private actor SystemAudioInputCapture: AudioInputCaptureDriving {
     }
 
     func stop() {
+        followsSystemDefault = false
+        if let defaultInputListener {
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &defaultInputAddress, nil, defaultInputListener
+            )
+            self.defaultInputListener = nil
+        }
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         session.stopRunning()
@@ -338,7 +368,17 @@ private actor SystemAudioInputCapture: AudioInputCaptureDriving {
 
     private func disconnected(deviceID: String, onFailure: @Sendable (Error) -> Void) {
         guard input?.device.uniqueID == deviceID else { return }
-        onFailure(VoiceAudioRecorderError.inputDeviceUnavailable)
+        if followsSystemDefault {
+            defaultInputChanged(onFailure: onFailure)
+        } else {
+            onFailure(VoiceAudioRecorderError.inputDeviceUnavailable)
+        }
+    }
+
+    private func defaultInputChanged(onFailure: @Sendable (Error) -> Void) {
+        guard followsSystemDefault, input != nil else { return }
+        do { try select(deviceUniqueID: nil) }
+        catch { onFailure(error) }
     }
 }
 
