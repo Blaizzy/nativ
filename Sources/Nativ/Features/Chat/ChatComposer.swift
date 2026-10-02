@@ -213,7 +213,7 @@ private struct ChatBrowsingAvailability: Sendable {
     }
 }
 
-struct ChatComposer: View {
+struct ChatComposer<ContextHeader: View>: View {
     var model: NativModel
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
@@ -228,6 +228,7 @@ struct ChatComposer: View {
     let onFindDraftModels: (String) -> Void
     let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
+    let contextHeader: ContextHeader
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     @State private var showsKits = false
@@ -239,6 +240,8 @@ struct ChatComposer: View {
     @State private var webReadProviderLabel: String?
     @State private var browsingConfigurationRevision = 0
     @State private var composerWidth: CGFloat = 410
+    @State private var workspacePickerWidth: CGFloat = 120
+    @State private var modelPickerWidth: CGFloat = 180
     private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
     private let editorMaximumHeight: CGFloat = 120
@@ -282,147 +285,155 @@ struct ChatComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                if !viewModel.pendingPastedTexts.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(viewModel.pendingPastedTexts) { item in
-                                ChatPastedTextCard(pastedText: item, onRemove: {
-                                    viewModel.removePendingPastedText(item.id, undoManager: undoManager)
-                                })
-                            }
-                        }
-                        .padding(2)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                }
-                if !viewModel.pendingAnnotations.isEmpty {
-                    ChatAnnotationCards(
-                        annotations: viewModel.pendingAnnotations,
-                        allowsRemoval: true
-                    )
-                    .padding(12)
-                }
-                ZStack(alignment: .topLeading) {
-                    ChatComposerTextEditor(
-                        text: $viewModel.composerText,
-                        isEnabled: canCompose,
-                        onSubmit: send,
-                        onCancel: cancelPromptEditingAction,
-                        onRecallPrevious: recallPreviousPrompt,
-                        onPasteImage: { viewModel.attachImages(from: $0) },
-                        onContentHeightChange: { height in
-                            editorContentHeight = height
-                        },
-                        fontScale: model.settings.chatFontScale,
-                        focusToken: viewModel.composerFocusToken,
-                        forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
-                            .isEmpty
-                            && viewModel.pendingPastedTexts.isEmpty
-                            && viewModel.promptEditContext == nil,
-                        onNavigatePendingSelection: viewModel.moveImageModelHighlight,
-                        onCancelPendingDecision: viewModel.cancelPendingToolDecision,
-                        onPasteText: viewModel.attachPastedText,
-                        onTextEdit: viewModel.editComposerText,
-                        onTextCommit: viewModel.commitComposerText,
-                        resetToken: viewModel.composerResetToken
-                    )
-
-                    if viewModel.composerText.isEmpty {
-                        HStack(spacing: 8) {
-                            Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            if showsRecallHint {
-                                ChatRecallHint()
-                            }
-                        }
-                        .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
-                        .foregroundStyle(.tertiary)
-                        .padding(textInset)
-                        .offset(x: 4)
-                        .allowsHitTesting(false)
-                    }
-                }
-                .frame(height: editorHeight)
-
-                if !viewModel.pendingImageAttachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(viewModel.pendingImageAttachments) { attachment in
-                                ChatPendingImageAttachmentView(
-                                    attachment: attachment,
-                                    validation: viewModel.attachmentValidation(for: attachment.id),
-                                    modelRejectsImage: modelLacksVision
-                                        && attachment.chatAttachmentKind == .image
-                                ) {
-                                    viewModel.removePendingImageAttachment(attachment.id)
+            VStack(spacing: 0) {
+                contextHeader.padding(.horizontal, 16)
+                VStack(alignment: .leading, spacing: 0) {
+                    if !viewModel.pendingPastedTexts.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(viewModel.pendingPastedTexts) { item in
+                                    ChatPastedTextCard(pastedText: item, onRemove: {
+                                        viewModel.removePendingPastedText(item.id, undoManager: undoManager)
+                                    })
                                 }
                             }
+                            .padding(2)
                         }
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                }
-
-                if !attachmentNotices.isEmpty {
-                    ChatAttachmentNoticesView(
-                        notices: attachmentNotices,
-                        onDismiss: dismissAttachmentNotice
-                    )
-                }
-
-                HStack(spacing: 8) {
-                    ChatComposerAddButton(
-                        isEnabled: canCompose,
-                        isPresented: $showsAddPanel
-                    )
-                    .frame(width: 30, height: 30)
-                    .help("More message options")
-
-                    ChatWorkspacePicker(
-                        selection: workspaceMode,
-                        onSelect: onSelectWorkspaceMode
-                    )
-
-                    Spacer(minLength: 12)
-
-                    if let contextWindowUsage {
-                        ChatContextWindowRing(usage: contextWindowUsage)
-                            .equatable()
+                    if !viewModel.pendingAnnotations.isEmpty {
+                        ChatAnnotationCards(
+                            annotations: viewModel.pendingAnnotations,
+                            allowsRemoval: true
+                        )
+                        .padding(12)
                     }
+                    ZStack(alignment: .topLeading) {
+                        ChatComposerTextEditor(
+                            text: $viewModel.composerText,
+                            isEnabled: canCompose,
+                            onSubmit: send,
+                            onCancel: cancelPromptEditingAction,
+                            onRecallPrevious: recallPreviousPrompt,
+                            onPasteImage: { viewModel.attachImages(from: $0) },
+                            onContentHeightChange: { height in
+                                editorContentHeight = height
+                            },
+                            maximumHeight: editorMaximumHeight,
+                            fontScale: model.settings.chatFontScale,
+                            focusToken: viewModel.composerFocusToken,
+                            focusOnAppearance: !viewModel.pendingAnnotations.isEmpty,
+                            forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
+                                .isEmpty
+                                && viewModel.pendingPastedTexts.isEmpty
+                                && viewModel.promptEditContext == nil,
+                            onNavigatePendingSelection: viewModel.moveImageModelHighlight,
+                            onCancelPendingDecision: viewModel.cancelPendingToolDecision,
+                            onPasteText: viewModel.attachPastedText,
+                            onTextEdit: viewModel.editComposerText,
+                            onTextCommit: viewModel.commitComposerText,
+                            resetToken: viewModel.composerResetToken
+                        )
 
-                    modelPicker
-
-                    Button {
-                        if showsStopButton {
-                            viewModel.cancel()
-                        } else {
-                            send()
+                        if viewModel.composerText.isEmpty {
+                            HStack(spacing: 8) {
+                                Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                                if showsRecallHint {
+                                    ChatRecallHint()
+                                }
+                            }
+                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
+                            .foregroundStyle(.tertiary)
+                            .padding(textInset)
+                            .offset(x: 4)
+                            .allowsHitTesting(false)
                         }
-                    } label: {
-                        Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
-                            .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(actionButtonColor, in: Circle())
-                            .contentShape(.circle)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!showsStopButton && !effectiveCanSend)
-                    .help(actionButtonHelp)
+                    .frame(height: editorHeight)
+
+                    if !viewModel.pendingImageAttachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(viewModel.pendingImageAttachments) { attachment in
+                                    ChatPendingImageAttachmentView(
+                                        attachment: attachment,
+                                        validation: viewModel.attachmentValidation(for: attachment.id),
+                                        modelRejectsImage: modelLacksVision
+                                            && attachment.chatAttachmentKind == .image
+                                    ) {
+                                        viewModel.removePendingImageAttachment(attachment.id)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 1)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                    }
+
+                    if !attachmentNotices.isEmpty {
+                        ChatAttachmentNoticesView(
+                            notices: attachmentNotices,
+                            onDismiss: dismissAttachmentNotice
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        ChatComposerAddButton(
+                            isEnabled: canCompose,
+                            isPresented: $showsAddPanel
+                        )
+                        .frame(width: 30, height: 30)
+                        .help("More message options")
+
+                        ChatWorkspacePicker(
+                            selection: workspaceMode,
+                            onSelect: onSelectWorkspaceMode
+                        )
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
+
+                        Spacer(minLength: 12)
+
+                        if let contextWindowUsage {
+                            ChatContextWindowRing(usage: contextWindowUsage)
+                                .equatable()
+                        }
+
+                        modelPicker
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
+
+                        Button {
+                            if showsStopButton {
+                                viewModel.cancel()
+                            } else {
+                                send()
+                            }
+                        } label: {
+                            Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
+                                .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(actionButtonColor, in: Circle())
+                                .contentShape(.circle)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!showsStopButton && !effectiveCanSend)
+                        .help(actionButtonHelp)
+                    }
+                    .padding(.leading, 10)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 10)
                 }
-                .padding(.leading, 10)
-                .padding(.trailing, 12)
-                .padding(.bottom, 10)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+                }
+                .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.height
             } action: { height in
@@ -440,6 +451,7 @@ struct ChatComposer: View {
             }
         }
         .padding(.vertical, composerVerticalPadding)
+        .preference(key: ChatComposerMinimumWidthKey.self, value: minimumControlsWidth)
         .task(id: modelScanKey) {
             localLibrary.scan(searchPaths: model.settings.localModelSearchPaths)
         }
@@ -477,6 +489,13 @@ struct ChatComposer: View {
         .sheet(isPresented: $showsCapabilities) {
             ChatCapabilitiesSheet(model: model)
         }
+    }
+
+    private var minimumControlsWidth: CGFloat {
+        // Add, workspace picker, spacer, optional context ring, model picker, Send,
+        // plus the row's spacing and horizontal padding.
+        30 + workspacePickerWidth + 12 + modelPickerWidth + 32 + 22
+            + (contextWindowUsage == nil ? 8 * 4 : 17 + 8 * 5)
     }
 
     private var addPanel: some View {
@@ -750,19 +769,7 @@ struct ChatComposer: View {
     }
 
     private var importedContinuationIsAvailable: Bool {
-        guard viewModel.importedModelRepositoryID != nil else {
-            return true
-        }
-        guard let selectedLocalModel
-        else {
-            return true
-        }
-        guard let tokenCount = viewModel.importedPromptTokenCount,
-            let contextWindow = selectedLocalModel.contextSize
-        else {
-            return true
-        }
-        return tokenCount <= contextWindow
+        viewModel.importedContinuationIsAvailable(contextWindow: selectedLocalModel?.contextSize)
     }
 
     private var importedContinuationNotice: ChatAttachmentNotice? {
@@ -2511,8 +2518,12 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     var onRecallPrevious: (() -> Bool)?
     let onPasteImage: (NSPasteboard) -> Bool
     let onContentHeightChange: (CGFloat) -> Void
+    var acceptsImageDrops = false
+    var onImageDropTargetChange: ((Bool) -> Void)?
+    var maximumHeight: CGFloat = .infinity
     var fontScale: Double = 1.0
     var focusToken: Int = 0
+    var focusOnAppearance = false
     var forwardsKeysToPendingDecision = false
     var onNavigatePendingSelection: ((Int) -> Bool)?
     var onCancelPendingDecision: (() -> Void)?
@@ -2529,7 +2540,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             onRecallPrevious: onRecallPrevious,
             onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange,
-            focusToken: focusToken
+            focusToken: focusToken,
+            focusOnAppearance: focusOnAppearance
         )
     }
 
@@ -2559,10 +2571,12 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 14, height: 12)
         textView.textContainer?.widthTracksTextView = true
         textView.string = text
+        textView.acceptsImageDrops = acceptsImageDrops
+        textView.onImageDropTargetChange = onImageDropTargetChange
 
         let scrollView = ChatComposerNSScrollView()
         scrollView.drawsBackground = false
-        scrollView.hasVerticalScroller = true
+        scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
@@ -2570,6 +2584,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         scrollView.onLayout = context.coordinator.reportContentHeight
 
         context.coordinator.textView = textView
+        context.coordinator.maximumHeight = maximumHeight
         context.coordinator.onPasteText = onPasteText
         context.coordinator.onTextEdit = onTextEdit
         context.coordinator.onTextCommit = onTextCommit
@@ -2585,6 +2600,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         context.coordinator.onTextEdit = onTextEdit
         context.coordinator.onTextCommit = onTextCommit
         context.coordinator.onContentHeightChange = onContentHeightChange
+        context.coordinator.maximumHeight = maximumHeight
 
         guard let textView = context.coordinator.textView else {
             return
@@ -2595,6 +2611,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         textView.font = ChatFontMetrics.bodyNSFont(scale: fontScale)
 
         if let composerTextView = textView as? ChatComposerNSTextView {
+            composerTextView.acceptsImageDrops = acceptsImageDrops
+            composerTextView.onImageDropTargetChange = onImageDropTargetChange
             composerTextView.forwardsKeysToPendingDecision = forwardsKeysToPendingDecision
             composerTextView.onNavigatePendingSelection = onNavigatePendingSelection
             composerTextView.onCancelPendingDecision = onCancelPendingDecision
@@ -2625,9 +2643,10 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         var lastResetToken = 0
         private var pendingEdit: (range: NSRange, replacement: String)?
         var onContentHeightChange: (CGFloat) -> Void
+        var maximumHeight: CGFloat = .infinity
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
-        private var lastFocusToken: Int
+        private var lastFocusToken: Int?
 
         init(
             text: Binding<String>,
@@ -2636,7 +2655,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             onRecallPrevious: (() -> Bool)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void,
-            focusToken: Int
+            focusToken: Int,
+            focusOnAppearance: Bool
         ) {
             _text = text
             self.onSubmit = onSubmit
@@ -2644,7 +2664,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             self.onRecallPrevious = onRecallPrevious
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
-            lastFocusToken = focusToken
+            // Add to chat can reveal a composer that was removed by the expanded work pane.
+            lastFocusToken = focusOnAppearance ? nil : focusToken
         }
 
         func handlePasteImage(_ pasteboard: NSPasteboard) -> Bool {
@@ -2732,6 +2753,17 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             let usedRect = layoutManager.usedRect(for: textContainer)
             let measuredHeight = ceil(usedRect.maxY + (textView.textContainerInset.height * 2))
 
+            // Enable the scroller only once the editor is capped and the text can
+            // actually scroll. Letting AppKit auto-toggle it while the editor is
+            // still growing loops with legacy scrollers ("Show scroll bars:
+            // Always"): the scroller takes width, the text rewraps, the height
+            // changes, the editor resizes, and the scroller toggles again.
+            let needsScroller = measuredHeight > maximumHeight
+            if let scrollView = textView.enclosingScrollView,
+               scrollView.hasVerticalScroller != needsScroller {
+                scrollView.hasVerticalScroller = needsScroller
+            }
+
             guard lastReportedHeight.map({ abs($0 - measuredHeight) >= 0.5 }) ?? true else {
                 return
             }
@@ -2791,6 +2823,14 @@ private final class ChatComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Bool)?
     var onPasteImage: ((NSPasteboard) -> Bool)?
+    var onImageDropTargetChange: ((Bool) -> Void)?
+    var acceptsImageDrops = false {
+        didSet {
+            if acceptsImageDrops {
+                registerForDraggedTypes([.fileURL] + NSImage.imageTypes.map { NSPasteboard.PasteboardType($0) })
+            }
+        }
+    }
     var forwardsKeysToPendingDecision = false
     var onNavigatePendingSelection: ((Int) -> Bool)?
     var onCancelPendingDecision: (() -> Void)?
@@ -2798,6 +2838,57 @@ private final class ChatComposerNSTextView: NSTextView {
     /// Returns whether the recall happened, so an Up key that recalls nothing
     /// still moves the caret.
     var onRecallPrevious: (() -> Bool)?
+
+    private func isImageDrop(_ sender: NSDraggingInfo) -> Bool {
+        acceptsImageDrops && ChatImageAttachment.canReadImages(from: sender.draggingPasteboard)
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isImageDrop(sender) {
+            let canDrop = isEditable && sender.draggingSourceOperationMask.contains(.copy)
+            onImageDropTargetChange?(canDrop)
+            return canDrop ? .copy : []
+        }
+        onImageDropTargetChange?(false)
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onImageDropTargetChange?(false)
+        super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onImageDropTargetChange?(false)
+        super.draggingEnded(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        if isImageDrop(sender) {
+            return isEditable && sender.draggingSourceOperationMask.contains(.copy)
+        }
+        return super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        defer { onImageDropTargetChange?(false) }
+        if isImageDrop(sender) {
+            // NSTextView otherwise inserts the file path into this plain-text editor.
+            guard isEditable, sender.draggingSourceOperationMask.contains(.copy) else { return false }
+            return onPasteImage?(sender.draggingPasteboard) ?? false
+        }
+        return super.performDragOperation(sender)
+    }
 
     override func keyDown(with event: NSEvent) {
         // Return confirms a marked composition in input methods such as Japanese

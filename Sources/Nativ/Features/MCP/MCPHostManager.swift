@@ -23,20 +23,29 @@ final class MCPHostManager: ObservableObject {
     }
 
     private var connections: [UUID: Connection] = [:]
+    private var projectCalls: [UUID: (config: MCPServerConfig, client: MCPClient)] = [:]
+    private let catalog: MCPServerCatalog
     private var appliedServers: [MCPServerConfig] = []
     private var reloadTask: Task<Void, Never>?
     private var reloadGeneration = 0
     private let githubOAuth: (any GitHubOAuthAuthorizing)?
 
     init(
-        githubOAuth: (any GitHubOAuthAuthorizing)? = GitHubOAuthManager.configured()
+        githubOAuth: (any GitHubOAuthAuthorizing)? = GitHubOAuthManager.configured(),
+        catalog: MCPServerCatalog = .bundled
     ) {
         self.githubOAuth = githubOAuth
+        self.catalog = catalog
     }
 
-    func toolDefinitions() -> [MLXChatToolDefinition] {
-        connections.values.flatMap { connection in
-            Self.toolDefinitions(for: connection)
+    func toolDefinitions(projectScope: ChatToolScope? = nil) -> [MLXChatToolDefinition] {
+        connections.values.flatMap { connection -> [MLXChatToolDefinition] in
+            if let projectScope, projectScope.isProject,
+                !projectScope.projectToolsAreAvailable,
+                isProjectFilesystem(connection.config) {
+                return []
+            }
+            return Self.toolDefinitions(for: connection)
         }
     }
 
@@ -56,11 +65,91 @@ final class MCPHostManager: ObservableObject {
         route(for: name) != nil
     }
 
-    func callTool(named name: String, argumentsJSON: String?) async throws -> String {
+    func callTool(
+        named name: String,
+        argumentsJSON: String?,
+        projectScope: ChatToolScope? = nil,
+        currentProjectScope: (() -> ChatToolScope)? = nil
+    ) async throws -> String {
         guard let route = route(for: name) else {
             throw MCPClientError.notConnected
         }
-        return try await route.client.callTool(name: route.toolName, argumentsJSON: argumentsJSON)
+        guard isProjectFilesystem(route.connection.config),
+            let projectScope, projectScope.isProject else {
+            return try await route.connection.client.callTool(
+                name: route.toolName, argumentsJSON: argumentsJSON
+            )
+        }
+
+        let directory = try Self.projectDirectory(
+            expected: projectScope, current: currentProjectScope?() ?? projectScope
+        )
+        let config = route.connection.config
+        let client = await route.connection.client.scopedToDirectory(
+            directory, arguments: Array(config.arguments.dropLast()) + [directory.path]
+        )
+        try Task.checkCancellation()
+        guard connections[config.id] != nil, isEnabled(config) else {
+            throw MCPClientError.notConnected
+        }
+        let callID = UUID()
+        projectCalls[callID] = (config, client)
+        defer { projectCalls[callID] = nil }
+        return try await withTaskCancellationHandler {
+            do {
+                _ = try await client.connectAndListTools()
+                try Task.checkCancellation()
+                guard projectCalls[callID] != nil, isEnabled(config) else {
+                    throw MCPClientError.notConnected
+                }
+                _ = try Self.projectDirectory(
+                    expected: projectScope, current: currentProjectScope?() ?? projectScope
+                )
+                let result = try await client.callTool(
+                    name: route.toolName, argumentsJSON: argumentsJSON
+                )
+                await client.disconnect()
+                return result
+            } catch {
+                await client.disconnect()
+                throw error
+            }
+        } onCancel: {
+            Task { await client.disconnect() }
+        }
+    }
+
+    private func isEnabled(_ config: MCPServerConfig) -> Bool {
+        appliedServers.contains {
+            $0.id == config.id && $0.isEnabled && Self.launchEquivalent($0, config)
+        }
+    }
+
+    private func isProjectFilesystem(_ config: MCPServerConfig) -> Bool {
+        guard let entry = catalog.entry(matching: config), entry.id == "filesystem" else {
+            return false
+        }
+        return config.command == entry.command && config.arguments == entry.arguments
+            && config.arguments.last == "."
+    }
+
+    static func projectDirectory(expected: ChatToolScope, current: ChatToolScope) throws -> URL {
+        guard expected.projectToolsAreAvailable, current.projectToolsAreAvailable,
+            expected.projectID == current.projectID, expected.rootPath == current.rootPath,
+            let path = expected.rootPath, path.hasPrefix("/") else {
+            throw MCPClientError.toolFailed(
+                "Project file access is disabled or the project folder has changed or is unavailable."
+            )
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard directory.resolvingSymlinksInPath().path == directory.path,
+            FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
+            isDirectory.boolValue,
+            FileWriteAccessPolicy.isConfigured(rootPath: directory.path) else {
+            throw MCPClientError.toolFailed("The project folder is no longer available.")
+        }
+        return directory
     }
 
     func reload(servers: [MCPServerConfig]) {
@@ -88,10 +177,16 @@ final class MCPHostManager: ObservableObject {
 
     func shutdown() {
         reloadTask?.cancel()
+        reloadGeneration += 1
         let previous = connections
+        let previousProjectCalls = projectCalls
+        projectCalls = [:]
         connections = [:]
         states = [:]
         Task {
+            for call in previousProjectCalls.values {
+                await call.client.disconnect()
+            }
             for connection in previous.values {
                 await connection.client.disconnect()
             }
@@ -115,6 +210,12 @@ final class MCPHostManager: ObservableObject {
         let enabled = servers.filter(\.isEnabled)
         let enabledByID = Dictionary(enabled.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
+        for (id, call) in projectCalls {
+            if !enabled.contains(where: { $0.id == call.config.id && Self.launchEquivalent($0, call.config) }) {
+                projectCalls[id] = nil
+                await call.client.disconnect()
+            }
+        }
         for (id, connection) in connections {
             let reusable = enabledByID[id].map { Self.launchEquivalent($0, connection.config) } ?? false
             if !reusable {
@@ -149,7 +250,7 @@ final class MCPHostManager: ObservableObject {
                 )
                 continue
             }
-            let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
+            let catalogEntry = catalog.entry(matching: config)
             if catalogEntry?.id == "github" {
                 githubPending.append((config, executable))
                 continue
@@ -286,7 +387,7 @@ final class MCPHostManager: ObservableObject {
             )
             guard generation == reloadGeneration else { return }
 
-            let catalogEntry = MCPServerCatalog.bundled.entry(matching: config)
+            let catalogEntry = catalog.entry(matching: config)
             var environment = Self.childEnvironment(
                 searchPath: searchPath,
                 overrides: config.environment,
@@ -354,13 +455,13 @@ final class MCPHostManager: ObservableObject {
         }
     }
 
-    private func route(for name: String) -> (client: MCPClient, toolName: String)? {
+    private func route(for name: String) -> (connection: Connection, toolName: String)? {
         for connection in connections.values {
             let prefix = "mcp__\(connection.slug)__"
             guard name.hasPrefix(prefix) else { continue }
             let toolName = String(name.dropFirst(prefix.count))
             if connection.tools.contains(where: { $0.name == toolName }) {
-                return (connection.client, toolName)
+                return (connection, toolName)
             }
         }
         return nil

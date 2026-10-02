@@ -7,17 +7,28 @@ struct MarkdownView: NSViewRepresentable {
     let content: String
     let style: MarkdownStyle
     var plainText = false
+    var isStreaming = false
+    var onTranslate: ((String) -> Void)?
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.chatSearchHighlight) private var searchHighlight
 
     func makeNSView(context: Context) -> MarkdownSurface {
         let view = MarkdownSurface()
-        view.configure(content: content, style: style, plainText: plainText)
+        view.onTranslate = onTranslate
+        view.onAddToChat = onAddToChat
+        view.onRequestEdit = onRequestEdit
+        view.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         view.setSearchHighlight(searchHighlight)
         return view
     }
 
     func updateNSView(_ nsView: MarkdownSurface, context: Context) {
-        nsView.configure(content: content, style: style, plainText: plainText)
+        nsView.onTranslate = onTranslate
+        nsView.onAddToChat = onAddToChat
+        nsView.onRequestEdit = onRequestEdit
+        nsView.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         nsView.setSearchHighlight(searchHighlight)
     }
 
@@ -34,11 +45,18 @@ struct MarkdownView: NSViewRepresentable {
 
 @MainActor
 final class MarkdownSurface: NSView {
+    var onTranslate: ((String) -> Void)?
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
+    private let workSelectionActions = ChatWorkSelectionActions()
     private(set) lazy var selection = MarkdownSelection(surface: self)
     var visibleTextViews: [MarkdownSelectableTextView] { mounted.values.flatMap { $0.content.textViews } }
     private var content: String?
     private var style = MarkdownStyle()
     private var plainText = false
+    private var fadesStreamingText = false
+    private var streamingUpdate: CFTimeInterval?
+    private var newStreamingBlocks: [String: CFTimeInterval] = [:]
     var searchHighlight: ChatSearchHighlight?
     var pendingSearchReveal = false
     private var mounted: [String: MarkdownBlockView] = [:]
@@ -68,12 +86,27 @@ final class MarkdownSurface: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        if onAddToChat != nil {
+            workSelectionActions.onAddToChat = onAddToChat
+            workSelectionActions.onRequestEdit = onRequestEdit
+            return workSelectionActions.menu(text: selection.text, screenFrame: selection.selectionFrame, in: self)
+        }
         let menu = NSMenu()
         let copy = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
         copy.target = self
         copy.isEnabled = selection.range.length > 0
+        if onTranslate != nil {
+            let translate = menu.addItem(withTitle: "Translate…", action: #selector(translateSelection(_:)), keyEquivalent: "")
+            translate.target = self
+            translate.isEnabled = selection.range.length > 0
+        }
         menu.autoenablesItems = false
         return menu
+    }
+
+    @objc private func translateSelection(_ sender: Any?) {
+        guard !selection.text.isEmpty else { return }
+        onTranslate?(selection.text)
     }
 
     override init(frame: NSRect) {
@@ -84,8 +117,23 @@ final class MarkdownSurface: NSView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("Not a serialized view") }
 
-    func configure(content: String, style: MarkdownStyle, plainText: Bool = false) {
+    func configure(content: String, style: MarkdownStyle, plainText: Bool = false, fadesStreamingText: Bool = false) {
+        if self.fadesStreamingText != fadesStreamingText {
+            self.fadesStreamingText = fadesStreamingText
+            if !fadesStreamingText {
+                visibleTextViews.forEach { $0.stopStreamingFade() }
+                newStreamingBlocks.removeAll()
+            }
+        }
         guard self.content != content || self.style != style || self.plainText != plainText else { return }
+        if self.content != content { workSelectionActions.dismiss() }
+        streamingUpdate = fadesStreamingText && self.content != nil && self.style == style
+            && content.hasPrefix(self.content ?? "")
+            ? CACurrentMediaTime() : nil
+        if streamingUpdate == nil {
+            newStreamingBlocks.removeAll()
+            visibleTextViews.forEach { $0.stopStreamingFade() }
+        }
         selection.invalidate(contentChanged: self.content != content)
         self.content = content
         self.style = style
@@ -106,6 +154,12 @@ final class MarkdownSurface: NSView {
     }
 
     private func setSnapshot(_ snapshot: MarkdownLayout) {
+        if let streamingUpdate, fadesStreamingText {
+            newStreamingBlocks = newStreamingBlocks.filter { CACurrentMediaTime() - $0.value < MarkdownSelectableTextView.fadeDuration }
+            for block in snapshot.blocks where !blockIDs.contains(block.id) {
+                newStreamingBlocks[block.id] = streamingUpdate
+            }
+        }
         self.snapshot = snapshot
         selection.invalidate(contentChanged: false)
         refreshedVisibleRect = nil
@@ -136,6 +190,7 @@ final class MarkdownSurface: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil { workSelectionActions.dismiss() }
         NotificationCenter.default.removeObserver(
             self, name: NSView.boundsDidChangeNotification, object: nil)
         if window != nil {
@@ -176,7 +231,9 @@ final class MarkdownSurface: NSView {
                 addSubview(view)
             }
             view.frame = block.frame
-            view.update(block, selection: selection)
+            view.update(block, selection: selection,
+                        fadeStart: fadesStreamingText ? streamingUpdate : nil,
+                        newBlockStart: newStreamingBlocks[block.id])
         }
         for id in Array(mounted.keys) where !needed.contains(id) {
             guard let view = mounted[id] else { continue }
@@ -224,7 +281,7 @@ private final class MarkdownBlockView: NSView {
     convenience init() { self.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("Not a serialized view") }
 
-    func update(_ block: MarkdownBlock, selection: MarkdownSelection) {
+    func update(_ block: MarkdownBlock, selection: MarkdownSelection, fadeStart: CFTimeInterval?, newBlockStart: CFTimeInterval?) {
         if block.scrollsHorizontally {
             if scroller == nil {
                 content.removeFromSuperview()
@@ -249,7 +306,7 @@ private final class MarkdownBlockView: NSView {
             }
             content.frame = bounds
         }
-        content.update(block, selection: selection)
+        content.update(block, selection: selection, fadeStart: fadeStart, newBlockStart: newBlockStart)
     }
 }
 
@@ -261,7 +318,8 @@ private final class MarkdownBlockContentView: NSView {
     override var isFlipped: Bool { true }
     var containsSelection: Bool { texts.values.contains(where: \.hasActiveSelection) }
 
-    func update(_ block: MarkdownBlock, selection: MarkdownSelection) {
+    func update(_ block: MarkdownBlock, selection: MarkdownSelection, fadeStart: CFTimeInterval?, newBlockStart: CFTimeInterval?) {
+        let previousBlock = self.block
         self.block = block
         // The parent already restricts mounting to the viewport. Cells in large tables are restricted too.
         let region = visibleRect.insetBy(dx: -100, dy: -350)
@@ -285,6 +343,10 @@ private final class MarkdownBlockContentView: NSView {
                 }
                 texts[fragment.id] = view
                 addSubview(view)
+                let previousText = previousBlock?.text.first { $0.id == fragment.id }?.text
+                if let start = previousText == nil ? newBlockStart : fadeStart {
+                    view.fadeNewText(from: previousText, continuing: previous, startedAt: start)
+                }
             }
             view.frame = fragment.frame
             view.fragmentID = block.id + "/" + fragment.id
@@ -313,6 +375,7 @@ private final class MarkdownBlockContentView: NSView {
 
 @MainActor
 final class MarkdownSelectableTextView: NSTextView {
+    static let fadeDuration = 0.25
     weak var document: MarkdownSelection?
     var fragmentID = ""
     var documentSelection: NSRange? {
@@ -329,6 +392,7 @@ final class MarkdownSelectableTextView: NSTextView {
     let system: MarkdownTextSystem
     var searchText: MarkdownSearchText { MarkdownSearchText(original) }
     private let original: NSAttributedString
+    private var streamingFades: [(range: NSRange, start: CFTimeInterval)] = []
     private let measuredWidth: CGFloat
     var hasActiveSelection: Bool { window?.firstResponder === self && selectedRange().length > 0 }
 
@@ -357,6 +421,59 @@ final class MarkdownSelectableTextView: NSTextView {
         measuredWidth == fragment.frame.width && original.isEqual(to: fragment.text)
     }
 
+    func stopStreamingFade() {
+        streamingFades.removeAll()
+        layer?.mask = nil
+    }
+
+    func fadeNewText(
+        from previousText: NSAttributedString?,
+        continuing previousView: MarkdownSelectableTextView?,
+        startedAt start: CFTimeInterval
+    ) {
+        let now = CACurrentMediaTime()
+        let previousLength = previousText?.length ?? 0
+        guard now - start < Self.fadeDuration, original.length > previousLength,
+              original.string.hasPrefix(previousText?.string ?? "") else { return }
+
+        streamingFades = previousView?.streamingFades.filter { now - $0.start < Self.fadeDuration } ?? []
+        streamingFades.append((NSRange(location: previousLength, length: original.length - previousLength), start))
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        wantsLayer = true
+        guard let layer else { return }
+
+        let mask = CAShapeLayer()
+        mask.frame = bounds
+        mask.fillColor = NSColor.black.cgColor
+        let fadingPath = CGMutablePath()
+        for fade in streamingFades {
+            let path = CGMutablePath()
+            for rect in selectionRects(for: fade.range) { path.addRect(rect) }
+            fadingPath.addPath(path)
+            let textMask = CAShapeLayer()
+            textMask.frame = bounds
+            textMask.path = path
+            textMask.fillColor = NSColor.black.cgColor
+            mask.addSublayer(textMask)
+
+            let animation = CABasicAnimation(keyPath: "opacity")
+            animation.fromValue = 0.2
+            animation.toValue = 1
+            animation.duration = Self.fadeDuration
+            animation.beginTime = textMask.convertTime(fade.start, from: nil)
+            textMask.add(animation, forKey: "streamingFade")
+        }
+        mask.path = CGPath(rect: bounds, transform: nil).subtracting(fadingPath)
+        layer.mask = mask
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0, start + Self.fadeDuration - CACurrentMediaTime())))
+            if self?.layer?.mask === mask { self?.stopStreamingFade() }
+        }
+    }
+
     override func mouseDown(with event: NSEvent) {
         guard let document else { super.mouseDown(with: event); return }
         let index = characterIndexForInsertion(at: convert(event.locationInWindow, from: nil))
@@ -365,6 +482,16 @@ final class MarkdownSelectableTextView: NSTextView {
         if document.range.length == 0, event.clickCount == 1, !event.modifierFlags.contains(.shift), let link {
             clicked(onLink: link, at: index)
         }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        // NSTextView otherwise takes focus and clears the document-wide selection.
+        guard let document, document.range.length > 0,
+              let menu = document.contextualMenu(for: event) else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     override func accessibilitySelectedText() -> String? {
@@ -383,11 +510,7 @@ final class MarkdownSelectableTextView: NSTextView {
 
     override func menu(for event: NSEvent) -> NSMenu? {
         if document?.range.length ?? 0 > 0 {
-            let menu = NSMenu()
-            let item = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
-            item.target = self
-            menu.autoenablesItems = false
-            return menu
+            return document?.contextualMenu(for: event)
         }
         return super.menu(for: event)
     }

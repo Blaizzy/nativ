@@ -135,6 +135,7 @@ struct AudioView: View {
     var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
+    @ObservedObject private var wakeWordMonitor = VoiceWakeWordMonitor.shared
     @ObservedObject private var animations: VoiceAnimationPreferences
     @ObservedObject private var sounds: VoiceSoundPreferences
     @ObservedObject private var captureLibrary: AudioCaptureLibrary
@@ -144,6 +145,13 @@ struct AudioView: View {
     @StateObject private var inputVolume = AudioInputVolumeController()
     @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
+    @AppStorage(AudioCapturePreferences.summaryLanguageKey)
+    private var summaryLanguage = AudioSummaryLanguage.automatic
+    @AppStorage(AudioCapturePreferences.summaryPromptKey)
+    private var summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
+    @AppStorage(AudioCapturePreferences.summaryMergePromptKey)
+    private var summaryMergePrompt = AudioCapturePreferences.defaultSummaryMergePrompt
+    @State private var showsSummaryPrompts = false
     @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
@@ -389,6 +397,7 @@ struct AudioView: View {
             ) {
                 audioInputPanel
                 captureControls
+                summarySettingsPanel
                 capturePrivacyPanel
             }
         case .overview:
@@ -429,6 +438,8 @@ struct AudioView: View {
                 subtitle: "Customize keyboard shortcuts and spoken commands for dictation"
             ) {
                 shortcutConfigurationPanel
+                    .frame(maxWidth: 760)
+                wakeWordConfigurationPanel
                     .frame(maxWidth: 760)
                 spokenReturnConfigurationPanel
                     .frame(maxWidth: 760)
@@ -1335,6 +1346,132 @@ struct AudioView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(tint.opacity(0.2), lineWidth: 1)
+        }
+    }
+
+    private var summarySettingsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Summary settings", systemImage: "text.bubble")
+                .font(.headline)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Language")
+                        .font(.callout.weight(.medium))
+                    Text("Auto infers the language from your transcript. Select a language to override it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Summary language", selection: $summaryLanguage) {
+                    Text(AudioSummaryLanguage.automatic.title)
+                        .tag(AudioSummaryLanguage.automatic)
+                    Divider()
+                    ForEach(AudioSummaryLanguage.allCases.filter { $0 != .automatic }) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 210, alignment: .trailing)
+                .accessibilityLabel("Summary language")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showsSummaryPrompts.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showsSummaryPrompts ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 8)
+                        Text("LLM prompts")
+                            .font(.callout.weight(.medium))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("LLM prompts")
+                .accessibilityValue(showsSummaryPrompts ? "Expanded" : "Collapsed")
+
+                if showsSummaryPrompts {
+                    summaryPromptEditors
+                        .padding(.top, 12)
+                }
+            }
+
+            Text("Applies to new and regenerated summaries.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .audioPanelStyle(cornerRadius: 16)
+    }
+
+    private var summaryPromptEditors: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            summaryPromptEditor(
+                title: "Summary prompt",
+                detail: "Used for the transcript, or each section of a long recording.",
+                prompt: $summaryPrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryPrompt
+            )
+
+            Divider()
+
+            summaryPromptEditor(
+                title: "Merge prompt",
+                detail: "Used to combine section summaries for long recordings.",
+                prompt: $summaryMergePrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryMergePrompt
+            )
+
+            Text("Saved automatically. The selected language takes precedence for both prompts. An empty prompt uses its default instructions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func summaryPromptEditor(
+        title: String,
+        detail: String,
+        prompt: Binding<String>,
+        defaultPrompt: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Button("Reset prompt") {
+                    prompt.wrappedValue = defaultPrompt
+                }
+                .disabled(prompt.wrappedValue == defaultPrompt)
+                .accessibilityLabel("Reset \(title.lowercased())")
+            }
+
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: prompt)
+                .font(.system(.callout, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .frame(height: 120)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                }
+                .accessibilityLabel(title)
         }
     }
 
@@ -2422,6 +2559,44 @@ struct AudioView: View {
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var wakeWordConfigurationPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Hey Nativ", systemImage: "waveform.badge.mic")
+                        .font(.headline)
+                    Text("Start dictation by saying “hey nativ”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+                Toggle("Listen for hey nativ", isOn: $shortcuts.isWakeWordEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase, so the Nativ server must be running.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if shortcuts.isWakeWordEnabled {
+                HStack {
+                    Text(wakeWordMonitor.state.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if case .unavailable = wakeWordMonitor.state {
+                        Button("Try Again") { wakeWordMonitor.restart() }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
         .padding(18)
         .audioPanelStyle()
     }

@@ -1,6 +1,18 @@
 import XCTest
 
 final class VoiceDictationTranscriptTests: XCTestCase {
+    func testWakePhraseIsRemovedBeforeTheReturnCommand() {
+        let result = VoiceDictationTranscript("Earlier audio. Hey, NATIV! Send the document enter.", wakeWord: true)
+        XCTAssertEqual(result.text, "Send the document")
+        XCTAssertTrue(result.pressReturn)
+        XCTAssertEqual(VoiceDictationTranscript("Hey native, hello there.", wakeWord: true).text, "hello there.")
+        for text in ["Hey David hello", "Hey natives hello", "They native hello", "hello there", "Hey native!"] {
+            XCTAssertTrue(VoiceDictationTranscript(text, wakeWord: true).isEmpty, text)
+        }
+        // Keyboard dictation must keep deliberately spoken wake words.
+        XCTAssertEqual(VoiceDictationTranscript("Hey native hello.").text, "Hey native hello.")
+    }
+
     func testTrailingEnterBecomesReturnWithoutAppearingInText() {
         let result = VoiceDictationTranscript("Send me the details enter")
 

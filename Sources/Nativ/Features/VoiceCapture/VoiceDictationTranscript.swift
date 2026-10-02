@@ -11,9 +11,11 @@ struct VoiceDictationTranscript: Equatable, Sendable {
 
     init(
         _ rawTranscript: String,
+        wakeWord: Bool = false,
         returnCommandTrigger: String? = defaultReturnCommandTrigger
     ) {
-        let trimmed = rawTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let content = wakeWord ? (VoiceWakeWordTranscript.dictation(from: rawTranscript) ?? "") : rawTranscript
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
         let triggerWords = returnCommandTrigger?.split(whereSeparator: \.isWhitespace) ?? []
         let triggerPattern = triggerWords
             .map { NSRegularExpression.escapedPattern(for: String($0)) }

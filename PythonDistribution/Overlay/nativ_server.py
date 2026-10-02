@@ -16,6 +16,15 @@ from threading import Lock
 from types import SimpleNamespace
 from typing import Any
 
+try:
+    import truststore
+except ImportError:
+    pass
+else:
+    # Verify TLS with the macOS keychain, not only certifi, so Hugging Face
+    # downloads work behind TLS-inspecting proxies (Cloudflare WARP, Zscaler, ...).
+    truststore.inject_into_ssl()
+
 import mlx.core as mx
 from fastapi import HTTPException, Request
 from fastapi.responses import Response

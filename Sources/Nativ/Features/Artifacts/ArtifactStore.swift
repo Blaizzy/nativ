@@ -51,6 +51,8 @@ final class ArtifactStore: ObservableObject {
 
     private var mutationRevision = 0
     private var knownFingerprint: String?
+    let trash: ArtifactTrash?
+    private var trashCancellable: AnyCancellable?
     private let mediaStore: MediaAssetStore
     private let rebuildIndex: Rebuild
     private var persistedDataChangeCancellable: AnyCancellable?
@@ -68,11 +70,22 @@ final class ArtifactStore: ObservableObject {
         persistedDataChanges: PersistedDataChangeHub? = nil,
         rebuild: Rebuild? = nil,
         mediaStore: MediaAssetStore = .shared,
-        deletionHandler: @escaping DeletionHandler = { _ in true }
+        trash: ArtifactTrash? = nil,
+        deletionHandler: DeletionHandler? = nil
     ) {
         self.mediaStore = mediaStore
         rebuildIndex = rebuild ?? Self.rebuild
-        self.deletionHandler = deletionHandler
+        self.trash = trash
+        self.deletionHandler = deletionHandler ?? { artifact in
+            guard let trash else { return false }
+            do {
+                try trash.delete(artifact)
+                return true
+            } catch {
+                trash.errorMessage = error.localizedDescription
+                return false
+            }
+        }
         indexURL = storage.indexURL
         cacheDirectory = storage.cacheDirectory
         favoritesURL = storage.favoritesURL
@@ -82,17 +95,25 @@ final class ArtifactStore: ObservableObject {
         favoriteIDs = Self.loadFavorites(favoritesURL)
         displayNames = Self.loadNames(displayNamesURL)
         let stored = Self.loadIndex(indexURL)
-        artifacts = stored.artifacts
+        artifacts = stored.artifacts.filter { artifact in !((trash?.records ?? []).contains { $0.id == artifact.id }) }
         knownFingerprint = stored.fingerprint
         persistedDataChangeCancellable = persistedDataChanges?.changes
             .sink { [weak self] change in
                 switch change.kind {
                 case .chatSession, .imageGenerationSession:
                     self?.refresh()
-                case .chatFolders:
+                case .chatFolders, .artifactDeleted:
                     break
                 }
             }
+        trashCancellable = trash?.$records.dropFirst().sink { [weak self] records in
+            guard let self else { return }
+            mutationRevision += 1
+            knownFingerprint = nil
+            let deletedIDs = Set(records.map(\.id))
+            artifacts.removeAll { deletedIDs.contains($0.id) }
+            refresh()
+        }
         if refreshesAutomatically {
             refresh()
         }
@@ -124,6 +145,31 @@ final class ArtifactStore: ObservableObject {
             return custom
         }
         return artifact.filename
+    }
+
+    func sortedByName(_ artifacts: [Artifact]) -> [Artifact] {
+        artifacts.sorted {
+            let comparison = displayName(for: $0).localizedCaseInsensitiveCompare(displayName(for: $1))
+            return comparison == .orderedSame
+                ? $0.id.uuidString < $1.id.uuidString
+                : comparison == .orderedAscending
+        }
+    }
+
+    func searchResults(in artifacts: [Artifact], query: String, semanticMatches: [UUID]?) -> [Artifact] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return artifacts }
+        let directMatches = artifacts.filter {
+            displayName(for: $0).lowercased().contains(query) || $0.searchText.contains(query)
+        }
+        guard let semanticMatches else { return directMatches }
+        let directIDs = Set(directMatches.map(\.id))
+        let candidates = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen = directIDs
+        return directMatches + semanticMatches.compactMap { id in
+            guard seen.insert(id).inserted else { return nil }
+            return candidates[id]
+        }
     }
 
     func rename(_ artifact: Artifact, to name: String) {
@@ -194,6 +240,11 @@ final class ArtifactStore: ObservableObject {
         try? data.write(to: url, options: .atomic)
     }
 
+    func rescan() {
+        trash?.reconcile()
+        refresh()
+    }
+
     func refresh() {
         guard !isRefreshing else {
             refreshPending = true
@@ -209,7 +260,8 @@ final class ArtifactStore: ObservableObject {
             let rebuilt = rebuild(cache, index, known)
             await MainActor.run {
                 if revision == self.mutationRevision {
-                    self.artifacts = rebuilt.artifacts
+                    let deletedIDs = Set(self.trash?.records.map(\.id) ?? [])
+                    self.artifacts = rebuilt.artifacts.filter { !deletedIDs.contains($0.id) }
                     self.knownFingerprint = rebuilt.fingerprint
                 } else {
                     self.refreshPending = true
@@ -225,17 +277,7 @@ final class ArtifactStore: ObservableObject {
 
     @discardableResult
     func delete(_ artifact: Artifact) -> Bool {
-        guard deletionHandler(artifact) else {
-            return false
-        }
-        mutationRevision += 1
-        knownFingerprint = nil
-        if artifact.asset == nil {
-            try? FileManager.default.removeItem(at: fileURL(for: artifact))
-        }
-        artifacts.removeAll { $0.id == artifact.id }
-        Self.writeIndex(artifacts, fingerprint: nil, to: indexURL)
-        return true
+        delete([artifact]).contains(artifact.id)
     }
 
     @discardableResult
@@ -246,9 +288,6 @@ final class ArtifactStore: ObservableObject {
                 continue
             }
             mutationRevision += 1
-            if artifact.asset == nil {
-                try? FileManager.default.removeItem(at: fileURL(for: artifact))
-            }
             deletedIDs.insert(artifact.id)
         }
         if !deletedIDs.isEmpty {

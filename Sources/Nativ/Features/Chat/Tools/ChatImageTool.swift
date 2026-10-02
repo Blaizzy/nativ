@@ -218,8 +218,6 @@ struct ChatImageToolExecutor {
             count: min(max(request.count ?? 1, 1), 4),
             width: boundedDimension(request.width ?? sourceSize?.width ?? 512),
             height: boundedDimension(request.height ?? sourceSize?.height ?? 512),
-            steps: 4,
-            guidance: 1,
             seedText: request.seed.map(String.init) ?? ""
         )
         let outputs = try await ImageGenerationExecutor().run(

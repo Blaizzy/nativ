@@ -584,6 +584,14 @@ struct MLXDrafterModelResolver: Sendable {
     }
 }
 
+/// A cached repository that holds partially downloaded files but no loadable snapshot.
+struct IncompleteModelDownload: Identifiable, Hashable, Sendable {
+    let repoID: String
+    let sizeBytes: Int64?
+
+    var id: String { repoID }
+}
+
 enum LocalModelDiscovery {
     private actor ScanCache {
         struct Key: Hashable, Sendable {
@@ -642,6 +650,73 @@ enum LocalModelDiscovery {
                 additionalPaths: searchPaths.additional
             )
         )
+    }
+
+    static func incompleteDownloads(path: String) async -> [IncompleteModelDownload] {
+        let expandedPath = Self.expandedPath(path)
+        return await Task.detached(priority: .utility) {
+            Self.incompleteDownloadsSynchronously(path: expandedPath)
+        }.value
+    }
+
+    static func incompleteDownloadsSynchronously(path: String) -> [IncompleteModelDownload] {
+        let fileManager = FileManager.default
+        let repoURLs = (try? fileManager.contentsOfDirectory(
+            at: URL(fileURLWithPath: path, isDirectory: true),
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return repoURLs.compactMap { repoURL -> IncompleteModelDownload? in
+            guard repoURL.lastPathComponent.hasPrefix("models--"),
+                  isDirectoryURL(repoURL, fileManager: fileManager),
+                  let repoID = repoID(fromCacheDirectoryName: repoURL.lastPathComponent)
+            else {
+                return nil
+            }
+
+            let snapshotURL = preferredSnapshotURL(for: repoURL, fileManager: fileManager)
+            if let snapshotURL,
+               isLikelyMLXModelSnapshot(snapshotURL, model: repoID, fileManager: fileManager) {
+                return nil
+            }
+
+            let blobsURL = repoURL.appendingPathComponent("blobs", isDirectory: true)
+            let hasPartialBlob = ((try? fileManager.contentsOfDirectory(atPath: blobsURL.path)) ?? [])
+                .contains { $0.hasSuffix(".incomplete") }
+            let hasMissingShards = snapshotURL.map {
+                safetensorsShardIndexStatus(at: $0, fileManager: fileManager) == .incomplete
+            } ?? false
+            guard hasPartialBlob || hasMissingShards else {
+                return nil
+            }
+
+            return IncompleteModelDownload(
+                repoID: repoID,
+                sizeBytes: allocatedSize(of: repoURL, fileManager: fileManager)
+            )
+        }
+        .sorted { $0.repoID.localizedStandardCompare($1.repoID) == .orderedAscending }
+    }
+
+    /// Disk space held by regular files under `url`; symlinks are not followed,
+    /// so the result is what deleting the directory frees.
+    private static func allocatedSize(of url: URL, fileManager: FileManager) -> Int64? {
+        let keys: [URLResourceKey] = [.isRegularFileKey, .totalFileAllocatedSizeKey]
+        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: keys) else {
+            return nil
+        }
+        var totalBytes: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            guard let values = try? fileURL.resourceValues(forKeys: Set(keys)),
+                  values.isRegularFile == true,
+                  let size = values.totalFileAllocatedSize
+            else {
+                continue
+            }
+            totalBytes += Int64(size)
+        }
+        return totalBytes > 0 ? totalBytes : nil
     }
 
     private static func performScan(
@@ -1041,9 +1116,15 @@ enum LocalModelDiscovery {
         let configURL = snapshotURL.appendingPathComponent("config.json")
         let tokenizerConfigURL = snapshotURL.appendingPathComponent("tokenizer_config.json")
         let modelIndexURL = snapshotURL.appendingPathComponent("model_index.json")
-        guard fileManager.fileExists(atPath: configURL.path) || fileManager.fileExists(atPath: tokenizerConfigURL.path) || fileManager.fileExists(atPath: modelIndexURL.path)
-        else {
-            return false
+        if !fileManager.fileExists(atPath: configURL.path)
+            && !fileManager.fileExists(atPath: tokenizerConfigURL.path)
+            && !fileManager.fileExists(atPath: modelIndexURL.path)
+        {
+            return MLXImageModelResolver.shared.isSupportedImageModel(
+                model: model,
+                at: snapshotURL,
+                fileManager: fileManager
+            )
         }
 
         switch safetensorsShardIndexStatus(at: snapshotURL, fileManager: fileManager) {
@@ -1646,6 +1727,11 @@ enum LocalModelDiscovery {
         ) {
             capabilities.insert(.imageEditing)
         }
+        if capabilities.contains(.imageGeneration)
+            || capabilities.contains(.imageEditing)
+        {
+            capabilities.remove(.text)
+        }
 
         let audioKeys: Set<String> = [
             "audio_config",
@@ -2000,6 +2086,7 @@ enum LocalModelDiscoveryError: LocalizedError, Equatable {
 @MainActor
 final class LocalModelLibrary: ObservableObject {
     @Published private(set) var models: [LocalModel] = []
+    @Published private(set) var incompleteDownloads: [IncompleteModelDownload] = []
     @Published private(set) var isScanning = false
     @Published private(set) var deletingModelIDs = Set<String>()
     @Published private(set) var error: String?
@@ -2018,10 +2105,14 @@ final class LocalModelLibrary: ObservableObject {
         scanTask = Task { [weak self] in
             do {
                 let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+                let incompleteDownloads = await LocalModelDiscovery.incompleteDownloads(
+                    path: searchPaths.primary
+                )
                 guard !Task.isCancelled else {
                     return
                 }
                 self?.models = models
+                self?.incompleteDownloads = incompleteDownloads
                 self?.error = nil
             } catch is CancellationError {
                 return
@@ -2030,6 +2121,7 @@ final class LocalModelLibrary: ObservableObject {
                     return
                 }
                 self?.models = []
+                self?.incompleteDownloads = []
                 self?.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
 
@@ -2047,28 +2139,29 @@ final class LocalModelLibrary: ObservableObject {
     }
 
     func delete(
-        model: LocalModel,
+        repoID: String,
         path: String,
         volumeIdentifier: String?,
         onCompletion: @escaping () -> Void
     ) {
-        guard !deletingModelIDs.contains(model.repoID) else { return }
-        deletingModelIDs.insert(model.repoID)
+        guard !deletingModelIDs.contains(repoID) else { return }
+        deletingModelIDs.insert(repoID)
         error = nil
 
         Task { [weak self] in
             do {
                 try await LocalModelDiscovery.delete(
-                    repoID: model.repoID,
+                    repoID: repoID,
                     path: path,
                     volumeIdentifier: volumeIdentifier
                 )
-                self?.models.removeAll { $0.repoID == model.repoID }
-                self?.deletingModelIDs.remove(model.repoID)
+                self?.models.removeAll { $0.repoID == repoID }
+                self?.incompleteDownloads.removeAll { $0.repoID == repoID }
+                self?.deletingModelIDs.remove(repoID)
                 onCompletion()
             } catch {
-                self?.deletingModelIDs.remove(model.repoID)
-                self?.error = "Couldn’t delete \(model.repoID): \(error.localizedDescription)"
+                self?.deletingModelIDs.remove(repoID)
+                self?.error = "Couldn’t delete \(repoID): \(error.localizedDescription)"
             }
         }
     }

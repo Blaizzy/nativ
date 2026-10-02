@@ -505,6 +505,7 @@ def install_requirements(
     python: Path,
     *,
     requirements: Path,
+    mlx_vlm_source: Path | None,
     mlx_audio_source: Path | None,
     extra_pip_args: list[str],
 ) -> None:
@@ -523,6 +524,9 @@ def install_requirements(
         "-r",
         str(requirements),
     ]
+    if mlx_vlm_source:
+        log(f"Resolving requirements with local mlx-vlm source {mlx_vlm_source}")
+        command.append(str(mlx_vlm_source))
     if mlx_audio_source:
         log(f"Resolving requirements with local mlx-audio source {mlx_audio_source}")
         command.append(str(mlx_audio_source))
@@ -720,7 +724,7 @@ def parse_args() -> argparse.Namespace:
         "--mlx-vlm-source",
         type=Path,
         default=Path(default_mlx_vlm_source) if default_mlx_vlm_source else None,
-        help="Install mlx-vlm from a local source checkout after installing dependencies",
+        help="Resolve and install mlx-vlm from a local source checkout",
     )
     parser.add_argument(
         "--mlx-audio-source",
@@ -814,6 +818,7 @@ def main() -> None:
             install_requirements(
                 python,
                 requirements=requirements,
+                mlx_vlm_source=mlx_vlm_source,
                 mlx_audio_source=mlx_audio_source,
                 extra_pip_args=args.pip_arg,
             )

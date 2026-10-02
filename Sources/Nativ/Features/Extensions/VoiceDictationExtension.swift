@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import NativExtensionSDK
 import SwiftUI
 
@@ -12,11 +13,21 @@ final class VoiceDictationExtension: NativHostExtension {
     private let coordinator = VoiceCaptureCoordinator()
     private let audioCaptureLibrary = AudioCaptureLibrary()
     private var isActive = false
+    private var audioActivityObservation: AnyCancellable?
 
     init(bundle: Bundle = .main) {
         manifest =
             Self.loadBundledManifest(bundle: bundle)
             ?? Self.fallbackManifest
+        audioActivityObservation = audioCaptureLibrary.$phase
+            .combineLatest(audioCaptureLibrary.$playingRecordID, audioCaptureLibrary.$isPlaybackPaused)
+            .map { phase, playingRecordID, isPlaybackPaused in
+                phase != .idle || (playingRecordID != nil && !isPlaybackPaused)
+            }
+            .removeDuplicates()
+            .sink { [weak self] busy in
+                self?.coordinator.setOtherAudioBusy(busy)
+            }
     }
 
     func activate(context: NativExtensionHostContext) {

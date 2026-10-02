@@ -177,6 +177,10 @@ public enum Nativ {
         try modelTypeRegistry().canonicalModelTypes(for: .imageGeneration)
     }
 
+    public static func imageEditingModelTypes() throws -> Set<String> {
+        try modelTypeRegistry().canonicalModelTypes(for: .imageEditing)
+    }
+
     public static func makeProcess(
         arguments: [String] = [],
         environment: [String: String] = [:]

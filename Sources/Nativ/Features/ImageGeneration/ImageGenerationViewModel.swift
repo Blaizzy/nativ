@@ -26,8 +26,9 @@ struct ImageRequestSettings: Equatable, Codable, Sendable {
     var count = 1
     var width = 512
     var height = 512
-    var steps = 4
-    var guidance = 1.0
+    // Nil lets the model resolve its own defaults, including any guidance schedule.
+    var steps: Int?
+    var guidance: Double?
     var seedText = ""
 }
 
@@ -168,7 +169,7 @@ final class ImageGenerationViewModel: ObservableObject {
     @Published private(set) var statusText: String?
     @Published private(set) var scrollToken = 0
 
-    private let sessionStore = ImageGenerationSessionStore()
+    private let sessionStore: ImageGenerationSessionStore
     private let windowID: UUID
     private let persistedDataChanges: PersistedDataChangeHub
     private let inferenceActivity: InferenceActivityCoordinator
@@ -186,11 +187,13 @@ final class ImageGenerationViewModel: ObservableObject {
     init(
         windowID: UUID = UUID(),
         persistedDataChanges: PersistedDataChangeHub = .init(),
-        inferenceActivity: InferenceActivityCoordinator = .init()
+        inferenceActivity: InferenceActivityCoordinator = .init(),
+        sessionStore: ImageGenerationSessionStore = .init()
     ) {
         self.windowID = windowID
         self.persistedDataChanges = persistedDataChanges
         self.inferenceActivity = inferenceActivity
+        self.sessionStore = sessionStore
         storedSessions = sessionStore.loadSessions().map { session in
             var repaired = session
             for index in repaired.turns.indices where repaired.turns[index].status == .inProgress {
@@ -370,7 +373,11 @@ final class ImageGenerationViewModel: ObservableObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    func run(using appModel: NativModel, modelIsInstalled: Bool = true) {
+    func run(
+        using appModel: NativModel,
+        modelIsInstalled: Bool = true,
+        modelSupportsEditing: Bool
+    ) {
         guard !isGenerating,
               appModel.isRunning,
               let requestModelID = normalized(modelID),
@@ -405,11 +412,19 @@ final class ImageGenerationViewModel: ObservableObject {
         settings.count = min(max(settings.count, 1), 10)
         settings.width = boundedRoundedDimension(settings.width, upperLimit: maxRequestDimension)
         settings.height = boundedRoundedDimension(settings.height, upperLimit: maxRequestDimension)
-        settings.steps = min(max(settings.steps, 1), 1_000)
-        settings.guidance = min(max(settings.guidance, 0), 100)
+        settings.steps = settings.steps.map { min(max($0, 1), 1_000) }
+        settings.guidance = settings.guidance.map { min(max($0, 0), 100) }
         requestSettings = settings
 
         let references = effectiveReferenceImages
+        guard modelSupportsEditing || references.isEmpty else {
+            inferenceActivity.end(
+                resource: activityResource,
+                operationID: operationID
+            )
+            statusText = "The selected model does not support image editing."
+            return
+        }
         if references.count == 1 {
             activeReference = references[0]
         } else if references.count > 1 {
@@ -488,12 +503,16 @@ final class ImageGenerationViewModel: ObservableObject {
                     current.status = .completed
                 }
 
-                if outputs.count == 1 {
+                if outputs.count == 1, modelSupportsEditing {
                     activeReference = outputs[0].attachment
                     statusText = "Image ready. Your next prompt will edit it."
                 } else {
                     activeReference = nil
-                    statusText = "\(outputs.count) images ready. Choose one to continue editing."
+                    statusText = outputs.count == 1
+                        ? "Image ready."
+                        : modelSupportsEditing
+                            ? "\(outputs.count) images ready. Choose one to continue editing."
+                            : "\(outputs.count) images ready."
                 }
                 persistCurrentSession(updateTimestamp: true)
                 bumpScroll()
@@ -766,33 +785,6 @@ final class ImageGenerationViewModel: ObservableObject {
     }
 
     @discardableResult
-    func removeArtifact(_ assetID: UUID, sessionID: UUID) -> Bool {
-        guard !inferenceActivity.isActive(.imageGeneration(sessionID)) else { return false }
-        if sessionID == currentSessionID {
-            let previousTurns = turns
-            let previousReference = activeReference
-            for index in turns.indices {
-                turns[index].referenceImages.removeAll { $0.assetID == assetID }
-                turns[index].outputs.removeAll { ($0.asset?.id ?? $0.id) == assetID }
-            }
-            if activeReference?.assetID == assetID { activeReference = nil }
-            guard persistCurrentSession(updateTimestamp: false) else {
-                turns = previousTurns
-                activeReference = previousReference
-                return false
-            }
-            pendingImageAttachments.removeAll { $0.assetID == assetID }
-            return true
-        }
-        guard var session = sessionStore.loadSession(id: sessionID) else { return false }
-        session.removeArtifact(assetID)
-        guard saveSession(session) else { return false }
-        upsertStoredSession(session)
-        refreshSessionList()
-        return true
-    }
-
-    @discardableResult
     func removeOutput(sessionID: UUID, turnID: UUID, outputID: UUID) -> Bool {
         guard canModifySession(sessionID) else {
             return false
@@ -883,9 +875,18 @@ final class ImageGenerationViewModel: ObservableObject {
 
     private func handlePersistedDataChange(_ change: PersistedDataChange) {
         guard change.originWindowID != windowID else { return }
-        guard case .imageGenerationSession = change.kind else { return }
+        if case .artifactDeleted(let id) = change.kind {
+            pendingImageAttachments.removeAll { $0.assetID == id }
+            if activeReference?.assetID == id { activeReference = nil }
+            return
+        }
+        guard case .imageGenerationSession(let id) = change.kind else { return }
 
-        storedSessions = sessionStore.loadSessions()
+        if let session = sessionStore.loadSession(id: id) {
+            upsertStoredSession(session)
+        } else {
+            storedSessions.removeAll { $0.id == id }
+        }
         if let currentSession {
             if let fresh = storedSessions.first(where: { $0.id == currentSession.id }) {
                 if !isGenerating, fresh != currentSession {

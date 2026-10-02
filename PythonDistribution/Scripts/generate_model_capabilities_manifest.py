@@ -189,16 +189,42 @@ def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
     editing_types: set[str] = set()
     for model_path in sorted(models_root.glob("*/model.py")):
         module = _parse_module(model_path)
-        for statement in module.body:
-            if not isinstance(statement, ast.ClassDef):
-                continue
-            model_type = _literal_assignment(statement, "model_type")
+        classes = {
+            statement.name: statement
+            for statement in module.body
+            if isinstance(statement, ast.ClassDef)
+        }
+
+        def inherited_literal(
+            class_name: str,
+            name: str,
+            visited: set[str] | None = None,
+        ) -> Any | None:
+            visited = set() if visited is None else visited
+            if class_name in visited:
+                return None
+            visited.add(class_name)
+            statement = classes.get(class_name)
+            if statement is None:
+                return None
+            value = _literal_assignment(statement, name)
+            if value is not None:
+                return value
+            for base in statement.bases:
+                if isinstance(base, ast.Name):
+                    value = inherited_literal(base.id, name, visited)
+                    if value is not None:
+                        return value
+            return None
+
+        for class_name in classes:
+            model_type = inherited_literal(class_name, "model_type")
             if not isinstance(model_type, str) or not model_type.strip():
                 continue
             model_type = model_type.strip().lower()
-            if _literal_assignment(statement, "is_image_generation_model") is True:
+            if inherited_literal(class_name, "is_image_generation_model") is True:
                 generation_types.add(model_type)
-            if _literal_assignment(statement, "is_image_edit_model") is True:
+            if inherited_literal(class_name, "is_image_edit_model") is True:
                 editing_types.add(model_type)
     if not generation_types or not editing_types:
         raise RuntimeError(f"Missing image model capabilities under {models_root}")

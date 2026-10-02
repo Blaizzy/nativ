@@ -13,7 +13,8 @@ struct ChatMarkdownRenderer: View {
         content: content,
         isStreaming: isStreaming
       ),
-      fontSize: ChatFontMetrics.baseBodyPointSize * fontScale
+      fontSize: ChatFontMetrics.baseBodyPointSize * fontScale,
+      isStreaming: isStreaming
     )
     .transaction { $0.animation = nil }
   }
