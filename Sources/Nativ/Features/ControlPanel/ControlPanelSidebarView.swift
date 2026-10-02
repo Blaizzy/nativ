@@ -88,15 +88,17 @@ extension ControlPanelView {
             presenting: pendingDeleteRecent
         ) { recent in
             Button("Delete", role: .destructive) {
-                deleteRecentSession(recent)
                 pendingDeleteRecent = nil
+                Task { await deleteRecentSession(recent) }
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            if recent.scheduledTaskID != nil {
+            if case .chat(let id) = recent.selection, chat.sessions.contains(where: { $0.id == id && $0.worktree != nil }) {
+                Text("“\(recent.title)” will be permanently deleted. Its worktree will be saved in Settings > Recently deleted worktrees before the checkout and branch are removed. Ignored files require confirmation and aren’t saved. The local project folder will be kept.")
+            } else if recent.scheduledTaskID != nil {
                 Text(
                     "“\(recent.title)” will be permanently deleted. "
                         + "The scheduled task and its run record will be kept."
@@ -129,7 +131,7 @@ extension ControlPanelView {
             isPresented: $isConfirmingBulkDelete
         ) {
             Button("Delete", role: .destructive) {
-                bulkDeleteSelected()
+                Task { await bulkDeleteSelected() }
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
@@ -145,18 +147,20 @@ extension ControlPanelView {
             presenting: pendingDeleteProject
         ) { project in
             Button("Keep Chats") {
-                removeProject(project, disposition: .keepChats)
+                pendingDeleteProject = nil
+                Task { await removeProject(project, disposition: .keepChats) }
             }
             .keyboardShortcut(.defaultAction)
             Button("Delete Chats", role: .destructive) {
-                removeProject(project, disposition: .deleteChats)
+                pendingDeleteProject = nil
+                Task { await removeProject(project, disposition: .deleteChats) }
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteProject = nil
             }
         } message: { project in
             Text(
-                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted."
+                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted. Deleting its chats saves recoverable worktree snapshots before removing their checkouts and branches. Ignored files require confirmation and aren’t saved."
             )
         }
         .alert(
@@ -171,6 +175,14 @@ extension ControlPanelView {
             }
         } message: {
             Text(projectErrorMessage ?? "The project could not be updated.")
+        }
+        .alert("Couldn’t delete chat", isPresented: Binding(
+            get: { chatDeletionErrorMessage != nil },
+            set: { if !$0 { chatDeletionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { chatDeletionErrorMessage = nil }
+        } message: {
+            Text(chatDeletionErrorMessage ?? "The chat and its remaining worktree data have been kept. Try again.")
         }
     }
 

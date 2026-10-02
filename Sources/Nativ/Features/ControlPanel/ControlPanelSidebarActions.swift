@@ -231,7 +231,7 @@ extension ControlPanelView {
     }
 
     var bulkDeleteDescription: String {
-        let base = "The selected chats are permanently deleted."
+        let base = "The selected chats and their managed worktrees and branches are permanently deleted. You’ll be asked before discarding uncommitted files or unmerged commits."
         let folders = "Selected folders are removed but their chats are kept."
         let includesScheduledRun = selectedChats.contains { $0.scheduledTaskID != nil }
         guard includesScheduledRun else {
@@ -317,31 +317,30 @@ extension ControlPanelView {
         return candidate
     }
 
-    func bulkDeleteSelected() {
+    func bulkDeleteSelected() async {
         let targets = recentSessions.filter { selectedRecentIDs.contains($0.id) }
         let folderTargets = selectedFolderIDs
         guard !targets.isEmpty || !folderTargets.isEmpty else {
             return
         }
-        let affectsDisplayed = targets.contains { isDisplayedRecent($0) }
-        let removedIDs = selectedRecentIDs
+        let displayedIDs = Set(targets.filter { isDisplayedRecent($0) }.map(\.id))
+        var removedIDs: Set<ControlPanelRecentSession.ID> = []
+        for recent in targets {
+            switch recent.selection {
+            case .chat(let sessionID):
+                guard await deleteChatSession(sessionID) else { continue }
+            case .imageGeneration(let sessionID):
+                imageGeneration.deleteSession(sessionID)
+            case .tab, .extensionPage:
+                continue
+            }
+            removedIDs.insert(recent.id)
+        }
         withAnimation(.snappy(duration: 0.2)) {
-            for recent in targets {
-                switch recent.selection {
-                case .chat(let sessionID):
-                    deleteChatSession(sessionID)
-                case .imageGeneration(let sessionID):
-                    imageGeneration.deleteSession(sessionID)
-                case .tab, .extensionPage:
-                    break
-                }
-            }
-            for folderID in folderTargets {
-                chat.deleteFolder(folderID)
-            }
+            for folderID in folderTargets { chat.deleteFolder(folderID) }
             exitSelectMode()
         }
-        guard affectsDisplayed else {
+        guard !displayedIDs.isDisjoint(with: removedIDs) else {
             return
         }
         if let survivor = recentSessions.first(where: { !removedIDs.contains($0.id) }) {
