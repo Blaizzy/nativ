@@ -2,11 +2,18 @@
   {
     "id": "filesystem",
     "name": "filesystem",
-    "summary": "Read and write files in allowed folders.",
+    "summary": "Read and write files in the chat's folder.",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+    "requiresFolder": true,
     "symbol": "folder.fill",
     "tint": "blue",
+    "legacyLaunchConfigurations": [
+      {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "."]
+      }
+    ],
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
   },
   {
