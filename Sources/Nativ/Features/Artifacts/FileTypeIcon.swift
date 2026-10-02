@@ -30,11 +30,11 @@ struct FileTypeStyle {
         switch normalized {
         case "pdf":
             return FileTypeStyle(icon: .filePdf, tint: .red, label: "PDF")
-        case "doc", "docx", "rtf", "pages":
+        case "doc", "docx", "rtf", "pages", "odt", "epub":
             return FileTypeStyle(icon: .fileDoc, tint: .blue, label: normalized.uppercased())
         case "ppt", "pptx", "key":
             return FileTypeStyle(icon: .filePpt, tint: .yellow, label: normalized.uppercased())
-        case "csv", "tsv", "xls", "xlsx", "numbers":
+        case "csv", "tsv", "xls", "xlsx", "ods", "numbers":
             return FileTypeStyle(icon: .fileCsv, tint: .green, label: normalized.uppercased())
         case "md", "markdown", "mdown", "mkd":
             return FileTypeStyle(icon: .fileText, tint: .secondary, label: "MD")
@@ -46,7 +46,7 @@ struct FileTypeStyle {
             return FileTypeStyle(icon: .fileVideo, tint: .indigo, label: normalized.uppercased())
         case "wav", "mp3", "m4a", "aac", "flac", "aiff":
             return FileTypeStyle(icon: .fileAudio, tint: .teal, label: normalized.uppercased())
-        case "json", "js", "ts", "jsx", "tsx", "py", "swift", "java", "kt", "c", "cpp", "cc", "h", "hpp",
+        case "ipynb", "json", "js", "ts", "jsx", "tsx", "py", "swift", "java", "kt", "c", "cpp", "cc", "h", "hpp",
              "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css", "scss", "xml", "yaml",
              "yml", "toml", "sql", "ini", "cfg", "conf", "env":
             return FileTypeStyle(icon: .fileCode, tint: .purple, label: normalized.uppercased())
