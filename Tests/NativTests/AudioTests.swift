@@ -1010,6 +1010,61 @@ final class LiveAudioTranscriptionSessionTests: XCTestCase {
         let maximumActiveRequests = await probe.maximumActiveRequests
         XCTAssertEqual(maximumActiveRequests, 1)
     }
+
+    func testCancellationRemovesQueuedChunks() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let writer = try AudioTranscriptFileWriter(
+            url: directory.appendingPathComponent("recording.txt")
+        )
+        let chunks = (1...3).map { directory.appendingPathComponent("chunk-\($0).wav") }
+        for chunk in chunks {
+            try Data().write(to: chunk)
+        }
+        let session = LiveAudioTranscriptionSession(
+            transcriptWriter: writer,
+            transcribe: { _ in
+                try await Task.sleep(for: .seconds(10))
+                return "late text"
+            }
+        )
+        for chunk in chunks {
+            session.enqueue(chunk)
+        }
+
+        await session.cancel()
+
+        XCTAssertTrue(chunks.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    func testServerFailureRemovesChunk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let writer = try AudioTranscriptFileWriter(
+            url: directory.appendingPathComponent("recording.txt")
+        )
+        let chunk = directory.appendingPathComponent("chunk.wav")
+        try Data().write(to: chunk)
+        let session = LiveAudioTranscriptionSession(
+            transcriptWriter: writer,
+            transcribe: { _ in throw URLError(.cannotConnectToHost) }
+        )
+        session.enqueue(chunk)
+
+        do {
+            _ = try await session.finish()
+            XCTFail("Expected transcription to fail")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: chunk.path))
+    }
 }
 
 private final class EmittedURLStore: @unchecked Sendable {

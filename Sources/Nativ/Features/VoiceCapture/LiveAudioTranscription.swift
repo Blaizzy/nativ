@@ -63,6 +63,7 @@ final class LiveAudioTranscriptionSession: @unchecked Sendable {
         lock.withLock {
             let precedingTask = tail
             let task = Task { [weak self] in
+                defer { try? FileManager.default.removeItem(at: chunkURL) }
                 await precedingTask?.value
                 guard !Task.isCancelled else { return }
                 await self?.process(chunkURL)
@@ -94,7 +95,6 @@ final class LiveAudioTranscriptionSession: @unchecked Sendable {
     }
 
     private func process(_ chunkURL: URL) async {
-        defer { try? FileManager.default.removeItem(at: chunkURL) }
         do {
             try Task.checkCancellation()
             let chunkTranscript = try await transcribe(chunkURL)
