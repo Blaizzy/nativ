@@ -9,12 +9,16 @@ struct MarkdownView: NSViewRepresentable {
     var plainText = false
     var isStreaming = false
     var onTranslate: ((String) -> Void)?
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.chatSearchHighlight) private var searchHighlight
 
     func makeNSView(context: Context) -> MarkdownSurface {
         let view = MarkdownSurface()
         view.onTranslate = onTranslate
+        view.onAddToChat = onAddToChat
+        view.onRequestEdit = onRequestEdit
         view.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         view.setSearchHighlight(searchHighlight)
         return view
@@ -22,6 +26,8 @@ struct MarkdownView: NSViewRepresentable {
 
     func updateNSView(_ nsView: MarkdownSurface, context: Context) {
         nsView.onTranslate = onTranslate
+        nsView.onAddToChat = onAddToChat
+        nsView.onRequestEdit = onRequestEdit
         nsView.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         nsView.setSearchHighlight(searchHighlight)
     }
@@ -40,6 +46,9 @@ struct MarkdownView: NSViewRepresentable {
 @MainActor
 final class MarkdownSurface: NSView {
     var onTranslate: ((String) -> Void)?
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
+    private let workSelectionActions = ChatWorkSelectionActions()
     private(set) lazy var selection = MarkdownSelection(surface: self)
     var visibleTextViews: [MarkdownSelectableTextView] { mounted.values.flatMap { $0.content.textViews } }
     private var content: String?
@@ -77,6 +86,11 @@ final class MarkdownSurface: NSView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        if onAddToChat != nil {
+            workSelectionActions.onAddToChat = onAddToChat
+            workSelectionActions.onRequestEdit = onRequestEdit
+            return workSelectionActions.menu(text: selection.text, screenFrame: selection.selectionFrame, in: self)
+        }
         let menu = NSMenu()
         let copy = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
         copy.target = self
@@ -112,6 +126,7 @@ final class MarkdownSurface: NSView {
             }
         }
         guard self.content != content || self.style != style || self.plainText != plainText else { return }
+        if self.content != content { workSelectionActions.dismiss() }
         streamingUpdate = fadesStreamingText && self.content != nil && self.style == style
             && content.hasPrefix(self.content ?? "")
             ? CACurrentMediaTime() : nil
@@ -175,6 +190,7 @@ final class MarkdownSurface: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil { workSelectionActions.dismiss() }
         NotificationCenter.default.removeObserver(
             self, name: NSView.boundsDidChangeNotification, object: nil)
         if window != nil {
@@ -466,6 +482,16 @@ final class MarkdownSelectableTextView: NSTextView {
         if document.range.length == 0, event.clickCount == 1, !event.modifierFlags.contains(.shift), let link {
             clicked(onLink: link, at: index)
         }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        // NSTextView otherwise takes focus and clears the document-wide selection.
+        guard let document, document.range.length > 0,
+              let menu = document.contextualMenu(for: event) else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     override func accessibilitySelectedText() -> String? {

@@ -3,22 +3,85 @@ import XCTest
 
 @MainActor
 final class MarkdownSelectionTests: XCTestCase {
-    func testTranslateMenuUsesSelectedPreviewTextWithoutChangingTheDocument() throws {
-        let (window, _, surface) = fixture("# Hola\n\nUn **documento**.", height: 300)
+    func testDocumentMenuUsesOnlySelectedPreviewTextWithoutChangingTheDocument() throws {
+        let (window, _, surface) = fixture("# Hola\n\nUn **documento**.\n\n## Another section\n\nLeave this alone.", height: 300)
         defer { window.close() }
-        var translatedSource: String?
-        surface.onTranslate = { translatedSource = $0 }
-        _ = surface.selection.command(NSSelectorFromString("selectAll:"))
+        var selectedSource: String?
+        surface.onTranslate = { selectedSource = $0 }
+        surface.onAddToChat = { selectedSource = $0 }
+        surface.onRequestEdit = { _, _ in }
+        surface.selection.select(anchor: 0, head: "Hola\n\nUn documento.".utf16.count)
         let originalText = surface.selection.text
         let event = try XCTUnwrap(NSEvent.mouseEvent(
             with: .rightMouseDown, location: .zero, modifierFlags: [], timestamp: 0,
             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
         let view = try XCTUnwrap(surface.visibleTextViews.first)
         let menu = try XCTUnwrap(view.menu(for: event))
-        let action = try XCTUnwrap(menu.items.first { $0.title == "Translate…" })
+        XCTAssertEqual(menu.items.map(\.title), ["Add to chat", "Edit"])
+        XCTAssertFalse(menu.allowsContextMenuPlugIns)
+        XCTAssertTrue(menu.items.allSatisfy(\.isEnabled))
+        let action = try XCTUnwrap(menu.items.first)
         XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
-        XCTAssertEqual(translatedSource, "Hola\n\nUn documento.")
+        XCTAssertEqual(selectedSource, "Hola\n\nUn documento.")
         XCTAssertEqual(surface.selection.text, originalText)
+        surface.selection.clear()
+        XCTAssertEqual(surface.menu(for: event)?.items.first { $0.title == "Add to chat" }?.isEnabled, false)
+        surface.onAddToChat = nil
+        XCTAssertEqual(try XCTUnwrap(surface.menu(for: event)).items.map(\.title), ["Copy", "Translate…"])
+    }
+
+    func testSourceMenuKeepsTheSelectedPassageAndOnlyOffersWorkActions() throws {
+        let scroll = ChatWorkSourceTextView.scrollableTextView()
+        let editor = try XCTUnwrap(scroll.documentView as? ChatWorkSourceTextView)
+        editor.string = "# Selected\n\nKeep this paragraph."
+        editor.setSelectedRange(NSRange(location: 0, length: 10))
+        var selection: String?
+        editor.selectionActions.onAddToChat = { selection = $0 }
+        editor.selectionActions.onRequestEdit = { _, _ in }
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let menu = try XCTUnwrap(editor.menu(for: event))
+        XCTAssertEqual(menu.items.map(\.title), ["Add to chat", "Edit"])
+        let action = menu.items[0]
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(action.action), to: action.target, from: action))
+        XCTAssertEqual(selection, "# Selected")
+        XCTAssertEqual(editor.string, "# Selected\n\nKeep this paragraph.")
+        editor.setSelectedRange(NSRange(location: 10, length: 0))
+        XCTAssertTrue(try XCTUnwrap(editor.menu(for: event)).items.allSatisfy { !$0.isEnabled })
+    }
+
+    func testEditInputStaysBelowSelectionInsideTheDocumentColumn() async throws {
+        let (window, scroll, surface) = fixture("# Dogs", width: 380, height: 600)
+        defer { window.close() }
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1_000, height: 600))
+        window.contentView = container
+        window.setContentSize(NSSize(width: 1_000, height: 600))
+        window.setFrameOrigin(NSPoint(x: 100, y: 100))
+        container.addSubview(scroll)
+        scroll.frame = NSRect(x: 620, y: 0, width: 380, height: 600)
+        surface.onAddToChat = { _ in }
+        surface.onRequestEdit = { _, _ in }
+        window.makeFirstResponder(surface)
+        surface.refreshVisibleBlocks()
+        surface.selection.select(anchor: 0, head: 4)
+        let selection = try XCTUnwrap(surface.selection.selectionFrame)
+        let column = window.convertToScreen(scroll.convert(scroll.bounds, to: nil))
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .rightMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        let edit = try XCTUnwrap(surface.menu(for: event)?.items.last)
+        let actions = try XCTUnwrap(edit.target as? ChatWorkSelectionActions)
+        defer { actions.dismiss() }
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(edit.action), to: actions, from: edit))
+        // Allow the deferred menu action and SwiftUI's initial layout to finish.
+        try await Task.sleep(for: .milliseconds(100))
+        let frame = try XCTUnwrap(window.childWindows?.first?.frame)
+        XCTAssertGreaterThanOrEqual(frame.minX, column.minX)
+        XCTAssertLessThanOrEqual(frame.maxX, column.maxX)
+        XCTAssertEqual(frame.maxY, selection.minY - 8, accuracy: 1)
+        XCTAssertLessThanOrEqual(frame.height, 40)
+        actions.dismiss()
+        XCTAssertTrue(window.childWindows?.isEmpty ?? true)
     }
 
     func testDragAcrossHeadingParagraphAndCodeCopiesOnePassage() throws {

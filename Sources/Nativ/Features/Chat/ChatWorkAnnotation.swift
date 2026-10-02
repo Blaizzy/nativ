@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WebKit
 
@@ -13,6 +14,197 @@ struct ChatWorkFeedback {
         if let annotation { context += annotation.context + "\n" }
         else if !selectedText.isEmpty { context += "Selected text:\n\(selectedText)\n\n" }
         return context + "Comment: \(comment)"
+    }
+}
+
+/// Shared selection actions for the document preview and its source editor.
+@MainActor
+final class ChatWorkSelectionActions: NSObject {
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
+    private weak var sourceView: NSView?
+    private var selectionText = ""
+    private var selectionScreenFrame: CGRect?
+    private var editPanel: NSPanel?
+    private var outsideClickMonitor: Any?
+
+    func menu(text: String, screenFrame: CGRect?, in view: NSView) -> NSMenu {
+        sourceView = view
+        selectionText = text
+        selectionScreenFrame = screenFrame
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.allowsContextMenuPlugIns = false
+        if #available(macOS 15.2, *) { menu.automaticallyInsertsWritingToolsItems = false }
+        for (title, symbol, action, available) in [
+            ("Add to chat", "text.bubble", #selector(addToChat(_:)), onAddToChat != nil),
+            ("Edit", "pencil", #selector(requestEdit(_:)), onRequestEdit != nil)
+        ] {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            item.isEnabled = available && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return menu
+    }
+
+    func dismiss() {
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        outsideClickMonitor = nil
+        NotificationCenter.default.removeObserver(self)
+        if let panel = editPanel {
+            editPanel = nil
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+            panel.contentViewController = nil
+        }
+    }
+
+    @objc private func dismissForNotification(_ notification: Notification) { dismiss() }
+
+    @objc private func addToChat(_ sender: Any?) {
+        guard !selectionText.isEmpty else { return }
+        onAddToChat?(selectionText)
+    }
+
+    @objc private func requestEdit(_ sender: Any?) {
+        guard let submit = onRequestEdit, !selectionText.isEmpty else { return }
+        let text = selectionText
+        let selection = selectionScreenFrame
+        // Present after the context menu has finished tracking.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.sourceView, let window = view.window,
+                  !view.isHiddenOrHasHiddenAncestor else { return }
+            self.dismiss()
+            let visible = window.convertToScreen(view.convert(view.visibleRect, to: nil))
+            guard let selection, !selection.isEmpty, !selection.isNull,
+                  selection.intersects(visible) else { return }
+            let width = min(390, visible.width - 16)
+            guard width >= 120 else { return }
+            let controller = NSHostingController(rootView: ChatWorkEditRequestView(
+                width: width, onCancel: { [weak self] in self?.dismiss() },
+                onSubmit: { [weak self] request in
+                    try await submit(text, request)
+                    self?.dismiss()
+                }))
+            let panel = ChatWorkEditPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 36),
+                                          styleMask: [.borderless, .nonactivatingPanel],
+                                          backing: .buffered, defer: false)
+            panel.contentViewController = controller
+            controller.view.layoutSubtreeIfNeeded()
+            panel.setContentSize(NSSize(width: width, height: 36))
+            panel.appearance = view.effectiveAppearance
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.hidesOnDeactivate = true
+            panel.isReleasedWhenClosed = false
+            // Screen coordinates keep the bar stable when focus leaves the document.
+            let x = min(max(selection.minX, visible.minX + 8), visible.maxX - width - 8)
+            let y = selection.minY - 8 - panel.frame.height
+            panel.setFrameOrigin(NSPoint(x: x, y: max(visible.minY + 8, y)))
+            self.editPanel = panel
+            window.addChildWindow(panel, ordered: .above)
+            panel.makeKeyAndOrderFront(nil)
+            self.outsideClickMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .scrollWheel]
+            ) { [weak self, weak window] event in
+                if event.window === window { self?.dismiss() }
+                return event
+            }
+            for name in [NSWindow.willCloseNotification, NSWindow.didResizeNotification] {
+                NotificationCenter.default.addObserver(self, selector: #selector(self.dismissForNotification(_:)),
+                                                       name: name, object: window)
+            }
+            NotificationCenter.default.addObserver(self, selector: #selector(self.dismissForNotification(_:)),
+                                                   name: NSApplication.didResignActiveNotification, object: nil)
+        }
+    }
+}
+
+private final class ChatWorkEditPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+private struct ChatWorkEditRequestView: View {
+    let width: CGFloat
+    let onCancel: () -> Void
+    let onSubmit: (String) async throws -> Void
+    @State private var request = ""
+    @State private var errorMessage: String?
+    @State private var submission: Task<Void, Never>?
+    @FocusState private var isFocused: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Describe the edit…", text: $request)
+                .textFieldStyle(.plain).font(.system(size: 14))
+                .focused($isFocused).accessibilityLabel("Edit request")
+                .disabled(submission != nil).onSubmit(send)
+            Button(action: send) {
+                ZStack {
+                    Circle().fill(colorScheme == .dark ? Color.white : Color.black)
+                    if submission != nil {
+                        ProgressView().controlSize(.mini).colorScheme(colorScheme == .dark ? .light : .dark)
+                    } else {
+                        Image(systemName: "arrow.up").font(.system(size: 14))
+                            .foregroundStyle(colorScheme == .dark ? Color.black : Color.white)
+                    }
+                }
+                .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain).keyboardShortcut(.return, modifiers: .command)
+            .accessibilityLabel("Send edit request").help("Send edit request (⌘↩)")
+            .disabled(submission != nil || request.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.leading, 14).padding(.trailing, 4)
+        .frame(width: width, height: 36)
+        .background(colorScheme == .dark ? Color(white: 0.095) : Color(nsColor: .textBackgroundColor), in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+        .onExitCommand(perform: onCancel)
+        .onAppear { isFocused = true }
+        .onDisappear { submission?.cancel() }
+        .alert("Couldn’t send edit", isPresented: Binding(
+            get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { isFocused = true }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private func send() {
+        let instruction = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard submission == nil, !instruction.isEmpty else { return }
+        submission = Task { @MainActor in
+            defer { submission = nil }
+            do { try await onSubmit(instruction) }
+            catch is CancellationError {}
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
+}
+
+final class ChatWorkSourceTextView: NSTextView {
+    let selectionActions = ChatWorkSelectionActions()
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let range = selectedRange()
+        let text = range.length > 0 ? (string as NSString).substring(with: range) : ""
+        return selectionActions.menu(text: text,
+            screenFrame: firstRect(forCharacterRange: range, actualRange: nil), in: self)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        // Keep the selected passage and omit AppKit's injected text-service items.
+        guard let menu = menu(for: event) else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { selectionActions.dismiss() }
     }
 }
 

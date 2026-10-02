@@ -109,14 +109,17 @@ the work pane share the right side of chat.
 - **Translation:** the Translate button opens the native macOS translation popover
   for selected source or browser text, or the document/page's prose. Select the target
   language in the popover; macOS may offer to download a language. Selected Markdown
-  preview text also has a **Translate…** context-menu action. Translation does not
+  in chat messages also has a **Translate…** context-menu action. Translation does not
   overwrite the original content.
 - **Collaboration:** **Add to chat** adds an annotation directly to the composer,
   including the page or file, selected source text, and the item's revision. **Annotate**
   adds a selected webpage element the same way. Files also offer **Add to chat** in
-  their right-click menu. The composer receives focus so you can
-  type your comment without a popup; existing draft text and attachments are preserved.
-  Nothing is sent until you send the draft.
+  their right-click menu. To reference a section of a document, select its text in
+  Preview or Source. The selection menu contains only **Add to chat** and **Edit**.
+  **Add to chat** focuses the composer so you can type your comment; nothing is sent
+  until you send the draft. **Edit** opens a compact input below the selection;
+  the arrow button (Return or Command-Return) sends the instruction and selected passage
+  directly to the agent to edit that file. Escape or clicking outside dismisses the input. Both actions preserve existing draft text and attachments.
 - **Persistence:** items, open tabs, selection, and pane visibility are saved with
   the session. Closing a tab preserves its contents under **+ → Recents**.
   Work-only sessions are retained even if no messages have been sent.

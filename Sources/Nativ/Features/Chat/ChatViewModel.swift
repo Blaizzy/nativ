@@ -1580,6 +1580,68 @@ final class ChatViewModel: ObservableObject {
         composerFocusToken += 1
     }
 
+    func sendWorkEdit(_ target: ChatWorkFeedback, request: String, using appModel: NativModel) async throws {
+        let modelID = appModel.settings.normalized().languageModelID
+        guard appModel.isRunning, !appModel.isModelLoading, modelID != nil else {
+            throw ChatWorkError.invalid("Load a model before sending an edit request.")
+        }
+        let models = try await LocalModelDiscovery.scan(searchPaths: appModel.settings.localModelSearchPaths)
+        try Task.checkCancellation()
+        var settings = appModel.settings.normalized()
+        guard appModel.isRunning, !appModel.isModelLoading, settings.languageModelID == modelID else {
+            throw ChatWorkError.invalid("The model changed. Send the edit request again when it is ready.")
+        }
+        if let error = settings.structuredOutputValidationError { throw ChatWorkError.invalid(error) }
+        guard let localModel = models.first(where: { $0.repoID == modelID }),
+              localModel.capabilities.contains(.tools) else {
+            throw ChatWorkError.invalid("Choose a model that supports tools to edit this file.")
+        }
+        if importedModelRepositoryID != nil, let tokens = importedPromptTokenCount,
+           let contextWindow = localModel.contextSize, tokens > contextWindow {
+            throw ChatWorkError.invalid("This chat exceeds the selected model’s context window.")
+        }
+        if let importedSystemPrompt = currentSession?.importedSystemPrompt {
+            settings.systemPrompt = importedSystemPrompt
+        }
+        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
+        let message = try appendWorkEdit(target, request: request, settings: settings)
+        enqueueGeneration(for: message.id, in: sessionID, settings: settings,
+                          languageModelSupportsTools: true,
+                          languageModelSupportsVision: localModel.capabilities.contains(.vision), appModel: appModel)
+    }
+
+    /// Persist an edit request independently of whatever is staged in the composer.
+    func appendWorkEdit(_ target: ChatWorkFeedback, request: String, settings: NativSettings) throws -> ChatTranscriptMessage {
+        guard let session = currentSession, session.id == target.sessionID,
+              canModifySession(session.id), promptEditContext == nil else {
+            throw ChatWorkError.invalid("Return to this chat and finish editing any message before requesting a file edit.")
+        }
+        guard let item = workState.selectedItem, item.id == target.item.id, item.canEdit else {
+            throw ChatWorkError.invalid("Open the selected file again before requesting an edit.")
+        }
+        guard item.revision == target.item.revision else {
+            throw ChatWorkError.invalid("This file changed. Select the passage again before requesting an edit.")
+        }
+        let request = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty, !target.selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              target.selectedText.count <= ChatAnnotation.maximumSelectionCharacters else {
+            throw ChatWorkError.invalid("Select a passage of up to 8,000 characters and describe the change.")
+        }
+        var message = ChatTranscriptMessage(role: .user,
+            content: "Edit this selection in place. Keep the rest of the file unchanged.\n\n" + request,
+            modelID: settings.languageModelID)
+        message.annotations = [ChatWorkAnnotationReference(itemID: item.id, title: item.title,
+            revision: item.revision, selection: nil, url: nil, selectedText: target.selectedText).annotation()]
+        if session.personalizationSnapshot == nil { currentSession?.capturePersonalization(settings.personalization) }
+        messages.append(message)
+        guard persistCurrentSession(updateTimestamp: true) else {
+            messages.removeAll { $0.id == message.id }
+            currentSession = session
+            throw ChatWorkError.invalid("The edit request could not be saved. Try again.")
+        }
+        return message
+    }
+
     func send(
         using appModel: NativModel,
         languageModelSupportsTools: Bool,

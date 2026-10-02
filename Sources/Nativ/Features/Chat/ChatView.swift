@@ -36,7 +36,9 @@ struct ChatView: View {
             ) {
                 transcript(project: project)
             } work: {
-                ChatWorkPane(chat: chat)
+                ChatWorkPane(chat: chat) { target, request in
+                    try await chat.sendWorkEdit(target, request: request, using: model)
+                }
             }
         }
         .background(Color.nativMainContentBackground)

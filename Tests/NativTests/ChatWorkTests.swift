@@ -471,6 +471,38 @@ final class ChatWorkSessionTests: XCTestCase {
         }
     }
 
+    func testInlineEditPersistsSelectionWithoutConsumingTheDraftAndRejectsStaleTargets() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "# Selected\n\nKeep this paragraph.")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let target = ChatWorkFeedback(item: item, sessionID: session.id, annotation: nil, selectedText: "# Selected")
+        chat.draft = "Unsent draft"
+        chat.attachPastedText("Pasted context", replacing: NSRange(location: 12, length: 0), undoManager: nil)
+        try chat.addWorkFeedback(target)
+        let draft = ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts)
+        let annotations = chat.pendingAnnotations
+        let settings = NativSettings()
+        XCTAssertThrowsError(try chat.appendWorkEdit(target, request: " ", settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
+        let message = try chat.appendWorkEdit(target, request: " Rename the heading to Summary ", settings: settings)
+        XCTAssertEqual(chat.messages.map(\.id), [message.id])
+        XCTAssertTrue(message.content.hasSuffix("Rename the heading to Summary"))
+        XCTAssertEqual(message.annotations.first?.workReference?.selectedText, "# Selected")
+        XCTAssertEqual(message.annotations.first?.workReference?.revision, 1)
+        XCTAssertEqual(store.loadSession(id: session.id)?.messages.first?.id, message.id)
+        XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
+        XCTAssertEqual(chat.pendingAnnotations, annotations)
+        XCTAssertEqual(chat.workState.selectedItem?.content, item.content)
+        try chat.updateWorkItem(item.id, content: "# Changed", previousContent: item.content)
+        XCTAssertThrowsError(try chat.appendWorkEdit(target, request: "Rename it", settings: settings))
+        XCTAssertEqual(chat.messages.count, 1)
+        chat.createSession()
+        XCTAssertThrowsError(try chat.appendWorkEdit(target, request: "Rename it", settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
+    }
+
     func testOmittedUpdateIDUsesReadReceiptAndPreservesRevisionAndConsentTargets() async throws {
         let (root, _, session) = try fixture()
         let chat = subject(root)

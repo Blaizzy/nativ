@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 struct ChatWorkPane: View {
     @ObservedObject var chat: ChatViewModel
+    let onRequestEdit: (ChatWorkFeedback, String) async throws -> Void
     @ObservedObject private var browserProfile = ChatWorkBrowserProfile.shared
     @Environment(\.controlPanelIsFullScreen) private var isFullScreen
     @Environment(\.controlPanelIsSidebarVisible) private var isSidebarVisible
@@ -679,7 +680,9 @@ struct ChatWorkPane: View {
             ChatWorkSourceEditor(text: item.content, onChange: { text, previousContent in
                 do { try chat.updateWorkItem(item.id, content: text, previousContent: previousContent) }
                 catch { errorMessage = error.localizedDescription }
-            }, onSelection: { selectedText = $0 })
+            }, onSelection: { selectedText = $0 },
+               onAddToChat: { text in addFeedback(for: item, selectedText: text) },
+               onRequestEdit: { text, request in try await requestEdit(for: item, text: text, request: request) })
             .id(item.id)
         } else if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
             ChatWorkBrowserView(browser: chat.workBrowser(for: item, sessionID: sessionID))
@@ -687,7 +690,12 @@ struct ChatWorkPane: View {
         } else {
             ScrollView {
                 MarkdownRenderer(content: previewMarkdown(item), baseURL: item.sourceURL.flatMap(URL.init(string:)),
-                                 fontSize: 15, imagePolicy: .document, onTranslate: presentTranslation)
+                                 fontSize: 15, imagePolicy: .document, onTranslate: presentTranslation,
+                                 onAddToChat: { text in addFeedback(for: item, selectedText: text) },
+                                 onRequestEdit: { text, request in
+                                     try await requestEdit(for: item, text: text, request: request)
+                                 })
+                    .id(item.id)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(24)
             }
@@ -701,12 +709,19 @@ struct ChatWorkPane: View {
         return "\(fence)\(item.language ?? "")\n\(item.content)\n\(fence)"
     }
 
-    private func addFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil) {
+    private func addFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil,
+                             selectedText: String? = nil) {
         let target = ChatWorkFeedback(item: item, sessionID: chat.currentSessionID,
                                       annotation: annotation,
-                                      selectedText: chat.workState.selectedID == item.id ? selectedText : "")
+                                      selectedText: selectedText ?? (chat.workState.selectedID == item.id ? self.selectedText : ""))
         do { try chat.addWorkFeedback(target) }
         catch { errorMessage = error.localizedDescription }
+    }
+
+    private func requestEdit(for item: ChatWorkItem, text: String, request: String) async throws {
+        let target = ChatWorkFeedback(item: item, sessionID: chat.currentSessionID,
+                                      annotation: nil, selectedText: text)
+        try await onRequestEdit(target, request)
     }
 
     private func create(title: String, kind: ChatWorkItem.Kind, content: String = "") {
@@ -831,12 +846,16 @@ private struct ChatWorkSourceEditor: NSViewRepresentable {
     let text: String
     let onChange: (String, String) -> Void
     let onSelection: (String) -> Void
+    let onAddToChat: (String) -> Void
+    let onRequestEdit: (String, String) async throws -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        guard let editor = scroll.documentView as? NSTextView else { return scroll }
+        let scroll = ChatWorkSourceTextView.scrollableTextView()
+        guard let editor = scroll.documentView as? ChatWorkSourceTextView else { return scroll }
+        editor.selectionActions.onAddToChat = onAddToChat
+        editor.selectionActions.onRequestEdit = onRequestEdit
         editor.isRichText = false
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false
@@ -854,7 +873,11 @@ private struct ChatWorkSourceEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let editor = scroll.documentView as? NSTextView, editor.string != text else { return }
+        guard let editor = scroll.documentView as? ChatWorkSourceTextView else { return }
+        editor.selectionActions.onAddToChat = onAddToChat
+        editor.selectionActions.onRequestEdit = onRequestEdit
+        guard editor.string != text else { return }
+        editor.selectionActions.dismiss()
         let selection = editor.selectedRange()
         editor.string = text
         context.coordinator.lastContent = text
@@ -879,6 +902,7 @@ private struct ChatWorkSourceEditor: NSViewRepresentable {
             let range = editor.selectedRange()
             parent.onSelection((editor.string as NSString).substring(with: range))
         }
+
     }
 }
 

@@ -16,6 +16,8 @@ struct MarkdownRenderer: View {
     var imagePolicy: ImagePolicy = .mathOnly
     var isStreaming = false
     var onTranslate: ((String) -> Void)?
+    var onAddToChat: ((String) -> Void)?
+    var onRequestEdit: ((String, String) async throws -> Void)?
 
     private struct LoadedImages {
         let request: MarkdownImageRequest
@@ -38,7 +40,9 @@ struct MarkdownRenderer: View {
                 images: images
             ),
             isStreaming: isStreaming,
-            onTranslate: onTranslate
+            onTranslate: onTranslate,
+            onAddToChat: onAddToChat,
+            onRequestEdit: onRequestEdit
         )
         .task(id: request) {
             guard let request else { return }
