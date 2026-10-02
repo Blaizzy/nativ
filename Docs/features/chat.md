@@ -46,6 +46,48 @@ switch to the original model when it is installed and links to Models when it is
 Users can instead continue with any downloaded language model. A chat remains read-only when
 its recorded token count exceeds the selected model's context window.
 
+## Project chat environments
+
+New project chats start in **Local**, using the project's existing folder. Before sending
+messages or opening work-pane items, choose **Local > Worktree…** in the project bar to
+create a separate Git checkout and a `nativ/<chat-id>` branch for that chat. The project
+must be a Git repository with at least one commit. Worktree creation starts at its current
+commit; it leaves uncommitted files and the project's current branch unchanged.
+
+File read/write/search tools, project MCP scope, and new terminals use the chat's checkout.
+Projects rooted in a repository subfolder keep that relative folder in the checkout.
+The worktree is the default working directory, not a sandbox for shell commands. Work-pane
+documents retain their separate per-chat storage.
+
+The environment menu shows the created branch and provides **Copy branch name**,
+**Copy folder path**, and **Show in Finder**. Checkouts live under the app profile's
+`Chat/Worktrees/<chat-id>` folder. Each chat keeps this association across launches;
+an unavailable checkout disables project tools instead of redirecting them to Local.
+Failed setup remains attached to the chat and can be retried from the environment menu.
+
+Empty worktree chats are retained. Closing a chat keeps its checkout and branch. Deleting
+it saves and verifies a self-contained Git bundle before removing its managed checkout and
+branch. Snapshots preserve committed history, the index, unstaged edits, and non-ignored new
+files. Ignored files require an additional confirmation listing excluded paths; cancel keeps
+the chat and its work. Submodules and nested Git repositories block cleanup because their
+contents cannot be fully captured by the parent repository's snapshot. Cleanup
+refuses changed checkout registrations, branches in use elsewhere, and locked worktrees;
+on failure the chat remains available for retry. The local project folder is never removed.
+Bulk deletion and **Remove project > Delete Chats** use the same cleanup; **Keep Chats**
+preserves their worktrees. Active worktree chats and terminal commands must be stopped first.
+
+**Settings > Projects > Recently deleted worktrees** lists snapshots, independently of the
+deleted chat. **Restore** recreates the files and staged/unstaged changes on a new managed
+branch in a new chat, using the original repository, which must still be available at its
+original location. The old conversation is not restored. Snapshots are kept under
+`Chat/DeletedWorktrees/<snapshot-id>` until explicitly removed with **Delete permanently**;
+that action requires confirmation and never deletes restored checkouts. An interrupted cleanup
+may leave a snapshot alongside its original chat, so the saved work remains recoverable.
+
+Git commit and merge remain terminal operations. Conversation forking is unavailable for
+worktree chats in this first version, to avoid silently sharing their checkout with another
+chat; create a new project chat for another worktree instead.
+
 ## Multiple windows
 
 Choose **File > New Window** or press Command + Shift + N to open another workspace.

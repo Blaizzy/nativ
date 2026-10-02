@@ -14,15 +14,19 @@ struct ChatWorkTerminalReceipt: Equatable {
 final class ChatWorkTerminalPool {
     private var sessions: [UUID: [UUID: ChatWorkTerminalSession]] = [:]
 
-    func session(for item: ChatWorkItem, sessionID: UUID, directory: String) -> ChatWorkTerminalSession {
+    func session(for item: ChatWorkItem, sessionID: UUID, directory: String, startupError: String? = nil) -> ChatWorkTerminalSession {
         if let session = sessions[sessionID]?[item.id] { return session }
-        let session = ChatWorkTerminalSession(item: item, directory: directory)
+        let session = ChatWorkTerminalSession(item: item, directory: directory, startupError: startupError)
         sessions[sessionID, default: [:]][item.id] = session
         return session
     }
 
     func existing(itemID: UUID, sessionID: UUID) -> ChatWorkTerminalSession? {
         sessions[sessionID]?[itemID]
+    }
+
+    func hasRunningCommand(sessionID: UUID) -> Bool {
+        sessions[sessionID]?.values.contains { $0.commandIsRunning } ?? false
     }
 
     func remove(itemID: UUID, sessionID: UUID) {
@@ -62,7 +66,10 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
     var receipt: ChatWorkTerminalReceipt { .init(instanceID: instanceID, inputVersion: inputVersion) }
     var commandIsRunning: Bool { isInteractive ? isRunning && (!atPrompt || commandPending) : isRunning }
 
-    init(item: ChatWorkItem, directory: String) {
+    private let startupError: String?
+
+    init(item: ChatWorkItem, directory: String, startupError: String? = nil) {
+        self.startupError = startupError
         isInteractive = item.terminalCommand == nil
         self.directory = directory
         initialDirectory = directory
@@ -99,6 +106,11 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
     func startIfNeeded(shell: String = "/bin/zsh", arguments: [String] = ["-l"], environment override: [String: String]? = nil) {
         guard isInteractive, !didStart, let terminal = view as? LocalProcessTerminalView else { return }
         didStart = true
+        if let startupError {
+            status = "Folder unavailable"
+            append(startupError + "\n")
+            return
+        }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: initialDirectory, isDirectory: &isDirectory), isDirectory.boolValue else {
             status = "Folder unavailable"

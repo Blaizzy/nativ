@@ -30,6 +30,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
     var personalizationSnapshot: String? = nil
+    var worktree: ChatGitWorktree? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }
@@ -48,7 +49,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             sessionOrder: sessionOrder,
             folderID: folderID,
             projectID: projectID,
-            scheduledTaskID: scheduledTaskID
+            scheduledTaskID: scheduledTaskID,
+            worktree: worktree
         )
     }
 
@@ -137,6 +139,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let folderID: UUID?
     let projectID: UUID?
     let scheduledTaskID: String?
+    var worktree: ChatGitWorktree? = nil
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
@@ -814,6 +817,10 @@ struct ChatSessionStore {
     private let legacyChatDirectory: URL?
     private let mediaStore: MediaAssetStore
 
+    var worktrees: ChatGitWorktreeStore {
+        ChatGitWorktreeStore(root: chatDirectory.appendingPathComponent("Worktrees", isDirectory: true))
+    }
+
     var workFiles: ChatWorkFileStore {
         ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
     }
@@ -897,16 +904,18 @@ struct ChatSessionStore {
         }
     }
 
-    func deleteSession(id: UUID) {
+    @discardableResult
+    func deleteSession(id: UUID) -> Bool {
         do {
             try fileManager.removeItem(at: sessionURL(for: id))
         } catch CocoaError.fileNoSuchFile {
             // Continue so stale ownership and index records are also removed.
         } catch {
             reportFailure("deleteSession", sessionID: id, error: error)
-            return
+            return false
         }
         mediaStore.removeOwner("chat:\(id.uuidString)")
+        return true
     }
 
     func loadFolders() -> [ChatFolder] {
