@@ -273,6 +273,9 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var imageModelSelectionRequests:
         [UUID: ChatImageModelSelectionRequest] = [:]
 
+    @Published private(set) var preparingWorktreeSessionIDs: Set<UUID> = []
+    @Published private(set) var deletingSessionIDs: Set<UUID> = []
+
     private let sessionStore: ChatSessionStore
     let workBrowsers = ChatWorkBrowserPool()
     let workTerminals = ChatWorkTerminalPool()
@@ -407,7 +410,7 @@ final class ChatViewModel: ObservableObject {
         guard let currentSessionID else {
             return false
         }
-        return !canModifySession(currentSessionID)
+        return inferenceActivity.isOwnedByAnotherWindow(.chat(currentSessionID), windowID: windowID)
     }
 
     var visibleMessages: [ChatTranscriptMessage] {
@@ -469,6 +472,8 @@ final class ChatViewModel: ObservableObject {
 
     func canSend(isRunning: Bool, selectedModelID: String?) -> Bool {
         isRunning
+            && !isPreparingCurrentWorktree
+            && !isDeletingCurrentSession
             && selectedModelID?.isEmpty == false
             && !hasBlockingAttachmentValidation
             && (pastedTextDraft.hasContent
@@ -602,11 +607,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     var forkableAssistantResponseIDs: Set<UUID> {
-        ChatConversationBranch.forkableAssistantResponseIDs(in: messages)
+        currentWorktree == nil ? ChatConversationBranch.forkableAssistantResponseIDs(in: messages) : []
     }
 
     func forkAssistantResponse(_ messageID: UUID) {
-        guard let sourceSession = currentSessionSnapshot,
+        guard currentWorktree == nil, let sourceSession = currentSessionSnapshot,
             let branch = ChatConversationBranch.throughAssistantResponse(
                 messageID,
                 in: sourceSession
@@ -682,7 +687,7 @@ final class ChatViewModel: ObservableObject {
         title: String, kind: ChatWorkItem.Kind, content: String = "",
         url: String? = nil, language: String? = nil, sourceURL: String? = nil
     ) throws {
-        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
+        guard let sessionID = currentSessionID, canModifySession(sessionID) else { throw ChatWorkError.unavailable }
         var state = workState
         try state.create(title: title, kind: kind, content: content, url: url, language: language, sourceURL: sourceURL)
         if kind == .terminal { state.items[state.items.count - 1].terminalWorkingDirectory = terminalDirectory(in: sessionID) }
@@ -690,28 +695,44 @@ final class ChatViewModel: ObservableObject {
     }
 
     var workFilesDirectory: URL? {
-        currentSessionID.map { sessionStore.workFiles.directory(for: $0) }
+        guard let sessionID = currentSessionID,
+              currentWorktree == nil || currentWorktree?.availableRootPath != nil else { return nil }
+        return workFiles(in: sessionID).directory(for: sessionID)
     }
 
     func workFileURL(for item: ChatWorkItem) -> URL? {
-        currentSessionID.flatMap { sessionStore.workFiles.fileURL(for: item, sessionID: $0) }
+        currentSessionID.flatMap { workFiles(in: $0).fileURL(for: item, sessionID: $0) }
+    }
+
+    private func workFiles(in sessionID: UUID) -> ChatWorkFileStore {
+        sessionStore.workFiles(for: worktree(for: sessionID))
     }
 
     func refreshWorkFiles(in requestedSessionID: UUID? = nil) throws {
         guard let sessionID = requestedSessionID ?? currentSessionID,
               let state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         guard canModifySession(sessionID) else { return }
-        let refreshed = try sessionStore.workFiles.refreshed(state, sessionID: sessionID)
+        if worktree(for: sessionID) != nil,
+           sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
+            // Materialize legacy sources before reading the checkout, preserving external edits.
+            try saveWorkState(state, in: sessionID, updateTimestamp: false)
+        }
+        if let worktree = worktree(for: sessionID), worktree.availableRootPath == nil {
+            throw ChatWorkError.invalid("The chat worktree is unavailable. Restore its checkout before changing files.")
+        }
+        let refreshed = try workFiles(in: sessionID).refreshed(state, sessionID: sessionID,
+                                                             droppingMissing: worktree(for: sessionID) != nil)
         if refreshed != state {
             try saveWorkState(refreshed, in: sessionID, updateTimestamp: true)
         } else {
             // Materialize older chats lazily, without changing their titles or revisions.
-            try sessionStore.workFiles.save(state, previous: state, sessionID: sessionID)
+            try workFiles(in: sessionID).save(state, previous: state, sessionID: sessionID)
         }
-        try sessionStore.workFiles.createDirectory(for: sessionID)
+        try workFiles(in: sessionID).createDirectory(for: sessionID)
     }
 
     private func terminalDirectory(in sessionID: UUID) -> String {
+        if let worktree = worktree(for: sessionID) { return worktree.projectPath }
         if let projectID = projectID(for: sessionID), let project = projectStore.project(withID: projectID) {
             return project.rootPath
         }
@@ -720,7 +741,10 @@ final class ChatViewModel: ObservableObject {
 
     func workTerminal(for item: ChatWorkItem, sessionID: UUID) -> ChatWorkTerminalSession {
         workTerminals.session(for: item, sessionID: sessionID,
-                              directory: item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID))
+                              directory: item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID),
+                              startupError: worktree(for: sessionID).flatMap {
+                                  $0.availableRootPath == nil ? "The chat worktree is unavailable: \($0.projectPath)" : nil
+                              })
     }
 
     func restartWorkTerminal(_ id: UUID) {
@@ -797,12 +821,13 @@ final class ChatViewModel: ObservableObject {
         guard canModifySession(sessionID) else {
             throw ChatWorkError.invalid("This chat is active in another window.")
         }
+        try refreshWorkFiles(in: sessionID)
         var state = workState
         guard let item = state.items.first(where: { $0.id == id }) else { throw ChatWorkError.missingItem }
         guard item.canEdit else { throw ChatWorkError.invalid("Only saved files can be deleted.") }
         state.close(id)
         state.items.removeAll { $0.id == id }
-        try sessionStore.workFiles.delete(item, sessionID: sessionID, trashFile: trashFile) {
+        try workFiles(in: sessionID).delete(item, sessionID: sessionID, trashFile: trashFile) {
             try saveWorkState(state, in: sessionID, updateTimestamp: true)
         }
         workBrowsers.remove(itemID: id, sessionID: sessionID)
@@ -1004,7 +1029,7 @@ final class ChatViewModel: ObservableObject {
             return try await executeBrowserAction(browserRequest, item: item, sessionID: sessionID)
         }
         let result = try state.execute(request) { item in
-            sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)
+            workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID)
         }
         if request.action == .create, state.selectedItem?.kind == .terminal {
             state.items[state.items.count - 1].terminalWorkingDirectory = terminalDirectory(in: sessionID)
@@ -1028,12 +1053,138 @@ final class ChatViewModel: ObservableObject {
         return result
     }
 
+    private func workResult(_ result: String, item: ChatWorkItem, sessionID: UUID) throws -> String {
+        guard let url = workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID),
+              var object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any] else { return result }
+        object["file_path"] = url.path
+        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+    }
+
     private func executeBrowserAction(_ request: ChatWorkRequest, item: ChatWorkItem, sessionID: UUID) async throws -> String {
         var result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
         result["revision"] = item.revision
         result["editable"] = item.canEdit
-        result["file_path"] = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)?.path
+        result["file_path"] = workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID)?.path
         return String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    var currentWorktree: ChatGitWorktree? { currentSession?.worktree }
+
+    var worktreeRecoveryStore: ChatGitWorktreeStore { sessionStore.worktrees }
+
+    func restoreWorktreeSnapshot(_ id: UUID) async throws -> UUID {
+        let store = sessionStore.worktrees
+        let record = try await Task.detached { try store.loadSnapshot(id) }.value
+        let sessionID = UUID()
+        let operationID = UUID()
+        guard inferenceActivity.begin(resource: .chat(record.sessionID), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "This worktree is already being changed in another window.")
+        }
+        defer { inferenceActivity.end(resource: .chat(record.sessionID), operationID: operationID) }
+        guard inferenceActivity.begin(resource: .chat(sessionID), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "The new chat is already active.")
+        }
+        preparingWorktreeSessionIDs.insert(sessionID)
+        defer {
+            preparingWorktreeSessionIDs.remove(sessionID)
+            inferenceActivity.end(resource: .chat(sessionID), operationID: operationID)
+        }
+        let plan = try await Task.detached(priority: .userInitiated) {
+            try store.restorationPlan(record, sessionID: sessionID)
+        }.value
+        let projectID = projectStore.projects.first { $0.rootPath == URL(fileURLWithPath: record.worktree.repositoryPath)
+            .appendingPathComponent(record.worktree.projectSubpath).path }?.id
+        var session = ChatSession(id: sessionID, title: "Restored: \(record.title)", createdAt: Date(),
+                                  updatedAt: Date(), messages: [], projectID: projectID, worktree: plan)
+        // Persist the destination before creating it, so an interrupted restore remains discoverable.
+        try saveWorktreeSession(session)
+        session.worktree = try await Task.detached(priority: .userInitiated) { try store.restore(id, to: plan) }.value
+        if let fileTabs = record.workState {
+            session.workState = try sessionStore.workFiles(for: session.worktree)
+                .refreshed(fileTabs, sessionID: sessionID, droppingMissing: true)
+            session.workFilesInWorktree = true
+        }
+        try saveWorktreeSession(session)
+        return sessionID
+    }
+
+    func permanentlyDeleteWorktreeSnapshot(_ id: UUID) async throws {
+        let store = sessionStore.worktrees
+        let record = try await Task.detached { try store.loadSnapshot(id) }.value
+        let operationID = UUID()
+        guard inferenceActivity.begin(resource: .chat(record.sessionID), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "This worktree is already being changed in another window.")
+        }
+        defer { inferenceActivity.end(resource: .chat(record.sessionID), operationID: operationID) }
+        try await Task.detached(priority: .userInitiated) { try store.permanentlyDeleteSnapshot(id) }.value
+    }
+
+    var isPreparingCurrentWorktree: Bool {
+        currentSessionID.map { preparingWorktreeSessionIDs.contains($0) } ?? false
+    }
+
+    var isDeletingCurrentSession: Bool {
+        currentSessionID.map { deletingSessionIDs.contains($0) } ?? false
+    }
+
+    var canCreateCurrentWorktree: Bool {
+        guard let session = currentSession, session.projectID != nil,
+              session.worktree?.isReady != true else { return false }
+        return messages.isEmpty && workState.items.isEmpty && !isSessionBusy(session.id)
+            && canModifySession(session.id) && !isLoadingSessions
+    }
+
+    func toolScope(for sessionID: UUID, settings: NativSettings) -> ChatToolScope {
+        projectStore.toolScope(for: projectID(for: sessionID), settings: settings, worktree: worktree(for: sessionID))
+    }
+
+    private func worktree(for sessionID: UUID) -> ChatGitWorktree? {
+        sessionID == currentSessionID ? currentSession?.worktree : storedSessions.first { $0.id == sessionID }?.worktree
+    }
+
+    func createCurrentWorktree() async throws {
+        guard canCreateCurrentWorktree, let session = currentSessionSnapshot,
+              let projectID = session.projectID, let project = projectStore.project(withID: projectID) else {
+            throw ChatGitWorktreeError(message: "Choose Worktree in a new, empty project chat.")
+        }
+        let operationID = UUID()
+        guard inferenceActivity.begin(resource: .chat(session.id), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "This chat is already active in another window.")
+        }
+        preparingWorktreeSessionIDs.insert(session.id)
+        defer {
+            preparingWorktreeSessionIDs.remove(session.id)
+            inferenceActivity.end(resource: .chat(session.id), operationID: operationID)
+        }
+        let store = sessionStore.worktrees
+        let plan: ChatGitWorktree
+        if let previous = session.worktree {
+            plan = previous
+        } else {
+            plan = try await Task.detached(priority: .userInitiated) {
+                try store.plan(projectPath: project.rootPath, sessionID: session.id)
+            }.value
+        }
+        // Persist the reservation first, so a crash or checkout failure remains attached to this chat.
+        var reserved = session
+        reserved.worktree = plan
+        try saveWorktreeSession(reserved)
+        let ready = try await Task.detached(priority: .userInitiated) { try store.create(plan) }.value
+        reserved.worktree = ready
+        try saveWorktreeSession(reserved)
+    }
+
+    private func saveWorktreeSession(_ session: ChatSession) throws {
+        guard sessionStore.saveSession(session) else {
+            throw ChatGitWorktreeError(message: "The chat's worktree could not be saved. Its files are kept at \(session.worktree?.path ?? "").")
+        }
+        upsertStoredSession(session)
+        if currentSessionID == session.id {
+            objectWillChange.send()
+            currentSession?.worktree = session.worktree
+        }
+        refreshSessionList()
+        persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
     }
 
     func createSession(projectID: UUID? = nil) {
@@ -1373,22 +1524,67 @@ final class ChatViewModel: ObservableObject {
         (storedSessions.compactMap(\.pinnedOrder).max() ?? -1) + 1
     }
 
-    func deleteSession(_ sessionID: UUID) {
+    @discardableResult
+    func deleteSession(
+        _ sessionID: UUID,
+        confirmDiscard: @MainActor (String) async -> Bool = { _ in false }
+    ) async throws -> Bool {
         guard canModifySession(sessionID) else {
-            return
+            throw ChatGitWorktreeError(message: "This chat is active in another operation. Stop it and try again.")
         }
+        if let worktree = worktree(for: sessionID) {
+            guard !isSessionBusy(sessionID), !workTerminals.hasRunningCommand(sessionID: sessionID) else {
+                throw ChatGitWorktreeError(message: "Stop the chat and its terminal commands before deleting its worktree.")
+            }
+            if workState(for: sessionID)?.items.contains(where: \.canEdit) == true,
+               sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
+                try refreshWorkFiles(in: sessionID)
+            }
+            let operationID = UUID()
+            guard inferenceActivity.begin(resource: .chat(sessionID), windowID: windowID, operationID: operationID) else {
+                throw ChatGitWorktreeError(message: "This chat is active in another operation. Stop it and try again.")
+            }
+            deletingSessionIDs.insert(sessionID)
+            defer {
+                deletingSessionIDs.remove(sessionID)
+                inferenceActivity.end(resource: .chat(sessionID), operationID: operationID)
+            }
+            let store = sessionStore.worktrees
+            let removal = try await Task.detached(priority: .userInitiated) {
+                try store.removal(worktree, sessionID: sessionID)
+            }.value
+            let discard = removal.requiresConfirmation ? await confirmDiscard(removal.warning) : false
+            guard !removal.requiresConfirmation || discard else { return false }
+            workTerminals.remove(sessionID: sessionID)
+            let title = sessions.first { $0.id == sessionID }?.title ?? "Worktree"
+            let fileTabs = workState(for: sessionID)
+            try await Task.detached(priority: .userInitiated) {
+                try store.remove(worktree, sessionID: sessionID, discardChanges: discard, title: title, workState: fileTabs)
+            }.value
+            try finishDeletingSession(sessionID)
+        } else {
+            try finishDeletingSession(sessionID)
+        }
+        return true
+    }
+
+    private func finishDeletingSession(_ sessionID: UUID) throws {
         // A busy session used to be undeletable, so a chat whose stream never
         // finished could not be removed at all. Cancel its work and delete it.
         if isSessionBusy(sessionID) {
             cancelRequests(for: sessionID)
         }
 
+        guard sessionStore.deleteSession(id: sessionID) else {
+            throw ChatGitWorktreeError(message: "The chat could not be deleted from disk. Try deleting it again.")
+        }
         storedSessions.removeAll { $0.id == sessionID }
         workBrowsers.remove(sessionID: sessionID)
         workTerminals.remove(sessionID: sessionID)
         lastWorkReads.removeValue(forKey: sessionID)
         RoutineStore.shared.detachSession(sessionID)
-        deletePersistedSession(sessionID)
+        searchLibrary.remove(sessionID)
+        persistedDataChanges.send(.chatSession(sessionID), originWindowID: windowID)
         pruneRedundantEmptySessions()
 
         guard sessionID == currentSessionID else {
@@ -1416,14 +1612,15 @@ final class ChatViewModel: ObservableObject {
     @discardableResult
     func removeProjectSessions(
         projectID: UUID,
-        disposition: ChatProjectSessionRemovalDisposition
-    ) -> Bool {
+        disposition: ChatProjectSessionRemovalDisposition,
+        confirmDiscard: @MainActor (String) async -> Bool = { _ in false }
+    ) async throws -> Bool {
         let sessionIDs = Array(
             storedSessions.lazy
                 .filter { $0.projectID == projectID }
                 .map(\.id))
         guard sessionIDs.allSatisfy(canModifySession) else {
-            return false
+            throw ChatGitWorktreeError(message: "One or more project chats are active in another operation. Stop them and try again.")
         }
 
         switch disposition {
@@ -1432,7 +1629,7 @@ final class ChatViewModel: ObservableObject {
                 storedSessions[index].projectID = nil
                 storedSessions[index].folderID = nil
                 guard saveSession(storedSessions[index]) else {
-                    return false
+                    throw ChatGitWorktreeError(message: "The project chats could not be saved. Try removing the project again.")
                 }
                 if currentSession?.id == storedSessions[index].id {
                     currentSession = storedSessions[index]
@@ -1443,7 +1640,7 @@ final class ChatViewModel: ObservableObject {
             refreshSessionList()
         case .deleteChats:
             for sessionID in sessionIDs {
-                deleteSession(sessionID)
+                guard try await deleteSession(sessionID, confirmDiscard: confirmDiscard) else { return false }
             }
         }
         return true
@@ -1452,8 +1649,9 @@ final class ChatViewModel: ObservableObject {
     func handleScheduledTaskDeletion(
         taskID: String,
         linkedSessionIDs: Set<UUID>,
-        disposition: ScheduledTaskChatDisposition
-    ) {
+        disposition: ScheduledTaskChatDisposition,
+        confirmDiscard: @MainActor (String) async -> Bool = { _ in false }
+    ) async throws {
         let sessionIDs = linkedSessionIDs.union(
             storedSessions.lazy
                 .filter { $0.scheduledTaskID == taskID }
@@ -1480,7 +1678,7 @@ final class ChatViewModel: ObservableObject {
 
         case .deleteChats:
             for sessionID in sessionIDs {
-                deleteSession(sessionID)
+                _ = try await deleteSession(sessionID, confirmDiscard: confirmDiscard)
             }
         }
     }
@@ -1736,10 +1934,7 @@ final class ChatViewModel: ObservableObject {
                 assistantMessageID: UUID(),
                 settings: settings,
                 personalizationSnapshot: currentSession?.personalizationSnapshot ?? "",
-                toolScope: projectStore.toolScope(
-                    for: projectID(for: sessionID),
-                    settings: settings
-                ),
+                toolScope: toolScope(for: sessionID, settings: settings),
                 imageGenerationModelID: imageGenerationModelID(for: sessionID)
                     ?? settings.imageGenerationModelID,
                 languageModelSupportsTools: languageModelSupportsTools,
@@ -2677,6 +2872,10 @@ final class ChatViewModel: ObservableObject {
                             .additionalModelSearchPaths,
                         huggingFaceToken: appModel?.effectiveHuggingFaceToken
                     )
+                    if let worktree = queuedRequest.toolScope.worktree,
+                       worktree.availableRootPath != queuedRequest.toolScope.rootPath || worktree.availableRootPath == nil {
+                        throw ChatGitWorktreeError(message: "The chat worktree is unavailable. Restore its folder before running tools.")
+                    }
                     let context = ChatToolExecutionContext(
                         imageGenerationModelID: activeImageModelID,
                         baseURL: queuedRequest.settings.serverBaseURL,
@@ -2773,10 +2972,7 @@ final class ChatViewModel: ObservableObject {
                             argumentsJSON: toolCall.function?.arguments,
                             projectScope: queuedRequest.toolScope,
                             currentProjectScope: { [self] in
-                                projectStore.toolScope(
-                                    for: queuedRequest.toolScope.projectID,
-                                    settings: appModel?.settings ?? queuedRequest.settings
-                                )
+                                toolScope(for: queuedRequest.sessionID, settings: appModel?.settings ?? queuedRequest.settings)
                             }
                         )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
@@ -2963,10 +3159,7 @@ final class ChatViewModel: ObservableObject {
         if advertisesToolsForModel {
             toolDefinitions += settings.customTools.compactMap { try? $0.definition() }
             toolDefinitions += mcpHost?.toolDefinitions(
-                projectScope: projectStore.toolScope(
-                    for: queuedRequest.toolScope.projectID,
-                    settings: appModel?.settings ?? queuedRequest.settings
-                )
+                projectScope: toolScope(for: queuedRequest.sessionID, settings: appModel?.settings ?? queuedRequest.settings)
             ) ?? []
             let webSearchIsConfigured = ChatWebSearchToolRegistry.isConfigured()
             let webReadIsConfigured = ChatWebReadToolRegistry.isConfigured()
@@ -3725,7 +3918,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     func canModifySession(_ sessionID: UUID) -> Bool {
-        !inferenceActivity.isOwnedByAnotherWindow(
+        !preparingWorktreeSessionIDs.contains(sessionID) && !deletingSessionIDs.contains(sessionID)
+            && !inferenceActivity.isOwnedByAnotherWindow(
             .chat(sessionID),
             windowID: windowID
         )
@@ -3763,6 +3957,8 @@ final class ChatViewModel: ObservableObject {
         }
 
         return currentSession.projectID == projectID
+            && currentSession.worktree == nil
+            && !preparingWorktreeSessionIDs.contains(currentSession.id)
             && messages.isEmpty
             && workState.items.isEmpty
             && !pastedTextDraft.hasContent
@@ -3788,7 +3984,8 @@ final class ChatViewModel: ObservableObject {
                 continue
             }
 
-            if session.messages.isEmpty && (session.workState?.items.isEmpty ?? true) {
+            if session.worktree == nil && !preparingWorktreeSessionIDs.contains(session.id)
+                && session.messages.isEmpty && (session.workState?.items.isEmpty ?? true) {
                 let routineStore = RoutineStore.shared
                 let isLinkedToRoutine = routineStore.routines.contains {
                     $0.sourceSessionID == session.id

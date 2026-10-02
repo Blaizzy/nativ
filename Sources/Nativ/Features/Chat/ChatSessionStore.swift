@@ -30,6 +30,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
     var personalizationSnapshot: String? = nil
+    var worktree: ChatGitWorktree? = nil
+    var workFilesInWorktree: Bool? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }
@@ -48,7 +50,8 @@ struct ChatSession: Identifiable, Equatable, Codable {
             sessionOrder: sessionOrder,
             folderID: folderID,
             projectID: projectID,
-            scheduledTaskID: scheduledTaskID
+            scheduledTaskID: scheduledTaskID,
+            worktree: worktree
         )
     }
 
@@ -137,6 +140,7 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let folderID: UUID?
     let projectID: UUID?
     let scheduledTaskID: String?
+    var worktree: ChatGitWorktree? = nil
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
@@ -814,8 +818,18 @@ struct ChatSessionStore {
     private let legacyChatDirectory: URL?
     private let mediaStore: MediaAssetStore
 
+    var worktrees: ChatGitWorktreeStore {
+        ChatGitWorktreeStore(root: chatDirectory.appendingPathComponent("Worktrees", isDirectory: true))
+    }
+
     var workFiles: ChatWorkFileStore {
         ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
+    }
+
+    func workFiles(for worktree: ChatGitWorktree?) -> ChatWorkFileStore {
+        guard let worktree else { return workFiles }
+        return ChatWorkFileStore(root: URL(fileURLWithPath: worktree.projectPath)
+            .appendingPathComponent("Nativ Files", isDirectory: true), worktree: worktree)
     }
 
     init(
@@ -879,20 +893,31 @@ struct ChatSessionStore {
 
             var persisted = session
             _ = try persisted.externalizeAssets(using: mediaStore)
-            let data = try makeEncoder().encode(persisted)
-            // Callers that already own the session can supply its previous work state.
-            // Chats without editable files never need to reread the transcript.
+            // Callers can supply the prior file state. Worktree saves still read the
+            // persisted migration marker so a stale window cannot migrate twice.
             var previous = previousWorkState
-            if let state = persisted.workState, state.items.contains(where: \.canEdit) {
-                if previous == nil {
-                    previous = (try? Data(contentsOf: sessionURL(for: session.id)))
-                        .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }?.workState
+            let hasEditableFiles = persisted.workState?.items.contains(where: \.canEdit) == true
+            if persisted.worktree != nil || (hasEditableFiles && previous == nil) {
+                let saved = (try? Data(contentsOf: sessionURL(for: session.id)))
+                    .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }
+                previous = previous ?? saved?.workState
+                if persisted.worktree != nil, saved?.workFilesInWorktree == true {
+                    persisted.workFilesInWorktree = true
                 }
-                try workFiles.save(state, previous: previous, sessionID: persisted.id, materializeMissing: false)
             }
+            let files = workFiles(for: persisted.worktree)
+            if let state = persisted.workState, hasEditableFiles {
+                if persisted.worktree != nil, persisted.workFilesInWorktree != true {
+                    try files.migrate(state, previous: previous, from: workFiles, sessionID: persisted.id)
+                    persisted.workFilesInWorktree = true
+                } else {
+                    try files.save(state, previous: previous, sessionID: persisted.id, materializeMissing: false)
+                }
+            }
+            let data = try makeEncoder().encode(persisted)
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
             if let state = persisted.workState {
-                workFiles.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
+                files.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
             }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true
@@ -902,16 +927,18 @@ struct ChatSessionStore {
         }
     }
 
-    func deleteSession(id: UUID) {
+    @discardableResult
+    func deleteSession(id: UUID) -> Bool {
         do {
             try fileManager.removeItem(at: sessionURL(for: id))
         } catch CocoaError.fileNoSuchFile {
             // Continue so stale ownership and index records are also removed.
         } catch {
             reportFailure("deleteSession", sessionID: id, error: error)
-            return
+            return false
         }
         mediaStore.removeOwner("chat:\(id.uuidString)")
+        return true
     }
 
     func loadFolders() -> [ChatFolder] {

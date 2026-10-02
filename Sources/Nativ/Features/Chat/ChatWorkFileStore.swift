@@ -3,14 +3,15 @@ import Foundation
 /// Readable files for session-owned work. IDs keep duplicate names and different chats separate.
 struct ChatWorkFileStore {
     let root: URL
+    var worktree: ChatGitWorktree? = nil
     private let fileManager = FileManager.default
 
     func directory(for sessionID: UUID) -> URL {
-        root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
+        worktree == nil ? root.appendingPathComponent(sessionID.uuidString, isDirectory: true) : root
     }
 
     func fileURL(for item: ChatWorkItem, sessionID: UUID) -> URL? {
-        guard item.canEdit else { return nil }
+        guard item.canEdit, worktree == nil || worktree?.availableRootPath != nil else { return nil }
         return directory(for: sessionID)
             .appendingPathComponent(item.id.uuidString, isDirectory: true)
             .appendingPathComponent(item.storedFilename)
@@ -63,14 +64,20 @@ struct ChatWorkFileStore {
               materializeMissing: Bool = true) throws {
         var writes: [(URL, String)] = []
         for item in state.items where item.canEdit {
-            guard let url = fileURL(for: item, sessionID: sessionID) else { continue }
             let old = previous?.items.first { $0.id == item.id }
+            // Git or a terminal may delete a file. Metadata-only chat saves must not recreate it.
+            if worktree != nil, old?.storedFilename == item.storedFilename, old?.content == item.content { continue }
+            guard let url = fileURL(for: item, sessionID: sessionID) else { throw ChatWorkError.unavailable }
             let oldURL = old.flatMap { fileURL(for: $0, sessionID: sessionID) }
             // Only an explicit refresh materializes missing files from older chats.
             // Metadata and transcript saves do no filesystem work for unchanged sources.
             if !materializeMissing, oldURL == url, old?.content == item.content { continue }
+            try checkLocation(directory(for: sessionID), isDirectory: true)
             try checkLocation(url)
             let exists = fileManager.fileExists(atPath: url.path)
+            if worktree != nil, let oldURL, !fileManager.fileExists(atPath: oldURL.path) {
+                throw ChatWorkError.conflict
+            }
             if exists, oldURL == url, old?.content == item.content { continue }
             if exists {
                 let disk = try read(url)
@@ -88,9 +95,37 @@ struct ChatWorkFileStore {
         }
     }
 
+    /// Copy an older chat's sources into its checkout without overwriting either location.
+    /// Legacy copies are retained for recovery, but are no longer used after migration.
+    func migrate(_ state: ChatWorkState, previous: ChatWorkState?, from legacy: ChatWorkFileStore,
+                 sessionID: UUID) throws {
+        var sources = state
+        for index in sources.items.indices where sources.items[index].canEdit {
+            let item = sources.items[index]
+            let old = previous?.items.first { $0.id == item.id } ?? item
+            if let source = legacy.fileURL(for: old, sessionID: sessionID), fileManager.fileExists(atPath: source.path) {
+                let disk = try legacy.read(source)
+                if disk != old.content {
+                    guard item.content == old.content || item.content == disk else { throw ChatWorkError.conflict }
+                    sources.items[index].content = disk
+                }
+            }
+        }
+        try save(sources, previous: nil, sessionID: sessionID)
+    }
+
     /// Bring edits made in Finder, an editor, or the terminal back into the same side-pane item.
-    func refreshed(_ state: ChatWorkState, sessionID: UUID) throws -> ChatWorkState {
+    func refreshed(_ state: ChatWorkState, sessionID: UUID, droppingMissing: Bool = false) throws -> ChatWorkState {
         var result = state
+        if droppingMissing {
+            result.items.removeAll { item in
+                guard item.canEdit else { return false }
+                guard let url = fileURL(for: item, sessionID: sessionID) else { return true }
+                return !fileManager.fileExists(atPath: url.path)
+            }
+            result.openIDs.removeAll { id in !result.items.contains { $0.id == id } }
+            if !result.items.contains(where: { $0.id == result.selectedID }) { result.selectedID = nil }
+        }
         for index in result.items.indices {
             let item = result.items[index]
             guard let url = fileURL(for: item, sessionID: sessionID) else { continue }
@@ -131,6 +166,9 @@ struct ChatWorkFileStore {
     }
 
     private func checkLocation(_ url: URL, isDirectory: Bool = false) throws {
+        if let worktree, worktree.availableRootPath == nil {
+            throw ChatWorkError.invalid("The chat worktree is unavailable. Restore its checkout before changing files.")
+        }
         var component = url
         while component.path.count >= root.path.count {
             if let values = try? component.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),

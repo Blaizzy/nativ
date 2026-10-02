@@ -418,7 +418,7 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertTrue(saved.content.contains("before\nafter"))
         let read = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: saved.id), in: original.id)
         XCTAssertTrue(read.contains("after"))
-        chat.deleteSession(original.id)
+        try await chat.deleteSession(original.id)
         XCTAssertNil(chat.workTerminals.existing(itemID: saved.id, sessionID: original.id))
     }
 

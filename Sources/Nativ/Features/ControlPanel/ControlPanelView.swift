@@ -56,6 +56,7 @@ struct ControlPanelView: View {
     @State var pendingDeleteFolder: ChatFolder?
     @State var pendingDeleteProject: ChatProject?
     @State var projectErrorMessage: String?
+    @State var chatDeletionErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
     @State var chatLibrarySearch = ChatLibrarySearchState()
