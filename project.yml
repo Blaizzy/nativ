@@ -12,6 +12,9 @@ settings:
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
 packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.18.0
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
@@ -132,6 +135,8 @@ targets:
         product: SwaTexRender
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: SwiftTerm
+        product: SwiftTerm
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -153,9 +158,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.11
-        NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
-        CURRENT_PROJECT_VERSION: 18
+        MARKETING_VERSION: 0.3.12
+        NATIV_RELEASE_VERSION: 0.3.12rc1
+        CURRENT_PROJECT_VERSION: 19
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -176,8 +181,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.11
-        CURRENT_PROJECT_VERSION: 18
+        MARKETING_VERSION: 0.3.12
+        CURRENT_PROJECT_VERSION: 19
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -234,7 +239,19 @@ targets:
         buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkState.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkFileStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkTerminal.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkSplitView.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkDocument.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkBrowser.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkAnnotation.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkAnnotationReference.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatGitWorktree.swift
+      - path: Sources/Nativ/Features/Chat/ChatGitWorktreeRecovery.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatStreamEventRelay.swift
       - path: Sources/Nativ/Features/Chat/ChatFontScale.swift
@@ -327,6 +344,8 @@ targets:
       - target: NativExtensionSDK
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: SwiftTerm
+        product: SwiftTerm
       - package: Sparkle
         product: Sparkle
       - package: SwiftCMark

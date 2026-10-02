@@ -79,13 +79,14 @@ struct FileReadAccessPolicy: Sendable {
         }
 
         let standardizedCandidate = candidate.standardizedFileURL
-        try Self.rejectBlockedPath(standardizedCandidate)
+        let permitsManagedWorktree = ChatGitWorktree.isManagedProjectRoot(rootURL)
+        try Self.rejectBlockedPath(standardizedCandidate, permitsManagedWorktree: permitsManagedWorktree)
 
         let resolved = Self.canonicalURL(standardizedCandidate)
         guard contains(resolved) else {
             throw FileReadAccessError.outsideAllowedRoot
         }
-        try Self.rejectBlockedPath(resolved)
+        try Self.rejectBlockedPath(resolved, permitsManagedWorktree: permitsManagedWorktree)
 
         return ResolvedFileReadPath(
             url: resolved,
@@ -117,7 +118,7 @@ struct FileReadAccessPolicy: Sendable {
     func suggestions(for missingURL: URL, maximumCount: Int = 3) -> [String] {
         let parent = Self.canonicalURL(missingURL.deletingLastPathComponent())
         guard contains(parent), maximumCount > 0,
-            (try? Self.rejectBlockedPath(parent)) != nil,
+            (try? Self.rejectBlockedPath(parent, permitsManagedWorktree: ChatGitWorktree.isManagedProjectRoot(rootURL))) != nil,
             let names = try? FileManager.default.contentsOfDirectory(atPath: parent.path)
         else {
             return []
@@ -126,7 +127,7 @@ struct FileReadAccessPolicy: Sendable {
         let needle = missingURL.lastPathComponent
         let ranked = names.prefix(300).compactMap { name -> (String, Int)? in
             let candidate = Self.canonicalURL(parent.appendingPathComponent(name))
-            guard contains(candidate), (try? Self.rejectBlockedPath(candidate)) != nil else {
+            guard contains(candidate), (try? Self.rejectBlockedPath(candidate, permitsManagedWorktree: ChatGitWorktree.isManagedProjectRoot(rootURL))) != nil else {
                 return nil
             }
             let score = Self.suggestionScore(name: name, needle: needle)
@@ -143,7 +144,7 @@ struct FileReadAccessPolicy: Sendable {
             .map { displayPath(for: parent.appendingPathComponent($0.0)) }
     }
 
-    private static func rejectBlockedPath(_ url: URL) throws {
+    private static func rejectBlockedPath(_ url: URL, permitsManagedWorktree: Bool = false) throws {
         let path = url.standardizedFileURL.path
         let lowercasePath = path.lowercased()
         if ["/dev", "/proc", "/sys"].contains(where: {
@@ -165,8 +166,8 @@ struct FileReadAccessPolicy: Sendable {
         }) {
             throw FileReadAccessError.blockedPath
         }
-        if lowercasePath.contains("/library/application support/nativ/")
-            || lowercasePath.hasSuffix("/library/application support/nativ")
+        if !permitsManagedWorktree && (lowercasePath.contains("/library/application support/nativ/")
+            || lowercasePath.hasSuffix("/library/application support/nativ"))
         {
             throw FileReadAccessError.blockedPath
         }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
+struct ChatTranscriptScroller<Content: View>: View {
     let currentSessionID: UUID?
     let revision: ChatTranscriptRevision
     let submissionID: UUID?
@@ -9,7 +9,6 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
     let searchNavigation: ChatSearchNavigationRequest?
     let onSearchNavigation: (UUID) -> Void
     let bottomOverlayClearance: CGFloat
-    let topInset: TopInset
     let content: (Range<Int>) -> Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var contentHeight: CGFloat = 0
@@ -32,7 +31,6 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         searchNavigation: ChatSearchNavigationRequest? = nil,
         onSearchNavigation: @escaping (UUID) -> Void = { _ in },
         bottomOverlayClearance: CGFloat = 0,
-        @ViewBuilder topInset: () -> TopInset,
         @ViewBuilder content: @escaping (Range<Int>) -> Content
     ) {
         self.currentSessionID = currentSessionID
@@ -43,7 +41,6 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
         self.searchNavigation = searchNavigation
         self.onSearchNavigation = onSearchNavigation
         self.bottomOverlayClearance = bottomOverlayClearance
-        self.topInset = topInset()
         self.content = content
     }
 
@@ -57,7 +54,6 @@ struct ChatTranscriptScroller<Content: View, TopInset: View>: View {
                 // Applying the default anchor to them as well competes with that scroll.
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
-                .safeAreaInset(edge: .top, spacing: 0) { topInset }
                 .onGeometryChange(for: CGFloat.self) {
                     $0.size.height
                 } action: {
