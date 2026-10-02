@@ -814,11 +814,17 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         do {
-            let (transcript, modelID) = try await transcribe(recordingURL)
             let transcriptURL = recordingURL
                 .deletingPathExtension()
                 .appendingPathExtension("txt")
-            try transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+            let transcriptWriter = try AudioTranscriptFileWriter(url: transcriptURL)
+            let (transcript, modelID) = try await transcribe(
+                recordingURL,
+                onSegment: { segment in
+                    try await transcriptWriter.append(segment)
+                }
+            )
+            try await transcriptWriter.replace(with: transcript)
             analytics.upsertTranscription(
                 recordingURL: recordingURL,
                 transcript: transcript,
@@ -850,7 +856,10 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
-    private func transcribe(_ recordingURL: URL) async throws -> (String, String) {
+    private func transcribe(
+        _ recordingURL: URL,
+        onSegment: @escaping @Sendable (String) async throws -> Void = { _ in }
+    ) async throws -> (String, String) {
         guard let configuration = transcriptionConfigurationProvider?() else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
@@ -873,7 +882,11 @@ final class AudioCaptureLibrary: ObservableObject {
             baseURL: configuration.serverBaseURL,
             apiKey: configuration.serverAPIKey
         )
-        let result = try await client.transcribe(fileURL: recordingURL, model: modelID)
+        let result = try await client.transcribeStreaming(
+            fileURL: recordingURL,
+            model: modelID,
+            onSegment: onSegment
+        )
         let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else {
             throw AudioCaptureLibraryError.emptyTranscript

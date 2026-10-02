@@ -101,11 +101,57 @@ public final class NativAudioClient {
         return transcription
     }
 
+    public func transcribeStreaming(
+        fileURL: URL,
+        model: String,
+        chunkDuration: TimeInterval = 5,
+        onSegment: @escaping @Sendable (String) async throws -> Void
+    ) async throws -> NativAudioTranscription {
+        let audioData = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        let request = makeURLRequest(
+            audioData: audioData,
+            fileName: fileURL.lastPathComponent,
+            model: model,
+            responseFormat: "ndjson",
+            stream: true,
+            chunkDuration: chunkDuration
+        )
+        let (bytes, response) = try await session.bytes(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativAudioTranscriptionError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            var body = ""
+            for try await line in bytes.lines {
+                body += line
+            }
+            throw NativAudioTranscriptionError.httpStatus(httpResponse.statusCode, body)
+        }
+
+        var transcript = ""
+        for try await line in bytes.lines {
+            guard let segment = try Self.streamingSegment(from: line) else {
+                continue
+            }
+            transcript += segment
+            try await onSegment(segment)
+        }
+        let normalized = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            throw NativAudioTranscriptionError.emptyTranscript
+        }
+        return NativAudioTranscription(text: normalized)
+    }
+
     func makeURLRequest(
         audioData: Data,
         fileName: String,
         model: String,
-        boundary: String = "NativBoundary-\(UUID().uuidString)"
+        boundary: String = "NativBoundary-\(UUID().uuidString)",
+        responseFormat: String = "json",
+        stream: Bool = false,
+        chunkDuration: TimeInterval? = nil
     ) -> URLRequest {
         var request = URLRequest(
             url: baseURL.appendingPathComponent("v1/audio/transcriptions")
@@ -117,13 +163,19 @@ public final class NativAudioClient {
             "multipart/form-data; boundary=\(boundary)",
             forHTTPHeaderField: "Content-Type"
         )
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(
+            stream ? "application/x-ndjson" : "application/json",
+            forHTTPHeaderField: "Accept"
+        )
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
         request.httpBody = Self.multipartBody(
             audioData: audioData,
             fileName: fileName,
             model: model,
-            boundary: boundary
+            boundary: boundary,
+            responseFormat: responseFormat,
+            stream: stream,
+            chunkDuration: chunkDuration
         )
         return request
     }
@@ -132,7 +184,10 @@ public final class NativAudioClient {
         audioData: Data,
         fileName: String,
         model: String,
-        boundary: String
+        boundary: String,
+        responseFormat: String,
+        stream: Bool,
+        chunkDuration: TimeInterval?
     ) -> Data {
         var body = Data()
         body.appendUTF8("--\(boundary)\r\n")
@@ -140,7 +195,17 @@ public final class NativAudioClient {
         body.appendUTF8("\(model)\r\n")
         body.appendUTF8("--\(boundary)\r\n")
         body.appendUTF8("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
-        body.appendUTF8("json\r\n")
+        body.appendUTF8("\(responseFormat)\r\n")
+        if stream {
+            body.appendUTF8("--\(boundary)\r\n")
+            body.appendUTF8("Content-Disposition: form-data; name=\"stream\"\r\n\r\n")
+            body.appendUTF8("true\r\n")
+        }
+        if let chunkDuration {
+            body.appendUTF8("--\(boundary)\r\n")
+            body.appendUTF8("Content-Disposition: form-data; name=\"chunk_duration\"\r\n\r\n")
+            body.appendUTF8("\(chunkDuration)\r\n")
+        }
         body.appendUTF8("--\(boundary)\r\n")
         body.appendUTF8(
             "Content-Disposition: form-data; name=\"file\"; filename=\"\(safeFileName(fileName))\"\r\n"
@@ -149,6 +214,14 @@ public final class NativAudioClient {
         body.append(audioData)
         body.appendUTF8("\r\n--\(boundary)--\r\n")
         return body
+    }
+
+    static func streamingSegment(from line: String) throws -> String? {
+        guard let data = line.data(using: .utf8) else {
+            throw NativAudioTranscriptionError.invalidResponse
+        }
+        let transcription = try JSONDecoder().decode(NativAudioTranscription.self, from: data)
+        return transcription.text.isEmpty ? nil : transcription.text
     }
 
     private static func safeFileName(_ fileName: String) -> String {

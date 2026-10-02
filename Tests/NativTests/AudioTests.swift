@@ -907,6 +907,73 @@ final class NativAudioClientTests: XCTestCase {
         XCTAssertTrue(body.contains("filename=\"bad___name.m4a\""))
         XCTAssertFalse(body.contains("filename=\"bad\"\r\n"))
     }
+
+    func testStreamingTranscriptionRequestUsesNDJSON() throws {
+        let client = NativAudioClient(
+            baseURL: try XCTUnwrap(URL(string: "http://speech-runtime.local:49152"))
+        )
+        let request = client.makeURLRequest(
+            audioData: Data([0x00]),
+            fileName: "recording.wav",
+            model: "speech-model",
+            boundary: "TestBoundary",
+            responseFormat: "ndjson",
+            stream: true,
+            chunkDuration: 5
+        )
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "Accept"),
+            "application/x-ndjson"
+        )
+        let body = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
+        XCTAssertTrue(body.contains("name=\"response_format\"\r\n\r\nndjson"))
+        XCTAssertTrue(body.contains("name=\"stream\"\r\n\r\ntrue"))
+        XCTAssertTrue(body.contains("name=\"chunk_duration\"\r\n\r\n5.0"))
+    }
+
+    func testStreamingSegmentExtractsIncrementalText() throws {
+        XCTAssertEqual(
+            try NativAudioClient.streamingSegment(
+                from: #"{"text":"First segment ","is_final":false}"#
+            ),
+            "First segment "
+        )
+        XCTAssertNil(
+            try NativAudioClient.streamingSegment(
+                from: #"{"text":"","is_final":true}"#
+            )
+        )
+    }
+}
+
+final class AudioTranscriptFileWriterTests: XCTestCase {
+    func testEachSegmentIsDurableBeforeFinalReplacement() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("recording.txt")
+        let writer = try AudioTranscriptFileWriter(url: url)
+
+        try await writer.append("First segment ")
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "First segment ")
+
+        try await writer.append("survives interruption.")
+        XCTAssertEqual(
+            try String(contentsOf: url, encoding: .utf8),
+            "First segment survives interruption."
+        )
+
+        try await writer.replace(with: "First segment survives interruption.")
+        XCTAssertEqual(
+            try String(contentsOf: url, encoding: .utf8),
+            "First segment survives interruption."
+        )
+    }
 }
 
 @MainActor
