@@ -213,6 +213,36 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertEqual(ToolExposureMode.automatic.title, "Discoverable")
     }
 
+    func testLegacyToolCanBeChangedFromOnToDiscoverable() throws {
+        var settings = NativSettings(toolExposureModesMigrated: false)
+
+        XCTAssertEqual(settings.toolExposureMode(for: "generate_image"), .on)
+
+        settings.setToolExposureMode(.automatic, toolName: "generate_image")
+
+        XCTAssertEqual(settings.toolExposureModes["generate_image"], .automatic)
+        XCTAssertEqual(settings.toolExposureMode(for: "generate_image"), .automatic)
+
+        settings.setToolExposureMode(.on, toolName: "generate_image")
+        XCTAssertNil(settings.toolExposureModes["generate_image"])
+        XCTAssertEqual(settings.toolExposureMode(for: "generate_image"), .on)
+
+        settings.setToolExposureMode(.automatic, toolName: "generate_image")
+        let decoded = try PropertyListDecoder().decode(
+            NativSettings.self,
+            from: PropertyListEncoder().encode(settings)
+        )
+        XCTAssertEqual(decoded.toolExposureMode(for: "generate_image"), .automatic)
+
+        var migrated = NativSettings(
+            toolExposureModes: ["generate_image": .on],
+            toolExposureModesMigrated: true
+        )
+        migrated.setToolExposureMode(.automatic, toolName: "generate_image")
+        XCTAssertNil(migrated.toolExposureModes["generate_image"])
+        XCTAssertEqual(migrated.toolExposureMode(for: "generate_image"), .automatic)
+    }
+
     func testToolSearchDefaultsToOn() {
         XCTAssertEqual(
             NativSettings().toolExposureMode(for: ChatToolDiscoveryRegistry.toolName),

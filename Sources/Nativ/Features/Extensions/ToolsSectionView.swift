@@ -207,11 +207,13 @@ struct ToolsSectionView: View {
     }
 
     private func setExposureMode(_ mode: ToolExposureMode, for tool: ToolItem) {
-        model.settings.setToolExposureMode(
+        var settings = model.settings
+        settings.setToolExposureMode(
             mode,
             toolNames: tool.toolNames,
             default: tool.defaultExposureMode
         )
+        model.settings = settings
     }
 
     private func humanized(_ name: String) -> String {

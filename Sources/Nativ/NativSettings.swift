@@ -1430,11 +1430,13 @@ struct NativSettings: Codable, Equatable {
         toolName: String,
         default defaultMode: ToolExposureMode? = nil
     ) {
+        let implicitMode = defaultMode
+            ?? (toolExposureModesMigrated ? Self.defaultToolExposureMode(for: toolName) : .on)
         disabledToolNames.removeAll { $0 == toolName }
         if mode == .off {
             disabledToolNames.append(toolName)
             toolExposureModes.removeValue(forKey: toolName)
-        } else if mode == (defaultMode ?? Self.defaultToolExposureMode(for: toolName)) {
+        } else if mode == implicitMode {
             toolExposureModes.removeValue(forKey: toolName)
         } else {
             toolExposureModes[toolName] = mode
