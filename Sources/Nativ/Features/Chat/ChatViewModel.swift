@@ -764,12 +764,12 @@ final class ChatViewModel: ObservableObject {
         if let item = state.items.first(where: { $0.kind == .terminal && $0.terminalCommand != nil }) {
             id = item.id
         } else {
-            id = try state.create(title: "Agent terminal", kind: .terminal, author: "Agent").id
+            id = try state.create(title: "Agent terminal", kind: .terminal, author: "Agent", activate: false).id
         }
         let index = state.items.firstIndex(where: { $0.id == id })!
         state.items[index].terminalCommand = request.command
         state.items[index].terminalWorkingDirectory = request.currentDirectoryURL.path
-        state.open(id)
+        state.open(id, activate: false)
         try saveWorkState(state, in: sessionID, updateTimestamp: true)
         let terminal = workTerminal(for: state.items[index], sessionID: sessionID)
         terminal.beginCommand(request.command, directory: request.currentDirectoryURL.path)

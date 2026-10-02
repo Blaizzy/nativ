@@ -368,11 +368,13 @@ final class ChatWorkSessionTests: XCTestCase {
                                              environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"))
         let task = Task { try await chat.runWorkTerminalCommand(request, in: original.id) }
         for _ in 0..<100 {
-            if let item = chat.workState.selectedItem,
+            if let item = chat.workState.items.first(where: { $0.terminalCommand != nil }),
                chat.workTerminals.existing(itemID: item.id, sessionID: original.id)?.text.contains("cancel_ready") == true { break }
             try await Task.sleep(for: .milliseconds(10))
         }
-        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let item = try XCTUnwrap(chat.workState.items.first { $0.terminalCommand != nil })
+        XCTAssertNil(chat.workState.selectedID)
+        XCTAssertFalse(chat.workState.isVisible, "Background output must not open the work pane")
         let terminal = try XCTUnwrap(chat.workTerminals.existing(itemID: item.id, sessionID: original.id))
         XCTAssertTrue(terminal.text.contains("cancel_ready"))
         let start = Date()
@@ -391,13 +393,16 @@ final class ChatWorkSessionTests: XCTestCase {
         let (root, store, original) = try fixture()
         let chat = subject(root)
         try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Keep reading")
+        let documentID = try XCTUnwrap(chat.workState.selectedID)
+        chat.toggleWorkPaneExpanded()
         let request = TerminalProcessRequest(command: "printf 'stream_%s\\n' before; sleep 0.5; printf 'after\\n'",
                                              currentDirectoryURL: root, timeout: 10,
                                              environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"))
         let task = Task { try await chat.runWorkTerminalCommand(request, in: original.id) }
         var terminal: ChatWorkTerminalSession?
         for _ in 0..<100 {
-            if let item = chat.workState.selectedItem {
+            if let item = chat.workState.items.first(where: { $0.terminalCommand != nil }) {
                 terminal = chat.workTerminals.existing(itemID: item.id, sessionID: original.id)
                 if terminal?.text.contains("stream_before") == true { break }
             }
@@ -406,6 +411,9 @@ final class ChatWorkSessionTests: XCTestCase {
         let live = try XCTUnwrap(terminal)
         XCTAssertTrue(live.text.contains("stream_before"))
         XCTAssertTrue(live.isRunning)
+        XCTAssertEqual(chat.workState.selectedID, documentID)
+        XCTAssertTrue(chat.workState.isVisible)
+        XCTAssertEqual(chat.workState.isExpanded, true)
         // Switching chats cannot move the result to the newly selected chat.
         chat.createSession()
         XCTAssertNotEqual(chat.currentSessionID, original.id)
@@ -413,11 +421,25 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertFalse(live.isRunning)
         XCTAssertTrue(chat.workState.items.isEmpty)
-        let saved = try XCTUnwrap(store.loadSession(id: original.id)?.workState?.selectedItem)
+        let savedState = try XCTUnwrap(store.loadSession(id: original.id)?.workState)
+        XCTAssertEqual(savedState.selectedID, documentID)
+        let saved = try XCTUnwrap(savedState.items.first { $0.terminalCommand != nil })
         XCTAssertEqual(saved.kind, .terminal)
         XCTAssertTrue(saved.content.contains("before\nafter"))
         let read = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: saved.id), in: original.id)
         XCTAssertTrue(read.contains("after"))
+        // Reusing a closed output tab must also preserve the new-tab page or a hidden pane.
+        chat.selectSession(original.id)
+        chat.openWorkNewTab()
+        for visible in [true, false] {
+            chat.closeWorkItem(saved.id)
+            chat.setWorkPaneVisible(visible)
+            _ = try await chat.runWorkTerminalCommand(request, in: original.id)
+            XCTAssertNil(chat.workState.selectedID)
+            XCTAssertEqual(chat.workState.isVisible, visible)
+            XCTAssertTrue(chat.workState.openIDs.contains(saved.id))
+            XCTAssertEqual(chat.workState.items.filter { $0.terminalCommand != nil }.count, 1)
+        }
         try await chat.deleteSession(original.id)
         XCTAssertNil(chat.workTerminals.existing(itemID: saved.id, sessionID: original.id))
     }

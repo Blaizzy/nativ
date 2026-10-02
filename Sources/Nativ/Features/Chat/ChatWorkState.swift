@@ -72,11 +72,13 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         isVisible = true
     }
 
-    mutating func open(_ id: UUID) {
+    mutating func open(_ id: UUID, activate: Bool = true) {
         guard items.contains(where: { $0.id == id }) else { return }
         if !openIDs.contains(id) { openIDs.append(id) }
-        selectedID = id
-        isVisible = true
+        if activate {
+            selectedID = id
+            isVisible = true
+        }
     }
 
     mutating func close(_ id: UUID) {
@@ -90,7 +92,8 @@ struct ChatWorkState: Codable, Equatable, Sendable {
     @discardableResult
     mutating func create(
         title: String, kind: ChatWorkItem.Kind, content: String = "",
-        url: String? = nil, language: String? = nil, sourceURL: String? = nil, author: String = "You"
+        url: String? = nil, language: String? = nil, sourceURL: String? = nil, author: String = "You",
+        activate: Bool = true
     ) throws -> ChatWorkItem {
         guard items.count < Self.maximumItems else {
             throw ChatWorkError.invalid("This chat already has \(Self.maximumItems) work items.")
@@ -111,7 +114,7 @@ struct ChatWorkState: Codable, Equatable, Sendable {
             language: language, sourceURL: sourceURL, updatedBy: author
         )
         items.append(item)
-        open(item.id)
+        open(item.id, activate: activate)
         return item
     }
 
