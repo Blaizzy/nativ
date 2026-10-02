@@ -37,11 +37,11 @@ struct ChatView: View {
                 onFindDraftModels: onFindDraftModels,
                 onPreviewAttachment: { previewedAttachment = $0 }
             )
-            .dropDestination(for: URL.self) { urls, _ in
-                chat.attachFiles(fromURLs: urls)
-            } isTargeted: {
-                isDropTargeted = $0
-            }
+            .onDrop(
+                of: [UTType.fileURL.identifier, UTType.image.identifier],
+                isTargeted: $isDropTargeted,
+                perform: chat.loadAttachments
+            )
             .overlay {
                 if isDropTargeted {
                     dropOverlay

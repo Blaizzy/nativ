@@ -1566,6 +1566,57 @@ final class ChatViewModel: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func loadAttachments(from providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                accepted = true
+                provider.loadItem(
+                    forTypeIdentifier: UTType.fileURL.identifier,
+                    options: nil
+                ) { [weak self] item, _ in
+                    guard let url = Self.fileURL(from: item) else {
+                        Task { @MainActor in
+                            self?.attachmentImportError = "The dropped file couldn’t be read."
+                        }
+                        return
+                    }
+                    Task { @MainActor in
+                        _ = self?.attachFiles(fromURLs: [url])
+                    }
+                }
+                continue
+            }
+
+            guard let typeIdentifier = Self.preferredDroppedImageType(for: provider) else {
+                continue
+            }
+            accepted = true
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { [weak self] data, _ in
+                guard let data,
+                    let image = NSImage(data: data),
+                    let attachment = ChatImageAttachment.attachment(
+                        from: image,
+                        filename: Self.droppedImageFilename(for: typeIdentifier)
+                    )
+                else {
+                    Task { @MainActor in
+                        self?.attachmentImportError = "The dropped image couldn’t be read."
+                    }
+                    return
+                }
+                Task { @MainActor in
+                    self?.attachmentImportError = nil
+                    self?.pendingImageAttachments.append(attachment)
+                }
+            }
+        }
+
+        return accepted
+    }
+
     func pasteImageFromClipboard() {
         attachImages(from: .general)
     }
@@ -1624,6 +1675,34 @@ final class ChatViewModel: ObservableObject {
                 + "Check that they still exist and that you have permission to open them."
         }
         return attachments
+    }
+
+    private static func preferredDroppedImageType(for provider: NSItemProvider) -> String? {
+        let fallbackTypes: [UTType] = [.png, .jpeg, .tiff, .gif, .image]
+        return provider.registeredTypeIdentifiers.first(where: { identifier in
+            UTType(identifier)?.conforms(to: .image) == true
+        }) ?? fallbackTypes.map(\.identifier).first(where: provider.hasItemConformingToTypeIdentifier)
+    }
+
+    private static func droppedImageFilename(for typeIdentifier: String) -> String {
+        let fileExtension = UTType(typeIdentifier)?.preferredFilenameExtension ?? "png"
+        return "Dropped Image.\(fileExtension)"
+    }
+
+    private nonisolated static func fileURL(from item: NSSecureCoding?) -> URL? {
+        if let url = item as? URL {
+            return url
+        }
+        if let url = item as? NSURL {
+            return url as URL
+        }
+        if let data = item as? Data {
+            return URL(dataRepresentation: data, relativeTo: nil)
+        }
+        if let string = item as? String {
+            return URL(string: string) ?? URL(fileURLWithPath: string)
+        }
+        return nil
     }
 
     private var hasBlockingAttachmentValidation: Bool {

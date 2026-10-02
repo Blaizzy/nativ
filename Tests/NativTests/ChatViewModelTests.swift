@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
@@ -77,6 +78,34 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertFalse(subject.attachImages(from: pasteboard))
         XCTAssertNil(subject.attachmentImportError)
         XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
+    }
+
+    func testDroppedImageProviderStagesAttachment() async throws {
+        let subject = ChatViewModel()
+        let provider = NSItemProvider()
+        let png = try XCTUnwrap(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        ))
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.png.identifier,
+            visibility: .all
+        ) { completion in
+            completion(png, nil)
+            return nil
+        }
+        let attachmentStaged = expectation(description: "Dropped image is staged")
+        let subscription = subject.$pendingImageAttachments.dropFirst().sink { attachments in
+            if !attachments.isEmpty {
+                attachmentStaged.fulfill()
+            }
+        }
+        defer { subscription.cancel() }
+
+        XCTAssertTrue(subject.loadAttachments(from: [provider]))
+        await fulfillment(of: [attachmentStaged], timeout: 1)
+        XCTAssertEqual(subject.pendingImageAttachments.count, 1)
+        XCTAssertEqual(subject.pendingImageAttachments[0].filename, "Dropped Image.png")
+        XCTAssertNil(subject.attachmentImportError)
     }
 
     func testUnavailableReasonUsesServerAndModelPreconditions() {

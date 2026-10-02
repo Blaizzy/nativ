@@ -315,6 +315,7 @@ struct ChatComposer: View {
                         onContentHeightChange: { height in
                             editorContentHeight = height
                         },
+                        acceptsImageDrops: true,
                         maximumHeight: editorMaximumHeight,
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
