@@ -1564,25 +1564,19 @@ final class ChatViewModel: ObservableObject {
         pendingAnnotations.removeAll { $0.id == id }
     }
 
-    func addWorkFeedback(_ target: ChatWorkFeedback, comment: String) throws {
+    func addWorkFeedback(_ target: ChatWorkFeedback) throws {
         guard currentSessionID == target.sessionID, workState.items.contains(where: { $0.id == target.item.id }) else {
             throw ChatWorkError.invalid("Return to the chat containing this annotation.")
         }
-        let text: String
-        if let selection = target.annotation {
-            guard pendingAnnotations.count < ChatAnnotation.maximumCount else {
-                throw ChatWorkError.invalid("Send or remove an annotation before adding another.")
-            }
-            let reference = ChatWorkAnnotationReference(itemID: target.item.id, title: target.item.title,
-                                                        revision: target.item.revision, selection: selection)
-            pendingAnnotations.append(reference.annotation())
-            text = comment
-        } else {
-            text = target.message(comment: comment)
+        guard pendingAnnotations.count < ChatAnnotation.maximumCount else {
+            throw ChatWorkError.invalid("Send or remove an annotation before adding another.")
         }
-        let appended = (draft.isEmpty ? "" : "\n\n") + text
-        restoreComposerDraft(pastedTextDraft.replacingText(
-            in: NSRange(location: (composerText as NSString).length, length: 0), with: appended))
+        let reference = ChatWorkAnnotationReference(itemID: target.item.id, title: target.item.title,
+            revision: target.item.revision, selection: target.annotation, url: target.item.url,
+            selectedText: target.annotation == nil && !target.selectedText.isEmpty
+                ? String(target.selectedText.prefix(ChatAnnotation.maximumSelectionCharacters)) : nil)
+        pendingAnnotations.append(reference.annotation())
+        if workState.isExpanded == true { toggleWorkPaneExpanded() }
         composerFocusToken += 1
     }
 

@@ -320,6 +320,7 @@ struct ChatComposer: View {
                         maximumHeight: editorMaximumHeight,
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
+                        focusOnAppearance: !viewModel.pendingAnnotations.isEmpty,
                         forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
                             .isEmpty
                             && viewModel.pendingPastedTexts.isEmpty
@@ -2530,6 +2531,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
     var maximumHeight: CGFloat = .infinity
     var fontScale: Double = 1.0
     var focusToken: Int = 0
+    var focusOnAppearance = false
     var forwardsKeysToPendingDecision = false
     var onNavigatePendingSelection: ((Int) -> Bool)?
     var onCancelPendingDecision: (() -> Void)?
@@ -2546,7 +2548,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             onRecallPrevious: onRecallPrevious,
             onPasteImage: onPasteImage,
             onContentHeightChange: onContentHeightChange,
-            focusToken: focusToken
+            focusToken: focusToken,
+            focusOnAppearance: focusOnAppearance
         )
     }
 
@@ -2651,7 +2654,7 @@ struct ChatComposerTextEditor: NSViewRepresentable {
         var maximumHeight: CGFloat = .infinity
         weak var textView: NSTextView?
         private var lastReportedHeight: CGFloat?
-        private var lastFocusToken: Int
+        private var lastFocusToken: Int?
 
         init(
             text: Binding<String>,
@@ -2660,7 +2663,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             onRecallPrevious: (() -> Bool)?,
             onPasteImage: @escaping (NSPasteboard) -> Bool,
             onContentHeightChange: @escaping (CGFloat) -> Void,
-            focusToken: Int
+            focusToken: Int,
+            focusOnAppearance: Bool
         ) {
             _text = text
             self.onSubmit = onSubmit
@@ -2668,7 +2672,8 @@ struct ChatComposerTextEditor: NSViewRepresentable {
             self.onRecallPrevious = onRecallPrevious
             self.onPasteImage = onPasteImage
             self.onContentHeightChange = onContentHeightChange
-            lastFocusToken = focusToken
+            // Add to chat can reveal a composer that was removed by the expanded work pane.
+            lastFocusToken = focusOnAppearance ? nil : focusToken
         }
 
         func handlePasteImage(_ pasteboard: NSPasteboard) -> Bool {

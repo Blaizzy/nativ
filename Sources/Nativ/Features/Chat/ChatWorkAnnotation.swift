@@ -1,10 +1,8 @@
 import SwiftUI
 import WebKit
 
-/// A presentation owns a snapshot so it cannot use a different tab or revision
-/// if the selected work changes while the feedback sheet is being presented.
-struct ChatWorkFeedback: Identifiable {
-    let id = UUID()
+/// Keep the referenced work and revision as they were when added to the draft.
+struct ChatWorkFeedback {
     let item: ChatWorkItem
     let sessionID: UUID?
     let annotation: ChatWorkPageAnnotation?
@@ -15,37 +13,6 @@ struct ChatWorkFeedback: Identifiable {
         if let annotation { context += annotation.context + "\n" }
         else if !selectedText.isEmpty { context += "Selected text:\n\(selectedText)\n\n" }
         return context + "Comment: \(comment)"
-    }
-}
-
-struct ChatWorkFeedbackSheet: View {
-    let target: ChatWorkFeedback
-    let onSubmit: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var comment = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("\(target.annotation == nil ? "Discuss" : "Annotate") \(target.item.title)").font(.headline)
-            if let annotation = target.annotation {
-                Text(annotation.selector).font(.caption.monospaced()).textSelection(.enabled)
-                if !annotation.text.isEmpty {
-                    Text(annotation.text).font(.caption).lineLimit(5).foregroundStyle(.secondary)
-                }
-            } else if !target.selectedText.isEmpty {
-                Text(target.selectedText).font(.caption.monospaced()).lineLimit(5).foregroundStyle(.secondary)
-            }
-            TextField("What would you like to change?", text: $comment, axis: .vertical)
-                .textFieldStyle(.roundedBorder).lineLimit(3...6)
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Add to chat") { onSubmit(comment) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(24).frame(width: 440)
     }
 }
 
@@ -211,7 +178,7 @@ struct ChatWorkAnnotateButton: View {
                 .background(Color.primary.opacity(0.07), in: Capsule())
         }
         .buttonStyle(.plain)
-        .help(annotator.isActive ? "Cancel annotation" : "Select part of this page to discuss in chat")
+        .help(annotator.isActive ? "Cancel annotation" : "Select part of this page to add to chat")
         .accessibilityLabel(annotator.isActive ? "Cancel annotation" : "Annotate")
     }
 }

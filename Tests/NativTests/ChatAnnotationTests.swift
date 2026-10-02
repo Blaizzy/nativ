@@ -7,7 +7,11 @@ final class ChatAnnotationTests: XCTestCase {
             selection: ChatWorkPageAnnotation(url: "http://127.0.0.1:12345/page/index.html",
                                               selector: "canvas#game", text: "Board", x: 20, y: 30))
         var message = ChatTranscriptMessage(role: .user, content: "Make the board larger")
-        message.annotations = [reference.annotation()]
+        let document = ChatWorkAnnotationReference(itemID: UUID(), title: "Notes.md", revision: 1,
+            selection: nil, selectedText: "Selected paragraph")
+        let website = ChatWorkAnnotationReference(itemID: UUID(), title: "Page", revision: 1,
+            selection: nil, url: "https://example.com/page")
+        message.annotations = [reference, document, website].map { $0.annotation() }
         let restored = try JSONDecoder().decode(ChatTranscriptMessage.self, from: JSONEncoder().encode(message))
         XCTAssertEqual(restored.content, "Make the board larger")
         XCTAssertEqual(restored.annotations, message.annotations)
@@ -19,6 +23,9 @@ final class ChatAnnotationTests: XCTestCase {
         XCTAssertTrue(prompt.contains("revision 3"))
         XCTAssertTrue(prompt.contains("canvas#game"))
         XCTAssertTrue(prompt.contains("(20, 30)"))
+        XCTAssertTrue(prompt.contains(document.itemID.uuidString))
+        XCTAssertTrue(prompt.contains("Selected paragraph"))
+        XCTAssertTrue(prompt.contains("https://example.com/page"))
         XCTAssertTrue(prompt.hasSuffix("Current user request:\nMake the board larger"))
     }
 

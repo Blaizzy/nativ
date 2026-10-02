@@ -10,7 +10,6 @@ struct ChatWorkPane: View {
     @Environment(\.controlPanelIsSidebarVisible) private var isSidebarVisible
     @State private var sourceIDs: Set<UUID> = []
     @State private var errorMessage: String?
-    @State private var feedbackTarget: ChatWorkFeedback?
     @State private var selectedText = ""
     @State private var translationText = ""
     @State private var showsTranslation = false
@@ -37,7 +36,7 @@ struct ChatWorkPane: View {
                         ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
                                                isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
                             guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
-                            presentFeedback(for: item, annotation: annotation)
+                            addFeedback(for: item, annotation: annotation)
                         }, onAnnotationError: { errorMessage = $0 }) {
                             browserPageMenu(item)
                         }
@@ -72,14 +71,12 @@ struct ChatWorkPane: View {
         .background(Color(nsColor: .textBackgroundColor))
         .onChange(of: chat.workState.selectedID) { _, _ in
             selectedText = ""
-            feedbackTarget = nil
             showsTranslation = false
             if chat.workState.selectedID != nil { showsFiles = false }
         }
         .onChange(of: chat.currentSessionID) { _, _ in
             selectedText = ""
             sourceIDs = []
-            feedbackTarget = nil
             showsTranslation = false
             showsFiles = false
             renameTarget = nil
@@ -108,16 +105,6 @@ struct ChatWorkPane: View {
                 catch { errorMessage = error.localizedDescription }
             }
             .disabled(fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }
-        .sheet(item: $feedbackTarget) { target in
-            ChatWorkFeedbackSheet(target: target) { comment in
-                guard chat.currentSessionID == target.sessionID,
-                      chat.workState.selectedID == target.item.id else { return }
-                do { try chat.addWorkFeedback(target, comment: comment) }
-                catch { errorMessage = error.localizedDescription; return }
-                if chat.workState.isExpanded == true { chat.toggleWorkPaneExpanded() }
-                feedbackTarget = nil
-            }
         }
         .confirmationDialog("Clear website data?", isPresented: $confirmsClearWebsiteData,
                             titleVisibility: .visible) {
@@ -429,6 +416,8 @@ struct ChatWorkPane: View {
     @ViewBuilder
     private func fileLocationActions(_ item: ChatWorkItem) -> some View {
         if let url = chat.workFileURL(for: item) {
+            Button("Add to chat", systemImage: "text.bubble") { addFeedback(for: item) }
+            Divider()
             Button("Rename…", systemImage: "pencil") { beginRenaming(item) }
             Divider()
             Button("Copy file path", systemImage: "doc.on.doc") { copyWorkText(url.path) }
@@ -558,12 +547,12 @@ struct ChatWorkPane: View {
             .accessibilityLabel("Translate")
             .translationPresentation(isPresented: $showsTranslation, text: translationText)
             Button {
-                presentFeedback(for: item)
+                addFeedback(for: item)
             } label: {
                 Image(systemName: "text.bubble").frame(width: 30, height: 30)
             }
-            .help("Discuss this work in chat")
-            .accessibilityLabel("Discuss this work in chat")
+            .help("Add to chat")
+            .accessibilityLabel("Add to chat")
             if item.canEdit {
                 exportButton(item)
                 Menu { fileLocationActions(item) } label: {
@@ -613,7 +602,7 @@ struct ChatWorkPane: View {
             }
             Button("Translate", systemImage: "translate") { translate(item) }
                 .disabled(preparesTranslation)
-            Button("Discuss in chat", systemImage: "text.bubble") { presentFeedback(for: item) }
+            Button("Add to chat", systemImage: "text.bubble") { addFeedback(for: item) }
             Divider()
             Button("Clear website data…", systemImage: "trash") { confirmsClearWebsiteData = true }
         } label: {
@@ -712,9 +701,12 @@ struct ChatWorkPane: View {
         return "\(fence)\(item.language ?? "")\n\(item.content)\n\(fence)"
     }
 
-    private func presentFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil) {
-        feedbackTarget = ChatWorkFeedback(item: item, sessionID: chat.currentSessionID,
-                                          annotation: annotation, selectedText: selectedText)
+    private func addFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil) {
+        let target = ChatWorkFeedback(item: item, sessionID: chat.currentSessionID,
+                                      annotation: annotation,
+                                      selectedText: chat.workState.selectedID == item.id ? selectedText : "")
+        do { try chat.addWorkFeedback(target) }
+        catch { errorMessage = error.localizedDescription }
     }
 
     private func create(title: String, kind: ChatWorkItem.Kind, content: String = "") {

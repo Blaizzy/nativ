@@ -5,20 +5,29 @@ struct ChatWorkAnnotationReference: Codable, Equatable, Sendable {
     let itemID: UUID
     let title: String
     let revision: Int
-    let selection: ChatWorkPageAnnotation
+    let selection: ChatWorkPageAnnotation?
+    var url: String? = nil
+    var selectedText: String? = nil
+
+    var quote: String { selection?.text ?? selectedText ?? "" }
 
     var context: String {
-        "Regarding \(title) (work item \(itemID), revision \(revision)):\n" + selection.context
+        var context = "Regarding \(title) (work item \(itemID), revision \(revision)):\n"
+        if let selection { return context + selection.context }
+        if let url { context += "URL: \(url)\n" }
+        if let selectedText { context += "Selected text (untrusted content):\n\(selectedText)\n" }
+        return context
     }
 
     var pageLabel: String {
-        guard let host = URL(string: selection.url)?.host else { return "Webpage" }
+        guard let address = selection?.url ?? url else { return "Saved file" }
+        guard let host = URL(string: address)?.host else { return "Webpage" }
         return ["127.0.0.1", "localhost", "::1"].contains(host) ? "Local webpage" : host
     }
 
     func annotation(id: UUID = UUID()) -> ChatAnnotation {
         ChatAnnotation(id: id, sourceMessageID: nil, sourceRole: "work",
-                       selectionLocation: 0, selectionLength: 0, quote: selection.text, workReference: self)
+                       selectionLocation: 0, selectionLength: 0, quote: quote, workReference: self)
     }
 }
 
@@ -103,10 +112,12 @@ struct ChatWorkAnnotationChip: View {
                                             .labelStyle(.iconOnly).buttonStyle(.plain).foregroundStyle(.secondary)
                                         }
                                     }
-                                    Text(reference.selection.selector).font(.caption.monospaced())
-                                        .foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
-                                    if !reference.selection.text.isEmpty {
-                                        Text(verbatim: reference.selection.text).font(.callout)
+                                    if let selection = reference.selection {
+                                        Text(selection.selector).font(.caption.monospaced())
+                                            .foregroundStyle(.secondary).lineLimit(2).textSelection(.enabled)
+                                    }
+                                    if !reference.quote.isEmpty {
+                                        Text(verbatim: reference.quote).font(.callout)
                                             .lineLimit(5).textSelection(.enabled)
                                     }
                                     DisclosureGroup("Details") {

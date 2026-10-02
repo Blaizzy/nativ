@@ -430,32 +430,45 @@ final class ChatWorkSessionTests: XCTestCase {
         let (root, _, session) = try fixture()
         let chat = subject(root)
         try await loaded(chat)
-        try chat.createWorkItem(title: "Game", kind: .website, content: "<canvas></canvas>")
-        let item = try XCTUnwrap(chat.workState.selectedItem)
-        chat.draft = "Existing request"
-        chat.attachPastedText("Pasted context", replacing: NSRange(location: 16, length: 0), undoManager: nil)
-        let pasted = chat.pendingPastedTexts
-        let target = ChatWorkFeedback(item: item, sessionID: session.id,
-            annotation: ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#game",
-                                               text: "", x: 12, y: 24), selectedText: "")
-        try chat.addWorkFeedback(target, comment: "Make this bigger")
-        XCTAssertTrue(chat.draft.hasPrefix("Existing requestPasted context"))
-        XCTAssertTrue(chat.composerText.hasSuffix("Make this bigger"))
-        XCTAssertFalse(chat.composerText.contains("work item"))
-        XCTAssertFalse(chat.composerText.contains("canvas#game"))
-        XCTAssertEqual(chat.pendingPastedTexts, pasted)
-        XCTAssertEqual(chat.pendingAnnotations.count, 1)
-        XCTAssertEqual(chat.pendingAnnotations.first?.workReference?.itemID, item.id)
-        chat.removeAnnotation(try XCTUnwrap(chat.pendingAnnotations.first?.id))
-        XCTAssertTrue(chat.pendingAnnotations.isEmpty)
-        XCTAssertTrue(chat.composerText.hasSuffix("Make this bigger"))
-        for _ in 0..<ChatAnnotation.maximumCount { try chat.addWorkFeedback(target, comment: "Comment") }
-        let before = chat.draft
-        XCTAssertThrowsError(try chat.addWorkFeedback(target, comment: "Too many"))
-        XCTAssertEqual(chat.draft, before)
-        chat.createSession()
-        XCTAssertTrue(chat.pendingAnnotations.isEmpty)
-        XCTAssertThrowsError(try chat.addWorkFeedback(target, comment: "Wrong chat"))
+        let selection = ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#game",
+                                               text: "Board", x: 12, y: 24)
+        let cases: [(ChatWorkItem.Kind, String?, ChatWorkPageAnnotation?)] = [
+            (.website, nil, selection), (.document, nil, nil), (.website, "https://example.com/page", nil)
+        ]
+        for (kind, url, annotation) in cases {
+            try chat.createWorkItem(title: "Work", kind: kind, content: url == nil ? "Selected text" : "", url: url)
+            let item = try XCTUnwrap(chat.workState.selectedItem)
+            let target = ChatWorkFeedback(item: item, sessionID: session.id,
+                annotation: annotation, selectedText: kind == .document ? "Selected text" : "")
+            chat.draft = "Existing request"
+            chat.attachPastedText("Pasted context", replacing: NSRange(location: 16, length: 0), undoManager: nil)
+            let draft = ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts)
+            let focusToken = chat.composerFocusToken
+            chat.toggleWorkPaneExpanded()
+            try chat.addWorkFeedback(target)
+            XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
+            XCTAssertTrue(chat.messages.isEmpty)
+            XCTAssertGreaterThan(chat.composerFocusToken, focusToken)
+            XCTAssertEqual(chat.workState.isExpanded, false)
+            let expected = ChatWorkAnnotationReference(itemID: item.id, title: item.title, revision: item.revision,
+                selection: annotation, url: url, selectedText: kind == .document ? "Selected text" : nil)
+            XCTAssertEqual(chat.pendingAnnotations.map(\.workReference), [expected])
+            XCTAssertEqual(chat.pendingAnnotations.first?.quote, annotation?.text ?? target.selectedText)
+            chat.removeAnnotation(try XCTUnwrap(chat.pendingAnnotations.first?.id))
+            XCTAssertTrue(chat.pendingAnnotations.isEmpty)
+            XCTAssertEqual(chat.composerText, draft.editableText)
+            chat.draft = ""
+            for _ in 0..<ChatAnnotation.maximumCount { try chat.addWorkFeedback(target) }
+            XCTAssertThrowsError(try chat.addWorkFeedback(target))
+            XCTAssertTrue(chat.draft.isEmpty)
+            XCTAssertTrue(chat.composerText.isEmpty)
+            chat.removeAnnotation(chat.pendingAnnotations[0].id)
+            XCTAssertEqual(chat.pendingAnnotations.count, ChatAnnotation.maximumCount - 1)
+            chat.createSession()
+            XCTAssertTrue(chat.pendingAnnotations.isEmpty)
+            XCTAssertThrowsError(try chat.addWorkFeedback(target))
+            chat.selectSession(session.id)
+        }
     }
 
     func testOmittedUpdateIDUsesReadReceiptAndPreservesRevisionAndConsentTargets() async throws {

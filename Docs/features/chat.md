@@ -111,9 +111,12 @@ the work pane share the right side of chat.
   language in the popover; macOS may offer to download a language. Selected Markdown
   preview text also has a **Translate…** context-menu action. Translation does not
   overwrite the original content.
-- **Collaboration:** use the discussion button to add feedback to the chat draft,
-  including selected source text and the item's revision. Nothing is sent until
-  the user sends the draft.
+- **Collaboration:** **Add to chat** adds an annotation directly to the composer,
+  including the page or file, selected source text, and the item's revision. **Annotate**
+  adds a selected webpage element the same way. Files also offer **Add to chat** in
+  their right-click menu. The composer receives focus so you can
+  type your comment without a popup; existing draft text and attachments are preserved.
+  Nothing is sent until you send the draft.
 - **Persistence:** items, open tabs, selection, and pane visibility are saved with
   the session. Closing a tab preserves its contents under **+ → Recents**.
   Work-only sessions are retained even if no messages have been sent.
