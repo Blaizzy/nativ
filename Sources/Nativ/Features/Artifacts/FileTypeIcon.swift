@@ -34,8 +34,10 @@ struct FileTypeStyle {
             return FileTypeStyle(icon: .fileDoc, tint: .blue, label: normalized.uppercased())
         case "ppt", "pptx", "key":
             return FileTypeStyle(icon: .filePpt, tint: .yellow, label: normalized.uppercased())
-        case "csv", "tsv", "xls", "xlsx", "ods", "numbers":
+        case "csv", "tsv":
             return FileTypeStyle(icon: .fileCsv, tint: .green, label: normalized.uppercased())
+        case "xls", "xlsx", "ods", "numbers":
+            return FileTypeStyle(icon: .fileText, tint: .green, label: normalized.uppercased())
         case "md", "markdown", "mdown", "mkd":
             return FileTypeStyle(icon: .fileText, tint: .secondary, label: "MD")
         case "txt", "text", "log":

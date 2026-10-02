@@ -44,7 +44,7 @@ actor NotebookDocumentTextExtractor: DocumentTextExtracting {
             let text = parts.joined(separator: "\n")
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             sections.append(ExtractedDocumentSection(
-                location: .named("Cell \(number) · \(kind)"),
+                location: .named("Cell \(number) - \(kind)"),
                 text: text
             ))
         }
