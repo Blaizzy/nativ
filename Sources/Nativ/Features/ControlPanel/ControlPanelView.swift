@@ -322,7 +322,13 @@ struct ControlPanelView: View {
 
             Spacer(minLength: 0)
 
-            if showsModelConfigurationToggle {
+            if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
+                ChatWorkWindowControls(
+                    chat: chat,
+                    isConfigurationVisible: isModelConfigurationVisible,
+                    toggleConfiguration: toggleModelConfigurationVisibility
+                )
+            } else if showsModelConfigurationToggle {
                 controlPanelTopButton(
                     systemName: "sidebar.right",
                     help: isModelConfigurationVisible

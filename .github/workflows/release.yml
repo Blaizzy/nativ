@@ -82,6 +82,9 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Install Metal Toolchain for the terminal renderer
+        run: xcodebuild -downloadComponent MetalToolchain
+
       - name: Configure project signing values
         run: |
           cat > Configuration/Signing.local.xcconfig <<EOF

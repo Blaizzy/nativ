@@ -12,6 +12,9 @@ settings:
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
 packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: 1.18.0
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.9.4
@@ -132,6 +135,8 @@ targets:
         product: SwaTexRender
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: SwiftTerm
+        product: SwiftTerm
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -234,6 +239,16 @@ targets:
         buildPhase: resources
       - path: Sources/Nativ/Utilities/ShellEnvironment.swift
       - path: Sources/Nativ/Features/Chat/ChatToolRegistry.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkState.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkFileStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkTerminal.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkSplitView.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkDocument.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkBrowser.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkAnnotation.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkAnnotationReference.swift
+      - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
       - path: Sources/Nativ/Features/Chat/ChatStreamEventRelay.swift
@@ -327,6 +342,8 @@ targets:
       - target: NativExtensionSDK
       - package: ZIPFoundation
         product: ZIPFoundation
+      - package: SwiftTerm
+        product: SwiftTerm
       - package: Sparkle
         product: Sparkle
       - package: SwiftCMark

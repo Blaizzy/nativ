@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     var model: NativModel
-    let chat: ChatViewModel
+    @ObservedObject var chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
     @ObservedObject var projects: ChatProjectStore
@@ -25,31 +25,21 @@ struct ChatView: View {
             model: model,
             isConfigurationVisible: $showsConfiguration
         ) {
-            ChatTranscriptView(
-                model: model,
-                chat: chat,
-                extensionManager: extensionManager,
-                project: project,
-                projectRootIsAvailable: project.map { projects.isRootAvailable(for: $0) } ?? true,
-                workspaceMode: workspaceMode,
-                onSelectWorkspaceMode: onSelectWorkspaceMode,
-                onExploreImageModels: onExploreImageModels,
-                onFindDraftModels: onFindDraftModels,
-                onPreviewAttachment: { previewedAttachment = $0 }
-            )
-            .dropDestination(for: URL.self) { urls, _ in
-                chat.attachFiles(fromURLs: urls)
-            } isTargeted: {
-                isDropTargeted = $0
-            }
-            .overlay {
-                if isDropTargeted {
-                    dropOverlay
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
+            ChatWorkSplitView(
+                isWorkVisible: chat.workState.isVisible,
+                isExpanded: Binding(get: { chat.workState.isExpanded == true }, set: { expanded in
+                    if expanded != (chat.workState.isExpanded == true) { chat.toggleWorkPaneExpanded() }
+                }),
+                isWorkOnLeft: Binding(get: { chat.workState.isWorkOnLeft == true },
+                                      set: { chat.setWorkPaneOnLeft($0) }),
+                onShowChatOnly: { chat.setWorkPaneVisible(false) }
+            ) {
+                transcript(project: project)
+            } work: {
+                ChatWorkPane(chat: chat) { target, request in
+                    try await chat.sendWorkEdit(target, request: request, using: model)
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
         .overlay {
@@ -59,6 +49,12 @@ struct ChatView: View {
                     onClose: { self.previewedAttachment = nil }
                 )
             }
+        }
+        .onChange(of: chat.workState.isVisible) { _, visible in
+            if visible { showsConfiguration = false }
+        }
+        .onChange(of: showsConfiguration) { _, visible in
+            if visible { chat.setWorkPaneVisible(false) }
         }
         .onAppear {
             chat.mcpHost = mcpHost
@@ -79,6 +75,34 @@ struct ChatView: View {
             chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
+    }
+
+    private func transcript(project: ChatProject?) -> some View {
+        ChatTranscriptView(
+            model: model,
+            chat: chat,
+            extensionManager: extensionManager,
+            project: project,
+            projectRootIsAvailable: project.map { projects.isRootAvailable(for: $0) } ?? true,
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onExploreImageModels: onExploreImageModels,
+            onFindDraftModels: onFindDraftModels,
+            onPreviewAttachment: { previewedAttachment = $0 }
+        )
+        .dropDestination(for: URL.self) { urls, _ in
+            chat.attachFiles(fromURLs: urls)
+        } isTargeted: {
+            isDropTargeted = $0
+        }
+        .overlay {
+            if isDropTargeted {
+                dropOverlay
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
     }
 
     private var dropOverlay: some View {
@@ -499,6 +523,9 @@ private struct ChatComposerContainer: View {
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
+        .transformPreference(ChatComposerMinimumWidthKey.self) { width in
+            if width > 0 { width += ChatTranscriptLayout.horizontalPadding * 2 }
+        }
     }
 }
 
@@ -581,8 +608,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     )
                 }
 
-                if !message.annotations.isEmpty {
-                    ChatAnnotationCards(annotations: message.annotations)
+                if !message.annotationPresentation.annotations.isEmpty {
+                    ChatAnnotationCards(annotations: message.annotationPresentation.annotations)
                 }
                 if showsTextContent {
                     if message.role == .user, !message.pastedTexts.isEmpty {
@@ -744,7 +771,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     private var displayContent: String {
-        message.content.isEmpty ? " " : message.content
+        let content = message.annotationPresentation.content
+        return content.isEmpty ? " " : content
     }
 
     private var showsTextContent: Bool {
@@ -1226,6 +1254,12 @@ private struct ChatAgentStepCell: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if message.toolName == ChatWorkToolRegistry.toolName {
+                ScrollView {
+                    NativCodeBlock(raw: formattedArguments)
+                }
+                .frame(maxHeight: 180)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
@@ -1272,6 +1306,14 @@ private struct ChatAgentStepCell: View {
     }
 
     private var consentDescription: Text {
+        if message.toolName == ChatWorkToolRegistry.toolName {
+            if let data = message.content.data(using: .utf8),
+               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let description = payload["consent_description"] as? String {
+                return Text(verbatim: description)
+            }
+            return Text("The agent wants to work in this chat’s side pane. Review the action and arguments below before allowing it.")
+        }
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
             return Text(
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."

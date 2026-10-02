@@ -25,6 +25,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var folderID: UUID?
     var projectID: UUID?
     var imageGenerationModelID: String?
+    var workState: ChatWorkState?
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
@@ -813,6 +814,10 @@ struct ChatSessionStore {
     private let legacyChatDirectory: URL?
     private let mediaStore: MediaAssetStore
 
+    var workFiles: ChatWorkFileStore {
+        ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
+    }
+
     init(
         chatDirectory: URL? = nil,
         legacyChatDirectory: URL? = nil,
@@ -864,7 +869,7 @@ struct ChatSessionStore {
     }
 
     @discardableResult
-    func saveSession(_ session: ChatSession) -> Bool {
+    func saveSession(_ session: ChatSession, previousWorkState: ChatWorkState? = nil) -> Bool {
         do {
             migrateLegacyStoreIfNeeded()
             try fileManager.createDirectory(
@@ -875,7 +880,20 @@ struct ChatSessionStore {
             var persisted = session
             _ = try persisted.externalizeAssets(using: mediaStore)
             let data = try makeEncoder().encode(persisted)
+            // Callers that already own the session can supply its previous work state.
+            // Chats without editable files never need to reread the transcript.
+            var previous = previousWorkState
+            if let state = persisted.workState, state.items.contains(where: \.canEdit) {
+                if previous == nil {
+                    previous = (try? Data(contentsOf: sessionURL(for: session.id)))
+                        .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }?.workState
+                }
+                try workFiles.save(state, previous: previous, sessionID: persisted.id, materializeMissing: false)
+            }
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
+            if let state = persisted.workState {
+                workFiles.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
+            }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true
         } catch {
