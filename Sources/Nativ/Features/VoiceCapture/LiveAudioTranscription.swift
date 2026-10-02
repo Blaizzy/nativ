@@ -130,8 +130,8 @@ final class LiveAudioChunkEmitter: @unchecked Sendable {
 
     init(
         directory: URL,
-        chunkDuration: TimeInterval = 3,
-        overlapDuration: TimeInterval = 0.5,
+        chunkDuration: TimeInterval = 1.5,
+        overlapDuration: TimeInterval = 0,
         onChunk: @escaping @Sendable (URL) -> Void
     ) {
         self.directory = directory
@@ -211,6 +211,11 @@ final class LiveAudioChunkEmitter: @unchecked Sendable {
     }
 
     private func retainForOverlap(_ buffer: AVAudioPCMBuffer) {
+        guard overlapDuration > 0 else {
+            overlapBuffers.removeAll()
+            overlapFrames = 0
+            return
+        }
         guard let copiedBuffer = Self.copy(buffer) else { return }
         overlapBuffers.append(copiedBuffer)
         overlapFrames += AVAudioFramePosition(copiedBuffer.frameLength)

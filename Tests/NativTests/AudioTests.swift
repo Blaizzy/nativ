@@ -1026,6 +1026,39 @@ private final class EmittedURLStore: @unchecked Sendable {
 }
 
 final class LiveAudioChunkEmitterTests: XCTestCase {
+    func testDefaultRegimenEmitsDisjointOneAndAHalfSecondChunks() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let emittedURLs = EmittedURLStore()
+        let emitter = LiveAudioChunkEmitter(directory: directory) { url in
+            emittedURLs.append(url)
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_000)
+        )
+        buffer.frameLength = 4_000
+        buffer.floatChannelData?[0].initialize(repeating: 0.1, count: 4_000)
+
+        for _ in 0..<14 {
+            try emitter.append(buffer)
+        }
+        emitter.finish()
+
+        let lengths = try emittedURLs.urls.map { url in
+            try AVAudioFile(forReading: url).length
+        }
+        XCTAssertEqual(lengths, [24_000, 24_000, 8_000])
+    }
+
     func testEmitsOverlappingValidWaveFilesAndFlushesRemainder() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
