@@ -701,25 +701,40 @@ final class ChatViewModel: ObservableObject {
     }
 
     var workFilesDirectory: URL? {
-        currentSessionID.map { sessionStore.workFiles.directory(for: $0) }
+        guard let sessionID = currentSessionID,
+              currentWorktree == nil || currentWorktree?.availableRootPath != nil else { return nil }
+        return workFiles(in: sessionID).directory(for: sessionID)
     }
 
     func workFileURL(for item: ChatWorkItem) -> URL? {
-        currentSessionID.flatMap { sessionStore.workFiles.fileURL(for: item, sessionID: $0) }
+        currentSessionID.flatMap { workFiles(in: $0).fileURL(for: item, sessionID: $0) }
+    }
+
+    private func workFiles(in sessionID: UUID) -> ChatWorkFileStore {
+        sessionStore.workFiles(for: worktree(for: sessionID))
     }
 
     func refreshWorkFiles(in requestedSessionID: UUID? = nil) throws {
         guard let sessionID = requestedSessionID ?? currentSessionID,
               let state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         guard canModifySession(sessionID) else { return }
-        let refreshed = try sessionStore.workFiles.refreshed(state, sessionID: sessionID)
+        if worktree(for: sessionID) != nil,
+           sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
+            // Materialize legacy sources before reading the checkout, preserving external edits.
+            try saveWorkState(state, in: sessionID, updateTimestamp: false)
+        }
+        if let worktree = worktree(for: sessionID), worktree.availableRootPath == nil {
+            throw ChatWorkError.invalid("The chat worktree is unavailable. Restore its checkout before changing files.")
+        }
+        let refreshed = try workFiles(in: sessionID).refreshed(state, sessionID: sessionID,
+                                                             droppingMissing: worktree(for: sessionID) != nil)
         if refreshed != state {
             try saveWorkState(refreshed, in: sessionID, updateTimestamp: true)
         } else {
             // Materialize older chats lazily, without changing their titles or revisions.
-            try sessionStore.workFiles.save(state, previous: state, sessionID: sessionID)
+            try workFiles(in: sessionID).save(state, previous: state, sessionID: sessionID)
         }
-        try sessionStore.workFiles.createDirectory(for: sessionID)
+        try workFiles(in: sessionID).createDirectory(for: sessionID)
     }
 
     private func terminalDirectory(in sessionID: UUID) -> String {
@@ -812,12 +827,13 @@ final class ChatViewModel: ObservableObject {
         guard canModifySession(sessionID) else {
             throw ChatWorkError.invalid("This chat is active in another window.")
         }
+        try refreshWorkFiles(in: sessionID)
         var state = workState
         guard let item = state.items.first(where: { $0.id == id }) else { throw ChatWorkError.missingItem }
         guard item.canEdit else { throw ChatWorkError.invalid("Only saved files can be deleted.") }
         state.close(id)
         state.items.removeAll { $0.id == id }
-        try sessionStore.workFiles.delete(item, sessionID: sessionID, trashFile: trashFile) {
+        try workFiles(in: sessionID).delete(item, sessionID: sessionID, trashFile: trashFile) {
             try saveWorkState(state, in: sessionID, updateTimestamp: true)
         }
         workBrowsers.remove(itemID: id, sessionID: sessionID)
@@ -1019,7 +1035,7 @@ final class ChatViewModel: ObservableObject {
             return try workResult(result, item: item, sessionID: sessionID)
         }
         let result = try state.execute(request) { item in
-            sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)
+            workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID)
         }
         if request.action == .create, state.selectedItem?.kind == .terminal {
             state.items[state.items.count - 1].terminalWorkingDirectory = terminalDirectory(in: sessionID)
@@ -1044,14 +1060,14 @@ final class ChatViewModel: ObservableObject {
             }
             object["revision"] = item.revision
             object["editable"] = item.canEdit
-            object["file_path"] = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)?.path
+            object["file_path"] = workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID)?.path
             return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
         }
         return result
     }
 
     private func workResult(_ result: String, item: ChatWorkItem, sessionID: UUID) throws -> String {
-        guard let url = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID),
+        guard let url = workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID),
               var object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any] else { return result }
         object["file_path"] = url.path
         return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
@@ -1088,6 +1104,11 @@ final class ChatViewModel: ObservableObject {
         // Persist the destination before creating it, so an interrupted restore remains discoverable.
         try saveWorktreeSession(session)
         session.worktree = try await Task.detached(priority: .userInitiated) { try store.restore(id, to: plan) }.value
+        if let fileTabs = record.workState {
+            session.workState = try sessionStore.workFiles(for: session.worktree)
+                .refreshed(fileTabs, sessionID: sessionID, droppingMissing: true)
+            session.workFilesInWorktree = true
+        }
         try saveWorktreeSession(session)
         return sessionID
     }
@@ -1520,6 +1541,10 @@ final class ChatViewModel: ObservableObject {
             guard !isSessionBusy(sessionID), !workTerminals.hasRunningCommand(sessionID: sessionID) else {
                 throw ChatGitWorktreeError(message: "Stop the chat and its terminal commands before deleting its worktree.")
             }
+            if workState(for: sessionID)?.items.contains(where: \.canEdit) == true,
+               sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
+                try refreshWorkFiles(in: sessionID)
+            }
             let operationID = UUID()
             guard inferenceActivity.begin(resource: .chat(sessionID), windowID: windowID, operationID: operationID) else {
                 throw ChatGitWorktreeError(message: "This chat is active in another operation. Stop it and try again.")
@@ -1537,8 +1562,9 @@ final class ChatViewModel: ObservableObject {
             guard !removal.requiresConfirmation || discard else { return false }
             workTerminals.remove(sessionID: sessionID)
             let title = sessions.first { $0.id == sessionID }?.title ?? "Worktree"
+            let fileTabs = workState(for: sessionID)
             try await Task.detached(priority: .userInitiated) {
-                try store.remove(worktree, sessionID: sessionID, discardChanges: discard, title: title)
+                try store.remove(worktree, sessionID: sessionID, discardChanges: discard, title: title, workState: fileTabs)
             }.value
             try finishDeletingSession(sessionID)
         } else {

@@ -213,7 +213,7 @@ private struct ChatBrowsingAvailability: Sendable {
     }
 }
 
-struct ChatComposer: View {
+struct ChatComposer<ContextHeader: View>: View {
     var model: NativModel
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
@@ -228,6 +228,7 @@ struct ChatComposer: View {
     let onFindDraftModels: (String) -> Void
     let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
+    let contextHeader: ContextHeader
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     @State private var showsKits = false
@@ -284,151 +285,154 @@ struct ChatComposer: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            VStack(alignment: .leading, spacing: 0) {
-                if !viewModel.pendingPastedTexts.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(viewModel.pendingPastedTexts) { item in
-                                ChatPastedTextCard(pastedText: item, onRemove: {
-                                    viewModel.removePendingPastedText(item.id, undoManager: undoManager)
-                                })
-                            }
-                        }
-                        .padding(2)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 12)
-                }
-                if !viewModel.pendingAnnotations.isEmpty {
-                    ChatAnnotationCards(
-                        annotations: viewModel.pendingAnnotations,
-                        allowsRemoval: true
-                    )
-                    .padding(12)
-                }
-                ZStack(alignment: .topLeading) {
-                    ChatComposerTextEditor(
-                        text: $viewModel.composerText,
-                        isEnabled: canCompose,
-                        onSubmit: send,
-                        onCancel: cancelPromptEditingAction,
-                        onRecallPrevious: recallPreviousPrompt,
-                        onPasteImage: { viewModel.attachImages(from: $0) },
-                        onContentHeightChange: { height in
-                            editorContentHeight = height
-                        },
-                        maximumHeight: editorMaximumHeight,
-                        fontScale: model.settings.chatFontScale,
-                        focusToken: viewModel.composerFocusToken,
-                        forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
-                            .isEmpty
-                            && viewModel.pendingPastedTexts.isEmpty
-                            && viewModel.promptEditContext == nil,
-                        onNavigatePendingSelection: viewModel.moveImageModelHighlight,
-                        onCancelPendingDecision: viewModel.cancelPendingToolDecision,
-                        onPasteText: viewModel.attachPastedText,
-                        onTextEdit: viewModel.editComposerText,
-                        onTextCommit: viewModel.commitComposerText,
-                        resetToken: viewModel.composerResetToken
-                    )
-
-                    if viewModel.composerText.isEmpty {
-                        HStack(spacing: 8) {
-                            Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
-                            if showsRecallHint {
-                                ChatRecallHint()
-                            }
-                        }
-                        .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
-                        .foregroundStyle(.tertiary)
-                        .padding(textInset)
-                        .offset(x: 4)
-                        .allowsHitTesting(false)
-                    }
-                }
-                .frame(height: editorHeight)
-
-                if !viewModel.pendingImageAttachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(viewModel.pendingImageAttachments) { attachment in
-                                ChatPendingImageAttachmentView(
-                                    attachment: attachment,
-                                    validation: viewModel.attachmentValidation(for: attachment.id),
-                                    modelRejectsImage: modelLacksVision
-                                        && attachment.chatAttachmentKind == .image
-                                ) {
-                                    viewModel.removePendingImageAttachment(attachment.id)
+            VStack(spacing: 0) {
+                contextHeader.padding(.horizontal, 16)
+                VStack(alignment: .leading, spacing: 0) {
+                    if !viewModel.pendingPastedTexts.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(viewModel.pendingPastedTexts) { item in
+                                    ChatPastedTextCard(pastedText: item, onRemove: {
+                                        viewModel.removePendingPastedText(item.id, undoManager: undoManager)
+                                    })
                                 }
                             }
+                            .padding(2)
                         }
-                        .padding(.vertical, 1)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
-                }
-
-                if !attachmentNotices.isEmpty {
-                    ChatAttachmentNoticesView(
-                        notices: attachmentNotices,
-                        onDismiss: dismissAttachmentNotice
-                    )
-                }
-
-                HStack(spacing: 8) {
-                    ChatComposerAddButton(
-                        isEnabled: canCompose,
-                        isPresented: $showsAddPanel
-                    )
-                    .frame(width: 30, height: 30)
-                    .help("More message options")
-
-                    ChatWorkspacePicker(
-                        selection: workspaceMode,
-                        onSelect: onSelectWorkspaceMode
-                    )
-                    .fixedSize()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
-
-                    Spacer(minLength: 12)
-
-                    if let contextWindowUsage {
-                        ChatContextWindowRing(usage: contextWindowUsage)
-                            .equatable()
+                    if !viewModel.pendingAnnotations.isEmpty {
+                        ChatAnnotationCards(
+                            annotations: viewModel.pendingAnnotations,
+                            allowsRemoval: true
+                        )
+                        .padding(12)
                     }
+                    ZStack(alignment: .topLeading) {
+                        ChatComposerTextEditor(
+                            text: $viewModel.composerText,
+                            isEnabled: canCompose,
+                            onSubmit: send,
+                            onCancel: cancelPromptEditingAction,
+                            onRecallPrevious: recallPreviousPrompt,
+                            onPasteImage: { viewModel.attachImages(from: $0) },
+                            onContentHeightChange: { height in
+                                editorContentHeight = height
+                            },
+                            maximumHeight: editorMaximumHeight,
+                            fontScale: model.settings.chatFontScale,
+                            focusToken: viewModel.composerFocusToken,
+                            forwardsKeysToPendingDecision: viewModel.pendingImageAttachments
+                                .isEmpty
+                                && viewModel.pendingPastedTexts.isEmpty
+                                && viewModel.promptEditContext == nil,
+                            onNavigatePendingSelection: viewModel.moveImageModelHighlight,
+                            onCancelPendingDecision: viewModel.cancelPendingToolDecision,
+                            onPasteText: viewModel.attachPastedText,
+                            onTextEdit: viewModel.editComposerText,
+                            onTextCommit: viewModel.commitComposerText,
+                            resetToken: viewModel.composerResetToken
+                        )
 
-                    modelPicker
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
-
-                    Button {
-                        if showsStopButton {
-                            viewModel.cancel()
-                        } else {
-                            send()
+                        if viewModel.composerText.isEmpty {
+                            HStack(spacing: 8) {
+                                Text(viewModel.promptEditContext == nil ? "Message" : "Edit message")
+                                if showsRecallHint {
+                                    ChatRecallHint()
+                                }
+                            }
+                            .font(ChatFontMetrics.bodyFont(scale: model.settings.chatFontScale))
+                            .foregroundStyle(.tertiary)
+                            .padding(textInset)
+                            .offset(x: 4)
+                            .allowsHitTesting(false)
                         }
-                    } label: {
-                        Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
-                            .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 32, height: 32)
-                            .background(actionButtonColor, in: Circle())
-                            .contentShape(.circle)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!showsStopButton && !effectiveCanSend)
-                    .help(actionButtonHelp)
+                    .frame(height: editorHeight)
+
+                    if !viewModel.pendingImageAttachments.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(viewModel.pendingImageAttachments) { attachment in
+                                    ChatPendingImageAttachmentView(
+                                        attachment: attachment,
+                                        validation: viewModel.attachmentValidation(for: attachment.id),
+                                        modelRejectsImage: modelLacksVision
+                                            && attachment.chatAttachmentKind == .image
+                                    ) {
+                                        viewModel.removePendingImageAttachment(attachment.id)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 1)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 8)
+                    }
+
+                    if !attachmentNotices.isEmpty {
+                        ChatAttachmentNoticesView(
+                            notices: attachmentNotices,
+                            onDismiss: dismissAttachmentNotice
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        ChatComposerAddButton(
+                            isEnabled: canCompose,
+                            isPresented: $showsAddPanel
+                        )
+                        .frame(width: 30, height: 30)
+                        .help("More message options")
+
+                        ChatWorkspacePicker(
+                            selection: workspaceMode,
+                            onSelect: onSelectWorkspaceMode
+                        )
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
+
+                        Spacer(minLength: 12)
+
+                        if let contextWindowUsage {
+                            ChatContextWindowRing(usage: contextWindowUsage)
+                                .equatable()
+                        }
+
+                        modelPicker
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
+
+                        Button {
+                            if showsStopButton {
+                                viewModel.cancel()
+                            } else {
+                                send()
+                            }
+                        } label: {
+                            Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
+                                .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 32, height: 32)
+                                .background(actionButtonColor, in: Circle())
+                                .contentShape(.circle)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!showsStopButton && !effectiveCanSend)
+                        .help(actionButtonHelp)
+                    }
+                    .padding(.leading, 10)
+                    .padding(.trailing, 12)
+                    .padding(.bottom, 10)
                 }
-                .padding(.leading, 10)
-                .padding(.trailing, 12)
-                .padding(.bottom, 10)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
+                }
+                .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             }
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 4)
             .onGeometryChange(for: CGFloat.self) { proxy in
                 proxy.size.height
             } action: { height in

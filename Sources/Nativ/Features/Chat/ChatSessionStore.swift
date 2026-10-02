@@ -31,6 +31,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var importedSystemPrompt: String? = nil
     var personalizationSnapshot: String? = nil
     var worktree: ChatGitWorktree? = nil
+    var workFilesInWorktree: Bool? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }
@@ -825,6 +826,12 @@ struct ChatSessionStore {
         ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
     }
 
+    func workFiles(for worktree: ChatGitWorktree?) -> ChatWorkFileStore {
+        guard let worktree else { return workFiles }
+        return ChatWorkFileStore(root: URL(fileURLWithPath: worktree.projectPath)
+            .appendingPathComponent("Nativ Files", isDirectory: true), worktree: worktree)
+    }
+
     init(
         chatDirectory: URL? = nil,
         legacyChatDirectory: URL? = nil,
@@ -886,15 +893,26 @@ struct ChatSessionStore {
 
             var persisted = session
             _ = try persisted.externalizeAssets(using: mediaStore)
-            let data = try makeEncoder().encode(persisted)
             let previous = (try? Data(contentsOf: sessionURL(for: session.id)))
-                .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }?.workState
-            if let state = persisted.workState {
-                try workFiles.save(state, previous: previous, sessionID: persisted.id)
+                .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }
+            let files = workFiles(for: persisted.worktree)
+            // Preserve the migration marker even when a window still holds an older session value.
+            if persisted.worktree != nil, previous?.workFilesInWorktree == true {
+                persisted.workFilesInWorktree = true
             }
+            if let state = persisted.workState {
+                if persisted.worktree != nil, persisted.workFilesInWorktree != true,
+                   state.items.contains(where: \.canEdit) {
+                    try files.migrate(state, previous: previous?.workState, from: workFiles, sessionID: persisted.id)
+                    persisted.workFilesInWorktree = true
+                } else {
+                    try files.save(state, previous: previous?.workState, sessionID: persisted.id)
+                }
+            }
+            let data = try makeEncoder().encode(persisted)
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
             if let state = persisted.workState {
-                workFiles.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
+                files.removeRenamedFiles(previous: previous?.workState, current: state, sessionID: persisted.id)
             }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true

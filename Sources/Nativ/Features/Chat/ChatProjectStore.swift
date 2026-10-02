@@ -114,7 +114,16 @@ struct ChatToolScope: Equatable, Sendable {
                 """
         }
         let name = projectName ?? "Project"
-        let checkoutContext = worktree.map { " This chat uses a dedicated Git worktree on branch \($0.branch). Keep project changes in this checkout." } ?? ""
+        let checkoutContext = worktree.map { tree in
+            let headContext: String
+            switch tree.currentHead {
+            case .branch(let name): headContext = "Current branch: \(name)."
+            case .detached(let commit): headContext = "HEAD is detached at \(commit). Create a branch before committing new work."
+            case nil: headContext = "Git HEAD is unavailable; inspect Git before changing branches or committing."
+            }
+            return " This chat uses a dedicated Git worktree. \(headContext) Keep project changes in this checkout. "
+                + "Use the terminal for git branch/switch operations and check git status afterward."
+        } ?? ""
         if projectToolsEnabled {
             return """
                 You are working in the Nativ project “\(name)”. Its workspace root is \

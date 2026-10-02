@@ -49,7 +49,7 @@ its recorded token count exceeds the selected model's context window.
 ## Project chat environments
 
 New project chats start in **Local**, using the project's existing folder. Before sending
-messages or opening work-pane items, choose **Local > Worktree…** in the project bar to
+messages or opening work-pane items, choose **Local > Worktree…** above the composer to
 create a separate Git checkout and a `nativ/<chat-id>` branch for that chat. The project
 must be a Git repository with at least one commit. Worktree creation starts at its current
 commit; it leaves uncommitted files and the project's current branch unchanged.
@@ -57,21 +57,34 @@ commit; it leaves uncommitted files and the project's current branch unchanged.
 File read/write/search tools, project MCP scope, and new terminals use the chat's checkout.
 Projects rooted in a repository subfolder keep that relative folder in the checkout.
 The worktree is the default working directory, not a sandbox for shell commands. Work-pane
-documents retain their separate per-chat storage.
+documents, code, and generated websites live inside its project folder at
+`Nativ Files/<item-id>/<filename>`. Existing worktree chats migrate their side-pane files
+there, preserving external edits and keeping legacy copies for recovery. Missing checkouts
+never fall back to the local project or chat storage.
 
-The environment menu shows the created branch and provides **Copy branch name**,
+Empty project chats show project, environment, and branch controls directly above the composer.
+Once the conversation starts, the **Pinned summary** toolbar toggle opens these controls,
+the checkout path, project-tool status, and file count without a full-width header.
+The environment menu shows the current Git branch and provides **Copy branch name**,
 **Copy folder path**, and **Show in Finder**. Checkouts live under the app profile's
 `Chat/Worktrees/<chat-id>` folder. Each chat keeps this association across launches;
 an unavailable checkout disables project tools instead of redirecting them to Local.
 Failed setup remains attached to the chat and can be retried from the environment menu.
+Agents can create, switch, or rename branches through the approved terminal. Git is the
+source of truth: the visible controls refresh every two seconds and agent context reads HEAD
+on every model request, including follow-ups in the same turn. Detached HEAD shows the commit
+instead of a stale branch, with **Copy commit ID** in the menu.
 
 Empty worktree chats are retained. Closing a chat keeps its checkout and branch. Deleting
-it saves and verifies a self-contained Git bundle before removing its managed checkout and
-branch. Snapshots preserve committed history, the index, unstaged edits, and non-ignored new
+it saves and verifies a self-contained Git bundle of the current HEAD before removing its
+managed checkout, including after a branch switch or detached checkout. Only the original
+Nativ-created branch is eligible for deletion, and only when its history is included in the
+snapshot and it is unused elsewhere. Other branches, including renamed and user-created
+branches, are preserved. Snapshots preserve committed history, the index, unstaged edits, and non-ignored new
 files. Ignored files require an additional confirmation listing excluded paths; cancel keeps
 the chat and its work. Submodules and nested Git repositories block cleanup because their
 contents cannot be fully captured by the parent repository's snapshot. Cleanup
-refuses changed checkout registrations, branches in use elsewhere, and locked worktrees;
+refuses changed checkout registrations and locked worktrees;
 on failure the chat remains available for retry. The local project folder is never removed.
 Bulk deletion and **Remove project > Delete Chats** use the same cleanup; **Keep Chats**
 preserves their worktrees. Active worktree chats and terminal commands must be stopped first.
@@ -79,7 +92,8 @@ preserves their worktrees. Active worktree chats and terminal commands must be s
 **Settings > Projects > Recently deleted worktrees** lists snapshots, independently of the
 deleted chat. **Restore** recreates the files and staged/unstaged changes on a new managed
 branch in a new chat, using the original repository, which must still be available at its
-original location. The old conversation is not restored. Snapshots are kept under
+original location. Saved side-pane file entries are reopened against the restored checkout;
+ignored or externally deleted files are not recreated. The old conversation is not restored. Snapshots are kept under
 `Chat/DeletedWorktrees/<snapshot-id>` until explicitly removed with **Delete permanently**;
 that action requires confirmation and never deletes restored checkouts. An interrupted cleanup
 may leave a snapshot alongside its original chat, so the saved work remains recoverable.
@@ -121,7 +135,8 @@ the work pane share the right side of chat.
   Renaming updates
   the existing tab and the file on disk while preserving its contents. You can also
   rename from a tab's context menu or the file's toolbar menu. Sources live under the app's
-  chat storage at `Files/<chat-id>/<item-id>/<filename>`, so duplicate names do not
+  chat storage at `Files/<chat-id>/<item-id>/<filename>` for Local chats, or in the
+  checkout's `Nativ Files/<item-id>/<filename>` for Worktree chats, so duplicate names do not
   overwrite each other. Pane and agent edits save to these files. Edits made in an
   external editor or terminal are picked up by **Refresh files**, when returning
   to the app, or before the next agent work action; conflicting edits are rejected.
