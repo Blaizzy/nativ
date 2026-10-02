@@ -264,7 +264,7 @@ struct IntegrationProfileManager {
                 text.contains(previous)
             else { continue }
             let rewritten = text.replacingOccurrences(of: previous, with: origin)
-            guard (try? rewritten.write(to: url, atomically: true, encoding: .utf8)) != nil else {
+            guard (try? writeText(rewritten, to: url)) != nil else {
                 continue
             }
             migrated.append(tool)
@@ -772,8 +772,9 @@ struct IntegrationProfileManager {
     }
 
     private func writeData(_ data: Data, to url: URL) throws {
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        let destination = url.resolvingSymlinksInPath()
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
     }
 
     private func shellQuote(_ value: String) -> String {
