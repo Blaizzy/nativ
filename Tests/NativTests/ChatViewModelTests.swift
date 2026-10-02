@@ -75,7 +75,7 @@ final class ChatViewModelTests: XCTestCase {
         pasteboard.clearContents()
         pasteboard.setString("Plain text", forType: .string)
 
-        XCTAssertFalse(subject.attachImages(from: pasteboard))
+        XCTAssertFalse(subject.attachAttachments(from: pasteboard))
         XCTAssertNil(subject.attachmentImportError)
         XCTAssertTrue(subject.pendingImageAttachments.isEmpty)
     }

@@ -1542,7 +1542,11 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
-    func attachImages(from pasteboard: NSPasteboard) -> Bool {
+    func attachAttachments(from pasteboard: NSPasteboard) -> Bool {
+        let urls = ChatImageAttachment.fileURLs(from: pasteboard)
+        if !urls.isEmpty {
+            return attachFiles(fromURLs: urls)
+        }
         guard ChatImageAttachment.canReadImages(from: pasteboard) else {
             return false
         }
@@ -1554,14 +1558,6 @@ final class ChatViewModel: ObservableObject {
         attachmentImportError = nil
         pendingImageAttachments.append(contentsOf: attachments)
         return true
-    }
-
-    @discardableResult
-    func attachAttachments(from pasteboard: NSPasteboard) -> Bool {
-        let urls = ChatImageAttachment.fileURLs(from: pasteboard)
-        return urls.isEmpty
-            ? attachImages(from: pasteboard)
-            : attachFiles(fromURLs: urls)
     }
 
     @discardableResult
@@ -1626,7 +1622,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func pasteImageFromClipboard() {
-        attachImages(from: .general)
+        attachAttachments(from: .general)
     }
 
     func captureScreenshot() {
@@ -1692,7 +1688,7 @@ final class ChatViewModel: ObservableObject {
         }) ?? fallbackTypes.map(\.identifier).first(where: provider.hasItemConformingToTypeIdentifier)
     }
 
-    private static func droppedImageFilename(for typeIdentifier: String) -> String {
+    nonisolated private static func droppedImageFilename(for typeIdentifier: String) -> String {
         let fileExtension = UTType(typeIdentifier)?.preferredFilenameExtension ?? "png"
         return "Dropped Image.\(fileExtension)"
     }
