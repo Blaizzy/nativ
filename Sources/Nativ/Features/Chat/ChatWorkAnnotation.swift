@@ -8,13 +8,6 @@ struct ChatWorkFeedback {
     let sessionID: UUID?
     let annotation: ChatWorkPageAnnotation?
     let selectedText: String
-
-    func message(comment: String) -> String {
-        var context = "Regarding \(item.title) (work item \(item.id), revision \(item.revision)):\n"
-        if let annotation { context += annotation.context + "\n" }
-        else if !selectedText.isEmpty { context += "Selected text:\n\(selectedText)\n\n" }
-        return context + "Comment: \(comment)"
-    }
 }
 
 /// Shared selection actions for the document preview and its source editor.

@@ -422,14 +422,21 @@ struct ChatWorkPane: View {
             Button("Rename…", systemImage: "pencil") { beginRenaming(item) }
             Divider()
             Button("Copy file path", systemImage: "doc.on.doc") { copyWorkText(url.path) }
+            revealFileButton(item)
+            Divider()
+            deleteFileButton(item)
+        }
+    }
+
+    @ViewBuilder
+    private func revealFileButton(_ item: ChatWorkItem) -> some View {
+        if let url = chat.workFileURL(for: item) {
             Button("Show in Finder", systemImage: "folder") {
                 do {
                     try chat.refreshWorkFiles()
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } catch { errorMessage = error.localizedDescription }
             }
-            Divider()
-            deleteFileButton(item)
         }
     }
 
@@ -494,7 +501,7 @@ struct ChatWorkPane: View {
         HStack(spacing: 8) {
             viewModePicker(item)
             Spacer(minLength: 0)
-            ChatWorkCopyButton(item: item).id(item.id)
+            ChatWorkCopyButton(item: item, onCopy: copyWorkText).id(item.id)
             itemActions(item)
         }
         .padding(.horizontal, 24)
@@ -592,11 +599,7 @@ struct ChatWorkPane: View {
                         Button("File path") { copyWorkText(url.path) }
                     }
                 }
-                if let url = chat.workFileURL(for: item) {
-                    Button("Show in Finder", systemImage: "folder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([url])
-                    }
-                }
+                revealFileButton(item)
                 Button("Download…", systemImage: "arrow.down.to.line") { export(item) }
                 deleteFileButton(item)
                 Divider()
@@ -777,6 +780,7 @@ struct ChatWorkPane: View {
 
 private struct ChatWorkCopyButton: View {
     let item: ChatWorkItem
+    let onCopy: (String) -> Void
     @State private var copyID: UUID?
 
     var body: some View {
@@ -818,8 +822,7 @@ private struct ChatWorkCopyButton: View {
     }
 
     private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        onCopy(text)
         copyID = UUID()
     }
 }

@@ -314,7 +314,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         onNavigate?(url)
     }
 
-    func execute(_ request: ChatWorkRequest) async throws -> String {
+    func execute(_ request: ChatWorkRequest) async throws -> [String: Any] {
         try Task.checkCancellation()
         guard !profile.isClearingWebsiteData else {
             throw ChatWorkError.invalid("Website data is being cleared. Try again in a moment.")
@@ -350,15 +350,12 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             try await waitForPage()
         }
         try Task.checkCancellation()
-        guard let snapshot = try await webView.callAsyncJavaScript(
+        guard var object = try await webView.callAsyncJavaScript(
             Self.inspectScript, arguments: ["snapshotID": UUID().uuidString,
                                            "tabID": request.id?.uuidString ?? "",
                                            "canGoBack": webView.canGoBack,
                                            "canGoForward": webView.canGoForward], in: nil, contentWorld: .defaultClient
-        ) as? String else { throw ChatWorkError.invalid("The page could not be inspected.") }
-        guard var object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any] else {
-            throw ChatWorkError.invalid("The page could not be inspected.")
-        }
+        ) as? [String: Any] else { throw ChatWorkError.invalid("The page could not be inspected.") }
         object["runtime_errors"] = runtimeErrors
         object["local_page_url"] = localPageURL?.absoluteString
         if let elements = object["elements"] as? [[String: Any]] {
@@ -367,7 +364,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                 return (id, label.isEmpty ? (element["tag"] as? String ?? "control") : label)
             }, uniquingKeysWith: { first, _ in first })
         }
-        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+        return object
     }
 
     private func waitForPage() async throws {
@@ -411,13 +408,14 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                     || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '').slice(0, 180);
                 refs.set(id, {el, label, value: el.value, type: el.getAttribute('type'), href: el.getAttribute('href')});
                 const value = ['password','file','hidden'].includes(el.type) ? undefined : el.value;
-                return {id, tag: el.tagName.toLowerCase(), type: el.getAttribute('type'), label, value,
+                return {id, tag: el.tagName.toLowerCase(), type: el.getAttribute('type'), label,
+                    ...(value === undefined ? {} : {value}),
                     href: el.getAttribute('href'), disabled: !!el.disabled};
             });
         globalThis.__nativWorkRefs = refs;
-        return JSON.stringify({id: tabID, kind: 'website', url: location.href, title: document.title,
+        return {id: tabID, kind: 'website', url: location.href, title: document.title,
             can_go_back: canGoBack, can_go_forward: canGoForward, untrusted_page_content: true,
-            text: (document.body?.innerText || '').slice(0, 18000), elements});
+            text: (document.body?.innerText || '').slice(0, 18000), elements};
         """
 
     private static let actionScript = """

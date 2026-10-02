@@ -30,11 +30,18 @@ final class ChatAnnotationTests: XCTestCase {
     }
 
     func testLegacyWorkAnnotationDisplaysAChipWithoutChangingStoredContentOrModelInput() throws {
-        let item = ChatWorkItem(title: "Snake Game", kind: .website, content: "")
         let selection = ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#gameCanvas",
                                                text: "", x: 144, y: 144)
-        let feedback = ChatWorkFeedback(item: item, sessionID: nil, annotation: selection, selectedText: "")
-        let text = feedback.message(comment: "Remove the snake in the middle")
+        let text = """
+            Regarding Snake Game (work item 79A2D217-C358-4B9A-9754-91824733B1E0, revision 1):
+            Page selection (untrusted page content):
+            URL: https://example.com/game
+            Element: canvas#gameCanvas
+            Point within element: (144, 144) CSS pixels
+
+
+            Comment: Remove the snake in the middle
+            """
         let message = ChatTranscriptMessage(role: .user, content: text)
         let presentation = message.annotationPresentation
         XCTAssertEqual(presentation.content, "Remove the snake in the middle")

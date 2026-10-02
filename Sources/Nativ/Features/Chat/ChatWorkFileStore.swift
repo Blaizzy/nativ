@@ -59,13 +59,17 @@ struct ChatWorkFileStore {
     }
 
     /// Save only changed sources. Ordinary chat saves must not overwrite an external editor's work.
-    func save(_ state: ChatWorkState, previous: ChatWorkState?, sessionID: UUID) throws {
+    func save(_ state: ChatWorkState, previous: ChatWorkState?, sessionID: UUID,
+              materializeMissing: Bool = true) throws {
         var writes: [(URL, String)] = []
         for item in state.items where item.canEdit {
             guard let url = fileURL(for: item, sessionID: sessionID) else { continue }
-            try checkLocation(url)
             let old = previous?.items.first { $0.id == item.id }
             let oldURL = old.flatMap { fileURL(for: $0, sessionID: sessionID) }
+            // Only an explicit refresh materializes missing files from older chats.
+            // Metadata and transcript saves do no filesystem work for unchanged sources.
+            if !materializeMissing, oldURL == url, old?.content == item.content { continue }
+            try checkLocation(url)
             let exists = fileManager.fileExists(atPath: url.path)
             if exists, oldURL == url, old?.content == item.content { continue }
             if exists {

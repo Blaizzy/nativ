@@ -634,40 +634,34 @@ final class ChatViewModel: ObservableObject {
         return nil
     }
 
-    func setWorkPaneVisible(_ visible: Bool) {
+    private func updateWorkPresentation(_ update: (inout ChatWorkState) -> Void) {
         guard let sessionID = currentSessionID else { return }
         var state = workState
-        state.isVisible = visible
-        state.isExpanded = false
+        update(&state)
         try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+    }
+
+    func setWorkPaneVisible(_ visible: Bool) {
+        updateWorkPresentation {
+            $0.isVisible = visible
+            $0.isExpanded = false
+        }
     }
 
     func toggleWorkPaneExpanded() {
-        guard let sessionID = currentSessionID else { return }
-        var state = workState
-        state.isExpanded = !(state.isExpanded ?? false)
-        try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+        updateWorkPresentation { $0.isExpanded = !($0.isExpanded ?? false) }
     }
 
     func setWorkPaneOnLeft(_ onLeft: Bool) {
-        guard let sessionID = currentSessionID else { return }
-        var state = workState
-        state.isWorkOnLeft = onLeft
-        try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+        updateWorkPresentation { $0.isWorkOnLeft = onLeft }
     }
 
     func openWorkNewTab() {
-        guard let sessionID = currentSessionID else { return }
-        var state = workState
-        state.openNewTab()
-        try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+        updateWorkPresentation { $0.openNewTab() }
     }
 
     func openWorkItem(_ id: UUID) {
-        guard let sessionID = currentSessionID else { return }
-        var state = workState
-        state.open(id)
-        try? saveWorkState(state, in: sessionID, updateTimestamp: false)
+        updateWorkPresentation { $0.open(id) }
     }
 
     func closeWorkItem(_ id: UUID) {
@@ -848,9 +842,10 @@ final class ChatViewModel: ObservableObject {
             ? currentSessionSnapshot : storedSessions.first(where: { $0.id == sessionID }) else {
             throw ChatWorkError.unavailable
         }
+        let previousWorkState = session.workState ?? ChatWorkState()
         session.workState = state
         if updateTimestamp { session.updatedAt = Date() }
-        guard saveSession(session) else {
+        guard saveSession(session, previousWorkState: previousWorkState) else {
             throw ChatWorkError.invalid("The work could not be saved. Check the chat storage location and try again.")
         }
         if sessionID == currentSessionID {
@@ -1006,8 +1001,7 @@ final class ChatViewModel: ObservableObject {
             if request.action == .open {
                 browserRequest.action = request.url != nil && request.id != nil ? .navigate : .inspect
             }
-            let result = try await workBrowser(for: item, sessionID: sessionID).execute(browserRequest)
-            return try workResult(result, item: item, sessionID: sessionID)
+            return try await executeBrowserAction(browserRequest, item: item, sessionID: sessionID)
         }
         let result = try state.execute(request) { item in
             sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)
@@ -1028,24 +1022,18 @@ final class ChatViewModel: ObservableObject {
         }
         if request.action == .create || request.action == .update, let item = state.selectedItem,
            item.resolvedKind == .website {
-            let snapshot = try await workBrowser(for: item, sessionID: sessionID)
-                .execute(ChatWorkRequest(action: .inspect, id: item.id))
-            guard var object = try JSONSerialization.jsonObject(with: Data(snapshot.utf8)) as? [String: Any] else {
-                throw ChatWorkError.invalid("The page could not be inspected.")
-            }
-            object["revision"] = item.revision
-            object["editable"] = item.canEdit
-            object["file_path"] = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)?.path
-            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+            return try await executeBrowserAction(ChatWorkRequest(action: .inspect, id: item.id),
+                                                  item: item, sessionID: sessionID)
         }
         return result
     }
 
-    private func workResult(_ result: String, item: ChatWorkItem, sessionID: UUID) throws -> String {
-        guard let url = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID),
-              var object = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any] else { return result }
-        object["file_path"] = url.path
-        return String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]), as: UTF8.self)
+    private func executeBrowserAction(_ request: ChatWorkRequest, item: ChatWorkItem, sessionID: UUID) async throws -> String {
+        var result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
+        result["revision"] = item.revision
+        result["editable"] = item.canEdit
+        result["file_path"] = sessionStore.workFiles.fileURL(for: item, sessionID: sessionID)?.path
+        return String(decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]), as: UTF8.self)
     }
 
     func createSession(projectID: UUID? = nil) {
@@ -1581,27 +1569,19 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendWorkEdit(_ target: ChatWorkFeedback, request: String, using appModel: NativModel) async throws {
-        let modelID = appModel.settings.normalized().languageModelID
-        guard appModel.isRunning, !appModel.isModelLoading, modelID != nil else {
-            throw ChatWorkError.invalid("Load a model before sending an edit request.")
-        }
+        let modelID = try submissionSettings(using: appModel).languageModelID
         let models = try await LocalModelDiscovery.scan(searchPaths: appModel.settings.localModelSearchPaths)
         try Task.checkCancellation()
-        var settings = appModel.settings.normalized()
-        guard appModel.isRunning, !appModel.isModelLoading, settings.languageModelID == modelID else {
+        let settings = try submissionSettings(using: appModel)
+        guard settings.languageModelID == modelID else {
             throw ChatWorkError.invalid("The model changed. Send the edit request again when it is ready.")
         }
-        if let error = settings.structuredOutputValidationError { throw ChatWorkError.invalid(error) }
         guard let localModel = models.first(where: { $0.repoID == modelID }),
               localModel.capabilities.contains(.tools) else {
             throw ChatWorkError.invalid("Choose a model that supports tools to edit this file.")
         }
-        if importedModelRepositoryID != nil, let tokens = importedPromptTokenCount,
-           let contextWindow = localModel.contextSize, tokens > contextWindow {
+        if !importedContinuationIsAvailable(contextWindow: localModel.contextSize) {
             throw ChatWorkError.invalid("This chat exceeds the selected model’s context window.")
-        }
-        if let importedSystemPrompt = currentSession?.importedSystemPrompt {
-            settings.systemPrompt = importedSystemPrompt
         }
         guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
         let message = try appendWorkEdit(target, request: request, settings: settings)
@@ -1632,14 +1612,37 @@ final class ChatViewModel: ObservableObject {
             modelID: settings.languageModelID)
         message.annotations = [ChatWorkAnnotationReference(itemID: item.id, title: item.title,
             revision: item.revision, selection: nil, url: nil, selectedText: target.selectedText).annotation()]
-        if session.personalizationSnapshot == nil { currentSession?.capturePersonalization(settings.personalization) }
-        messages.append(message)
-        guard persistCurrentSession(updateTimestamp: true) else {
-            messages.removeAll { $0.id == message.id }
-            currentSession = session
-            throw ChatWorkError.invalid("The edit request could not be saved. Try again.")
-        }
+        try persistSubmission(messages + [message], settings: settings)
         return message
+    }
+
+    func importedContinuationIsAvailable(contextWindow: Int?) -> Bool {
+        guard importedModelRepositoryID != nil, let tokens = importedPromptTokenCount,
+              let contextWindow else { return true }
+        return tokens <= contextWindow
+    }
+
+    private func submissionSettings(using appModel: NativModel) throws -> NativSettings {
+        var settings = appModel.settings.normalized()
+        guard appModel.isRunning, !appModel.isModelLoading, settings.languageModelID != nil else {
+            throw ChatWorkError.invalid("Load a model before sending a request.")
+        }
+        if let error = settings.structuredOutputValidationError { throw ChatWorkError.invalid(error) }
+        if let importedSystemPrompt = currentSession?.importedSystemPrompt { settings.systemPrompt = importedSystemPrompt }
+        return settings
+    }
+
+    /// All submissions save before generation. Composer state belongs to the caller.
+    private func persistSubmission(_ submittedMessages: [ChatTranscriptMessage], settings: NativSettings) throws {
+        guard let session = currentSession else { throw ChatWorkError.unavailable }
+        let previousMessages = messages
+        if session.personalizationSnapshot == nil { currentSession?.capturePersonalization(settings.personalization) }
+        messages = submittedMessages
+        guard persistCurrentSession(updateTimestamp: true) else {
+            messages = previousMessages
+            currentSession = session
+            throw ChatWorkError.invalid("The message could not be saved. Try again.")
+        }
     }
 
     func send(
@@ -1647,11 +1650,8 @@ final class ChatViewModel: ObservableObject {
         languageModelSupportsTools: Bool,
         languageModelSupportsVision: Bool
     ) {
-        var settings = appModel.settings.normalized()
-        if let importedSystemPrompt = currentSession?.importedSystemPrompt {
-            settings.systemPrompt = importedSystemPrompt
-        }
-        guard canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
+        guard let settings = try? submissionSettings(using: appModel),
+            canSend(isRunning: appModel.isRunning, selectedModelID: settings.languageModelID),
             languageModelSupportsVision || !hasPendingImageAttachments,
             let modelID = settings.languageModelID,
             let currentSession,
@@ -1666,14 +1666,7 @@ final class ChatViewModel: ObservableObject {
         let imageAttachments = pendingImageAttachments
         let annotations = pendingAnnotations
 
-        if currentSession.personalizationSnapshot == nil {
-            self.currentSession?.capturePersonalization(settings.personalization)
-            guard persistCurrentSession(updateTimestamp: false) else {
-                self.currentSession = currentSession
-                return
-            }
-        }
-
+        let userMessageID: UUID
         if let promptEditContext {
             guard canEditUserMessage(promptEditContext.messageID),
                 let revision = ChatPromptRevision.make(
@@ -1687,44 +1680,30 @@ final class ChatViewModel: ObservableObject {
                 return
             }
 
-            let editedMessageID = promptEditContext.messageID
-            messages = revision.messages
-            if let index = messages.firstIndex(where: { $0.id == editedMessageID }) {
-                messages[index].annotations = annotations
-                messages[index].pastedTexts = pastedTexts
+            userMessageID = promptEditContext.messageID
+            var revisedMessages = revision.messages
+            if let index = revisedMessages.firstIndex(where: { $0.id == userMessageID }) {
+                revisedMessages[index].annotations = annotations
+                revisedMessages[index].pastedTexts = pastedTexts
             }
+            guard (try? persistSubmission(revisedMessages, settings: settings)) != nil else { return }
             restoreComposerDraft(composerSnapshot?.draft ?? ChatPastedTextDraft(text: "", pastedTexts: []))
             pendingImageAttachments = composerSnapshot?.attachments ?? []
             pendingAnnotations = composerSnapshot?.annotations ?? []
             discardPromptEditing()
-            persistCurrentSession(updateTimestamp: true)
-            enqueueGeneration(
-                for: editedMessageID,
-                in: currentSession.id,
-                settings: settings,
-                languageModelSupportsTools: languageModelSupportsTools,
-                languageModelSupportsVision: languageModelSupportsVision,
-                appModel: appModel
-            )
-            return
+        } else {
+            var userMessage = ChatTranscriptMessage(role: .user, content: prompt, modelID: modelID,
+                                                    imageAttachments: imageAttachments)
+            userMessage.annotations = annotations
+            userMessage.pastedTexts = pastedTexts
+            guard (try? persistSubmission(messages + [userMessage], settings: settings)) != nil else { return }
+            userMessageID = userMessage.id
+            draft = ""
+            pendingImageAttachments.removeAll()
+            pendingAnnotations.removeAll()
         }
-
-        draft = ""
-        pendingImageAttachments.removeAll()
-        pendingAnnotations.removeAll()
-
-        var userMessage = ChatTranscriptMessage(
-            role: .user,
-            content: prompt,
-            modelID: modelID,
-            imageAttachments: imageAttachments
-        )
-        userMessage.annotations = annotations
-        userMessage.pastedTexts = pastedTexts
-        messages.append(userMessage)
-        persistCurrentSession(updateTimestamp: true)
         enqueueGeneration(
-            for: userMessage.id,
+            for: userMessageID,
             in: currentSession.id,
             settings: settings,
             languageModelSupportsTools: languageModelSupportsTools,
@@ -3602,6 +3581,7 @@ final class ChatViewModel: ObservableObject {
             return false
         }
 
+        let previousWorkState = session.workState ?? ChatWorkState()
         session.messages = messages
         session.workState = workState
         session.title = ChatSession.defaultTitle(for: messages)
@@ -3609,7 +3589,7 @@ final class ChatViewModel: ObservableObject {
             session.updatedAt = Date()
         }
 
-        guard saveSession(session) else {
+        guard saveSession(session, previousWorkState: previousWorkState) else {
             return false
         }
         currentSession = session
@@ -3732,12 +3712,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
-    private func saveSession(_ session: ChatSession) -> Bool {
+    private func saveSession(_ session: ChatSession, previousWorkState: ChatWorkState? = nil) -> Bool {
         searchLibrary.invalidate(session.id, from: self)
         guard canModifySession(session.id) else {
             return false
         }
-        guard sessionStore.saveSession(session) else {
+        guard sessionStore.saveSession(session, previousWorkState: previousWorkState) else {
             return false
         }
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)

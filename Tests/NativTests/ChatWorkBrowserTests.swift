@@ -110,24 +110,6 @@ final class ChatWorkBrowserTests: XCTestCase {
             """) as? String
     }
 
-    func testAnnotationFeedbackKeepsTheOriginalWorkRevisionAndSelection() {
-        var item = ChatWorkItem(title: "Game", kind: .website, content: "<canvas></canvas>")
-        let sessionID = UUID()
-        let annotation = ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#game",
-                                               text: "", x: 40, y: 60)
-        let feedback = ChatWorkFeedback(item: item, sessionID: sessionID, annotation: annotation,
-                                        selectedText: "Stale source selection")
-        item.revision += 1
-        item.title = "Renamed"
-        let message = feedback.message(comment: "Make this easier to see")
-        XCTAssertEqual(feedback.sessionID, sessionID)
-        XCTAssertTrue(message.contains("Regarding Game (work item \(item.id), revision 1)"))
-        XCTAssertTrue(message.contains("canvas#game"))
-        XCTAssertTrue(message.contains("(40, 60)"))
-        XCTAssertTrue(message.hasSuffix("Comment: Make this easier to see"))
-        XCTAssertFalse(message.contains("Stale source selection"))
-    }
-
     func testAnnotationPicksAnElementWithoutActivatingItAndKeepsPageCodeIsolated() async throws {
         let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 600, height: 500)
@@ -251,12 +233,12 @@ final class ChatWorkBrowserTests: XCTestCase {
         browser.onNavigate = { url in addresses.append(url); item.url = url }
         browser.load(item)
         let first = try await browser.execute(ChatWorkRequest(action: .inspect))
-        XCTAssertTrue(first.contains("Browser fixture"))
+        XCTAssertEqual(first["title"] as? String, "Browser fixture")
         let next = base.appendingPathComponent("next").absoluteString
         try browser.navigate(next)
         browser.load(item) // A SwiftUI update can occur before the next page commits.
         let result = try await browser.execute(ChatWorkRequest(action: .inspect))
-        XCTAssertEqual(try decode(result)["url"] as? String, next)
+        XCTAssertEqual(result["url"] as? String, next)
         XCTAssertEqual(addresses, [next])
         XCTAssertEqual(item.url, next)
         browser.load(item)
@@ -269,9 +251,9 @@ final class ChatWorkBrowserTests: XCTestCase {
         defer { server.stop() }
         let browser = makeBrowser()
         browser.load(ChatWorkItem(title: "Fixture", kind: .website, content: "", url: base.absoluteString))
-        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let first = try await browser.execute(ChatWorkRequest(action: .inspect))
         let result = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("New window", in: first)))
-        XCTAssertEqual(try decode(result)["title"] as? String, "Next page")
+        XCTAssertEqual(result["title"] as? String, "Next page")
     }
 
     func testRemotePagesCanRenderInlineFrames() async throws {
@@ -325,12 +307,11 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(first["title"] as? String, "Shared fixture")
         let input = try element("Name", in: first)
         let typed = try await browser.execute(ChatWorkRequest(action: .type, elementID: input, text: "Nativ"))
-        XCTAssertTrue(typed.contains("Nativ"))
-        XCTAssertFalse(typed.contains("do-not-expose"))
-        let typedState = try decode(typed)
-        let button = try element("Apply", in: typedState)
+        XCTAssertTrue((typed["elements"] as? [[String: Any]])?.contains { $0["value"] as? String == "Nativ" } == true)
+        XCTAssertFalse(String(describing: typed).contains("do-not-expose"))
+        let button = try element("Apply", in: typed)
         let clicked = try await browser.execute(ChatWorkRequest(action: .click, elementID: button))
-        XCTAssertTrue(clicked.contains("Clicked"))
+        XCTAssertTrue((clicked["text"] as? String)?.contains("Clicked") == true)
         let rendered = try await browser.webView.evaluateJavaScript("document.getElementById('result').innerText")
         XCTAssertEqual(rendered as? String, "Clicked")
         do {
@@ -378,12 +359,12 @@ final class ChatWorkBrowserTests: XCTestCase {
             document.addEventListener('keydown', e => { document.body.dataset.key = e.key; });
             </script>
             """))
-        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let first = try await browser.execute(ChatWorkRequest(action: .inspect))
         let url = try XCTUnwrap(URL(string: try XCTUnwrap(first["url"] as? String)))
         XCTAssertEqual(url.scheme, "http")
         XCTAssertEqual(url.host, "127.0.0.1")
         XCTAssertEqual(first["title"] as? String, "Local game")
-        let clicked = try decode(await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first))))
+        let clicked = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first)))
         XCTAssertTrue((clicked["text"] as? String)?.contains("Started") == true)
         for _ in 0..<30 {
             if try await browser.webView.evaluateJavaScript("document.body.dataset.fetched === 'true'") as? Bool == true { break }
@@ -413,14 +394,14 @@ final class ChatWorkBrowserTests: XCTestCase {
             <script>const snake = []; snake[0].x;</script>
             """)
         browser.load(item)
-        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let first = try await browser.execute(ChatWorkRequest(action: .inspect))
         XCTAssertFalse(try XCTUnwrap(first["runtime_errors"] as? [String]).isEmpty)
-        let clicked = try decode(await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first))))
+        let clicked = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("Start", in: first)))
         XCTAssertTrue(try XCTUnwrap(clicked["runtime_errors"] as? [String]).contains { $0.contains("Start failed") })
         let originalURL = browser.localPageURL
         item.content = "<h1>Repaired</h1><script>localStorage.setItem('version','2')</script>"
         browser.load(item)
-        let repaired = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let repaired = try await browser.execute(ChatWorkRequest(action: .inspect))
         XCTAssertEqual(browser.localPageURL, originalURL)
         XCTAssertEqual(repaired["text"] as? String, "Repaired")
         XCTAssertEqual(repaired["runtime_errors"] as? [String], [])
@@ -440,7 +421,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         var published: [String] = []
         browser.onNavigate = { published.append($0) }
         browser.load(item)
-        let first = try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
+        let first = try await browser.execute(ChatWorkRequest(action: .inspect))
         let local = try XCTUnwrap(browser.localPageURL)
         _ = try await browser.execute(ChatWorkRequest(action: .click, elementID: element("Navigate", in: first)))
         browser.load(item)
@@ -485,7 +466,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         let first = pool.browser(for: item, sessionID: session)
         item.content = "<p>Latest source</p>"
         _ = pool.browser(for: item, sessionID: session)
-        let latest = try decode(await first.execute(ChatWorkRequest(action: .inspect)))
+        let latest = try await first.execute(ChatWorkRequest(action: .inspect))
         XCTAssertEqual(latest["text"] as? String, "Latest source")
         let firstURL = try XCTUnwrap(first.localPageURL)
         _ = try await first.webView.evaluateJavaScript("localStorage.setItem('private','first page')")
@@ -504,11 +485,7 @@ final class ChatWorkBrowserTests: XCTestCase {
     private func inspect(_ browser: ChatWorkBrowser) async throws -> [String: Any] {
         // WebKit commits the queued HTML load on the next main run-loop turn.
         try await Task.sleep(for: .milliseconds(100))
-        return try decode(await browser.execute(ChatWorkRequest(action: .inspect)))
-    }
-
-    private func decode(_ json: String) throws -> [String: Any] {
-        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        return try await browser.execute(ChatWorkRequest(action: .inspect))
     }
 
     private func element(_ label: String, in snapshot: [String: Any]) throws -> String {

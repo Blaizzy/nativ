@@ -260,10 +260,6 @@ final class ChatWorkTests: XCTestCase {
             }
         }
     }
-
-    private func json(_ value: String) throws -> [String: Any] {
-        try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
-    }
 }
 
 @MainActor
@@ -495,6 +491,17 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
         XCTAssertEqual(chat.pendingAnnotations, annotations)
         XCTAssertEqual(chat.workState.selectedItem?.content, item.content)
+        // A failed submission must roll back the transcript and preserve the draft.
+        let sessionURL = store.sessionURL(for: session.id)
+        let saved = try Data(contentsOf: sessionURL)
+        try FileManager.default.removeItem(at: sessionURL)
+        try FileManager.default.createDirectory(at: sessionURL, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try chat.appendWorkEdit(target, request: "Unsaved edit", settings: settings))
+        XCTAssertEqual(chat.messages.map(\.id), [message.id])
+        XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
+        XCTAssertEqual(chat.pendingAnnotations, annotations)
+        try FileManager.default.removeItem(at: sessionURL)
+        try saved.write(to: sessionURL)
         try chat.updateWorkItem(item.id, content: "# Changed", previousContent: item.content)
         XCTAssertThrowsError(try chat.appendWorkEdit(target, request: "Rename it", settings: settings))
         XCTAssertEqual(chat.messages.count, 1)
@@ -554,16 +561,7 @@ final class ChatWorkSessionTests: XCTestCase {
         let (root, store, session) = try fixture()
         let chat = subject(root)
         try await loaded(chat)
-        var context = ChatToolExecutionContext(imageGenerationModelID: nil, baseURL: base, apiKey: nil,
-            imageReferences: [], modelSearchPath: "", additionalModelSearchPaths: [])
-        context.workAction = { request in try await chat.executeWorkAction(request, in: session.id) }
-        func run(_ arguments: [String: Any]) async throws -> [String: Any] {
-            let data = try JSONSerialization.data(withJSONObject: arguments)
-            let call = MLXChatToolCall(id: UUID().uuidString, function: MLXChatFunctionCall(
-                name: "chat_work", arguments: String(decoding: data, as: UTF8.self)))
-            let result = try await ChatToolDispatcher.execute(call: call, context: context)
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.content.utf8)) as? [String: Any])
-        }
+        let run = dispatcher(chat, sessionID: session.id, baseURL: base)
 
         let first = try await run(["action": "open", "url": base.absoluteString])
         let firstID = try XCTUnwrap(first["id"] as? String)
@@ -621,78 +619,66 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(restored.workState, saved)
     }
 
-    func testGeneratedWebsiteCanBeCreatedOperatedUpdatedAndRestored() async throws {
-        func json(_ value: String) throws -> [String: Any] {
-            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
+    func testGeneratedAndLegacyHTMLCanBeOperatedUpdatedAndRestored() async throws {
+        for legacyDocument in [false, true] {
+            let (root, store, original) = try fixture()
+            let html = """
+                <!DOCTYPE html><html><head><title>Snake Game</title></head><body>
+                <button onclick="this.textContent='Started'">Start</button></body></html>
+                """
+            var session = original
+            if legacyDocument {
+                let item = ChatWorkItem(title: "Snake Game", kind: .document, content: html, updatedBy: "Agent")
+                session.workState = ChatWorkState(items: [item], openIDs: [item.id], selectedID: item.id, isVisible: true)
+                XCTAssertTrue(store.saveSession(session))
+            }
+            let chat = subject(root)
+            try await loaded(chat)
+            chat.selectSession(session.id)
+            let request = legacyDocument
+                ? ChatWorkRequest(action: .open, id: session.workState?.selectedID)
+                : ChatWorkRequest(action: .create, title: "Game", kind: .website, content: html)
+            let opened = try json(await chat.executeWorkAction(request, in: session.id))
+            let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(opened["id"] as? String)))
+            XCTAssertEqual(opened["title"] as? String, "Snake Game")
+            XCTAssertEqual(opened["editable"] as? Bool, true)
+            XCTAssertEqual(opened["revision"] as? Int, 1)
+            XCTAssertTrue((opened["url"] as? String)?.hasPrefix("http://127.0.0.1:") == true)
+            let controls = try XCTUnwrap(opened["elements"] as? [[String: Any]])
+            let button = try XCTUnwrap(controls.first?["id"] as? String)
+            let clicked = try json(await chat.executeWorkAction(ChatWorkRequest(action: .click, elementID: button), in: session.id))
+            XCTAssertTrue((clicked["text"] as? String)?.contains("Started") == true)
+            let beforeEdit = try XCTUnwrap(store.loadSession(id: session.id)?.workState?.selectedItem)
+            XCTAssertEqual(beforeEdit.content, html)
+            XCTAssertEqual(beforeEdit.revision, 1)
+            XCTAssertEqual(beforeEdit.kind, legacyDocument ? .document : .website)
+            let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: id), in: session.id))
+            XCTAssertEqual(read["kind"] as? String, "website")
+            let updatedHTML = html.replacingOccurrences(of: "Start</button>", with: "Restart</button>")
+            let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, kind: .website,
+                content: updatedHTML, expectedRevision: 1), in: session.id))
+            XCTAssertEqual(updated["kind"] as? String, "website")
+            XCTAssertEqual(updated["revision"] as? Int, 2)
+            XCTAssertEqual(updated["text"] as? String, "Restart")
+            XCTAssertEqual(updated["runtime_errors"] as? [String], [])
+            let saved = try XCTUnwrap(store.loadSession(id: session.id)?.workState?.selectedItem)
+            XCTAssertNil(saved.url)
+            XCTAssertEqual(saved.content, updatedHTML)
+            XCTAssertTrue(saved.canEdit)
+            let restored = subject(root)
+            try await loaded(restored)
+            restored.selectSession(session.id)
+            let reopened = try json(await restored.executeWorkAction(ChatWorkRequest(action: .open, id: id), in: session.id))
+            XCTAssertEqual(reopened["text"] as? String, "Restart")
+            XCTAssertNotEqual(reopened["url"] as? String, updated["url"] as? String)
+            XCTAssertEqual(restored.workState.selectedItem, saved)
+            if legacyDocument {
+                let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Another Game",
+                    kind: .document, content: html), in: session.id))
+                XCTAssertEqual(created["kind"] as? String, "website")
+                XCTAssertNotNil(created["elements"])
+            }
         }
-        let (root, store, session) = try fixture()
-        let chat = subject(root)
-        try await loaded(chat)
-        let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Game",
-            kind: .website, content: "<button onclick=\"this.textContent='Started'\">Start</button>"), in: session.id))
-        let id = try XCTUnwrap(UUID(uuidString: try XCTUnwrap(created["id"] as? String)))
-        XCTAssertEqual(created["editable"] as? Bool, true)
-        XCTAssertEqual(created["revision"] as? Int, 1)
-        let controls = try XCTUnwrap(created["elements"] as? [[String: Any]])
-        let control = try XCTUnwrap(controls.first?["id"] as? String)
-        let clicked = try json(await chat.executeWorkAction(ChatWorkRequest(action: .click, elementID: control), in: session.id))
-        XCTAssertTrue((clicked["text"] as? String)?.contains("Started") == true)
-        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: id), in: session.id)
-        let html = "<h1>Updated game</h1><script>document.body.dataset.ready='yes'</script>"
-        let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, content: html,
-            expectedRevision: 1), in: session.id))
-        XCTAssertEqual(updated["revision"] as? Int, 2)
-        XCTAssertEqual(updated["text"] as? String, "Updated game")
-        XCTAssertEqual(updated["runtime_errors"] as? [String], [])
-        let saved = try XCTUnwrap(store.loadSession(id: session.id)?.workState?.selectedItem)
-        XCTAssertNil(saved.url)
-        XCTAssertEqual(saved.content, html)
-        XCTAssertTrue(saved.canEdit)
-        let restored = subject(root)
-        try await loaded(restored)
-        restored.selectSession(session.id)
-        let reopened = try json(await restored.executeWorkAction(ChatWorkRequest(action: .open, id: id), in: session.id))
-        XCTAssertEqual(reopened["text"] as? String, "Updated game")
-        XCTAssertNotEqual(reopened["url"] as? String, updated["url"] as? String)
-        XCTAssertEqual(restored.workState.selectedItem, saved)
-    }
-
-    func testExistingHTMLDocumentOpensAsLiveWebsiteAndRemainsEditable() async throws {
-        let (root, store, original) = try fixture()
-        let html = """
-            <!DOCTYPE html><html><head><title>Snake Game</title></head><body>
-            <button onclick="this.textContent='Running'">Play</button></body></html>
-            """
-        let item = ChatWorkItem(title: "Snake Game", kind: .document, content: html, updatedBy: "Agent")
-        var session = original
-        session.workState = ChatWorkState(items: [item], openIDs: [item.id], selectedID: item.id, isVisible: true)
-        XCTAssertTrue(store.saveSession(session))
-        let chat = subject(root)
-        try await loaded(chat)
-        chat.selectSession(session.id)
-        func json(_ value: String) throws -> [String: Any] {
-            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
-        }
-        let opened = try json(await chat.executeWorkAction(ChatWorkRequest(action: .open, id: item.id), in: session.id))
-        XCTAssertEqual(opened["title"] as? String, "Snake Game")
-        XCTAssertTrue((opened["url"] as? String)?.hasPrefix("http://127.0.0.1:") == true)
-        let controls = try XCTUnwrap(opened["elements"] as? [[String: Any]])
-        let button = try XCTUnwrap(controls.first?["id"] as? String)
-        let clicked = try json(await chat.executeWorkAction(ChatWorkRequest(action: .click, elementID: button), in: session.id))
-        XCTAssertTrue((clicked["text"] as? String)?.contains("Running") == true)
-        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem, item)
-        let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id))
-        XCTAssertEqual(read["kind"] as? String, "website")
-        let updated = try json(await chat.executeWorkAction(ChatWorkRequest(action: .update, kind: .website,
-            content: html.replacingOccurrences(of: "Play", with: "Restart"), expectedRevision: 1), in: session.id))
-        XCTAssertEqual(updated["kind"] as? String, "website")
-        XCTAssertEqual(updated["revision"] as? Int, 2)
-        XCTAssertTrue((updated["text"] as? String)?.contains("Restart") == true)
-        XCTAssertNil(store.loadSession(id: session.id)?.workState?.selectedItem?.url)
-        let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Another Game",
-            kind: .document, content: html), in: session.id))
-        XCTAssertEqual(created["kind"] as? String, "website")
-        XCTAssertNotNil(created["elements"])
     }
 
     func testAgentOpensAndOperatesAWebsiteThroughTheSessionDispatcher() async throws {
@@ -702,16 +688,7 @@ final class ChatWorkSessionTests: XCTestCase {
         let (root, store, session) = try fixture()
         let chat = subject(root)
         try await loaded(chat)
-        var context = ChatToolExecutionContext(imageGenerationModelID: nil, baseURL: base, apiKey: nil,
-            imageReferences: [], modelSearchPath: "", additionalModelSearchPaths: [])
-        context.workAction = { request in try await chat.executeWorkAction(request, in: session.id) }
-        func run(_ arguments: [String: String]) async throws -> [String: Any] {
-            let data = try JSONSerialization.data(withJSONObject: arguments)
-            let call = MLXChatToolCall(id: UUID().uuidString, function: MLXChatFunctionCall(
-                name: "chat_work", arguments: String(decoding: data, as: UTF8.self)))
-            let result = try await ChatToolDispatcher.execute(call: call, context: context)
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(result.content.utf8)) as? [String: Any])
-        }
+        let run = dispatcher(chat, sessionID: session.id, baseURL: base)
         func element(_ label: String, in page: [String: Any]) throws -> String {
             let elements = try XCTUnwrap(page["elements"] as? [[String: Any]])
             return try XCTUnwrap(elements.first { $0["label"] as? String == label }?["id"] as? String)
@@ -751,6 +728,20 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(chat.workState.items.count, 1)
     }
 
+    private func dispatcher(_ chat: ChatViewModel, sessionID: UUID, baseURL: URL)
+        -> ([String: Any]) async throws -> [String: Any] {
+        var context = ChatToolExecutionContext(imageGenerationModelID: nil, baseURL: baseURL, apiKey: nil,
+            imageReferences: [], modelSearchPath: "", additionalModelSearchPaths: [])
+        context.workAction = { request in try await chat.executeWorkAction(request, in: sessionID) }
+        return { arguments in
+            let data = try JSONSerialization.data(withJSONObject: arguments)
+            let call = MLXChatToolCall(id: UUID().uuidString, function: MLXChatFunctionCall(
+                name: "chat_work", arguments: String(decoding: data, as: UTF8.self)))
+            let result = try await ChatToolDispatcher.execute(call: call, context: context)
+            return try json(result.content)
+        }
+    }
+
     private func fixture() throws -> (URL, ChatSessionStore, ChatSession) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = ChatSessionStore(chatDirectory: root.appendingPathComponent("Chat"),
@@ -784,9 +775,6 @@ final class ChatWorkSessionTests: XCTestCase {
         let (root, store, session) = try fixture()
         let chat = subject(root)
         try await loaded(chat)
-        func json(_ value: String) throws -> [String: Any] {
-            try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
-        }
         let created = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Notes.md",
             kind: .document, content: "# Original"), in: session.id))
         let item = try XCTUnwrap(chat.workState.selectedItem)
@@ -936,6 +924,24 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(store.loadSession(id: session.id)?.workState, before)
     }
 
+    func testMetadataAndTranscriptSavesLeaveMissingSourcesForExplicitRefresh() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        try FileManager.default.removeItem(at: url)
+        chat.toggleWorkPaneExpanded()
+        let target = ChatWorkFeedback(item: item, sessionID: session.id, annotation: nil, selectedText: "Original")
+        let message = try chat.appendWorkEdit(target, request: "Change this", settings: NativSettings())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(store.loadSession(id: session.id)?.messages.last?.id, message.id)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.isExpanded, true)
+        try chat.refreshWorkFiles()
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "Original")
+    }
+
     func testFailedFileSaveDoesNotPublishUnsavedWork() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
@@ -1001,4 +1007,8 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertThrowsError(try chat.createWorkItem(title: "Unsaved", kind: .document, content: "Do not claim saved"))
         XCTAssertEqual(chat.workState, before)
     }
+}
+
+private func json(_ value: String) throws -> [String: Any] {
+    try XCTUnwrap(JSONSerialization.jsonObject(with: Data(value.utf8)) as? [String: Any])
 }

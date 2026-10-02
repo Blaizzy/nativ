@@ -32,14 +32,9 @@ final class ChatWorkSplitTests: XCTestCase {
 final class ChatWorkSplitViewTests: XCTestCase {
     func testDividerOwnsHitTestingAndCursorUpdatesInBothPaneOrders() async throws {
         let state = SplitFixtureState()
-        let host = NSHostingView(rootView: SplitFixture(state: state, usesWebContent: true))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1_200, height: 700),
-                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+        let (host, window) = host(state, usesWebContent: true)
         let previousCursor = NSCursor.current
         defer { previousCursor.set(); window.close() }
-        window.contentView = host
-        window.orderBack(nil)
 
         for workOnLeft in [false, true] {
             state.workOnLeft = workOnLeft
@@ -100,6 +95,16 @@ final class ChatWorkSplitViewTests: XCTestCase {
         XCTAssertEqual(swaps, 1, "Releasing a drag over the button must not also swap")
     }
 
+    private func host(_ state: SplitFixtureState, usesWebContent: Bool = false) -> (NSView, NSWindow) {
+        let host = NSHostingView(rootView: SplitFixture(state: state, usesWebContent: usesWebContent))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1_200, height: 700),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        return (host, window)
+    }
+
     private func findDivider(in view: NSView) -> ChatWorkDividerNSView? {
         if let divider = view as? ChatWorkDividerNSView { return divider }
         return view.subviews.lazy.compactMap { self.findDivider(in: $0) }.first
@@ -114,13 +119,8 @@ final class ChatWorkSplitViewTests: XCTestCase {
     func testSwappingPreservesPaneWidthsAndViewState() async throws {
         let state = SplitFixtureState()
         state.composerWidth = 700
-        let host = NSHostingView(rootView: SplitFixture(state: state))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1_200, height: 700),
-                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+        let (_, window) = host(state)
         defer { window.close() }
-        window.contentView = host
-        window.orderBack(nil)
         try await Task.sleep(for: .milliseconds(100))
         let chatIdentity = try XCTUnwrap(state.chatIdentity)
         let workIdentity = try XCTUnwrap(state.workIdentity)
@@ -148,13 +148,8 @@ final class ChatWorkSplitViewTests: XCTestCase {
 
     func testWindowResizeCollapsesBeforeCompressingComposerAndCanRestoreChat() async throws {
         let state = SplitFixtureState()
-        let host = NSHostingView(rootView: SplitFixture(state: state))
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1_200, height: 700),
-                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
+        let (_, window) = host(state)
         defer { window.close() }
-        window.contentView = host
-        window.orderBack(nil)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertFalse(state.expanded)
         XCTAssertEqual(state.chatWidth, 600, accuracy: 1)

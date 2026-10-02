@@ -765,19 +765,7 @@ struct ChatComposer: View {
     }
 
     private var importedContinuationIsAvailable: Bool {
-        guard viewModel.importedModelRepositoryID != nil else {
-            return true
-        }
-        guard let selectedLocalModel
-        else {
-            return true
-        }
-        guard let tokenCount = viewModel.importedPromptTokenCount,
-            let contextWindow = selectedLocalModel.contextSize
-        else {
-            return true
-        }
-        return tokenCount <= contextWindow
+        viewModel.importedContinuationIsAvailable(contextWindow: selectedLocalModel?.contextSize)
     }
 
     private var importedContinuationNotice: ChatAttachmentNotice? {
