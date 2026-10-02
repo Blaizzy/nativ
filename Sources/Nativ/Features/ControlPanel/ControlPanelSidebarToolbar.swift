@@ -28,7 +28,7 @@ extension ControlPanelView {
                         .frame(width: 24, height: 22)
                 }
                 .help(allSelectedPinned ? "Unpin selected" : "Pin selected")
-                .disabled(!hasSelectedPinnable)
+                .disabled(!hasSelectedChats)
 
                 Button {
                     bulkExportSelected()
@@ -46,7 +46,7 @@ extension ControlPanelView {
                         .frame(width: 24, height: 22)
                 }
                 .help("Delete selected")
-                .disabled(selectedRecentIDs.isEmpty && selectedFolderIDs.isEmpty)
+                .disabled(selectedRecentIDs.isEmpty)
                 Spacer(minLength: 0)
             }
         }

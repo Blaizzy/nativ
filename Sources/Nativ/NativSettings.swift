@@ -688,7 +688,6 @@ struct NativSettings: Codable, Equatable {
     var chatFontScale: Double
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
-    var sidebarFoldersCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
 
@@ -747,7 +746,6 @@ struct NativSettings: Codable, Equatable {
         chatFontScale: Double = Self.defaultChatFontScale,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
-        sidebarFoldersCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
@@ -805,7 +803,6 @@ struct NativSettings: Codable, Equatable {
         self.chatFontScale = chatFontScale
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
-        self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
     }
@@ -866,7 +863,6 @@ struct NativSettings: Codable, Equatable {
         case chatFontScale
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
-        case sidebarFoldersCollapsed
         case sidebarSessionsCollapsed
         case modelConfigs
     }
@@ -1022,9 +1018,6 @@ struct NativSettings: Codable, Equatable {
         sidebarProjectsCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarProjectsCollapsed)
             ?? defaults.sidebarProjectsCollapsed
-        sidebarFoldersCollapsed =
-            try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed)
-            ?? defaults.sidebarFoldersCollapsed
         sidebarSessionsCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed)
             ?? defaults.sidebarSessionsCollapsed
@@ -1087,7 +1080,6 @@ struct NativSettings: Codable, Equatable {
         try container.encode(chatFontScale, forKey: .chatFontScale)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
-        try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
     }
@@ -1314,14 +1306,13 @@ struct NativSettings: Codable, Equatable {
     }
 
     var allSidebarSectionsCollapsed: Bool {
-        sidebarPinnedCollapsed && sidebarProjectsCollapsed && sidebarFoldersCollapsed
+        sidebarPinnedCollapsed && sidebarProjectsCollapsed
             && sidebarSessionsCollapsed
     }
 
     mutating func setAllSidebarSectionsCollapsed(_ collapsed: Bool) {
         sidebarPinnedCollapsed = collapsed
         sidebarProjectsCollapsed = collapsed
-        sidebarFoldersCollapsed = collapsed
         sidebarSessionsCollapsed = collapsed
     }
 

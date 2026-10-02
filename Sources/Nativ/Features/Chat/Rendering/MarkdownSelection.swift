@@ -28,6 +28,8 @@ final class MarkdownSelection {
 
     init(surface: MarkdownSurface) { self.surface = surface }
 
+    func contextualMenu(for event: NSEvent) -> NSMenu? { surface?.menu(for: event) }
+
     func invalidate(contentChanged: Bool) {
         indexed = false
         fragments.removeAll()

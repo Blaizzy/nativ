@@ -102,7 +102,7 @@ final class ArtifactStore: ObservableObject {
                 switch change.kind {
                 case .chatSession, .imageGenerationSession:
                     self?.refresh()
-                case .chatFolders, .artifactDeleted:
+                case .artifactDeleted:
                     break
                 }
             }
