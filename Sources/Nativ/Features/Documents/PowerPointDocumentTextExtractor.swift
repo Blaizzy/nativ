@@ -61,26 +61,9 @@ actor PowerPointDocumentTextExtractor: DocumentTextExtracting {
     }
 
     private static func text(for entry: Entry, in archive: Archive) throws -> String? {
-        var data = Data()
-        data.reserveCapacity(Int(entry.uncompressedSize))
-        do {
-            _ = try archive.extract(entry) { chunk in
-                guard chunk.count <= Int(slideLimit) - data.count else {
-                    throw DocumentTextExtractionError.archiveTooLarge
-                }
-                data.append(chunk)
-            }
-        } catch let error as DocumentTextExtractionError {
-            throw error
-        } catch {
-            throw DocumentTextExtractionError.invalidDocument
-        }
-
+        let data = try ArchiveEntryData.read(entry, in: archive, limit: slideLimit)
         let delegate = SlideTextParser()
-        let parser = XMLParser(data: data)
-        parser.delegate = delegate
-        parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { throw DocumentTextExtractionError.invalidDocument }
+        try ArchiveEntryData.parse(data, with: delegate)
         return delegate.text.nilIfEmpty
     }
 }

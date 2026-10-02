@@ -111,8 +111,8 @@ private final class PackageParser: NSObject, XMLParserDelegate {
         case "item":
             guard let id = attributeDict["id"], let href = attributeDict["href"] else { return }
             let type = attributeDict["media-type"] ?? ""
-            if type.contains("xhtml") || type.contains("html") || href.hasSuffix(".xhtml")
-                || href.hasSuffix(".html") || href.hasSuffix(".htm") {
+            let fileExtension = (href as NSString).pathExtension.lowercased()
+            if type.contains("html") || ["xhtml", "html", "htm"].contains(fileExtension) {
                 manifest[id] = href
             }
         case "itemref":

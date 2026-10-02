@@ -355,10 +355,9 @@ struct ChatReadFileToolExecutor {
             offset: offset,
             limit: limit,
             maximumCharacters: max(
-                FileReadContentPolicy.resultCharacterBudget(
-                    base: context.fileReadMaximumResultCharacters,
-                    isDenseGrid: extracted.isDenseGrid
-                ),
+                extracted.isDenseGrid
+                    ? context.fileReadMaximumResultCharacters / 4
+                    : context.fileReadMaximumResultCharacters,
                 1
             )
         )
@@ -665,12 +664,8 @@ private enum FileReadContentPolicy {
     ]
 
     /// Rows of short values cost roughly one token per character, around four times ordinary
-    /// prose, so the same character budget would produce four times the prefill. Scale it down
-    /// for that content only rather than lowering the limit for every file.
-    static func resultCharacterBudget(base: Int, isDenseGrid: Bool) -> Int {
-        isDenseGrid ? base / 4 : base
-    }
-
+    /// prose, so these get a quarter of the usual character budget rather than every file
+    /// getting a smaller one.
     static func isDenseGrid(extensionName: String) -> Bool {
         ["xlsx", "ods", "csv", "tsv"].contains(extensionName)
     }
