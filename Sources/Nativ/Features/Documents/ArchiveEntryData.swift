@@ -32,21 +32,31 @@ enum ArchiveEntryData {
 }
 
 /// Collects character data from the elements named in `textElements`, breaking a
-/// paragraph whenever one of `blockElements` closes.
+/// paragraph whenever one of `blockElements` closes and inserting a tab whenever one of
+/// `separatorElements` closes, which keeps spreadsheet cells apart within a row.
 final class ElementTextParser: NSObject, XMLParserDelegate {
     private let textElements: Set<String>
     private let blockElements: Set<String>
+    private let separatorElements: Set<String>
     private var paragraphs: [String] = []
     private var paragraph = ""
     private var depth = 0
 
-    init(textElements: Set<String>, blockElements: Set<String>) {
+    init(
+        textElements: Set<String>,
+        blockElements: Set<String>,
+        separatorElements: Set<String> = []
+    ) {
         self.textElements = textElements
         self.blockElements = blockElements
+        self.separatorElements = separatorElements
     }
 
     var text: String {
         (paragraphs + [paragraph])
+            .map {
+                $0.hasSuffix("\t") ? String($0.dropLast()) : $0
+            }
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
@@ -81,6 +91,8 @@ final class ElementTextParser: NSObject, XMLParserDelegate {
         if blockElements.contains(name) {
             paragraphs.append(paragraph)
             paragraph = ""
+        } else if separatorElements.contains(name) {
+            paragraph.append("\t")
         }
     }
 }

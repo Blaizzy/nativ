@@ -22,9 +22,11 @@ actor OpenDocumentTextExtractor: DocumentTextExtracting {
         }
         let content = try ArchiveEntryData.read(entry, in: archive, limit: Self.contentLimit)
 
+        let isSheet = (filename as NSString).pathExtension.lowercased() == "ods"
         let delegate = ElementTextParser(
             textElements: ["p", "h", "span", "a", "list-item"],
-            blockElements: ["p", "h", "list-item", "table-row"]
+            blockElements: isSheet ? ["table-row"] : ["p", "h", "list-item", "table-row"],
+            separatorElements: isSheet ? ["table-cell"] : []
         )
         try ArchiveEntryData.parse(content, with: delegate)
         let text = delegate.text

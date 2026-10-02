@@ -17,19 +17,10 @@ actor NotebookDocumentTextExtractor: DocumentTextExtracting {
         try Task.checkCancellation()
         guard !data.isEmpty else { throw DocumentTextExtractionError.emptyData }
 
-        let root: [String: Any]
-        do {
-            guard let parsed = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw DocumentTextExtractionError.invalidDocument
-            }
-            root = parsed
-        } catch is DocumentTextExtractionError {
-            throw DocumentTextExtractionError.invalidDocument
-        } catch {
-            throw DocumentTextExtractionError.invalidDocument
-        }
-
-        guard let cells = root["cells"] as? [[String: Any]] else {
+        let parsed = try? JSONSerialization.jsonObject(with: data)
+        guard let root = parsed as? [String: Any],
+            let cells = root["cells"] as? [[String: Any]]
+        else {
             throw DocumentTextExtractionError.invalidDocument
         }
 

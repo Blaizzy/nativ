@@ -170,8 +170,6 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
     private var value = ""
     private var readsValue = false
     private var isSharedString = false
-    private var isInlineString = false
-    private var columnIndex = 0
 
     init(sharedStrings: [String]) {
         self.sharedStrings = sharedStrings
@@ -191,17 +189,11 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         switch ElementTextParser.localName(elementName) {
         case "row":
             cells = []
-            columnIndex = 0
         case "c":
-            let type = attributeDict["t"] ?? ""
-            isSharedString = type == "s"
-            isInlineString = type == "inlineStr"
+            isSharedString = (attributeDict["t"] ?? "") == "s"
             if let reference = attributeDict["r"] {
                 let target = Self.column(for: reference)
-                while columnIndex < target {
-                    cells.append("")
-                    columnIndex += 1
-                }
+                while cells.count < target { cells.append("") }
             }
         case "v", "t":
             readsValue = true
@@ -227,10 +219,9 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
             readsValue = false
             if isSharedString, let index = Int(value), sharedStrings.indices.contains(index) {
                 cells.append(sharedStrings[index])
-            } else if !value.isEmpty || isInlineString {
+            } else {
                 cells.append(value)
             }
-            columnIndex += 1
         case "row":
             while let last = cells.last, last.isEmpty { cells.removeLast() }
             rows.append(cells.joined(separator: "\t"))
