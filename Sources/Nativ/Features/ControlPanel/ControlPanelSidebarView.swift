@@ -52,7 +52,6 @@ extension ControlPanelView {
                             .padding(.bottom, 8)
                     }
                     projectsSection
-                    foldersSection
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
@@ -108,26 +107,7 @@ extension ControlPanelView {
             }
         }
         .alert(
-            "Delete folder?",
-            isPresented: Binding(
-                get: { pendingDeleteFolder != nil },
-                set: { if !$0 { pendingDeleteFolder = nil } }
-            ),
-            presenting: pendingDeleteFolder
-        ) { folder in
-            Button("Delete", role: .destructive) {
-                chat.deleteFolder(folder.id)
-                pendingDeleteFolder = nil
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {
-                pendingDeleteFolder = nil
-            }
-        } message: { folder in
-            Text("“\(folder.name)” will be removed. Its chats will be moved out, not deleted.")
-        }
-        .alert(
-            "Delete \(selectedRecentIDs.count + selectedFolderIDs.count) items?",
+            "Delete \(selectedRecentIDs.count) items?",
             isPresented: $isConfirmingBulkDelete
         ) {
             Button("Delete", role: .destructive) {

@@ -10,6 +10,10 @@ struct ChatPersistenceFailure: Equatable, Sendable {
     let message: String
 }
 
+// Folder migration is intentionally lazy: Codable ignores the legacy `folderID`
+// key, so every existing chat loads without folder membership and appears in the
+// normal sidebar listing. The next save omits that key. Obsolete folders.json
+// files are ignored; migration never depends on their presence or validity.
 struct ChatSession: Identifiable, Equatable, Codable {
     static let newChatTitle = "New chat"
 
@@ -22,7 +26,6 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var pinned: Bool?
     var pinnedOrder: Int?
     var sessionOrder: Int?
-    var folderID: UUID?
     var projectID: UUID?
     var imageGenerationModelID: String?
     var workState: ChatWorkState?
@@ -48,7 +51,6 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID,
             projectID: projectID,
             scheduledTaskID: scheduledTaskID,
             worktree: worktree
@@ -137,7 +139,6 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let isPinned: Bool
     let pinnedOrder: Int?
     let sessionOrder: Int?
-    let folderID: UUID?
     let projectID: UUID?
     let scheduledTaskID: String?
     var worktree: ChatGitWorktree? = nil
@@ -147,32 +148,6 @@ struct ChatSessionSummary: Identifiable, Equatable {
             return lhs.createdAt > rhs.createdAt
         }
         return lhs.updatedAt > rhs.updatedAt
-    }
-}
-
-struct ChatFolder: Identifiable, Equatable, Codable {
-    let id: UUID
-    var name: String
-    var isCollapsed: Bool
-    var isPinned: Bool
-
-    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false, isPinned: Bool = false) {
-        self.id = id
-        self.name = name
-        self.isCollapsed = isCollapsed
-        self.isPinned = isPinned
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, isCollapsed, isPinned
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        isCollapsed = try container.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
@@ -941,29 +916,6 @@ struct ChatSessionStore {
         return true
     }
 
-    func loadFolders() -> [ChatFolder] {
-        guard let data = try? Data(contentsOf: foldersURL) else {
-            return []
-        }
-        return (try? JSONDecoder().decode([ChatFolder].self, from: data)) ?? []
-    }
-
-    func saveFolders(_ folders: [ChatFolder]) {
-        do {
-            try fileManager.createDirectory(
-                at: chatDirectory,
-                withIntermediateDirectories: true
-            )
-
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(folders)
-            try data.write(to: foldersURL, options: .atomic)
-        } catch {
-            reportFailure("saveFolders", error: error)
-        }
-    }
-
     private func loadSession(from url: URL) -> ChatSession? {
         guard let data = try? Data(contentsOf: url) else {
             return nil
@@ -1006,7 +958,7 @@ struct ChatSessionStore {
         else { return }
         do {
             let legacySessions = legacyChatDirectory.appendingPathComponent("Sessions", isDirectory: true)
-            var files = ["folders.json", "current.json"].map {
+            var files = ["current.json"].map {
                 (source: legacyChatDirectory.appendingPathComponent($0), destination: chatDirectory.appendingPathComponent($0))
             }.filter { fileManager.fileExists(atPath: $0.source.path) }
             if fileManager.fileExists(atPath: legacySessions.path) {
@@ -1023,7 +975,6 @@ struct ChatSessionStore {
                     // Existing destination files are authoritative, but must be readable before discarding the fallback.
                     let data = try Data(contentsOf: destination)
                     switch source.lastPathComponent {
-                    case "folders.json": _ = try makeDecoder().decode([ChatFolder].self, from: data)
                     case "current.json": _ = try makeDecoder().decode([ChatTranscriptMessage].self, from: data)
                     default: _ = try makeDecoder().decode(ChatSession.self, from: data)
                     }
@@ -1113,10 +1064,6 @@ struct ChatSessionStore {
 
     private var sessionsDirectory: URL {
         chatDirectory.appendingPathComponent("Sessions", isDirectory: true)
-    }
-
-    private var foldersURL: URL {
-        chatDirectory.appendingPathComponent("folders.json")
     }
 
     private var legacyTranscriptURL: URL {
