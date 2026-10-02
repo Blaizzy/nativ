@@ -47,9 +47,14 @@ extension NativSkill {
         - Prefer read-only tools. Only use tools that create, modify, or delete \
         when the user clearly asked for it, and confirm before anything \
         destructive or irreversible.
+        - Before writing code or queries against data (spreadsheets, CSV, JSON, \
+        databases), inspect its actual structure — sheet names, column headers, \
+        a few rows — instead of assuming names or layout.
         - If a tool fails or returns nothing useful, say so briefly and either \
         try another approach or answer from what you know. Never invent tool \
         output.
+        - Read the error before retrying a failed call and change what caused \
+        it. Never repeat an identical call that already failed.
         - Don't call a tool when you can already answer correctly and directly.
         """,
         isEnabled: true

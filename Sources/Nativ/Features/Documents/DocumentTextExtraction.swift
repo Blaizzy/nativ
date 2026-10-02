@@ -7,12 +7,14 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case richText
     case wordProcessing
     case presentation
+    case spreadsheet
 }
 
 enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
     case page(Int)
     case slide(Int)
     case lines(Int, Int)
+    case sheet(String)
 
     var label: String {
         switch self {
@@ -22,6 +24,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             "Slide \(number)"
         case .lines(let first, let last):
             first == last ? "Line \(first)" : "Lines \(first)–\(last)"
+        case .sheet(let name):
+            "Sheet: \(name)"
         }
     }
 
@@ -33,6 +37,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             slides.contains(number)
         case .lines(let first, let last):
             lines.contains { first...last ~= $0 }
+        case .sheet:
+            false
         }
     }
 }
@@ -62,6 +68,7 @@ struct ExtractedDocumentContent: Codable, Equatable, Sendable {
         switch sections.first?.location {
         case .page: "pages"
         case .slide: "slides"
+        case .sheet: "sheets"
         default: "sections"
         }
     }
@@ -131,6 +138,7 @@ struct DocumentTextExtractionRouter: Sendable {
             CSVDocumentTextExtractor(),
             RichTextDocumentTextExtractor(),
             PowerPointDocumentTextExtractor(),
+            SpreadsheetDocumentTextExtractor(),
         ]
     }
 }

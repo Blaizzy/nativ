@@ -189,8 +189,9 @@ final class ChatReadFileToolTests: XCTestCase {
         try Data("%PDF-stub".utf8).write(to: pdfURL)
         let dependencies = ChatReadFileToolDependencies(
             read: { url in try await SafeLocalFileReader().read(url: url) },
-            extractPDF: { _, filename in
-                ExtractedDocumentContent(
+            extractDocument: { _, filename, format in
+                XCTAssertEqual(format, .pdf)
+                return ExtractedDocumentContent(
                     filename: filename,
                     mimeType: "application/pdf",
                     sourceSectionCount: 2,
@@ -207,6 +208,93 @@ final class ChatReadFileToolTests: XCTestCase {
         XCTAssertTrue((result["warnings"] as? [String])?.contains(where: {
             $0.contains("no extractable text")
         }) == true)
+    }
+
+    func testRoutesSpreadsheetsToDocumentExtraction() async throws {
+        try Data("PK-stub".utf8).write(to: rootURL.appendingPathComponent("lotto.xlsx"))
+        let dependencies = ChatReadFileToolDependencies(
+            read: { url in try await SafeLocalFileReader().read(url: url) },
+            extractDocument: { _, filename, format in
+                XCTAssertEqual(format, .spreadsheet)
+                return ExtractedDocumentContent(
+                    filename: filename,
+                    mimeType: "application/octet-stream",
+                    sourceSectionCount: 2,
+                    sections: [
+                        ExtractedDocumentSection(location: .sheet("당첨번호"), text: "회차\t번호1\n1140\t3")
+                    ]
+                )
+            }
+        )
+        let result = try await execute(path: "lotto.xlsx", dependencies: dependencies)
+
+        XCTAssertEqual(result["extracted_document"] as? Bool, true)
+        XCTAssertEqual(result["content"] as? String, "1|[Sheet: 당첨번호]\n2|회차\t번호1\n3|1140\t3")
+        XCTAssertEqual((result["warnings"] as? [String])?.first, "Some sheets had no extractable text.")
+    }
+
+    func testSpreadsheetSuggestsScriptedAnalysis() async throws {
+        try Data("PK-stub".utf8).write(to: rootURL.appendingPathComponent("lotto.xlsx"))
+        let rows = (1...50).map { "\($0)\t9\t18\t24" }.joined(separator: "\n")
+        let dependencies = ChatReadFileToolDependencies(
+            read: { url in try await SafeLocalFileReader().read(url: url) },
+            extractDocument: { _, filename, _ in
+                ExtractedDocumentContent(
+                    filename: filename,
+                    mimeType: "application/octet-stream",
+                    sourceSectionCount: 1,
+                    sections: [
+                        ExtractedDocumentSection(location: .sheet("Lotto"), text: "회차\t번호1\t번호2\t번호3\n" + rows)
+                    ]
+                )
+            }
+        )
+        let truncated = try await execute(
+            path: "lotto.xlsx", maximumCharacters: 100, dependencies: dependencies)
+
+        XCTAssertEqual(truncated["truncated"] as? Bool, true)
+        XCTAssertTrue((truncated["warnings"] as? [String])?.contains(where: {
+            $0.contains("Python script")
+        }) == true)
+
+        let complete = try await execute(path: "lotto.xlsx", dependencies: dependencies)
+        XCTAssertEqual(complete["truncated"] as? Bool, false)
+        XCTAssertTrue((complete["warnings"] as? [String])?.contains(where: {
+            $0.contains("Python script")
+        }) == true)
+    }
+
+    func testLineBasedDocumentsAreReturnedWithoutSectionLabels() async throws {
+        try Data("{\\rtf1 stub}".utf8).write(to: rootURL.appendingPathComponent("memo.rtf"))
+        let dependencies = ChatReadFileToolDependencies(
+            read: { url in try await SafeLocalFileReader().read(url: url) },
+            extractDocument: { _, filename, format in
+                XCTAssertEqual(format, .richText)
+                return ExtractedDocumentContent(
+                    filename: filename,
+                    mimeType: "application/rtf",
+                    sourceSectionCount: 2,
+                    sections: [
+                        ExtractedDocumentSection(location: .lines(1, 2), text: "first\nsecond"),
+                        ExtractedDocumentSection(location: .lines(3, 3), text: "third"),
+                    ]
+                )
+            }
+        )
+        let result = try await execute(path: "memo.rtf", dependencies: dependencies)
+
+        XCTAssertEqual(result["content"] as? String, "1|first\n2|second\n3|third")
+    }
+
+    func testUnsupportedDocumentHintSuggestsAlternatives() async throws {
+        try Data("legacy".utf8).write(to: rootURL.appendingPathComponent("old.xls"))
+        let payload = await failure(path: "old.xls")
+        let error = try XCTUnwrap(payload["error"] as? [String: Any])
+        XCTAssertEqual(error["code"] as? String, "unsupported_document")
+        let hint = try XCTUnwrap(error["hint"] as? String)
+        XCTAssertTrue(hint.contains("XLSX"))
+        XCTAssertTrue(hint.contains("CSV"))
+        XCTAssertTrue(hint.contains("column headers"))
     }
 
     private func execute(

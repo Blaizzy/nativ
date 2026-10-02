@@ -247,6 +247,7 @@
 		6F18364BF5D253A01CB4D9FE /* MarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63300909BAA09F75C75DE55D /* MarkdownDocument.swift */; };
 		6F59E4CC485E211A7E6BC943 /* ScheduledTaskViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7213B7C6CEA995B14EBAC99 /* ScheduledTaskViews.swift */; };
 		702AFCE23DACD12454A8A7A5 /* ChatAnnotationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A108D078B32275B9F99C98C7 /* ChatAnnotationTests.swift */; };
+		702B0F464002AF080E73B25E /* SpreadsheetDocumentTextExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DEDC3ED3F36B830E8BF4499 /* SpreadsheetDocumentTextExtractor.swift */; };
 		70545F329C01AD4C683BF264 /* NativWindowHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1301809E464FD9315BF2A22 /* NativWindowHandle.swift */; };
 		70620E92994E9828794445D8 /* ChatSearchFilesTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA054C2CE69D40692AB665CD /* ChatSearchFilesTool.swift */; };
 		71346ABDC1EEEA74A22218EC /* ArtifactTrashTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EEC2A452A788D13C8F336A6 /* ArtifactTrashTests.swift */; };
@@ -428,6 +429,7 @@
 		CB0D232F71771BF7F3EE2B53 /* FirecrawlBrowsingProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 195075F70CCB0E7DE02934DF /* FirecrawlBrowsingProvider.swift */; };
 		CB2186CE3DF58C79C1D8ACD1 /* MarkdownFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 696F983B4F1F1DEABA37ABBB /* MarkdownFixtures.swift */; };
 		CD5325BA28A70CF35CB16EA8 /* AudioCaptureSleepMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E03F44A59784052F3095DFE /* AudioCaptureSleepMonitor.swift */; };
+		CDF8E6C652790E68F71FEC06 /* SpreadsheetDocumentTextExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DEDC3ED3F36B830E8BF4499 /* SpreadsheetDocumentTextExtractor.swift */; };
 		CEE42CCB57866B76CE85E588 /* MCPServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A7A7ACB288953FD476C47E8 /* MCPServerConfig.swift */; };
 		CFE41B9A0EF8EAA3CDA4B83F /* ChatTextSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BBF7A59DCE85B6CEBFFD743 /* ChatTextSearch.swift */; };
 		D2D5168B1A4243EB55EB1D68 /* RealtimeAudioMeterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C01D6D1C8C321F16B5FD31F8 /* RealtimeAudioMeterTests.swift */; };
@@ -699,6 +701,7 @@
 		4BEAD8583687ABA95FF4986E /* LogTextStorageMutationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTextStorageMutationTests.swift; sourceTree = "<group>"; };
 		4C93856381B1D89C4DE61DCC /* VoiceCaptureOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCaptureOverlay.swift; sourceTree = "<group>"; };
 		4DCD9D4118F0B3580590998F /* ScheduledTaskChatLinker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScheduledTaskChatLinker.swift; sourceTree = "<group>"; };
+		4DEDC3ED3F36B830E8BF4499 /* SpreadsheetDocumentTextExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpreadsheetDocumentTextExtractor.swift; sourceTree = "<group>"; };
 		4DEE7582DCB286B9D878E28E /* ChatAttachmentKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatAttachmentKind.swift; sourceTree = "<group>"; };
 		4E56BA346D88CC58DE21D448 /* SafeLocalFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeLocalFileWriter.swift; sourceTree = "<group>"; };
 		4EEC2A452A788D13C8F336A6 /* ArtifactTrashTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactTrashTests.swift; sourceTree = "<group>"; };
@@ -1100,6 +1103,7 @@
 				FE82B4EBA796206F12005498 /* OfficeArchive.swift */,
 				CCB2C50E190D5DBA2E237FB2 /* PDFDocumentTextExtractor.swift */,
 				6D4ED7BDFBC000148E13EA19 /* PowerPointDocumentTextExtractor.swift */,
+				4DEDC3ED3F36B830E8BF4499 /* SpreadsheetDocumentTextExtractor.swift */,
 				A91D4332044DCC5DCE4B27F6 /* TextDocumentTextExtractors.swift */,
 			);
 			path = Documents;
@@ -2181,6 +2185,7 @@
 				5620EDCF472DEF4388E8E526 /* SettingsView.swift in Sources */,
 				C8B10834D4DF407907FCCF6C /* ShellEnvironment.swift in Sources */,
 				E64F3E5C624F0C949AE70C60 /* SoftwareUpdater.swift in Sources */,
+				702B0F464002AF080E73B25E /* SpreadsheetDocumentTextExtractor.swift in Sources */,
 				8B4DF732A8A6AA5FFBE11982 /* StatsView.swift in Sources */,
 				FEAADABA1D25B153BE25E58F /* StatusMenuController.swift in Sources */,
 				A5E3473F7FA26A19AB9FF7B2 /* SystemAudioMeetingRecorder.swift in Sources */,
@@ -2425,6 +2430,7 @@
 				36405D7EB30E430CF06956EB /* ShellEnvironmentTests.swift in Sources */,
 				04AAA063AB39CE5D0891ACD1 /* SoftwareUpdater.swift in Sources */,
 				FD3B0C04A25F8E9559D3219F /* SoftwareUpdaterTests.swift in Sources */,
+				CDF8E6C652790E68F71FEC06 /* SpreadsheetDocumentTextExtractor.swift in Sources */,
 				E29423382F4F584AE5AB1BE4 /* SystemAudioMeetingRecorder.swift in Sources */,
 				67E23EDA1E9759079031C580 /* SystemAudioMeetingRecorderTests.swift in Sources */,
 				A453FB139D170E222646C4D7 /* SystemMonitorIdentityTests.swift in Sources */,

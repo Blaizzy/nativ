@@ -105,6 +105,128 @@ final class DocumentTextExtractionTests: XCTestCase {
         }
     }
 
+    func testXLSXExtractsSheetsInWorkbookOrderAsTabSeparatedRows() async throws {
+        let data = try archiveData(pathExtension: "xlsx", entries: [
+            "xl/workbook.xml": """
+                <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <sheets>
+                    <sheet name="당첨번호" sheetId="1" r:id="rId2"/>
+                    <sheet name="Empty" sheetId="2" r:id="rId3"/>
+                    <sheet name="Notes" sheetId="3" r:id="rId1"/>
+                  </sheets>
+                </workbook>
+                """,
+            "xl/_rels/workbook.xml.rels": """
+                <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+                  <Relationship Id="rId1" Target="worksheets/sheet3.xml"/>
+                  <Relationship Id="rId2" Target="/xl/worksheets/sheet1.xml"/>
+                  <Relationship Id="rId3" Target="worksheets/sheet2.xml"/>
+                </Relationships>
+                """,
+            "xl/sharedStrings.xml": """
+                <sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <si><t>회차</t></si>
+                  <si><t>번호1</t></si>
+                  <si><r><t>Rich </t></r><r><t>&amp; text</t></r><rPh><t>ignored</t></rPh></si>
+                </sst>
+                """,
+            "xl/worksheets/sheet1.xml": """
+                <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <sheetData>
+                    <row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row>
+                    <row r="2"><c r="A2"><v>1140</v></c><c r="B2" t="b"><v>1</v></c><c r="C2"><f>1+2</f><v>3</v></c></row>
+                    <row r="3"><c r="AA3" t="inlineStr"><is><t>far	cell</t></is></c></row>
+                  </sheetData>
+                </worksheet>
+                """,
+            "xl/worksheets/sheet2.xml": """
+                <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <sheetData/>
+                </worksheet>
+                """,
+            "xl/worksheets/sheet3.xml": """
+                <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                  <sheetData><row r="1"><c r="A1" t="s"><v>2</v></c></row></sheetData>
+                </worksheet>
+                """,
+        ])
+
+        let content = try await DocumentTextExtractionRouter().extract(
+            data: data,
+            filename: "lotto.xlsx",
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            format: .spreadsheet
+        )
+
+        XCTAssertEqual(content.sourceSectionCount, 3)
+        XCTAssertEqual(content.sections.map(\.location), [.sheet("당첨번호"), .sheet("Notes")])
+        XCTAssertEqual(content.sections.map(\.text), [
+            "회차\t\t번호1\n1140\tTRUE\t3\n" + String(repeating: "\t", count: 26) + "far cell",
+            "Rich & text",
+        ])
+        XCTAssertEqual(content.sectionName, "sheets")
+    }
+
+    func testXLSXFallsBackToWorksheetPartsWithoutWorkbook() async throws {
+        let data = try archiveData(pathExtension: "xlsx", entries: [
+            "xl/worksheets/sheet2.xml": """
+                <worksheet><sheetData><row><c t="inlineStr"><is><t>second</t></is></c></row></sheetData></worksheet>
+                """,
+            "xl/worksheets/sheet1.xml": """
+                <worksheet><sheetData><row><c><v>1</v></c><c><v>2</v></c></row></sheetData></worksheet>
+                """,
+        ])
+
+        let content = try await DocumentTextExtractionRouter().extract(
+            data: data,
+            filename: "parts.xlsx",
+            mimeType: "application/octet-stream",
+            format: .spreadsheet
+        )
+
+        XCTAssertEqual(content.sections.map(\.location), [.sheet("Sheet1"), .sheet("Sheet2")])
+        XCTAssertEqual(content.sections.map(\.text), ["1\t2", "second"])
+    }
+
+    func testXLSXRejectsInvalidArchives() async {
+        do {
+            _ = try await DocumentTextExtractionRouter().extract(
+                data: Data("not a zip".utf8),
+                filename: "broken.xlsx",
+                mimeType: "application/octet-stream",
+                format: .spreadsheet
+            )
+            XCTFail("Expected an invalid spreadsheet error")
+        } catch let error as DocumentTextExtractionError {
+            XCTAssertEqual(error, .invalidDocument)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    private func archiveData(pathExtension: String, entries: [String: String]) throws -> Data {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appendingPathExtension(pathExtension)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let archive = try Archive(url: url, accessMode: .create)
+        for (path, text) in entries {
+            let xml = Data(text.utf8)
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: Int64(xml.count),
+                provider: { position, size in
+                    let start = Int(position)
+                    return xml.subdata(in: start..<min(start + size, xml.count))
+                }
+            )
+        }
+        return try Data(contentsOf: url)
+    }
+
     private func powerpointData(slides: [Int: String]) throws -> Data {
         let url = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
