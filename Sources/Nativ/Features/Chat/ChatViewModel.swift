@@ -1557,6 +1557,14 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
+    func attachAttachments(from pasteboard: NSPasteboard) -> Bool {
+        let urls = ChatImageAttachment.fileURLs(from: pasteboard)
+        return urls.isEmpty
+            ? attachImages(from: pasteboard)
+            : attachFiles(fromURLs: urls)
+    }
+
+    @discardableResult
     func attachFiles(fromURLs urls: [URL]) -> Bool {
         let attachments = importAttachments(from: urls)
         guard !attachments.isEmpty else {

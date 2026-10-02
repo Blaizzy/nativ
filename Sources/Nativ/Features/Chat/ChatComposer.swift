@@ -226,6 +226,7 @@ struct ChatComposer: View {
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onSend: (Bool, Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
     @State private var editorContentHeight: CGFloat = 0
@@ -311,11 +312,12 @@ struct ChatComposer: View {
                         onSubmit: send,
                         onCancel: cancelPromptEditingAction,
                         onRecallPrevious: recallPreviousPrompt,
-                        onPasteImage: { viewModel.attachImages(from: $0) },
+                        onPasteImage: { viewModel.attachAttachments(from: $0) },
                         onContentHeightChange: { height in
                             editorContentHeight = height
                         },
                         acceptsImageDrops: true,
+                        onImageDropTargetChange: onAttachmentDropTargetChange,
                         maximumHeight: editorMaximumHeight,
                         fontScale: model.settings.chatFontScale,
                         focusToken: viewModel.composerFocusToken,
@@ -2831,7 +2833,7 @@ private final class ChatComposerNSTextView: NSTextView {
     var onRecallPrevious: (() -> Bool)?
 
     private func isImageDrop(_ sender: NSDraggingInfo) -> Bool {
-        acceptsImageDrops && ChatImageAttachment.canReadImages(from: sender.draggingPasteboard)
+        acceptsImageDrops && ChatImageAttachment.canReadAttachments(from: sender.draggingPasteboard)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

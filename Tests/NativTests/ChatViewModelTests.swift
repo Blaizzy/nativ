@@ -108,6 +108,23 @@ final class ChatViewModelTests: XCTestCase {
         XCTAssertNil(subject.attachmentImportError)
     }
 
+    func testDroppedDocumentURLStagesAttachmentInsteadOfPastingPath() throws {
+        let subject = ChatViewModel()
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Nativ-Dropped-Document-\(UUID().uuidString).txt")
+        try Data("Document contents".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+
+        XCTAssertTrue(subject.attachAttachments(from: pasteboard))
+        XCTAssertEqual(subject.pendingImageAttachments.count, 1)
+        XCTAssertEqual(subject.pendingImageAttachments[0].filename, url.lastPathComponent)
+        XCTAssertEqual(subject.pendingImageAttachments[0].chatAttachmentKind, .document(.plainText))
+        XCTAssertNil(subject.attachmentImportError)
+    }
+
     func testUnavailableReasonUsesServerAndModelPreconditions() {
         let subject = ChatViewModel()
 
