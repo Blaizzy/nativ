@@ -433,37 +433,15 @@ struct NativPersonalization: Codable, Equatable {
             case .default:
                 return ""
             case .concise:
-                instructions = """
-                    Lead with the answer and use the fewest words needed to make it useful and clear. \
-                    Prioritize essential facts, decisions, and next steps. Omit conversational filler, \
-                    repeated conclusions, and examples that add little value. Preserve necessary context, \
-                    qualifications, and uncertainty; brevity must not make the answer misleading or incomplete.
-                    """
+                instructions = "Lead with the answer. Be concise and direct while preserving essential context and uncertainty."
             case .friendly:
-                instructions = """
-                    Use a warm, relaxed, conversational tone with clear, everyday language. Be attentive \
-                    to the user's situation and explain unfamiliar ideas in an approachable way. Show \
-                    encouragement when useful, without flattery, exaggerated enthusiasm, or forced intimacy. \
-                    Keep the conversation focused, and adopt a calm, serious tone when the subject calls for it.
-                    """
+                instructions = "Use a warm, conversational tone and plain language. Stay focused and serious when appropriate."
             case .professional:
-                instructions = """
-                    Use a composed, professional tone with precise language and clear organization. \
-                    Present the main point first, then the supporting details needed to understand or act \
-                    on it. Distinguish facts, assumptions, and recommendations. Avoid slang, casual banter, \
-                    and inflated business language. Remain approachable, and use technical terms only when \
-                    they suit the audience.
-                    """
+                instructions = "Use a precise, professional tone. Lead with the main point and distinguish facts, assumptions, and recommendations."
             case .detailed:
-                instructions = """
-                    Give thorough, well-organized explanations that help the user understand the topic. \
-                    Start with the main answer, then develop relevant context, important distinctions, \
-                    and practical implications. Explain unfamiliar concepts and use concrete examples \
-                    when they improve understanding. Match depth to the question's complexity, and avoid \
-                    repetition, tangents, or padding merely to make the response longer.
-                    """
+                instructions = "Give thorough, organized explanations. Lead with the answer, then add relevant context, distinctions, implications, and useful examples without repetition."
             }
-            return instructions + "\nTreat this as the default communication style. Follow the user's explicit requests for tone, length, and format when they differ. Maintain accuracy and clearly express uncertainty in every style."
+            return instructions
         }
     }
 
@@ -488,20 +466,11 @@ struct NativPersonalization: Codable, Equatable {
         var systemPrompt: String {
             switch self {
             case .none:
-                """
-                Write without emojis, emoticons, or decorative symbols. Use words for tone and emphasis. \
-                Include emojis only when the user explicitly requests them or when quoting or explaining \
-                them.
-                """
+                "Do not use emoji unless the user asks or the content discusses them."
             case .default:
                 ""
             case .more:
-                """
-                Use emojis to highlight points and make conversations warmer and engaging. Use them in every message. \
-                to the conversation. Keep them selective and relevant; avoid repeated symbols, emoji chains, \
-                or decorating every paragraph. Keep technical content and serious or sensitive discussions \
-                restrained. Follow the user's explicit requests about emoji use.
-                """
+                "Use relevant emoji in every response, but sparingly in technical, serious, or sensitive contexts."
             }
         }
     }
@@ -527,19 +496,11 @@ struct NativPersonalization: Codable, Equatable {
         var systemPrompt: String {
             switch self {
             case .minimal:
-                """
-                Write in plain-text paragraphs separated by blank lines. Do not add headings, bold, \
-                italics, tables, or bullet lists. Explain steps in sentences. Use fenced code blocks for \
-                code. Follow the user’s explicit formatting requests.
-                """
+                "Use plain paragraphs without headings, emphasis, tables, or lists. Use fenced blocks for code."
             case .default:
                 ""
             case .structured:
-                """
-                For multi-point answers, start with a short ## heading. Use bullet lists for related \
-                points or numbered lists for steps, and bold the key takeaway. Keep one-sentence answers \
-                unformatted. Follow explicit user format requests.
-                """
+                "For multi-point answers, use a short heading and concise bullets or numbered steps. Leave one-sentence answers unformatted."
             }
         }
     }
@@ -617,6 +578,9 @@ struct NativPersonalization: Codable, Equatable {
         }
         if !profile.markdownUsage.systemPrompt.isEmpty {
             sections.append("Markdown usage:\n" + profile.markdownUsage.systemPrompt)
+        }
+        if !sections.isEmpty {
+            sections.append("Style, emoji, and formatting preferences are defaults; explicit user requests override them.")
         }
         return sections.joined(separator: "\n\n")
     }
