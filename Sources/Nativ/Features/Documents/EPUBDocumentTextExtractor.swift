@@ -20,11 +20,11 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
         guard let packageEntry = archive[packagePath] else {
             throw DocumentTextExtractionError.invalidDocument
         }
-        let packageData = try ArchiveEntryData.read(
+        let packageData = try OfficeArchive.data(for: 
             packageEntry, in: archive, limit: Self.partLimit
         )
         let package = PackageParser()
-        try ArchiveEntryData.parse(packageData, with: package)
+        try XMLTextParsing.parse(packageData, with: package)
 
         let base = (packagePath as NSString).deletingLastPathComponent
         let documents = package.spine.compactMap { package.manifest[$0] }
@@ -39,12 +39,12 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
                 ? relativePath
                 : (base as NSString).appendingPathComponent(relativePath)
             guard let entry = archive[path] ?? archive[relativePath] else { continue }
-            let chapter = try ArchiveEntryData.read(entry, in: archive, limit: Self.partLimit)
+            let chapter = try OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit)
             let delegate = ElementTextParser(
                 textElements: ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "span", "a", "td"],
                 blockElements: ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "div", "tr"]
             )
-            try ArchiveEntryData.parse(chapter, with: delegate)
+            try XMLTextParsing.parse(chapter, with: delegate)
             let text = delegate.text
             guard !text.isEmpty else { continue }
             sections.append(ExtractedDocumentSection(
@@ -68,9 +68,9 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
         guard let container = archive["META-INF/container.xml"] else {
             throw DocumentTextExtractionError.invalidDocument
         }
-        let data = try ArchiveEntryData.read(container, in: archive, limit: partLimit)
+        let data = try OfficeArchive.data(for: container, in: archive, limit: partLimit)
         let delegate = ContainerParser()
-        try ArchiveEntryData.parse(data, with: delegate)
+        try XMLTextParsing.parse(data, with: delegate)
         guard let path = delegate.packagePath else {
             throw DocumentTextExtractionError.invalidDocument
         }
@@ -89,7 +89,7 @@ private final class ContainerParser: NSObject, XMLParserDelegate {
         attributes attributeDict: [String: String] = [:]
     ) {
         guard packagePath == nil,
-            ElementTextParser.localName(elementName) == "rootfile",
+            XMLTextParsing.localName(elementName) == "rootfile",
             let path = attributeDict["full-path"]
         else { return }
         packagePath = path
@@ -107,7 +107,7 @@ private final class PackageParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        switch ElementTextParser.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "item":
             guard let id = attributeDict["id"], let href = attributeDict["href"] else { return }
             let type = attributeDict["media-type"] ?? ""

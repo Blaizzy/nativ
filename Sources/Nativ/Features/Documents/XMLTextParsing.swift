@@ -1,33 +1,16 @@
 import Foundation
-import ZIPFoundation
 
-enum ArchiveEntryData {
-    static func read(_ entry: Entry, in archive: Archive, limit: UInt64) throws -> Data {
-        guard entry.uncompressedSize <= limit else {
-            throw DocumentTextExtractionError.archiveTooLarge
-        }
-        var data = Data()
-        data.reserveCapacity(Int(entry.uncompressedSize))
-        do {
-            _ = try archive.extract(entry) { chunk in
-                guard chunk.count <= Int(limit) - data.count else {
-                    throw DocumentTextExtractionError.archiveTooLarge
-                }
-                data.append(chunk)
-            }
-        } catch let error as DocumentTextExtractionError {
-            throw error
-        } catch {
-            throw DocumentTextExtractionError.invalidDocument
-        }
-        return data
-    }
-
+enum XMLTextParsing {
+    /// Parses with external entities disabled, which must hold for every document we open.
     static func parse(_ data: Data, with delegate: XMLParserDelegate) throws {
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         parser.shouldResolveExternalEntities = false
         guard parser.parse() else { throw DocumentTextExtractionError.invalidDocument }
+    }
+
+    static func localName(_ elementName: String) -> String {
+        elementName.split(separator: ":").last.map(String.init) ?? elementName
     }
 }
 
@@ -62,10 +45,6 @@ final class ElementTextParser: NSObject, XMLParserDelegate {
             .joined(separator: "\n")
     }
 
-    static func localName(_ elementName: String) -> String {
-        elementName.split(separator: ":").last.map(String.init) ?? elementName
-    }
-
     func parser(
         _ parser: XMLParser,
         didStartElement elementName: String,
@@ -73,7 +52,7 @@ final class ElementTextParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        if textElements.contains(Self.localName(elementName)) { depth += 1 }
+        if textElements.contains(XMLTextParsing.localName(elementName)) { depth += 1 }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
@@ -86,7 +65,7 @@ final class ElementTextParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        let name = Self.localName(elementName)
+        let name = XMLTextParsing.localName(elementName)
         if textElements.contains(name), depth > 0 { depth -= 1 }
         if blockElements.contains(name) {
             paragraphs.append(paragraph)

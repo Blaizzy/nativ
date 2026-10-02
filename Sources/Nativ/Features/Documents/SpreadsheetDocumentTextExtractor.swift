@@ -28,8 +28,8 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
         var sharedStrings: [String] = []
         if let entry = archive["xl/sharedStrings.xml"] {
             let parser = SharedStringsParser()
-            try ArchiveEntryData.parse(
-                ArchiveEntryData.read(entry, in: archive, limit: Self.partLimit),
+            try XMLTextParsing.parse(
+                OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit),
                 with: parser
             )
             sharedStrings = parser.strings
@@ -40,8 +40,8 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
             try Task.checkCancellation()
             guard let entry = archive[sheet.path] else { continue }
             let parser = WorksheetParser(sharedStrings: sharedStrings)
-            try ArchiveEntryData.parse(
-                ArchiveEntryData.read(entry, in: archive, limit: Self.partLimit),
+            try XMLTextParsing.parse(
+                OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit),
                 with: parser
             )
             let text = parser.text
@@ -68,13 +68,13 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
         if let workbookEntry = archive["xl/workbook.xml"],
             let relationshipsEntry = archive["xl/_rels/workbook.xml.rels"] {
             let workbook = WorkbookParser()
-            try ArchiveEntryData.parse(
-                ArchiveEntryData.read(workbookEntry, in: archive, limit: partLimit),
+            try XMLTextParsing.parse(
+                OfficeArchive.data(for: workbookEntry, in: archive, limit: partLimit),
                 with: workbook
             )
             let relationships = RelationshipsParser()
-            try ArchiveEntryData.parse(
-                ArchiveEntryData.read(relationshipsEntry, in: archive, limit: partLimit),
+            try XMLTextParsing.parse(
+                OfficeArchive.data(for: relationshipsEntry, in: archive, limit: partLimit),
                 with: relationships
             )
             let sheets = workbook.sheets.compactMap { sheet -> (name: String, path: String)? in
@@ -106,7 +106,7 @@ private final class WorkbookParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        guard ElementTextParser.localName(elementName) == "sheet",
+        guard XMLTextParsing.localName(elementName) == "sheet",
             let name = attributeDict["name"],
             let id = attributeDict["r:id"] ?? attributeDict["id"]
         else { return }
@@ -124,7 +124,7 @@ private final class RelationshipsParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        guard ElementTextParser.localName(elementName) == "Relationship",
+        guard XMLTextParsing.localName(elementName) == "Relationship",
             let id = attributeDict["Id"],
             let target = attributeDict["Target"]
         else { return }
@@ -143,7 +143,7 @@ private final class SharedStringsParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        if ElementTextParser.localName(elementName) == "si" { current = "" }
+        if XMLTextParsing.localName(elementName) == "si" { current = "" }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
@@ -156,7 +156,7 @@ private final class SharedStringsParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        guard ElementTextParser.localName(elementName) == "si" else { return }
+        guard XMLTextParsing.localName(elementName) == "si" else { return }
         strings.append(current ?? "")
         current = nil
     }
@@ -186,7 +186,7 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        switch ElementTextParser.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "row":
             cells = []
         case "c":
@@ -213,7 +213,7 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        switch ElementTextParser.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "v", "t":
             guard readsValue else { return }
             readsValue = false

@@ -20,7 +20,7 @@ actor OpenDocumentTextExtractor: DocumentTextExtracting {
         guard let entry = archive["content.xml"] else {
             throw DocumentTextExtractionError.invalidDocument
         }
-        let content = try ArchiveEntryData.read(entry, in: archive, limit: Self.contentLimit)
+        let content = try OfficeArchive.data(for: entry, in: archive, limit: Self.contentLimit)
 
         let isSheet = (filename as NSString).pathExtension.lowercased() == "ods"
         let delegate = ElementTextParser(
@@ -28,7 +28,7 @@ actor OpenDocumentTextExtractor: DocumentTextExtracting {
             blockElements: isSheet ? ["table-row"] : ["p", "h", "list-item", "table-row"],
             separatorElements: isSheet ? ["table-cell"] : []
         )
-        try ArchiveEntryData.parse(content, with: delegate)
+        try XMLTextParsing.parse(content, with: delegate)
         let text = delegate.text
         guard !text.isEmpty else {
             throw DocumentTextExtractionError.noExtractableText

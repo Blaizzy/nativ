@@ -61,9 +61,9 @@ actor PowerPointDocumentTextExtractor: DocumentTextExtracting {
     }
 
     private static func text(for entry: Entry, in archive: Archive) throws -> String? {
-        let data = try ArchiveEntryData.read(entry, in: archive, limit: slideLimit)
+        let data = try OfficeArchive.data(for: entry, in: archive, limit: slideLimit)
         let delegate = SlideTextParser()
-        try ArchiveEntryData.parse(data, with: delegate)
+        try XMLTextParsing.parse(data, with: delegate)
         return delegate.text.nilIfEmpty
     }
 }
@@ -87,7 +87,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        switch ElementTextParser.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "t": readsText = true
         case "br": paragraph.append("\n")
         case "tab": paragraph.append("\t")
@@ -105,7 +105,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        switch ElementTextParser.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "t":
             readsText = false
         case "p":
