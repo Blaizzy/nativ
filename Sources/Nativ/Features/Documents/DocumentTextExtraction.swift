@@ -9,6 +9,22 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case presentation
 }
 
+extension ChatDocumentFormat {
+    /// File extensions that have a dedicated extractor.
+    ///
+    /// CSV is absent on purpose: `read_file` returns it as raw numbered lines so that
+    /// line offsets keep matching the file on disk.
+    static func forFileExtension(_ fileExtension: String) -> ChatDocumentFormat? {
+        switch fileExtension.lowercased() {
+        case "pdf": .pdf
+        case "rtf": .richText
+        case "doc", "docx": .wordProcessing
+        case "pptx": .presentation
+        default: nil
+        }
+    }
+}
+
 enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
     case page(Int)
     case slide(Int)

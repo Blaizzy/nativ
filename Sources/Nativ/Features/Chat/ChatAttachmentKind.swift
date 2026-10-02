@@ -102,12 +102,12 @@ extension ChatImageAttachment {
             return .document(.plainText)
         }
 
+        if let format = ChatDocumentFormat.forFileExtension(fileExtension) {
+            return .document(format)
+        }
+
         switch fileExtension {
-        case "pdf": return .document(.pdf)
         case "csv": return .document(.csv)
-        case "rtf": return .document(.richText)
-        case "doc", "docx": return .document(.wordProcessing)
-        case "pptx": return .document(.presentation)
         case "txt", "md", "markdown", "json", "jsonl", "xml", "html", "htm",
              "css", "js", "jsx", "ts", "tsx", "swift", "py", "rb", "rs", "go",
              "java", "kt", "kts", "c", "h", "cc", "cpp", "cxx", "hpp", "m", "mm",

@@ -653,12 +653,7 @@ private enum FileReadContentPolicy {
 
     static func documentFormat(extensionName: String, data: Data) -> ChatDocumentFormat? {
         if extensionName == "pdf" || data.starts(with: Data("%PDF".utf8)) { return .pdf }
-        return switch extensionName {
-        case "rtf": .richText
-        case "doc", "docx": .wordProcessing
-        case "pptx": .presentation
-        default: nil
-        }
+        return ChatDocumentFormat.forFileExtension(extensionName)
     }
     static let binaryExtensions: Set<String> = [
         "7z", "a", "app", "avi", "bin", "bmp", "bz2", "class", "dmg", "dylib",
