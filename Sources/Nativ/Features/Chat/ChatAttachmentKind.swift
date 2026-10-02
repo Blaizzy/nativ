@@ -101,7 +101,7 @@ extension ChatImageAttachment {
         // A notebook is JSON, so it conforms to .text wherever .ipynb is registered. The
         // extension is the only thing that separates it from an ordinary JSON file, and
         // plain text extraction would keep its base64 image outputs.
-        if fileExtension == "ipynb" {
+        if ChatDocumentFormat.forFileExtension(fileExtension) == .notebook {
             return .document(.notebook)
         }
         if type?.conforms(to: .text) == true || type?.conforms(to: .sourceCode) == true {
