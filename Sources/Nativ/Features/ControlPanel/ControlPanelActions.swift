@@ -219,7 +219,7 @@ extension ControlPanelView {
         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
 
-    func deleteRecentSession(_ recent: ControlPanelRecentSession) {
+    func deleteRecentSession(_ recent: ControlPanelRecentSession) async {
         let shouldSelectReplacement = isDisplayedRecent(recent)
         let replacementSelection =
             shouldSelectReplacement
@@ -228,7 +228,7 @@ extension ControlPanelView {
 
         switch recent.selection {
         case .chat(let sessionID):
-            deleteChatSession(sessionID)
+            guard await deleteChatSession(sessionID) else { return }
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
@@ -251,8 +251,23 @@ extension ControlPanelView {
         }
     }
 
-    func deleteChatSession(_ sessionID: UUID) {
-        chat.deleteSession(sessionID)
+    func deleteChatSession(_ sessionID: UUID) async -> Bool {
+        do {
+            return try await chat.deleteSession(sessionID, confirmDiscard: confirmWorktreeDiscard)
+        } catch {
+            chatDeletionErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func confirmWorktreeDiscard(_ warning: String) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Remove ignored files?"
+        alert.informativeText = warning
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Save Snapshot and Delete")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func adjacentRecentSelection(
@@ -399,16 +414,15 @@ extension ControlPanelView {
     func removeProject(
         _ project: ChatProject,
         disposition: ChatProjectSessionRemovalDisposition
-    ) {
-        guard chat.removeProjectSessions(projectID: project.id, disposition: disposition) else {
-            pendingDeleteProject = nil
-            projectErrorMessage =
-                "One or more project chats are active in another window. Stop them and try again."
-            return
+    ) async {
+        do {
+            guard try await chat.removeProjectSessions(projectID: project.id, disposition: disposition,
+                                                      confirmDiscard: confirmWorktreeDiscard) else { return }
+            projects.removeProject(project.id)
+            showChatWorkspace()
+        } catch {
+            projectErrorMessage = error.localizedDescription
         }
-        projects.removeProject(project.id)
-        pendingDeleteProject = nil
-        showChatWorkspace()
     }
 
     func selectChatWorkspaceMode(_ mode: ChatWorkspaceMode) {

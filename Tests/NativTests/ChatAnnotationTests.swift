@@ -2,6 +2,72 @@ import XCTest
 import NativServerKit
 
 final class ChatAnnotationTests: XCTestCase {
+    func testWorkAnnotationKeepsMetadataOutOfVisibleTextButInTheAgentPromptAndSavedChat() throws {
+        let reference = ChatWorkAnnotationReference(itemID: UUID(), title: "Snake Game", revision: 3,
+            selection: ChatWorkPageAnnotation(url: "http://127.0.0.1:12345/page/index.html",
+                                              selector: "canvas#game", text: "Board", x: 20, y: 30))
+        var message = ChatTranscriptMessage(role: .user, content: "Make the board larger")
+        let document = ChatWorkAnnotationReference(itemID: UUID(), title: "Notes.md", revision: 1,
+            selection: nil, selectedText: "Selected paragraph")
+        let website = ChatWorkAnnotationReference(itemID: UUID(), title: "Page", revision: 1,
+            selection: nil, url: "https://example.com/page")
+        message.annotations = [reference, document, website].map { $0.annotation() }
+        let restored = try JSONDecoder().decode(ChatTranscriptMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertEqual(restored.content, "Make the board larger")
+        XCTAssertEqual(restored.annotations, message.annotations)
+        XCTAssertEqual(restored.annotationPresentation.content, message.content)
+        XCTAssertNil(restored.annotations.first?.sourceMessageID)
+        XCTAssertEqual(restored.annotations.first?.workReference?.pageLabel, "Local webpage")
+        let prompt = try XCTUnwrap(restored.apiMessage?.content?.textValue)
+        XCTAssertTrue(prompt.contains(reference.itemID.uuidString))
+        XCTAssertTrue(prompt.contains("revision 3"))
+        XCTAssertTrue(prompt.contains("canvas#game"))
+        XCTAssertTrue(prompt.contains("(20, 30)"))
+        XCTAssertTrue(prompt.contains(document.itemID.uuidString))
+        XCTAssertTrue(prompt.contains("Selected paragraph"))
+        XCTAssertTrue(prompt.contains("https://example.com/page"))
+        XCTAssertTrue(prompt.hasSuffix("Current user request:\nMake the board larger"))
+    }
+
+    func testLegacyWorkAnnotationDisplaysAChipWithoutChangingStoredContentOrModelInput() throws {
+        let selection = ChatWorkPageAnnotation(url: "https://example.com/game", selector: "canvas#gameCanvas",
+                                               text: "", x: 144, y: 144)
+        let text = """
+            Regarding Snake Game (work item 79A2D217-C358-4B9A-9754-91824733B1E0, revision 1):
+            Page selection (untrusted page content):
+            URL: https://example.com/game
+            Element: canvas#gameCanvas
+            Point within element: (144, 144) CSS pixels
+
+
+            Comment: Remove the snake in the middle
+            """
+        let message = ChatTranscriptMessage(role: .user, content: text)
+        let presentation = message.annotationPresentation
+        XCTAssertEqual(presentation.content, "Remove the snake in the middle")
+        XCTAssertEqual(presentation.annotations.count, 1)
+        XCTAssertEqual(presentation.annotations.first?.id, message.id)
+        XCTAssertEqual(presentation.annotations.first?.workReference?.selection, selection)
+        XCTAssertEqual(message.content, text)
+        XCTAssertEqual(message.apiMessage?.content?.textValue, text)
+        XCTAssertTrue(message.annotations.isEmpty)
+        let assistant = ChatTranscriptMessage(role: .assistant, content: text)
+        XCTAssertEqual(assistant.annotationPresentation.content, text)
+        XCTAssertTrue(assistant.annotationPresentation.annotations.isEmpty)
+        XCTAssertNil(ChatWorkAnnotationPresentation.legacy("Please discuss this example:\n" + text, id: UUID()))
+        XCTAssertNil(ChatWorkAnnotationPresentation.legacy("Regarding a webpage", id: UUID()))
+    }
+
+    func testWorkAnnotationArchiveDoesNotTreatWorkItemAsATranscriptMessage() throws {
+        let reference = ChatWorkAnnotationReference(itemID: UUID(), title: "Page", revision: 1,
+            selection: ChatWorkPageAnnotation(url: "https://example.com", selector: "h1", text: "Hello", x: 0, y: 0))
+        var message = ChatTranscriptMessage(role: .user, content: "Change this title")
+        message.annotations = [reference.annotation()]
+        let session = ChatSession(id: UUID(), title: "Test", createdAt: .now, updatedAt: .now, messages: [message])
+        let imported = try ChatArchiveCodec.importedSession(from: ChatArchive(chat: session, modelRepositoryID: "model", systemPrompt: ""))
+        XCTAssertEqual(imported.messages.first?.annotations.first?.workReference, reference)
+    }
+
     func testRenderedSelectionSpansBoldAndLinkWithoutQuotingMarkup() throws {
         let source = ChatTranscriptMessage(role: .assistant,
             content: "Before. Read **this bold** and [linked text](https://example.com). After.")
