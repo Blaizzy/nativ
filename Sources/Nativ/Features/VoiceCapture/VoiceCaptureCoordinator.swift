@@ -2,17 +2,6 @@ import AppKit
 import Combine
 import NativServerKit
 
-struct VoiceTranscriptionConfiguration: Sendable {
-    let modelSearchPath: String
-    let additionalModelSearchPaths: [String]
-    let selectedModelID: String?
-    let languageModelID: String?
-    let maxTokens: Int
-    let serverBaseURL: URL
-    let serverAPIKey: String?
-    let serverIsRunning: Bool
-}
-
 @MainActor
 final class VoiceCaptureCoordinator {
     var transcriptionConfigurationProvider:
@@ -36,6 +25,8 @@ final class VoiceCaptureCoordinator {
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
     private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var activeOverlayTranscriptionID: UUID?
+    private var liveTranscriptionPipeline: LiveAudioTranscriptionPipeline?
+    private var streamingTranscriptInserter: StreamingVoiceTranscriptInserter?
     private var isShortcutHeld = false
     private var isHandsFreeMode = false
     private var isPresentingAlert = false {
@@ -145,6 +136,10 @@ final class VoiceCaptureCoordinator {
         audioDeletionTasks.removeAll()
         shortcutMonitor.stop()
         recorder.stop()
+        let liveTranscriptionPipeline = liveTranscriptionPipeline
+        self.liveTranscriptionPipeline = nil
+        streamingTranscriptInserter = nil
+        Task { await liveTranscriptionPipeline?.cancel() }
         if let directory = try? VoiceAudioRecorder.recordingsDirectory {
             VoiceAudioRetention.removeAllAudioFiles(in: directory)
         }
@@ -238,9 +233,39 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                try self.recorder.start(
-                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
+                let recordingURL = try VoiceAudioRecorder.makeOutputURL()
+                let streamingTranscriptInserter = StreamingVoiceTranscriptInserter(
+                    target: self.insertionTarget,
+                    returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
                 )
+                let liveTranscriptionPipeline: LiveAudioTranscriptionPipeline?
+                if let configuration = self.transcriptionConfigurationProvider?(),
+                   configuration.serverIsRunning
+                {
+                    do {
+                        liveTranscriptionPipeline = try await LiveAudioTranscriptionPipeline(
+                            recordingURL: recordingURL,
+                            configuration: configuration
+                        ) { [weak self] transcript in
+                            guard let self else { return }
+                            self.overlay.updateTranscript(transcript)
+                            await streamingTranscriptInserter.insertUpdate(transcript)
+                        }
+                    } catch LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime {
+                        liveTranscriptionPipeline = nil
+                    }
+                } else {
+                    liveTranscriptionPipeline = nil
+                }
+                try self.recorder.start(
+                    outputURL: recordingURL,
+                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID,
+                    liveChunkEmitter: liveTranscriptionPipeline?.emitter
+                )
+                self.liveTranscriptionPipeline = liveTranscriptionPipeline
+                self.streamingTranscriptInserter = liveTranscriptionPipeline == nil
+                    ? nil
+                    : streamingTranscriptInserter
                 self.overlay.didStartRecording()
             } catch {
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
@@ -260,6 +285,10 @@ final class VoiceCaptureCoordinator {
     }
 
     private func recordingInterrupted(_ error: Error, savedURL: URL?) {
+        let liveTranscriptionPipeline = liveTranscriptionPipeline
+        self.liveTranscriptionPipeline = nil
+        streamingTranscriptInserter = nil
+        Task { await liveTranscriptionPipeline?.cancel() }
         clearFailedCaptureState()
         if let savedURL { scheduleAudioDeletion(savedURL) }
         NSLog("Nativ voice recording interrupted: %@", error.localizedDescription)
@@ -278,24 +307,70 @@ final class VoiceCaptureCoordinator {
         let target = insertionTarget
         insertionTarget = nil
         let savedURL = recorder.stop()
+        let liveTranscriptionPipeline = liveTranscriptionPipeline
+        let streamingTranscriptInserter = streamingTranscriptInserter
         if let error = recorder.lastRecordingError {
             recordingInterrupted(error, savedURL: savedURL)
             return
         }
+        self.liveTranscriptionPipeline = nil
+        self.streamingTranscriptInserter = nil
         if let recordingURL = savedURL {
             NSLog("Nativ saved voice recording to %@", recordingURL.path)
             scheduleAudioDeletion(recordingURL)
             let overlayTranscriptionID = UUID()
             activeOverlayTranscriptionID = overlayTranscriptionID
             overlay.waitForTranscription()
-            transcribe(
-                recordingURL,
-                target: target,
-                durationSeconds: recorder.lastRecordingDuration,
-                overlayTranscriptionID: overlayTranscriptionID
-            )
+            let duration = recorder.lastRecordingDuration
+            guard let liveTranscriptionPipeline,
+                  let streamingTranscriptInserter
+            else {
+                transcribe(
+                    recordingURL,
+                    target: target,
+                    durationSeconds: duration,
+                    overlayTranscriptionID: overlayTranscriptionID
+                )
+                return
+            }
+            let taskID = UUID()
+            transcriptionTasks[taskID] = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    self.transcriptionTasks[taskID] = nil
+                    self.updateWakeWordListening()
+                }
+                do {
+                    let completed = try await liveTranscriptionPipeline.finish()
+                    await self.completeStreamedTranscription(
+                        recordingURL,
+                        target: target,
+                        durationSeconds: duration,
+                        overlayTranscriptionID: overlayTranscriptionID,
+                        completed: completed,
+                        inserter: streamingTranscriptInserter
+                    )
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    if streamingTranscriptInserter.hasInsertedText {
+                        self.finishOverlayTranscription(overlayTranscriptionID)
+                        self.showTranscriptionError(
+                            title: "Transcription failed",
+                            message: error.localizedDescription
+                        )
+                    } else {
+                        self.transcribe(
+                            recordingURL,
+                            target: target,
+                            durationSeconds: duration,
+                            overlayTranscriptionID: overlayTranscriptionID
+                        )
+                    }
+                }
+            }
             return
         }
+        Task { await liveTranscriptionPipeline?.cancel() }
         activeOverlayTranscriptionID = nil
         overlay.hide()
     }
@@ -307,6 +382,10 @@ final class VoiceCaptureCoordinator {
         permissionTask?.cancel()
         permissionTask = nil
         recorder.discard()
+        let liveTranscriptionPipeline = liveTranscriptionPipeline
+        self.liveTranscriptionPipeline = nil
+        streamingTranscriptInserter = nil
+        Task { await liveTranscriptionPipeline?.cancel() }
         activeOverlayTranscriptionID = nil
         insertionTarget = nil
         isShortcutHeld = false
@@ -575,6 +654,57 @@ final class VoiceCaptureCoordinator {
         }
         transcriptionTasks[taskID] = task
         updateWakeWordListening()
+    }
+
+    private func completeStreamedTranscription(
+        _ recordingURL: URL,
+        target: VoiceTranscriptInsertionTarget?,
+        durationSeconds: TimeInterval?,
+        overlayTranscriptionID: UUID,
+        completed: (transcript: String, modelID: String),
+        inserter: StreamingVoiceTranscriptInserter
+    ) async {
+        let dictation = await inserter.finish(completed.transcript)
+        guard !dictation.isEmpty else {
+            handleEmptyTranscription(
+                recordingURL,
+                overlayTranscriptionID: overlayTranscriptionID
+            )
+            return
+        }
+        let transcriptURL = recordingURL
+            .deletingPathExtension()
+            .appendingPathExtension("txt")
+        do {
+            try dictation.text.write(
+                to: transcriptURL,
+                atomically: true,
+                encoding: .utf8
+            )
+        } catch {
+            finishOverlayTranscription(overlayTranscriptionID)
+            showTranscriptionError(
+                title: "Could not save transcript",
+                message: error.localizedDescription
+            )
+            return
+        }
+        analytics.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: dictation.text,
+            durationSeconds: durationSeconds,
+            modelID: completed.modelID,
+            applicationName: target?.applicationName
+        )
+        NSLog(
+            "Nativ saved streaming voice transcript to %@ using %@",
+            transcriptURL.path,
+            completed.modelID
+        )
+        finishOverlayTranscription(overlayTranscriptionID)
+        if !inserter.insertionSucceeded {
+            showInsertionPermissionAlertIfNeeded()
+        }
     }
 
     /// Why the bundled server could not be used for this recording.

@@ -12,6 +12,58 @@ struct VoiceTranscriptInsertionTarget: Equatable, Sendable {
 }
 
 @MainActor
+final class StreamingVoiceTranscriptInserter {
+    private let target: VoiceTranscriptInsertionTarget?
+    private let returnCommandTrigger: String?
+    private var state: StreamingVoiceTranscriptState
+    private(set) var insertionSucceeded = true
+
+    init(
+        target: VoiceTranscriptInsertionTarget?,
+        returnCommandTrigger: String?
+    ) {
+        self.target = target
+        self.returnCommandTrigger = returnCommandTrigger
+        state = StreamingVoiceTranscriptState(
+            returnCommandTrigger: returnCommandTrigger
+        )
+    }
+
+    var hasInsertedText: Bool { !state.insertedText.isEmpty }
+
+    func insertUpdate(_ transcript: String) async {
+        let suffix = state.incrementalText(for: transcript)
+        guard !suffix.isEmpty else { return }
+        insertionSucceeded = await VoiceTranscriptInserter.insertAtCursor(
+            suffix,
+            target: target
+        ) && insertionSucceeded
+    }
+
+    func finish(_ transcript: String) async -> VoiceDictationTranscript {
+        let dictation = VoiceDictationTranscript(
+            transcript,
+            returnCommandTrigger: returnCommandTrigger
+        )
+        let suffix = state.finalText(for: dictation.text)
+        if !suffix.isEmpty {
+            insertionSucceeded = await VoiceTranscriptInserter.insertAtCursor(
+                suffix,
+                target: target
+            ) && insertionSucceeded
+        }
+        if dictation.pressReturn {
+            insertionSucceeded = await VoiceTranscriptInserter.insertAtCursor(
+                "",
+                target: target,
+                pressReturn: true
+            ) && insertionSucceeded
+        }
+        return dictation
+    }
+}
+
+@MainActor
 enum VoiceTranscriptInserter {
     private static let pasteKeyCode = CGKeyCode(9)
     private static let returnKeyCode = CGKeyCode(36)

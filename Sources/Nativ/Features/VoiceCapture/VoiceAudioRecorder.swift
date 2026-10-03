@@ -174,7 +174,7 @@ final class VoiceAudioRecorder {
     func start(
         outputURL requestedOutputURL: URL? = nil,
         deviceUniqueID: String? = nil,
-        liveChunkEmitter: LiveAudioChunkEmitter? = nil
+        liveChunkEmitter: LiveAudioPCMEmitter? = nil
     ) throws -> URL {
         if let recordingURL, isRecording {
             return recordingURL
@@ -299,7 +299,7 @@ final class VoiceAudioRecorder {
         }
     }
 
-    private static func makeOutputURL() throws -> URL {
+    static func makeOutputURL() throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
@@ -319,11 +319,11 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
     private var converter: AVAudioConverter?
     private var conversionOutput: AVAudioPCMBuffer?
     private var pendingConversionBuffer: AVAudioPCMBuffer?
-    private let liveChunkEmitter: LiveAudioChunkEmitter?
+    private let liveChunkEmitter: LiveAudioPCMEmitter?
 
     init(
         outputURL: URL,
-        liveChunkEmitter: LiveAudioChunkEmitter? = nil,
+        liveChunkEmitter: LiveAudioPCMEmitter? = nil,
         onFailure: @escaping @Sendable (Error) -> Void = { _ in }
     ) {
         self.outputURL = outputURL

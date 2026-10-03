@@ -2,251 +2,230 @@ import AVFoundation
 import Foundation
 import NativServerKit
 
-struct LiveTranscriptMerger {
-    static func merge(_ existing: String, with incoming: String) -> String {
-        let existingWords = words(in: existing)
-        let incomingWords = words(in: incoming)
-        guard !existingWords.isEmpty else {
-            return incoming.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard !incomingWords.isEmpty else {
-            return existing.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
+struct VoiceTranscriptionConfiguration: Sendable {
+    let modelSearchPath: String
+    let additionalModelSearchPaths: [String]
+    let selectedModelID: String?
+    let languageModelID: String?
+    let maxTokens: Int
+    let serverBaseURL: URL
+    let serverAPIKey: String?
+    let serverIsRunning: Bool
+}
 
-        let maximumOverlap = min(existingWords.count, incomingWords.count)
-        let overlap = stride(from: maximumOverlap, through: 1, by: -1).first { count in
-            zip(existingWords.suffix(count), incomingWords.prefix(count)).allSatisfy {
-                normalized($0) == normalized($1)
+struct StreamingVoiceTranscriptState {
+    private let commandWords: [String]
+    private(set) var insertedText = ""
+
+    init(returnCommandTrigger: String?) {
+        commandWords = returnCommandTrigger?
+            .split(whereSeparator: \.isWhitespace)
+            .map { Self.normalized(String($0)) } ?? []
+    }
+
+    mutating func incrementalText(for transcript: String) -> String {
+        let words = transcript.split(whereSeparator: \.isWhitespace)
+        let maximumCandidate = min(words.count, commandWords.count)
+        let heldWordCount = stride(
+            from: maximumCandidate,
+            through: 1,
+            by: -1
+        ).first { count in
+            zip(words.suffix(count), commandWords.prefix(count)).allSatisfy {
+                Self.normalized(String($0)) == $1
             }
         } ?? 0
-        let suffix = incomingWords.dropFirst(overlap).joined(separator: " ")
-        guard !suffix.isEmpty else {
-            return existing.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return existing.trimmingCharacters(in: .whitespacesAndNewlines)
-            + " "
-            + suffix
+        let stableWordCount = words.count - heldWordCount
+        return suffix(toReach: words.prefix(stableWordCount).joined(separator: " "))
     }
 
-    private static func words(in text: String) -> [Substring] {
-        text.split(whereSeparator: \.isWhitespace)
+    mutating func finalText(for transcript: String) -> String {
+        suffix(toReach: transcript.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    private static func normalized(_ word: Substring) -> String {
+    private mutating func suffix(toReach text: String) -> String {
+        guard text != insertedText else { return "" }
+        guard text.hasPrefix(insertedText) else { return "" }
+        let suffix = String(text.dropFirst(insertedText.count))
+        insertedText = text
+        return suffix
+    }
+
+    private static func normalized(_ word: String) -> String {
         word.lowercased().trimmingCharacters(in: .punctuationCharacters)
     }
 }
 
-final class LiveAudioTranscriptionSession: @unchecked Sendable {
-    typealias Transcribe = @Sendable (URL) async throws -> String
+enum LiveAudioTranscriptionPipelineError: Error {
+    case serverNotRunning
+    case missingSpeechModel
+    case modelDoesNotSupportRealtime
+}
 
-    private let transcriptWriter: AudioTranscriptFileWriter
-    private let transcribe: Transcribe
-    private let onTranscriptUpdate: @MainActor @Sendable (String) -> Void
-    private let lock = NSLock()
-    private var tail: Task<Void, Never>?
-    private var tasks: [Task<Void, Never>] = []
-    private var transcript = ""
-    private var firstError: Error?
+final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
+    let emitter: LiveAudioPCMEmitter
+
+    private let session: NativRealtimeTranscriptionSession
+    private let modelID: String
+    private let transcriptURL: URL
 
     init(
-        transcriptWriter: AudioTranscriptFileWriter,
-        transcribe: @escaping Transcribe,
-        onTranscriptUpdate: @escaping @MainActor @Sendable (String) -> Void = { _ in }
-    ) {
-        self.transcriptWriter = transcriptWriter
-        self.transcribe = transcribe
-        self.onTranscriptUpdate = onTranscriptUpdate
-    }
+        recordingURL: URL,
+        configuration: VoiceTranscriptionConfiguration,
+        onTranscriptUpdate: @escaping @MainActor @Sendable (String) async -> Void = { _ in }
+    ) async throws {
+        guard configuration.serverIsRunning else {
+            throw LiveAudioTranscriptionPipelineError.serverNotRunning
+        }
 
-    func enqueue(_ chunkURL: URL) {
-        lock.withLock {
-            let precedingTask = tail
-            let task = Task { [weak self] in
-                defer { try? FileManager.default.removeItem(at: chunkURL) }
-                await precedingTask?.value
-                guard !Task.isCancelled else { return }
-                await self?.process(chunkURL)
-            }
-            tail = task
-            tasks.append(task)
+        let transcriptURL = recordingURL
+            .deletingPathExtension()
+            .appendingPathExtension("txt")
+        self.transcriptURL = transcriptURL
+        let transcriptWriter = try AudioTranscriptFileWriter(url: transcriptURL)
+        let installedModels = try await LocalModelDiscovery.scan(
+            searchPaths: LocalModelSearchPaths(
+                primary: configuration.modelSearchPath,
+                additional: configuration.additionalModelSearchPaths
+            )
+        )
+        guard let modelID = LocalModelDiscovery.speechToTextModelID(
+            in: installedModels,
+            selectedModelID: configuration.selectedModelID
+        ), let model = installedModels.first(where: { $0.repoID == modelID }) else {
+            throw LiveAudioTranscriptionPipelineError.missingSpeechModel
+        }
+        guard Self.supportsRealtimeStreaming(model) else {
+            throw LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime
+        }
+        self.modelID = modelID
+
+        let session = try NativRealtimeTranscriptionSession(
+            baseURL: configuration.serverBaseURL,
+            apiKey: configuration.serverAPIKey,
+            model: modelID
+        ) { transcript in
+            try await transcriptWriter.replace(with: transcript)
+            await onTranscriptUpdate(transcript)
+        }
+        self.session = session
+        emitter = LiveAudioPCMEmitter { data, sampleRate in
+            try await session.append(pcm16: data, sampleRate: sampleRate)
         }
     }
 
-    func finish() async throws -> String {
-        let finalTask = lock.withLock { tail }
-        await finalTask?.value
-        return try lock.withLock {
-            if let firstError {
-                throw firstError
-            }
-            return transcript
-        }
+    func finish() async throws -> (transcript: String, modelID: String) {
+        try await emitter.drain()
+        let transcript = try await session.finish()
+        return (transcript, modelID)
     }
 
     func cancel() async {
-        let activeTasks = lock.withLock { () -> [Task<Void, Never>] in
-            tasks.forEach { $0.cancel() }
-            return tasks
-        }
-        for task in activeTasks {
-            await task.value
-        }
+        emitter.cancel()
+        await session.cancel()
+        try? FileManager.default.removeItem(at: transcriptURL)
     }
 
-    private func process(_ chunkURL: URL) async {
-        do {
-            try Task.checkCancellation()
-            let chunkTranscript = try await transcribe(chunkURL)
-            try Task.checkCancellation()
-            let merged = lock.withLock {
-                transcript = LiveTranscriptMerger.merge(transcript, with: chunkTranscript)
-                return transcript
-            }
-            try await transcriptWriter.replace(with: merged)
-            await onTranscriptUpdate(merged)
-        } catch {
-            lock.withLock {
-                if firstError == nil {
-                    firstError = error
-                }
-            }
+    private static func supportsRealtimeStreaming(_ model: LocalModel) -> Bool {
+        guard let snapshotURL = model.snapshotURL,
+              let data = try? Data(contentsOf: snapshotURL.appendingPathComponent("config.json")),
+              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let modelType = (config["model_type"] as? String)?.lowercased()
+        else {
+            return false
         }
+        return modelType == "nemotron_asr" || modelType == "voxtral_realtime"
     }
 }
 
-final class LiveAudioChunkEmitter: @unchecked Sendable {
-    private let directory: URL
-    private let chunkDuration: TimeInterval
-    private let overlapDuration: TimeInterval
-    private let onChunk: @Sendable (URL) -> Void
-    private var chunkFile: AVAudioFile?
-    private var chunkURL: URL?
-    private var chunkFrames: AVAudioFramePosition = 0
-    private var newFrames: AVAudioFramePosition = 0
-    private var overlapBuffers: [AVAudioPCMBuffer] = []
-    private var overlapFrames: AVAudioFramePosition = 0
-    private var sequence = 0
+final class LiveAudioPCMEmitter: @unchecked Sendable {
+    typealias Send = @Sendable (Data, Int) async throws -> Void
 
-    init(
-        directory: URL,
-        chunkDuration: TimeInterval = 1.5,
-        overlapDuration: TimeInterval = 0,
-        onChunk: @escaping @Sendable (URL) -> Void
-    ) {
-        self.directory = directory
-        self.chunkDuration = chunkDuration
-        self.overlapDuration = overlapDuration
-        self.onChunk = onChunk
+    private let send: Send
+    private let lock = NSLock()
+    private var tail: Task<Void, Never>?
+    private var firstError: Error?
+
+    init(send: @escaping Send) {
+        self.send = send
     }
 
     func append(_ buffer: AVAudioPCMBuffer) throws {
         guard buffer.frameLength > 0 else { return }
-        if chunkFile == nil {
-            try startChunk(format: buffer.format, includingOverlap: false)
-        }
-        try chunkFile?.write(from: buffer)
-        chunkFrames += AVAudioFramePosition(buffer.frameLength)
-        newFrames += AVAudioFramePosition(buffer.frameLength)
-        retainForOverlap(buffer)
-
-        let targetFrames = AVAudioFramePosition(buffer.format.sampleRate * chunkDuration)
-        if chunkFrames >= targetFrames {
-            try emitCurrentChunk(nextFormat: buffer.format)
-        }
-    }
-
-    func finish() {
-        guard let chunkURL else { return }
-        chunkFile?.close()
-        chunkFile = nil
-        self.chunkURL = nil
-        if newFrames > 0 {
-            onChunk(chunkURL)
-        } else {
-            try? FileManager.default.removeItem(at: chunkURL)
-        }
-        chunkFrames = 0
-        newFrames = 0
-        overlapBuffers.removeAll()
-        overlapFrames = 0
-    }
-
-    private func emitCurrentChunk(nextFormat: AVAudioFormat) throws {
-        guard let completedURL = chunkURL else { return }
-        chunkFile?.close()
-        chunkFile = nil
-        chunkURL = nil
-        onChunk(completedURL)
-        try startChunk(format: nextFormat, includingOverlap: true)
-    }
-
-    private func startChunk(
-        format: AVAudioFormat,
-        includingOverlap: Bool
-    ) throws {
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        sequence += 1
-        let url = directory.appendingPathComponent("live-\(sequence).wav")
-        try? FileManager.default.removeItem(at: url)
-        let file = try AVAudioFile(
-            forWriting: url,
-            settings: format.settings,
-            commonFormat: format.commonFormat,
-            interleaved: format.isInterleaved
-        )
-        chunkFile = file
-        chunkURL = url
-        chunkFrames = 0
-        newFrames = 0
-        if includingOverlap {
-            for buffer in overlapBuffers {
-                try file.write(from: buffer)
-                chunkFrames += AVAudioFramePosition(buffer.frameLength)
+        let packet = try Self.packet(from: buffer)
+        lock.withLock {
+            let preceding = tail
+            tail = Task { [weak self] in
+                await preceding?.value
+                guard let self, !Task.isCancelled else { return }
+                do {
+                    try await send(packet.data, packet.sampleRate)
+                } catch {
+                    lock.withLock {
+                        if firstError == nil {
+                            firstError = error
+                        }
+                    }
+                }
             }
         }
     }
 
-    private func retainForOverlap(_ buffer: AVAudioPCMBuffer) {
-        guard overlapDuration > 0 else {
-            overlapBuffers.removeAll()
-            overlapFrames = 0
-            return
-        }
-        guard let copiedBuffer = Self.copy(buffer) else { return }
-        overlapBuffers.append(copiedBuffer)
-        overlapFrames += AVAudioFramePosition(copiedBuffer.frameLength)
-        let targetFrames = AVAudioFramePosition(buffer.format.sampleRate * overlapDuration)
-        while overlapFrames > targetFrames,
-              overlapBuffers.count > 1
-        {
-            overlapFrames -= AVAudioFramePosition(overlapBuffers.removeFirst().frameLength)
+    func finish() {}
+
+    func drain() async throws {
+        let finalTask = lock.withLock { tail }
+        await finalTask?.value
+        if let firstError = lock.withLock({ firstError }) {
+            throw firstError
         }
     }
 
-    private static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let copy = AVAudioPCMBuffer(
-            pcmFormat: buffer.format,
+    func cancel() {
+        lock.withLock {
+            tail?.cancel()
+            tail = nil
+        }
+    }
+
+    private static func packet(from buffer: AVAudioPCMBuffer) throws -> (
+        data: Data,
+        sampleRate: Int
+    ) {
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: buffer.format.sampleRate,
+            channels: 1,
+            interleaved: true
+        ), let converter = AVAudioConverter(from: buffer.format, to: format),
+        let output = AVAudioPCMBuffer(
+            pcmFormat: format,
             frameCapacity: buffer.frameLength
         ) else {
-            return nil
+            throw VoiceAudioRecorderError.couldNotConvert
         }
-        copy.frameLength = buffer.frameLength
-        let sourceBuffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        let destinationBuffers = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-        guard sourceBuffers.count == destinationBuffers.count else { return nil }
-        for index in sourceBuffers.indices {
-            guard let source = sourceBuffers[index].mData,
-                  let destination = destinationBuffers[index].mData
-            else {
+
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, state in
+            guard !suppliedInput else {
+                state.pointee = .noDataNow
                 return nil
             }
-            memcpy(destination, source, Int(sourceBuffers[index].mDataByteSize))
-            destinationBuffers[index].mDataByteSize = sourceBuffers[index].mDataByteSize
+            suppliedInput = true
+            state.pointee = .haveData
+            return buffer
         }
-        return copy
+        guard status != .error else {
+            throw conversionError ?? VoiceAudioRecorderError.couldNotConvert as NSError
+        }
+        let audioBuffer = output.audioBufferList.pointee.mBuffers
+        guard let bytes = audioBuffer.mData else {
+            throw VoiceAudioRecorderError.couldNotConvert
+        }
+        return (
+            Data(bytes: bytes, count: Int(audioBuffer.mDataByteSize)),
+            Int(format.sampleRate)
+        )
     }
 }

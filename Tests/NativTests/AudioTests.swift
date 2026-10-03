@@ -935,222 +935,70 @@ final class AudioTranscriptFileWriterTests: XCTestCase {
     }
 }
 
-final class LiveTranscriptMergerTests: XCTestCase {
-    func testMergesOverlappingWordsWithoutDuplication() {
-        XCTAssertEqual(
-            LiveTranscriptMerger.merge(
-                "The project ships on Tuesday",
-                with: "on Tuesday after the review."
-            ),
-            "The project ships on Tuesday after the review."
-        )
+final class StreamingVoiceTranscriptStateTests: XCTestCase {
+    func testStreamsOnlyNewText() {
+        var state = StreamingVoiceTranscriptState(returnCommandTrigger: nil)
+
+        XCTAssertEqual(state.incrementalText(for: "hello"), "hello")
+        XCTAssertEqual(state.incrementalText(for: "hello from nativ"), " from nativ")
+        XCTAssertEqual(state.finalText(for: "hello from nativ"), "")
     }
 
-    func testOverlapIgnoresCaseAndPunctuation() {
-        XCTAssertEqual(
-            LiveTranscriptMerger.merge(
-                "We decided to launch Tuesday.",
-                with: "tuesday, after final approval"
-            ),
-            "We decided to launch Tuesday. after final approval"
-        )
-    }
+    func testHoldsCommandWordsUntilFinalization() {
+        var state = StreamingVoiceTranscriptState(returnCommandTrigger: "send it")
 
-    func testNonOverlappingTranscriptAppendsAllWords() {
         XCTAssertEqual(
-            LiveTranscriptMerger.merge("First thought.", with: "Second thought."),
-            "First thought. Second thought."
+            state.incrementalText(for: "hello from nativ"),
+            "hello from nativ"
         )
+        XCTAssertEqual(
+            state.incrementalText(for: "hello from nativ send it"),
+            ""
+        )
+        XCTAssertEqual(state.finalText(for: "hello from nativ"), "")
     }
 }
 
-private actor LiveTranscriptionProbe {
-    private(set) var activeRequests = 0
-    private(set) var maximumActiveRequests = 0
+private actor LiveAudioPacketProbe {
+    private(set) var packets: [Data] = []
+    private(set) var sampleRates: [Int] = []
 
-    func transcribe(_ url: URL) async throws -> String {
-        activeRequests += 1
-        maximumActiveRequests = max(maximumActiveRequests, activeRequests)
-        defer { activeRequests -= 1 }
-        try await Task.sleep(for: .milliseconds(20))
-        return url.lastPathComponent == "first.wav"
-            ? "The project ships on Tuesday"
-            : "on Tuesday after the review"
+    func send(_ data: Data, sampleRate: Int) {
+        packets.append(data)
+        sampleRates.append(sampleRate)
     }
 }
 
-final class LiveAudioTranscriptionSessionTests: XCTestCase {
-    func testSerializesChunksMergesOverlapAndPersistsEachUpdate() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let transcriptURL = directory.appendingPathComponent("recording.txt")
-        let writer = try AudioTranscriptFileWriter(url: transcriptURL)
-        let firstURL = directory.appendingPathComponent("first.wav")
-        let secondURL = directory.appendingPathComponent("second.wav")
-        try Data().write(to: firstURL)
-        try Data().write(to: secondURL)
-        let probe = LiveTranscriptionProbe()
-        let session = LiveAudioTranscriptionSession(
-            transcriptWriter: writer,
-            transcribe: { url in try await probe.transcribe(url) }
-        )
-
-        session.enqueue(firstURL)
-        session.enqueue(secondURL)
-        let transcript = try await session.finish()
-
-        XCTAssertEqual(transcript, "The project ships on Tuesday after the review")
-        XCTAssertEqual(
-            try String(contentsOf: transcriptURL, encoding: .utf8),
-            transcript
-        )
-        let maximumActiveRequests = await probe.maximumActiveRequests
-        XCTAssertEqual(maximumActiveRequests, 1)
-    }
-
-    func testCancellationRemovesQueuedChunks() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let writer = try AudioTranscriptFileWriter(
-            url: directory.appendingPathComponent("recording.txt")
-        )
-        let chunks = (1...3).map { directory.appendingPathComponent("chunk-\($0).wav") }
-        for chunk in chunks {
-            try Data().write(to: chunk)
-        }
-        let session = LiveAudioTranscriptionSession(
-            transcriptWriter: writer,
-            transcribe: { _ in
-                try await Task.sleep(for: .seconds(10))
-                return "late text"
-            }
-        )
-        for chunk in chunks {
-            session.enqueue(chunk)
-        }
-
-        await session.cancel()
-
-        XCTAssertTrue(chunks.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
-    }
-
-    func testServerFailureRemovesChunk() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let writer = try AudioTranscriptFileWriter(
-            url: directory.appendingPathComponent("recording.txt")
-        )
-        let chunk = directory.appendingPathComponent("chunk.wav")
-        try Data().write(to: chunk)
-        let session = LiveAudioTranscriptionSession(
-            transcriptWriter: writer,
-            transcribe: { _ in throw URLError(.cannotConnectToHost) }
-        )
-        session.enqueue(chunk)
-
-        do {
-            _ = try await session.finish()
-            XCTFail("Expected transcription to fail")
-        } catch {
-            XCTAssertEqual((error as? URLError)?.code, .cannotConnectToHost)
-        }
-        XCTAssertFalse(FileManager.default.fileExists(atPath: chunk.path))
-    }
-}
-
-private final class EmittedURLStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storage: [URL] = []
-
-    var urls: [URL] {
-        lock.withLock { storage }
-    }
-
-    func append(_ url: URL) {
-        lock.withLock { storage.append(url) }
-    }
-}
-
-final class LiveAudioChunkEmitterTests: XCTestCase {
-    func testDefaultRegimenEmitsDisjointOneAndAHalfSecondChunks() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let emittedURLs = EmittedURLStore()
-        let emitter = LiveAudioChunkEmitter(directory: directory) { url in
-            emittedURLs.append(url)
+final class LiveAudioPCMEmitterTests: XCTestCase {
+    func testConvertsBuffersToOrderedMonoPCM16Packets() async throws {
+        let probe = LiveAudioPacketProbe()
+        let emitter = LiveAudioPCMEmitter { data, sampleRate in
+            await probe.send(data, sampleRate: sampleRate)
         }
         let format = try XCTUnwrap(
             AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
                 sampleRate: 16_000,
-                channels: 1,
+                channels: 2,
                 interleaved: false
             )
         )
         let buffer = try XCTUnwrap(
-            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_000)
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320)
         )
-        buffer.frameLength = 4_000
-        buffer.floatChannelData?[0].initialize(repeating: 0.1, count: 4_000)
+        buffer.frameLength = 320
+        buffer.floatChannelData?[0].initialize(repeating: 0.25, count: 320)
+        buffer.floatChannelData?[1].initialize(repeating: 0.25, count: 320)
 
-        for _ in 0..<14 {
+        for _ in 0..<3 {
             try emitter.append(buffer)
         }
-        emitter.finish()
+        try await emitter.drain()
 
-        let lengths = try emittedURLs.urls.map { url in
-            try AVAudioFile(forReading: url).length
-        }
-        XCTAssertEqual(lengths, [24_000, 24_000, 8_000])
-    }
-
-    func testEmitsOverlappingValidWaveFilesAndFlushesRemainder() throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let emittedURLs = EmittedURLStore()
-        let emitter = LiveAudioChunkEmitter(
-            directory: directory,
-            chunkDuration: 1,
-            overlapDuration: 0.25
-        ) { url in
-            emittedURLs.append(url)
-        }
-        let format = try XCTUnwrap(
-            AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 16_000,
-                channels: 1,
-                interleaved: false
-            )
-        )
-        let buffer = try XCTUnwrap(
-            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_000)
-        )
-        buffer.frameLength = 4_000
-        buffer.floatChannelData?[0].initialize(repeating: 0.1, count: 4_000)
-
-        for _ in 0..<8 {
-            try emitter.append(buffer)
-        }
-        emitter.finish()
-
-        XCTAssertEqual(emittedURLs.urls.count, 3)
-        let lengths = try emittedURLs.urls.map { url in
-            let file = try AVAudioFile(forReading: url)
-            return file.length
-        }
-        XCTAssertEqual(lengths, [16_000, 16_000, 8_000])
+        let packets = await probe.packets
+        let sampleRates = await probe.sampleRates
+        XCTAssertEqual(packets.map(\.count), [640, 640, 640])
+        XCTAssertEqual(sampleRates, [16_000, 16_000, 16_000])
     }
 
     func testRealServerPersistsTranscriptBeforeAudioInputFinishes() async throws {
@@ -1162,7 +1010,7 @@ final class LiveAudioChunkEmitterTests: XCTestCase {
             throw XCTSkip("Set NATIV_LIVE_AUDIO_TEST_FILE and NATIV_LIVE_AUDIO_SERVER_URL")
         }
         let modelID = environment["NATIV_LIVE_AUDIO_MODEL"]
-            ?? "mlx-community/parakeet-tdt-0.6b-v2"
+            ?? "mlx-community/nemotron-3.5-asr-streaming-0.6b"
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1170,17 +1018,14 @@ final class LiveAudioChunkEmitterTests: XCTestCase {
 
         let transcriptURL = directory.appendingPathComponent("recording.txt")
         let writer = try AudioTranscriptFileWriter(url: transcriptURL)
-        let session = LiveAudioTranscriptionSession(
-            transcriptWriter: writer,
-            transcribe: { chunkURL in
-                let client = NativAudioClient(baseURL: serverURL)
-                return try await client.transcribe(fileURL: chunkURL, model: modelID).text
-            }
-        )
-        let emitter = LiveAudioChunkEmitter(
-            directory: directory.appendingPathComponent("chunks", isDirectory: true)
-        ) { url in
-            session.enqueue(url)
+        let session = try NativRealtimeTranscriptionSession(
+            baseURL: serverURL,
+            model: modelID
+        ) { transcript in
+            try await writer.replace(with: transcript)
+        }
+        let emitter = LiveAudioPCMEmitter { data, sampleRate in
+            try await session.append(pcm16: data, sampleRate: sampleRate)
         }
         let audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: audioPath))
         let buffer = try XCTUnwrap(
@@ -1213,6 +1058,7 @@ final class LiveAudioChunkEmitterTests: XCTestCase {
             try emitter.append(buffer)
         }
         emitter.finish()
+        try await emitter.drain()
         let finalTranscript = try await session.finish()
 
         XCTAssertGreaterThan(finalTranscript.count, firstTranscript.count)
