@@ -1,5 +1,44 @@
 import Foundation
 
+private actor RealtimeTranscriptUpdateDispatcher {
+    typealias Update = @MainActor @Sendable (String) async -> Void
+
+    private let update: Update
+    private var pendingTranscript: String?
+    private var worker: Task<Void, Never>?
+    private var isCancelled = false
+
+    init(update: @escaping Update) {
+        self.update = update
+    }
+
+    func submit(_ transcript: String) {
+        guard !isCancelled else { return }
+        pendingTranscript = transcript
+        guard worker == nil else { return }
+        worker = Task { await run() }
+    }
+
+    func drain() async {
+        await worker?.value
+    }
+
+    func cancel() {
+        isCancelled = true
+        pendingTranscript = nil
+        worker?.cancel()
+        worker = nil
+    }
+
+    private func run() async {
+        while !Task.isCancelled, let transcript = pendingTranscript {
+            pendingTranscript = nil
+            await update(transcript)
+        }
+        worker = nil
+    }
+}
+
 public enum NativAudioTranscriptionError: Error, LocalizedError, CustomStringConvertible {
     case invalidResponse
     case httpStatus(Int, String)
@@ -29,11 +68,11 @@ public enum NativAudioTranscriptionError: Error, LocalizedError, CustomStringCon
 }
 
 public actor NativRealtimeTranscriptionSession {
-    public typealias TranscriptUpdate = @MainActor @Sendable (String) async throws -> Void
+    public typealias TranscriptUpdate = @MainActor @Sendable (String) async -> Void
 
     private let request: URLRequest
     private let model: String
-    private let onTranscriptUpdate: TranscriptUpdate
+    private let updateDispatcher: RealtimeTranscriptUpdateDispatcher
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var connectionTask: Task<Void, Error>?
@@ -70,7 +109,7 @@ public actor NativRealtimeTranscriptionSession {
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
         self.request = request
         self.model = model
-        self.onTranscriptUpdate = onTranscriptUpdate
+        updateDispatcher = RealtimeTranscriptUpdateDispatcher(update: onTranscriptUpdate)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: configuration)
@@ -100,7 +139,7 @@ public actor NativRealtimeTranscriptionSession {
     public func finish() async throws -> String {
         if let firstError { throw firstError }
         guard isConfigured, let socket else {
-            cancel()
+            await cancel()
             return transcript
         }
         if !isCommitted {
@@ -125,7 +164,7 @@ public actor NativRealtimeTranscriptionSession {
         }
     }
 
-    public func cancel() {
+    public func cancel() async {
         guard !isInvalidated else { return }
         isInvalidated = true
         connectionTask?.cancel()
@@ -137,6 +176,7 @@ public actor NativRealtimeTranscriptionSession {
         completion?.resume(throwing: CancellationError())
         completion = nil
         session.invalidateAndCancel()
+        await updateDispatcher.cancel()
     }
 
     private func connectIfNeeded() async throws {
@@ -205,12 +245,13 @@ public actor NativRealtimeTranscriptionSession {
                 case "conversation.item.input_audio_transcription.delta":
                     guard let delta = event["delta"] as? String else { continue }
                     transcript += delta
-                    try await onTranscriptUpdate(transcript)
+                    await updateDispatcher.submit(transcript)
                 case "conversation.item.input_audio_transcription.completed":
                     if let completed = event["transcript"] as? String {
                         transcript = completed
-                        try await onTranscriptUpdate(transcript)
+                        await updateDispatcher.submit(transcript)
                     }
+                    await updateDispatcher.drain()
                     completedTranscript = transcript
                     completion?.resume(returning: transcript)
                     completion = nil
@@ -274,6 +315,7 @@ public actor NativRealtimeTranscriptionSession {
         socket = nil
         receiveTask = nil
         session.invalidateAndCancel()
+        Task { await updateDispatcher.cancel() }
     }
 
     private static func requireEvent(_ event: [String: Any], type: String) throws {

@@ -244,11 +244,8 @@ final class VoiceCaptureCoordinator {
                 {
                     do {
                         liveTranscriptionPipeline = try await LiveAudioTranscriptionPipeline(
-                            recordingURL: recordingURL,
                             configuration: configuration
-                        ) { [weak self] transcript in
-                            guard let self else { return }
-                            self.overlay.updateTranscript(transcript)
+                        ) { transcript in
                             await streamingTranscriptInserter.insertUpdate(transcript)
                         }
                     } catch LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime {
@@ -257,11 +254,16 @@ final class VoiceCaptureCoordinator {
                 } else {
                     liveTranscriptionPipeline = nil
                 }
-                try self.recorder.start(
-                    outputURL: recordingURL,
-                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID,
-                    liveChunkEmitter: liveTranscriptionPipeline?.emitter
-                )
+                do {
+                    try self.recorder.start(
+                        outputURL: recordingURL,
+                        deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID,
+                        liveChunkEmitter: liveTranscriptionPipeline?.emitter
+                    )
+                } catch {
+                    await liveTranscriptionPipeline?.cancel()
+                    throw error
+                }
                 self.liveTranscriptionPipeline = liveTranscriptionPipeline
                 self.streamingTranscriptInserter = liveTranscriptionPipeline == nil
                     ? nil

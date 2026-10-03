@@ -188,7 +188,6 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
-    @Published private(set) var liveTranscript = ""
 
     var transcriptionConfigurationProvider:
         (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
@@ -214,7 +213,6 @@ final class AudioCaptureLibrary: ObservableObject {
     private var activeTask: Task<Void, Never>?
     private var lastMeterPublishAt = Date.distantPast
     private var stoppingTask: Task<Void, Never>?
-    private var liveTranscriptionPipeline: LiveAudioTranscriptionPipeline?
     private var saveWithoutTranscription = false
     private static let interruptedRecordingKey = "audio.capture.sleepSavedRecording"
     private var activationObservers: [NSObjectProtocol] = []
@@ -409,13 +407,10 @@ final class AudioCaptureLibrary: ObservableObject {
             let microphoneDeviceID = AudioInputDevicePreferences.shared.effectiveDeviceID
             switch kind {
             case .voiceNote:
-                let liveTranscription = try await makeLiveTranscription(for: outputURL)
                 try voiceRecorder.start(
                     outputURL: outputURL,
-                    deviceUniqueID: microphoneDeviceID,
-                    liveChunkEmitter: liveTranscription?.emitter
+                    deviceUniqueID: microphoneDeviceID
                 )
-                liveTranscriptionPipeline = liveTranscription
                 activeBackend = .microphone
             case .meeting:
                 if activeIncludesSystemAudio {
@@ -425,13 +420,10 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .systemAndMicrophone
                 } else {
-                    let liveTranscription = try await makeLiveTranscription(for: outputURL)
                     try voiceRecorder.start(
                         outputURL: outputURL,
-                        deviceUniqueID: microphoneDeviceID,
-                        liveChunkEmitter: liveTranscription?.emitter
+                        deviceUniqueID: microphoneDeviceID
                     )
-                    liveTranscriptionPipeline = liveTranscription
                     activeBackend = .microphone
                 }
             case .dictation:
@@ -527,16 +519,11 @@ final class AudioCaptureLibrary: ObservableObject {
             let recordID = recordingURL.deletingPathExtension().lastPathComponent
             stoppingTask = nil
             if saveWithoutTranscription {
-                await cancelLiveTranscription()
-                try? FileManager.default.removeItem(
-                    at: recordingURL.deletingPathExtension().appendingPathExtension("txt")
-                )
                 UserDefaults.standard.set(recordID, forKey: Self.interruptedRecordingKey)
                 resetCaptureState()
                 presentInterruptedRecordingNotice()
                 return
             }
-            let liveTranscription = await finishLiveTranscription()
             processingRecordIDs.insert(recordID)
             let automaticallySummarize = shouldSummarizeCurrentCapture
             activeTask = Task { [weak self] in
@@ -548,8 +535,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     kind: kind,
                     title: title,
                     duration: duration,
-                    automaticallySummarize: automaticallySummarize,
-                    completedLiveTranscription: liveTranscription
+                    automaticallySummarize: automaticallySummarize
                 )
             }
             await activeTask?.value
@@ -818,8 +804,7 @@ final class AudioCaptureLibrary: ObservableObject {
         title: String,
         duration: TimeInterval,
         automaticallySummarize: Bool,
-        preserveExistingSummary: Bool = true,
-        completedLiveTranscription: (transcript: String, modelID: String)? = nil
+        preserveExistingSummary: Bool = true
     ) async {
         let recordID = recordingURL.deletingPathExtension().lastPathComponent
         transcribingRecordIDs.insert(recordID)
@@ -829,23 +814,11 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         do {
-            let transcript: String
-            let modelID: String
-            if let completedLiveTranscription,
-               !completedLiveTranscription.transcript.isEmpty
-            {
-                transcript = completedLiveTranscription.transcript
-                modelID = completedLiveTranscription.modelID
-            } else {
-                let result = try await transcribe(recordingURL)
-                transcript = result.0
-                modelID = result.1
-                let transcriptURL = recordingURL
-                    .deletingPathExtension()
-                    .appendingPathExtension("txt")
-                let transcriptWriter = try AudioTranscriptFileWriter(url: transcriptURL)
-                try await transcriptWriter.replace(with: transcript)
-            }
+            let (transcript, modelID) = try await transcribe(recordingURL)
+            let transcriptURL = recordingURL
+                .deletingPathExtension()
+                .appendingPathExtension("txt")
+            try transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
             analytics.upsertTranscription(
                 recordingURL: recordingURL,
                 transcript: transcript,
@@ -900,44 +873,12 @@ final class AudioCaptureLibrary: ObservableObject {
             baseURL: configuration.serverBaseURL,
             apiKey: configuration.serverAPIKey
         )
-        let result = try await client.transcribe(
-            fileURL: recordingURL,
-            model: modelID
-        )
+        let result = try await client.transcribe(fileURL: recordingURL, model: modelID)
         let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else {
             throw AudioCaptureLibraryError.emptyTranscript
         }
         return (transcript, modelID)
-    }
-
-    private func makeLiveTranscription(
-        for recordingURL: URL
-    ) async throws -> LiveAudioTranscriptionPipeline? {
-        guard let configuration = transcriptionConfigurationProvider?() else {
-            throw AudioCaptureLibraryError.serverNotRunning
-        }
-        do {
-            return try await LiveAudioTranscriptionPipeline(
-                recordingURL: recordingURL,
-                configuration: configuration
-            ) { [weak self] transcript in
-                guard let self else { return }
-                self.liveTranscript = transcript
-                self.recordingOverlay.updateTranscript(transcript)
-            }
-        } catch LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime {
-            return nil
-        }
-    }
-
-    private func finishLiveTranscription() async -> (transcript: String, modelID: String)? {
-        let pipeline = liveTranscriptionPipeline
-        liveTranscriptionPipeline = nil
-        guard let result = try? await pipeline?.finish(), !result.transcript.isEmpty else {
-            return nil
-        }
-        return result
     }
 
     private func generateSummary(for transcript: String) async throws -> String {
@@ -1109,13 +1050,8 @@ final class AudioCaptureLibrary: ObservableObject {
         stopElapsedUpdates()
         switch activeBackend {
         case .microphone:
-            let recordingURL = voiceRecorder.stop()
-            await cancelLiveTranscription()
-            if let recordingURL {
+            if let recordingURL = voiceRecorder.stop() {
                 try? FileManager.default.removeItem(at: recordingURL)
-                try? FileManager.default.removeItem(
-                    at: recordingURL.deletingPathExtension().appendingPathExtension("txt")
-                )
             }
         case .systemAndMicrophone:
             await meetingRecorder.cancel()
@@ -1140,19 +1076,6 @@ final class AudioCaptureLibrary: ObservableObject {
         activeTask = nil
         stoppingTask = nil
         saveWithoutTranscription = false
-        liveTranscript = ""
-        recordingOverlay.updateTranscript("")
-        if liveTranscriptionPipeline != nil {
-            Task { [weak self] in
-                await self?.cancelLiveTranscription()
-            }
-        }
-    }
-
-    private func cancelLiveTranscription() async {
-        let pipeline = liveTranscriptionPipeline
-        liveTranscriptionPipeline = nil
-        await pipeline?.cancel()
     }
 
     private func startElapsedUpdates() {

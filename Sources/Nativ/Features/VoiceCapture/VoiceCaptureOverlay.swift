@@ -5,7 +5,7 @@ import SwiftUI
 private enum VoiceIslandLayoutMetrics {
     static let sideWidth: CGFloat = 48
     static let shelfSideWidth: CGFloat = 56
-    static let audioCaptureSideWidth: CGFloat = 202
+    static let audioCaptureSideWidth: CGFloat = 106
 }
 
 private let voiceCaptureDismissalDuration: TimeInterval = 0.38
@@ -68,7 +68,6 @@ final class VoiceCaptureOverlayModel: ObservableObject {
     @Published var showsNoSpeechFeedback = false
     @Published var presentation: Presentation = .dictation
     @Published var visibleSurface: VisibleSurface?
-    @Published var liveTranscript = ""
 
     var completeAudioCapture: (() -> Void)?
     var restartAudioCapture: (() -> Void)?
@@ -94,9 +93,9 @@ final class VoiceCaptureOverlayModel: ObservableObject {
 
 @MainActor
 final class VoiceCaptureOverlayController {
-    private static let waveformPanelSize = NSSize(width: 410, height: 58)
+    private static let waveformPanelSize = NSSize(width: 210, height: 58)
     private static let floatingIslandPanelSize = NSSize(width: 140, height: 52)
-    private static let floatingAudioCapturePanelSize = NSSize(width: 418, height: 52)
+    private static let floatingAudioCapturePanelSize = NSSize(width: 226, height: 52)
     private static let verticalAudioCapturePanelSize = NSSize(width: 72, height: 258)
     private let model: VoiceCaptureOverlayModel
     private let animationPreferences: VoiceAnimationPreferences
@@ -200,7 +199,6 @@ final class VoiceCaptureOverlayController {
         model.level = 0
         model.closingLevel = 0
         model.elapsed = 0
-        model.liveTranscript = ""
         model.showsNoSpeechFeedback = false
         if presentation.audioCaptureKind != nil {
             let recordingStyle = animationPreferences.recordingStyle
@@ -271,10 +269,6 @@ final class VoiceCaptureOverlayController {
             model.closingLevel = clampedLevel
         }
         model.elapsed = elapsed
-    }
-
-    func updateTranscript(_ transcript: String) {
-        model.liveTranscript = transcript
     }
 
     func showFailure() {
@@ -433,8 +427,7 @@ final class VoiceCaptureOverlayController {
     }
 
     private func positionIslandPanel(on screen: NSScreen) {
-        if model.presentation.audioCaptureKind == nil,
-           let leftArea = screen.auxiliaryTopLeftArea,
+        if let leftArea = screen.auxiliaryTopLeftArea,
            let rightArea = screen.auxiliaryTopRightArea,
            rightArea.minX - leftArea.maxX > 20 {
             let requestedWingWidth = model.presentation.audioCaptureKind == nil
@@ -1158,31 +1151,22 @@ private struct VoiceCaptureOverlayView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                     } else {
-                        if isAudioCapture, !model.liveTranscript.isEmpty {
-                            Text(model.liveTranscript)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.82))
-                                .lineLimit(1)
-                                .truncationMode(.head)
-                                .frame(width: 264, alignment: .leading)
-                        } else {
-                            ZStack {
-                                VoiceLiveWaveform(
-                                    level: model.state == .finishing
-                                        ? model.closingLevel
-                                        : model.level,
-                                    isRecording: model.state == .recording
-                                        || model.state == .finishing
-                                )
-                                .opacity(model.state == .transcribing ? 0.26 : 1)
+                        ZStack {
+                            VoiceLiveWaveform(
+                                level: model.state == .finishing
+                                    ? model.closingLevel
+                                    : model.level,
+                                isRecording: model.state == .recording
+                                    || model.state == .finishing
+                            )
+                            .opacity(model.state == .transcribing ? 0.26 : 1)
 
-                                if model.state == .transcribing {
-                                    VoiceTranscriptionWaveLoader()
-                                        .transition(.opacity)
-                                }
+                            if model.state == .transcribing {
+                                VoiceTranscriptionWaveLoader()
+                                    .transition(.opacity)
                             }
-                            .frame(width: isAudioCapture ? 264 : 90, height: 32)
                         }
+                        .frame(width: isAudioCapture ? 74 : 90, height: 32)
 
                         Text(formattedElapsed)
                             .font(
@@ -1205,7 +1189,7 @@ private struct VoiceCaptureOverlayView: View {
                 }
             }
             .padding(.horizontal, isAudioCapture ? 10 : 14)
-            .frame(width: isAudioCapture ? 384 : 210, height: 52)
+            .frame(width: isAudioCapture ? 184 : 210, height: 52)
             .background {
                 Capsule()
                     .fill(Color.black.opacity(0.94))
@@ -1488,17 +1472,6 @@ private struct VoiceCaptureIslandView: View {
                     .foregroundStyle(.white.opacity(0.76))
                     .frame(width: 38, alignment: .trailing)
 
-                if model.presentation.audioCaptureKind != nil,
-                   !model.liveTranscript.isEmpty
-                {
-                    Text(model.liveTranscript)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                        .frame(width: 176, alignment: .leading)
-                }
-
                 if model.presentation.audioCaptureKind != nil {
                     VoiceCaptureRecordingControls(model: model)
                 } else {
@@ -1510,7 +1483,7 @@ private struct VoiceCaptureIslandView: View {
             }
             .padding(.horizontal, model.presentation.audioCaptureKind == nil ? 15 : 12)
             .frame(
-                width: model.presentation.audioCaptureKind == nil ? 140 : 418,
+                width: model.presentation.audioCaptureKind == nil ? 140 : 226,
                 height: 46
             )
             .background {

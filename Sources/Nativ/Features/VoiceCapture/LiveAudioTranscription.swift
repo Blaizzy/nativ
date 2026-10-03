@@ -62,16 +62,18 @@ enum LiveAudioTranscriptionPipelineError: Error {
     case modelDoesNotSupportRealtime
 }
 
+enum LiveAudioPCMEmitterError: Error {
+    case backlogExceeded
+}
+
 final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
     let emitter: LiveAudioPCMEmitter
 
     private let session: NativRealtimeTranscriptionSession
     private let modelID: String
-    private let transcriptURL: URL
     private var preparationTask: Task<Void, Never>?
 
     init(
-        recordingURL: URL,
         configuration: VoiceTranscriptionConfiguration,
         onTranscriptUpdate: @escaping @MainActor @Sendable (String) async -> Void = { _ in }
     ) async throws {
@@ -79,11 +81,6 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
             throw LiveAudioTranscriptionPipelineError.serverNotRunning
         }
 
-        let transcriptURL = recordingURL
-            .deletingPathExtension()
-            .appendingPathExtension("txt")
-        self.transcriptURL = transcriptURL
-        let transcriptWriter = try AudioTranscriptFileWriter(url: transcriptURL)
         let installedModels = try await LocalModelDiscovery.scan(
             searchPaths: LocalModelSearchPaths(
                 primary: configuration.modelSearchPath,
@@ -96,7 +93,7 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
         ), let model = installedModels.first(where: { $0.repoID == modelID }) else {
             throw LiveAudioTranscriptionPipelineError.missingSpeechModel
         }
-        guard Self.supportsRealtimeStreaming(model) else {
+        guard LocalModelDiscovery.supportsRealtimeSpeechToText(model) else {
             throw LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime
         }
         self.modelID = modelID
@@ -105,10 +102,7 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
             baseURL: configuration.serverBaseURL,
             apiKey: configuration.serverAPIKey,
             model: modelID
-        ) { transcript in
-            try await transcriptWriter.replace(with: transcript)
-            await onTranscriptUpdate(transcript)
-        }
+        ) { transcript in await onTranscriptUpdate(transcript) }
         self.session = session
         emitter = LiveAudioPCMEmitter { data, sampleRate in
             try await session.append(pcm16: data, sampleRate: sampleRate)
@@ -129,59 +123,71 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
         preparationTask = nil
         emitter.cancel()
         await session.cancel()
-        try? FileManager.default.removeItem(at: transcriptURL)
     }
 
-    private static func supportsRealtimeStreaming(_ model: LocalModel) -> Bool {
-        guard let snapshotURL = model.snapshotURL,
-              let data = try? Data(contentsOf: snapshotURL.appendingPathComponent("config.json")),
-              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let modelType = (config["model_type"] as? String)?.lowercased()
-        else {
-            return false
-        }
-        return modelType == "nemotron_asr" || modelType == "voxtral_realtime"
-    }
 }
 
 final class LiveAudioPCMEmitter: @unchecked Sendable {
     typealias Send = @Sendable (Data, Int) async throws -> Void
 
+    private struct Packet {
+        let data: Data
+        let sampleRate: Int
+    }
+
     private let send: Send
     private let lock = NSLock()
-    private var tail: Task<Void, Never>?
+    private let maximumPendingPackets: Int
+    private var packets: [Packet] = []
+    private var packetWaiter: CheckedContinuation<Packet?, Never>?
+    private var worker: Task<Void, Never>?
     private var firstError: Error?
+    private var isFinished = false
+    private var isCancelled = false
 
-    init(send: @escaping Send) {
+    init(maximumPendingPackets: Int = 256, send: @escaping Send) {
+        self.maximumPendingPackets = maximumPendingPackets
         self.send = send
     }
 
     func append(_ buffer: AVAudioPCMBuffer) throws {
         guard buffer.frameLength > 0 else { return }
         let packet = try Self.packet(from: buffer)
-        lock.withLock {
-            let preceding = tail
-            tail = Task { [weak self] in
-                await preceding?.value
-                guard let self, !Task.isCancelled else { return }
-                do {
-                    try await send(packet.data, packet.sampleRate)
-                } catch {
-                    lock.withLock {
-                        if firstError == nil {
-                            firstError = error
-                        }
-                    }
+        try lock.withLock {
+            guard !isCancelled else { throw CancellationError() }
+            guard !isFinished else { return }
+            if let packetWaiter {
+                self.packetWaiter = nil
+                packetWaiter.resume(returning: Packet(
+                    data: packet.data,
+                    sampleRate: packet.sampleRate
+                ))
+            } else {
+                guard packets.count < maximumPendingPackets else {
+                    throw LiveAudioPCMEmitterError.backlogExceeded
                 }
+                packets.append(Packet(data: packet.data, sampleRate: packet.sampleRate))
+            }
+            if worker == nil {
+                worker = Task { [weak self] in await self?.run() }
             }
         }
     }
 
-    func finish() {}
+    func finish() {
+        lock.withLock {
+            isFinished = true
+            if packets.isEmpty, let packetWaiter {
+                self.packetWaiter = nil
+                packetWaiter.resume(returning: nil)
+            }
+        }
+    }
 
     func drain() async throws {
-        let finalTask = lock.withLock { tail }
-        await finalTask?.value
+        finish()
+        let finalWorker = lock.withLock { worker }
+        await finalWorker?.value
         if let firstError = lock.withLock({ firstError }) {
             throw firstError
         }
@@ -189,8 +195,42 @@ final class LiveAudioPCMEmitter: @unchecked Sendable {
 
     func cancel() {
         lock.withLock {
-            tail?.cancel()
-            tail = nil
+            isCancelled = true
+            packets.removeAll()
+            worker?.cancel()
+            if let packetWaiter {
+                self.packetWaiter = nil
+                packetWaiter.resume(returning: nil)
+            }
+        }
+    }
+
+    private func run() async {
+        while !Task.isCancelled, let packet = await nextPacket() {
+            do {
+                try await send(packet.data, packet.sampleRate)
+            } catch {
+                lock.withLock {
+                    if firstError == nil { firstError = error }
+                    isFinished = true
+                    packets.removeAll()
+                }
+                break
+            }
+        }
+    }
+
+    private func nextPacket() async -> Packet? {
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                if !packets.isEmpty {
+                    continuation.resume(returning: packets.removeFirst())
+                } else if isFinished || isCancelled {
+                    continuation.resume(returning: nil)
+                } else {
+                    packetWaiter = continuation
+                }
+            }
         }
     }
 

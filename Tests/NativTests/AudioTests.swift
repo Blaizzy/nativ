@@ -909,32 +909,6 @@ final class NativAudioClientTests: XCTestCase {
     }
 }
 
-final class AudioTranscriptFileWriterTests: XCTestCase {
-    func testEachLiveRevisionAtomicallyReplacesTheTranscript() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("recording.txt")
-        let writer = try AudioTranscriptFileWriter(url: url)
-
-        try await writer.replace(with: "First segment")
-        XCTAssertEqual(
-            try String(contentsOf: url, encoding: .utf8),
-            "First segment"
-        )
-
-        try await writer.replace(with: "First segment survives interruption.")
-        XCTAssertEqual(
-            try String(contentsOf: url, encoding: .utf8),
-            "First segment survives interruption."
-        )
-    }
-}
-
 final class StreamingVoiceTranscriptStateTests: XCTestCase {
     func testStreamsOnlyNewText() {
         var state = StreamingVoiceTranscriptState(returnCommandTrigger: nil)
@@ -970,6 +944,28 @@ private actor LiveAudioPacketProbe {
 }
 
 final class LiveAudioPCMEmitterTests: XCTestCase {
+    func testRejectsAudioWhenBoundedBacklogIsFull() throws {
+        let emitter = LiveAudioPCMEmitter(maximumPendingPackets: 0) { _, _ in }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)
+        )
+        buffer.frameLength = 160
+
+        XCTAssertThrowsError(try emitter.append(buffer)) { error in
+            guard case LiveAudioPCMEmitterError.backlogExceeded = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
     func testRealtimeSessionRejectsAppendAfterCancellation() async throws {
         let session = try NativRealtimeTranscriptionSession(
             baseURL: URL(string: "http://127.0.0.1:8080")!,
@@ -1016,72 +1012,6 @@ final class LiveAudioPCMEmitterTests: XCTestCase {
         XCTAssertEqual(sampleRates, [16_000, 16_000, 16_000])
     }
 
-    func testRealServerPersistsTranscriptBeforeAudioInputFinishes() async throws {
-        let environment = ProcessInfo.processInfo.environment
-        guard let audioPath = environment["NATIV_LIVE_AUDIO_TEST_FILE"],
-              let serverURLString = environment["NATIV_LIVE_AUDIO_SERVER_URL"],
-              let serverURL = URL(string: serverURLString)
-        else {
-            throw XCTSkip("Set NATIV_LIVE_AUDIO_TEST_FILE and NATIV_LIVE_AUDIO_SERVER_URL")
-        }
-        let modelID = environment["NATIV_LIVE_AUDIO_MODEL"]
-            ?? "mlx-community/nemotron-3.5-asr-streaming-0.6b"
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let transcriptURL = directory.appendingPathComponent("recording.txt")
-        let writer = try AudioTranscriptFileWriter(url: transcriptURL)
-        let session = try NativRealtimeTranscriptionSession(
-            baseURL: serverURL,
-            model: modelID
-        ) { transcript in
-            try await writer.replace(with: transcript)
-        }
-        let emitter = LiveAudioPCMEmitter { data, sampleRate in
-            try await session.append(pcm16: data, sampleRate: sampleRate)
-        }
-        let audioFile = try AVAudioFile(forReading: URL(fileURLWithPath: audioPath))
-        let buffer = try XCTUnwrap(
-            AVAudioPCMBuffer(
-                pcmFormat: audioFile.processingFormat,
-                frameCapacity: AVAudioFrameCount(audioFile.processingFormat.sampleRate / 4)
-            )
-        )
-
-        for _ in 0..<12 {
-            buffer.frameLength = 0
-            try audioFile.read(into: buffer)
-            try emitter.append(buffer)
-        }
-
-        let firstDeadline = Date().addingTimeInterval(5)
-        var firstTranscript = ""
-        while Date() < firstDeadline, firstTranscript.isEmpty {
-            firstTranscript = (try? String(contentsOf: transcriptURL, encoding: .utf8)) ?? ""
-            if firstTranscript.isEmpty {
-                try await Task.sleep(for: .milliseconds(20))
-            }
-        }
-        XCTAssertFalse(firstTranscript.isEmpty)
-        XCTAssertLessThan(audioFile.framePosition, audioFile.length)
-
-        while audioFile.framePosition < audioFile.length {
-            buffer.frameLength = 0
-            try audioFile.read(into: buffer)
-            try emitter.append(buffer)
-        }
-        emitter.finish()
-        try await emitter.drain()
-        let finalTranscript = try await session.finish()
-
-        XCTAssertGreaterThan(finalTranscript.count, firstTranscript.count)
-        XCTAssertEqual(
-            try String(contentsOf: transcriptURL, encoding: .utf8),
-            finalTranscript
-        )
-    }
 }
 
 @MainActor
