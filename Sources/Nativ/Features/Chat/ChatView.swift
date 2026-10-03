@@ -75,6 +75,7 @@ struct ChatView: View {
             chat.refreshPendingImageModelSelections()
         }
         .environment(\.chatFontScale, model.settings.chatFontScale)
+        .environmentObject(projects)
     }
 
     private func transcript(project: ChatProject?) -> some View {
@@ -196,8 +197,11 @@ private struct ChatProjectContextControls: View {
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
     @ObservedObject var chat: ChatViewModel
+    @EnvironmentObject private var projects: ChatProjectStore
     @State private var setupError: String?
     @State private var gitHead: ChatGitHead?
+    @State private var showsProjectPicker = false
+    @State private var isProjectHovered = false
     var isSummary = false
 
     private var path: String {
@@ -212,7 +216,31 @@ private struct ChatProjectContextControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                projectMenu
+                if !isSummary, chat.canChangeCurrentProject {
+                    Button { showsProjectPicker.toggle() } label: {
+                        projectLabel
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color.primary.opacity(showsProjectPicker ? 0.1 : isProjectHovered ? 0.06 : 0),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(.rect)
+                    }
+                        .buttonStyle(.plain)
+                        .onHover { isProjectHovered = $0 }
+                        .help("Change the project for this chat")
+                        .accessibilityLabel("Change project")
+                        .accessibilityValue(showsProjectPicker ? "Shown" : "Hidden")
+                        .background {
+                            NativArrowlessPopoverPresenter(isPresented: $showsProjectPicker, gap: 20,
+                                                           alignment: .leading, cornerRadius: 10, title: "Choose project") {
+                                ChatProjectPicker(projects: projects, selectedID: chat.currentProjectID,
+                                                  onSelect: selectProject, onCreate: createProject)
+                            }
+                        }
+                        .contextMenu { projectActions }
+                } else {
+                    projectMenu
+                }
                 if !isSummary, let branch {
                     branchLabel(branch)
                         .foregroundStyle(.secondary)
@@ -223,27 +251,27 @@ private struct ChatProjectContextControls: View {
                 if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
                     ProgressView().controlSize(.small)
                 }
-                HStack(spacing: 6) {
-                    Text("Worktree")
-                    Toggle("Worktree", isOn: Binding(
-                        get: { chat.currentWorktree != nil },
-                        set: { enabled in
-                            setupError = nil
-                            Task {
-                                do { try await chat.setCurrentWorktreeEnabled(enabled) }
-                                catch { setupError = error.localizedDescription }
+                if project != nil, chat.currentWorktree?.isReady != true {
+                    HStack(spacing: 6) {
+                        Text("Worktree")
+                        Toggle("Worktree", isOn: Binding(
+                            get: { chat.currentWorktree != nil },
+                            set: { enabled in
+                                setupError = nil
+                                Task {
+                                    do { try await chat.setCurrentWorktreeEnabled(enabled) }
+                                    catch { setupError = error.localizedDescription }
+                                }
                             }
-                        }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .labelsHidden()
-                    .disabled(!chat.canChangeCurrentWorktree)
+                        ))
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        .disabled(!chat.canChangeCurrentWorktree)
+                    }
+                    .fixedSize()
+                    .help("Use a separate checkout when you send your first message")
                 }
-                .fixedSize()
-                .help(chat.currentWorktree?.isReady == true
-                      ? "This chat uses its own worktree"
-                      : "Use a separate checkout when you send your first message")
-                if !isSummary && (!available || !toolsEnabled) {
+                if !isSummary && project != nil && (!available || !toolsEnabled) {
                     Image(systemName: "exclamationmark.circle")
                         .foregroundStyle(available ? Color.secondary : Color.orange)
                         .help(available ? "Project tools are off" : "Project folder unavailable")
@@ -277,6 +305,10 @@ private struct ChatProjectContextControls: View {
                     .fill(Color.primary.opacity(0.035))
             }
         }
+        .onChange(of: chat.currentSessionID) { _, _ in
+            showsProjectPicker = false
+            setupError = nil
+        }
         .task(id: path) {
             gitHead = nil
             guard !path.isEmpty else { return }
@@ -297,33 +329,64 @@ private struct ChatProjectContextControls: View {
     }
 
     private var projectMenu: some View {
-        Menu {
-            if chat.currentWorktree?.isReady == false {
-                Text("Setup starts when you send a message")
-            }
-            switch gitHead {
-            case .branch(let name):
-                Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
-            case .detached(let commit):
-                Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
-            case nil: EmptyView()
-            }
-            Divider()
-            Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
-            Button("Show in Finder", systemImage: "folder") {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
-            }.disabled(!available)
-        } label: {
-            Label(project?.name ?? "Worktree", systemImage: available ? "folder" : "folder.badge.questionmark")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(available ? Color.secondary : Color.orange)
-                .lineLimit(1).truncationMode(.middle)
-        }
+        Menu { projectActions } label: { projectLabel }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize(horizontal: false, vertical: true)
         .help(path)
         .accessibilityLabel("Project folder")
+    }
+
+    private var projectLabel: some View {
+        Label(project?.name ?? (chat.currentWorktree == nil ? "No project" : "Worktree"),
+              systemImage: available ? "folder" : "folder.badge.questionmark")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(available ? (showsProjectPicker ? Color.primary : Color.secondary) : Color.orange)
+            .lineLimit(1).truncationMode(.middle)
+    }
+
+    @ViewBuilder
+    private var projectActions: some View {
+        if chat.currentWorktree?.isReady == false {
+            Text("Setup starts when you send a message")
+        }
+        switch gitHead {
+        case .branch(let name):
+            Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
+        case .detached(let commit):
+            Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
+        case nil: EmptyView()
+        }
+        if !path.isEmpty {
+            Divider()
+            Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
+            Button("Show in Finder", systemImage: "folder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+            }.disabled(!available)
+        }
+    }
+
+    private func selectProject(_ id: UUID?) {
+        showsProjectPicker = false
+        setupError = nil
+        Task {
+            do { try await chat.setCurrentProject(id) }
+            catch { setupError = error.localizedDescription }
+        }
+    }
+
+    private func createProject() {
+        showsProjectPicker = false
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Create Project"
+        panel.message = "Choose a folder Nativ can read and write for this project."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { selectProject(try projects.createProject(directoryURL: url).id) }
+        catch { setupError = error.localizedDescription }
     }
 
     private func branchLabel(_ name: String) -> some View {
@@ -338,6 +401,90 @@ private struct ChatProjectContextControls: View {
     private func copy(_ value: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
+    }
+}
+
+private struct ChatProjectPicker: View {
+    @ObservedObject var projects: ChatProjectStore
+    let selectedID: UUID?
+    let onSelect: (UUID?) -> Void
+    let onCreate: () -> Void
+    @State private var search = ""
+    @FocusState private var searchIsFocused: Bool
+
+    private var matches: [ChatProject] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return projects.projects.filter { query.isEmpty || $0.name.localizedStandardContains(query) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search projects", text: $search)
+                    .textFieldStyle(.plain)
+                    .focused($searchIsFocused)
+                    .onSubmit { if let project = matches.first { onSelect(project.id) } }
+            }
+            .font(.system(size: 11))
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            Group {
+                if matches.isEmpty {
+                    Text(search.isEmpty ? "No projects yet" : "No matching projects")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(matches) { project in
+                                ChatProjectPickerRow(title: project.name, icon: "folder", selected: project.id == selectedID) {
+                                    onSelect(project.id)
+                                }
+                                .help(project.rootPath)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(height: CGFloat(max(1, min(projects.projects.count, 7)) * 26))
+            Divider().padding(.horizontal, 4).padding(.vertical, 4)
+            ChatProjectPickerRow(title: "New project", icon: "plus", action: onCreate)
+            ChatProjectPickerRow(title: "Don’t work in a project", icon: "xmark", selected: selectedID == nil) {
+                onSelect(nil)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(4)
+        .frame(width: 248)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .onAppear { searchIsFocused = true }
+    }
+}
+
+private struct ChatProjectPickerRow: View {
+    let title: String
+    let icon: String
+    var selected = false
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(.secondary).frame(width: 14)
+                Text(title).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                if selected { Image(systemName: "checkmark").fontWeight(.medium) }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(isHovering ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityValue(selected ? "Selected" : "")
     }
 }
 
@@ -739,7 +886,7 @@ private struct ChatComposerContainer: View {
     private var contextHeader: some View {
         if let progress = chat.currentWorktreeSetupProgress {
             ChatWorktreeSetupView(progress: progress, dismiss: chat.dismissWorktreeSetupProgress)
-        } else if chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
+        } else if chat.messages.isEmpty {
             ChatProjectContextControls(project: project, rootIsAvailable: projectRootIsAvailable,
                                        toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
         }

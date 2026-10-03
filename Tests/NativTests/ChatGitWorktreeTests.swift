@@ -514,6 +514,57 @@ final class ChatGitWorktreeTests: XCTestCase {
 
 @MainActor
 final class ChatWorktreeSessionTests: XCTestCase {
+    func testProjectPickerPreservesDraftAndReplansOnlyUncreatedWorktrees() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let first = try projects.createProject(directoryURL: fixture.repository)
+        let other = fixture.root.appendingPathComponent("Other")
+        try WorktreeFixture.git(["clone", fixture.repository.path, other.path])
+        let second = try projects.createProject(directoryURL: other)
+        let nongit = try projects.createProject(directoryURL: fixture.root)
+        let chatRoot = fixture.root.appendingPathComponent("Chat")
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(chat)
+        let id = try XCTUnwrap(chat.currentSessionID)
+        chat.draft = "Keep this draft"
+        let attachment = ChatImageAttachment(filename: "notes.txt", mimeType: "text/plain", base64Data: Data("Notes".utf8).base64EncodedString())
+        chat.stageAttachment(attachment)
+        XCTAssertTrue(chat.canChangeCurrentProject)
+        try await chat.setCurrentProject(first.id)
+        try await chat.setCurrentWorktreeEnabled(true)
+        let pending = chat.currentWorktree
+        do { try await chat.setCurrentProject(nongit.id); XCTFail("Cannot replan a worktree outside Git") }
+        catch { }
+        XCTAssertEqual(chat.currentProjectID, first.id)
+        XCTAssertEqual(chat.currentWorktree, pending)
+        try await chat.setCurrentProject(second.id)
+        XCTAssertEqual(chat.currentSessionID, id)
+        XCTAssertEqual(chat.currentProjectID, second.id)
+        XCTAssertEqual(chat.currentWorktree?.repositoryPath, second.rootPath)
+        XCTAssertEqual(chat.currentWorktree?.isReady, false)
+        XCTAssertEqual(chat.draft, "Keep this draft")
+        XCTAssertEqual(chat.pendingImageAttachments.map(\.id), [attachment.id])
+        let saved = try XCTUnwrap(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id))
+        XCTAssertEqual(saved.projectID, second.id)
+        XCTAssertEqual(saved.worktree, chat.currentWorktree)
+        try await chat.setCurrentProject(nil)
+        XCTAssertNil(chat.currentProjectID)
+        XCTAssertNil(chat.currentWorktree)
+        XCTAssertNil(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.projectID)
+        XCTAssertTrue(chat.canChangeCurrentProject)
+        XCTAssertFalse(chat.canChangeCurrentWorktree)
+        XCTAssertFalse(chat.toolScope(for: id, settings: NativSettings()).isProject)
+        do { try await chat.setCurrentProject(UUID()); XCTFail("Cannot choose a missing project") }
+        catch { XCTAssertEqual(error as? ChatProjectStoreError, .projectNotFound) }
+        XCTAssertNil(chat.currentProjectID)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Saved work")
+        XCTAssertFalse(chat.canChangeCurrentProject)
+        do { try await chat.setCurrentProject(first.id); XCTFail("Cannot move chat files to another project") }
+        catch { }
+        XCTAssertNil(chat.currentProjectID)
+    }
+
     func testNamingErrorsInvalidResponsesAndCollisionsUseRandomBranches() async throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -593,7 +644,10 @@ final class ChatWorktreeSessionTests: XCTestCase {
         }
         XCTAssertEqual(chat.currentWorktree, ready)
         XCTAssertFalse(chat.canChangeCurrentWorktree)
+        XCTAssertFalse(chat.canChangeCurrentProject)
         do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot detach an existing checkout") }
+        catch { }
+        do { try await chat.setCurrentProject(nil); XCTFail("Cannot detach an existing checkout from its project") }
         catch { }
         XCTAssertEqual(chat.currentWorktree, ready)
         XCTAssertNotNil(ready.availableRootPath)
@@ -670,6 +724,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertTrue(first.isPreparingCurrentWorktree)
         XCTAssertFalse(first.canSend(isRunning: true, selectedModelID: "model"))
         XCTAssertFalse(second.canChangeCurrentWorktree)
+        XCTAssertFalse(second.canChangeCurrentProject)
         XCTAssertFalse(second.canModifySession(id))
         first.createSession()
         let newID = first.currentSessionID
@@ -966,6 +1021,9 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertTrue(chat.canChangeCurrentWorktree)
         do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot forget pending worktree files") }
         catch { }
+        do { try await chat.setCurrentProject(nil); XCTFail("Cannot detach pending worktree files") }
+        catch { }
+        XCTAssertEqual(chat.currentProjectID, project.id)
         XCTAssertNotNil(chat.currentWorktree)
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "Keep me")
         XCTAssertEqual(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree, chat.currentWorktree)

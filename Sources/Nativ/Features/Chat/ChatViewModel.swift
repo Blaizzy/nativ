@@ -1096,14 +1096,14 @@ final class ChatViewModel: ObservableObject {
         var session = ChatSession(id: sessionID, title: "Restored: \(record.title)", createdAt: Date(),
                                   updatedAt: Date(), messages: [], projectID: projectID, worktree: plan)
         // Persist the destination before creating it, so an interrupted restore remains discoverable.
-        try saveWorktreeSession(session)
+        try saveProjectSession(session)
         session.worktree = try await Task.detached(priority: .userInitiated) { try store.restore(id, to: plan) }.value
         if let fileTabs = record.workState {
             session.workState = try sessionStore.workFiles(for: session.worktree)
                 .refreshed(fileTabs, sessionID: sessionID, droppingMissing: true)
             session.workFilesInWorktree = true
         }
-        try saveWorktreeSession(session)
+        try saveProjectSession(session)
         return sessionID
     }
 
@@ -1136,10 +1136,55 @@ final class ChatViewModel: ObservableObject {
     }
 
     var canChangeCurrentWorktree: Bool {
-        guard let session = currentSession, session.projectID != nil,
-              session.worktree?.isReady != true else { return false }
+        currentProjectID != nil && canChangeCurrentProject
+    }
+
+    var canChangeCurrentProject: Bool {
+        guard let session = currentSession, session.worktree?.isReady != true else { return false }
         return messages.isEmpty && workState.items.isEmpty && !isSessionBusy(session.id)
             && canModifySession(session.id) && !isLoadingSessions
+    }
+
+    func setCurrentProject(_ projectID: UUID?) async throws {
+        guard canChangeCurrentProject, var session = currentSessionSnapshot else {
+            throw ChatGitWorktreeError(message: "Choose a project before starting the chat.")
+        }
+        guard projectID != session.projectID else { return }
+        let project = projectID.flatMap { projectStore.project(withID: $0) }
+        guard projectID == nil || project != nil else { throw ChatProjectStoreError.projectNotFound }
+        let operationID = UUID()
+        guard inferenceActivity.begin(resource: .chat(session.id), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "This chat is already active in another window.")
+        }
+        preparingWorktreeSessionIDs.insert(session.id)
+        defer {
+            preparingWorktreeSessionIDs.remove(session.id)
+            inferenceActivity.end(resource: .chat(session.id), operationID: operationID)
+        }
+        try await requireUncreatedWorktree(session.worktree)
+        if session.worktree != nil, let project {
+            let store = sessionStore.worktrees
+            let sessionID = session.id
+            session.worktree = try await Task.detached(priority: .userInitiated) {
+                try store.plan(projectPath: project.rootPath, sessionID: sessionID)
+            }.value
+        } else {
+            session.worktree = nil
+        }
+        session.projectID = projectID
+        try saveProjectSession(session)
+        worktreeSetupProgress[session.id] = nil
+    }
+
+    private func requireUncreatedWorktree(_ worktree: ChatGitWorktree?) async throws {
+        guard let worktree else { return }
+        let store = sessionStore.worktrees
+        let hasCheckout = await Task.detached {
+            store.hasStartedCreating(worktree) || FileManager.default.fileExists(atPath: worktree.path)
+        }.value
+        guard !hasCheckout else {
+            throw ChatGitWorktreeError(message: "This chat already has worktree files. Start a new chat to choose a different workspace.")
+        }
     }
 
     func toolScope(for sessionID: UUID, settings: NativSettings) -> ChatToolScope {
@@ -1166,17 +1211,10 @@ final class ChatViewModel: ObservableObject {
         }
         let store = sessionStore.worktrees
         if !enabled {
-            if let previous = session.worktree {
-                let hasCheckout = await Task.detached {
-                    store.hasStartedCreating(previous) || FileManager.default.fileExists(atPath: previous.path)
-                }.value
-                guard !hasCheckout else {
-                    throw ChatGitWorktreeError(message: "This chat already has worktree files. Keep Worktree enabled or start a new local chat.")
-                }
-            }
+            try await requireUncreatedWorktree(session.worktree)
             var local = session
             local.worktree = nil
-            try saveWorktreeSession(local)
+            try saveProjectSession(local)
             worktreeSetupProgress[session.id] = nil
             return
         }
@@ -1191,7 +1229,7 @@ final class ChatViewModel: ObservableObject {
         // Reserve the environment now. The first message supplies the branch name before checkout.
         var reserved = session
         reserved.worktree = plan
-        try saveWorktreeSession(reserved)
+        try saveProjectSession(reserved)
     }
 
     /// Called under the chat's generation lock, before constructing any agent request or tool scope.
@@ -1259,17 +1297,19 @@ final class ChatViewModel: ObservableObject {
         guard var session = sessionID == currentSessionID ? currentSessionSnapshot
             : storedSessions.first(where: { $0.id == sessionID }) else { throw ChatWorkError.unavailable }
         session.worktree = worktree
-        try saveWorktreeSession(session)
+        try saveProjectSession(session)
     }
 
-    private func saveWorktreeSession(_ session: ChatSession) throws {
+    private func saveProjectSession(_ session: ChatSession) throws {
         guard sessionStore.saveSession(session) else {
-            throw ChatGitWorktreeError(message: "The chat's worktree could not be saved. Its files are kept at \(session.worktree?.path ?? "").")
+            throw ChatGitWorktreeError(message: "The chat's workspace could not be saved. Any existing files are kept in their current location.")
         }
         upsertStoredSession(session)
         if currentSessionID == session.id {
             objectWillChange.send()
             currentSession?.worktree = session.worktree
+            currentSession?.projectID = session.projectID
+            currentProjectID = session.projectID
         }
         refreshSessionList()
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
