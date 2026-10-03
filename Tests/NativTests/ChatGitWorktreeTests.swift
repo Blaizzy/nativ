@@ -38,6 +38,41 @@ private struct WorktreeFixture {
 }
 
 final class ChatGitWorktreeTests: XCTestCase {
+    @MainActor
+    func testGitChangeObserverSeesNestedEditsAndWorktreeBranchChangesAndStops() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let tree = try fixture.store.create(fixture.store.plan(projectPath: fixture.repository.appendingPathComponent("Sources").path, sessionID: UUID()))
+        let paths = try fixture.store.observationPaths(at: tree.projectPath)
+        let canonical = { (path: String) in
+            URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+        XCTAssertEqual(Set(paths.map(canonical)), Set([tree.path, tree.commonDirectory].map(canonical)))
+
+        let edited = expectation(description: "Nested file changed")
+        edited.assertForOverFulfill = false
+        let observer = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { edited.fulfill() })
+        try "edited\n".write(to: URL(fileURLWithPath: tree.projectPath).appendingPathComponent("value.txt"), atomically: true, encoding: .utf8)
+        await fulfillment(of: [edited], timeout: 5)
+        observer.stop()
+        observer.stop() // Cancellation and deinit can both stop the same observer.
+
+        let renamed = expectation(description: "Worktree Git metadata changed")
+        renamed.assertForOverFulfill = false
+        let metadataObserver = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { renamed.fulfill() })
+        try WorktreeFixture.git(["-C", tree.path, "branch", "-m", "renamed-branch"])
+        await fulfillment(of: [renamed], timeout: 5)
+        XCTAssertEqual(tree.currentHead, .branch("renamed-branch"))
+        metadataObserver.stop()
+
+        let stopped = expectation(description: "Stopped observer stays silent")
+        stopped.isInverted = true
+        let stoppedObserver = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { stopped.fulfill() })
+        stoppedObserver.stop()
+        try "later\n".write(to: URL(fileURLWithPath: tree.projectPath).appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        await fulfillment(of: [stopped], timeout: 1)
+    }
+
     func testDiffCounterIncludesBranchAndUncommittedChangesWithoutChangingTheIndex() throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

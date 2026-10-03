@@ -1,4 +1,39 @@
+import CoreServices
 import Foundation
+
+/// Watches nested files and Git metadata; its owner stops it when the summary closes.
+final class ChatGitChangeObserver {
+    private var stream: FSEventStreamRef?
+    private let onChange: @Sendable () -> Void
+
+    init?(paths: [String], onChange: @escaping @Sendable () -> Void) {
+        self.onChange = onChange
+        guard !paths.isEmpty else { return nil }
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        guard let stream = FSEventStreamCreate(nil, { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<ChatGitChangeObserver>.fromOpaque(info).takeUnretainedValue().onChange()
+        }, &context, paths as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
+           FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot)) else { return nil }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, .main)
+        guard FSEventStreamStart(stream) else {
+            stop()
+            return nil
+        }
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        self.stream = nil
+    }
+
+    deinit { stop() }
+}
 
 /// Read from Git each time it is needed, rather than persisting a second current-branch value.
 enum ChatGitHead: Codable, Equatable, Sendable {
@@ -156,6 +191,14 @@ struct ChatGitWorktreeRemoval: Sendable {
 struct ChatGitWorktreeStore: Sendable {
     let root: URL
 
+    func observationPaths(at path: String) throws -> [String] {
+        // A linked worktree's Git metadata lives outside its checkout. Watch both,
+        // even when the project itself is a subfolder of the repository.
+        let checkout = try git(["rev-parse", "--show-toplevel"], at: path)
+        let common = try git(["rev-parse", "--path-format=absolute", "--git-common-dir"], at: path)
+        return [checkout, common]
+    }
+
     func currentHead(at path: String) throws -> ChatGitHead? {
         let directory = try git(["rev-parse", "--absolute-git-dir"], at: path)
         return ChatGitHead(contents: try String(contentsOf: URL(fileURLWithPath: directory)
@@ -176,7 +219,8 @@ struct ChatGitWorktreeStore: Sendable {
         }
         var result = ChatGitDiffStat()
         let options = ["--numstat", "--no-ext-diff", "--no-textconv", "--find-renames"]
-        result.include(try git(["diff"] + options + [base, "--"], at: directory))
+        // A read must not refresh the index and trigger another filesystem notification.
+        result.include(try git(["--no-optional-locks", "diff"] + options + [base, "--"], at: directory))
         let untracked = try git(["ls-files", "--others", "--exclude-standard", "-z"], at: directory, trimOutput: false)
         for file in untracked.split(separator: "\0") {
             // Use Git's own binary and line-count handling, without touching the user's index.

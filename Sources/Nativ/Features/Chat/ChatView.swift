@@ -356,9 +356,28 @@ private struct ChatProjectContextControls: View {
             let directory = path
             let worktree = chat.currentWorktree
             let includeDiff = isSummary
-            // This runs only while the controls are visible. It also catches branch changes
-            // from the user's shell, not just commands invoked by the agent.
-            while !Task.isCancelled {
+            let (events, refresh) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let paths = includeDiff ? await Task.detached {
+                try? ChatGitWorktreeStore(root: URL(fileURLWithPath: directory)).observationPaths(at: directory)
+            }.value : nil
+            guard !Task.isCancelled else { return }
+            let observer = paths.flatMap { ChatGitChangeObserver(paths: $0) { refresh.yield() } }
+            // Only the composer branch label polls; the summary refreshes on open and file events.
+            let poll = !includeDiff ? Task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    refresh.yield()
+                }
+            } : nil
+            defer {
+                observer?.stop()
+                poll?.cancel()
+                refresh.finish()
+            }
+            refresh.yield()
+            // File events are coalesced by FSEvents. Buffer at most one more refresh while Git runs.
+            for await _ in events {
+                guard !Task.isCancelled else { return }
                 let (head, diff) = await Task.detached {
                     let store = ChatGitWorktreeStore(root: URL(fileURLWithPath: directory))
                     let head = worktree?.isReady == true ? worktree?.currentHead : try? store.currentHead(at: directory)
@@ -370,7 +389,6 @@ private struct ChatProjectContextControls: View {
                 guard !Task.isCancelled else { return }
                 gitHead = head
                 gitDiff = diff
-                do { try await Task.sleep(for: .seconds(includeDiff ? 5 : 2)) } catch { return }
             }
         }
     }
