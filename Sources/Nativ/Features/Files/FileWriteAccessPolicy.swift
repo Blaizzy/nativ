@@ -23,6 +23,7 @@ struct ResolvedFileWritePath: Equatable, Sendable {
 struct FileWriteAccessPolicy: Sendable {
     static let binaryDocumentExtensions: Set<String> = [
         "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "pdf", "rtf",
+        "epub",
     ]
 
     let rootURL: URL
