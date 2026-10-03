@@ -74,7 +74,7 @@ enum Main {
             RoutineHeadlessRun.execute(routineID: CommandLine.arguments[index + 1])
         }
 
-        NativFeatureTips.configure()
+        NativReleaseTips.configure()
         NativApplication.main()
     }
 
