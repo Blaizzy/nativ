@@ -215,6 +215,7 @@ targets:
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
       - path: Sources/Nativ/Features/Shared/NativBulkSelection.swift
+      - path: Sources/Nativ/Features/Shared/NativFeatureTip.swift
       - path: Sources/Nativ/Features/Developer/LogTextStorageMutation.swift
       - path: Sources/Nativ/Features/Integrations/CodexCLIProfile.swift
       - path: Sources/Nativ/Features/Integrations/IntegrationServices.swift
