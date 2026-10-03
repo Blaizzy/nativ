@@ -253,6 +253,12 @@ final class AudioAnalyticsStore: ObservableObject {
         records.first { $0.id == id }
     }
 
+    /// Saved recordings and meetings. Dictation is excluded: it is short,
+    /// high-volume, and keeps no audio, so it is browsed separately.
+    var captureRecords: [AudioTranscriptionRecord] {
+        records.filter { $0.resolvedKind != .dictation }
+    }
+
     func upsertTranscription(
         recordingURL: URL,
         transcript: String,

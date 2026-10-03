@@ -2117,6 +2117,30 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.append(contentsOf: attachments)
     }
 
+    func attachAudioSessions(_ records: [AudioTranscriptionRecord]) {
+        var attachments: [ChatImageAttachment] = []
+        var failedTitles: [String] = []
+
+        for record in records {
+            do {
+                attachments.append(
+                    try ChatAudioSessionAttachment.makeAttachment(for: record)
+                )
+            } catch {
+                failedTitles.append(record.displayTitle)
+            }
+        }
+
+        attachmentImportError = failedTitles.isEmpty
+            ? nil
+            : "Couldn't attach \(failedTitles.joined(separator: ", "))."
+
+        guard !attachments.isEmpty else {
+            return
+        }
+        pendingImageAttachments.append(contentsOf: attachments)
+    }
+
     var canPasteImage: Bool {
         ChatImageAttachment.canReadImages(from: .general)
     }

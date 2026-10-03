@@ -2902,7 +2902,7 @@ struct AudioView: View {
     }
 
     private var captureRecords: [AudioTranscriptionRecord] {
-        analytics.records.filter { $0.resolvedKind != .dictation }
+        analytics.captureRecords
     }
 
     private var speechModels: [LocalModel] {
