@@ -52,9 +52,9 @@ its recorded token count exceeds the selected model's context window.
 ## Project chat environments
 
 New project chats start in **Local**, using the project's existing folder. Before sending
-messages or opening work-pane items, choose **Local > Worktree…** above the composer to
-reserve a separate Git checkout for that chat. The project must be a Git repository with
-at least one commit. On the first message, before the agent starts, Nativ fetches the remote's
+messages or opening work-pane items, choose **Local > Worktree** above the composer to
+reserve a separate Git checkout directly, without a confirmation popup. The project must be
+a Git repository with at least one commit. On the first message, before the agent starts, Nativ fetches the remote's
 default branch, asks the selected model for a descriptive branch name based on that message,
 and creates the checkout on `nativ/<name>` without a chat ID or numeric suffix. If naming fails,
 returns an invalid name, or names an existing local branch, Nativ picks two random words such

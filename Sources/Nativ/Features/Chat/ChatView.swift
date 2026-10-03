@@ -196,7 +196,6 @@ private struct ChatProjectContextControls: View {
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
     @ObservedObject var chat: ChatViewModel
-    @State private var showsWorktreeSetup = false
     @State private var setupError: String?
     @State private var gitHead: ChatGitHead?
     var isSummary = false
@@ -237,6 +236,9 @@ private struct ChatProjectContextControls: View {
                         .help(available ? "Project tools are off" : "Project folder unavailable")
                         .accessibilityLabel(available ? "Project tools are off" : "Project folder unavailable")
                 }
+            }
+            if let setupError {
+                Text(setupError).foregroundStyle(.red).textSelection(.enabled)
             }
             if isSummary {
                 Divider()
@@ -279,35 +281,6 @@ private struct ChatProjectContextControls: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .sheet(isPresented: $showsWorktreeSetup) {
-            VStack(alignment: .leading, spacing: 16) {
-                Label("Use worktree", systemImage: "arrow.triangle.branch").font(.headline)
-                Text("Give this chat its own checkout and branch. File tools and terminals will start there.")
-                Text("When you send your first message, Nativ syncs the remote default branch, asks your model to name the new branch, and creates the checkout before starting work. Repositories without a remote use the local commit.")
-                    .font(.callout).foregroundStyle(.secondary)
-                if let setupError { Text(setupError).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showsWorktreeSetup = false }
-                        .keyboardShortcut(.cancelAction)
-                        .disabled(chat.isPreparingCurrentWorktree)
-                    Button(chat.isPreparingCurrentWorktree ? "Preparing…" : "Use worktree") {
-                        setupError = nil
-                        Task {
-                            do {
-                                try await chat.createCurrentWorktree()
-                                showsWorktreeSetup = false
-                            } catch { setupError = error.localizedDescription }
-                        }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!chat.canCreateCurrentWorktree)
-                }
-            }
-            .padding(24)
-            .frame(width: 400)
-            .interactiveDismissDisabled(chat.isPreparingCurrentWorktree)
-        }
     }
 
     private var environmentMenu: some View {
@@ -323,8 +296,14 @@ private struct ChatProjectContextControls: View {
                 }
             } else {
                 Label("Local", systemImage: "checkmark")
-                Button("Worktree…", systemImage: "arrow.triangle.branch") { showsWorktreeSetup = true }
-                    .disabled(!chat.canCreateCurrentWorktree)
+                Button("Worktree", systemImage: "arrow.triangle.branch") {
+                    setupError = nil
+                    Task {
+                        do { try await chat.createCurrentWorktree() }
+                        catch { setupError = error.localizedDescription }
+                    }
+                }
+                .disabled(!chat.canCreateCurrentWorktree)
             }
             Divider()
             Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
