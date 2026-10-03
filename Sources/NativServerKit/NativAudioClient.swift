@@ -36,12 +36,15 @@ public actor NativRealtimeTranscriptionSession {
     private let onTranscriptUpdate: TranscriptUpdate
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
+    private var connectionTask: Task<Void, Error>?
     private var receiveTask: Task<Void, Never>?
     private var transcript = ""
     private var completion: CheckedContinuation<String, Error>?
     private var completedTranscript: String?
     private var firstError: Error?
     private var isCommitted = false
+    private var isConnected = false
+    private var isConfigured = false
     private var isInvalidated = false
 
     public init(
@@ -73,11 +76,17 @@ public actor NativRealtimeTranscriptionSession {
         session = URLSession(configuration: configuration)
     }
 
+    public func prepare() async throws {
+        guard !isInvalidated else { throw CancellationError() }
+        try await connectIfNeeded()
+    }
+
     public func append(pcm16: Data, sampleRate: Int) async throws {
         guard !pcm16.isEmpty else { return }
         guard !isInvalidated else { throw CancellationError() }
         do {
-            try await connectIfNeeded(sampleRate: sampleRate)
+            try await connectIfNeeded()
+            try await configureIfNeeded(sampleRate: sampleRate)
             try await send([
                 "type": "input_audio_buffer.append",
                 "audio": pcm16.base64EncodedString(),
@@ -90,7 +99,10 @@ public actor NativRealtimeTranscriptionSession {
 
     public func finish() async throws -> String {
         if let firstError { throw firstError }
-        guard let socket else { return transcript }
+        guard isConfigured, let socket else {
+            cancel()
+            return transcript
+        }
         if !isCommitted {
             isCommitted = true
             do {
@@ -116,6 +128,8 @@ public actor NativRealtimeTranscriptionSession {
     public func cancel() {
         guard !isInvalidated else { return }
         isInvalidated = true
+        connectionTask?.cancel()
+        connectionTask = nil
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
@@ -125,14 +139,43 @@ public actor NativRealtimeTranscriptionSession {
         session.invalidateAndCancel()
     }
 
-    private func connectIfNeeded(sampleRate: Int) async throws {
-        if socket != nil { return }
+    private func connectIfNeeded() async throws {
+        if isConnected { return }
+        if let connectionTask {
+            try await connectionTask.value
+            return
+        }
+        let task = Task { try await establishConnection() }
+        connectionTask = task
+        do {
+            try await task.value
+            connectionTask = nil
+        } catch {
+            connectionTask = nil
+            throw error
+        }
+    }
+
+    private func establishConnection() async throws {
         let socket = session.webSocketTask(with: request)
         self.socket = socket
         socket.resume()
+        do {
+            let created = try await receiveJSON(from: socket)
+            try Self.requireEvent(created, type: "session.created")
+            isConnected = true
+        } catch {
+            socket.cancel(with: .goingAway, reason: nil)
+            self.socket = nil
+            throw error
+        }
+    }
 
-        let created = try await receiveJSON(from: socket)
-        try Self.requireEvent(created, type: "session.created")
+    private func configureIfNeeded(sampleRate: Int) async throws {
+        if isConfigured { return }
+        guard let socket else {
+            throw NativAudioTranscriptionError.realtime("Realtime transcription is not connected.")
+        }
         try await send([
             "type": "session.update",
             "session": [
@@ -147,6 +190,7 @@ public actor NativRealtimeTranscriptionSession {
         ])
         let updated = try await receiveJSON(from: socket)
         try Self.requireEvent(updated, type: "session.updated")
+        isConfigured = true
         receiveTask = Task { [weak self, socket] in
             await self?.receiveEvents(from: socket)
         }
@@ -222,6 +266,8 @@ public actor NativRealtimeTranscriptionSession {
         guard firstError == nil else { return }
         firstError = error
         isInvalidated = true
+        connectionTask?.cancel()
+        connectionTask = nil
         completion?.resume(throwing: error)
         completion = nil
         socket?.cancel(with: .goingAway, reason: nil)

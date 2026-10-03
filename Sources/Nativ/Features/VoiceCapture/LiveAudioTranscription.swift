@@ -68,6 +68,7 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
     private let session: NativRealtimeTranscriptionSession
     private let modelID: String
     private let transcriptURL: URL
+    private var preparationTask: Task<Void, Never>?
 
     init(
         recordingURL: URL,
@@ -112,6 +113,9 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
         emitter = LiveAudioPCMEmitter { data, sampleRate in
             try await session.append(pcm16: data, sampleRate: sampleRate)
         }
+        preparationTask = Task {
+            try? await session.prepare()
+        }
     }
 
     func finish() async throws -> (transcript: String, modelID: String) {
@@ -121,6 +125,8 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
     }
 
     func cancel() async {
+        preparationTask?.cancel()
+        preparationTask = nil
         emitter.cancel()
         await session.cancel()
         try? FileManager.default.removeItem(at: transcriptURL)
