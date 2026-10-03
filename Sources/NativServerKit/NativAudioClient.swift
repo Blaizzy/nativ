@@ -42,6 +42,7 @@ public actor NativRealtimeTranscriptionSession {
     private var completedTranscript: String?
     private var firstError: Error?
     private var isCommitted = false
+    private var isInvalidated = false
 
     public init(
         baseURL: URL,
@@ -74,6 +75,7 @@ public actor NativRealtimeTranscriptionSession {
 
     public func append(pcm16: Data, sampleRate: Int) async throws {
         guard !pcm16.isEmpty else { return }
+        guard !isInvalidated else { throw CancellationError() }
         do {
             try await connectIfNeeded(sampleRate: sampleRate)
             try await send([
@@ -112,6 +114,8 @@ public actor NativRealtimeTranscriptionSession {
     }
 
     public func cancel() {
+        guard !isInvalidated else { return }
+        isInvalidated = true
         receiveTask?.cancel()
         receiveTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
@@ -169,6 +173,7 @@ public actor NativRealtimeTranscriptionSession {
                     socket.cancel(with: .normalClosure, reason: nil)
                     self.socket = nil
                     receiveTask = nil
+                    isInvalidated = true
                     session.finishTasksAndInvalidate()
                     return
                 case "error":
@@ -216,6 +221,7 @@ public actor NativRealtimeTranscriptionSession {
     private func fail(_ error: Error) {
         guard firstError == nil else { return }
         firstError = error
+        isInvalidated = true
         completion?.resume(throwing: error)
         completion = nil
         socket?.cancel(with: .goingAway, reason: nil)

@@ -970,6 +970,21 @@ private actor LiveAudioPacketProbe {
 }
 
 final class LiveAudioPCMEmitterTests: XCTestCase {
+    func testRealtimeSessionRejectsAppendAfterCancellation() async throws {
+        let session = try NativRealtimeTranscriptionSession(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            model: "test-model"
+        ) { _ in }
+
+        await session.cancel()
+
+        do {
+            try await session.append(pcm16: Data([0, 0]), sampleRate: 16_000)
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+    }
+
     func testConvertsBuffersToOrderedMonoPCM16Packets() async throws {
         let probe = LiveAudioPacketProbe()
         let emitter = LiveAudioPCMEmitter { data, sampleRate in
