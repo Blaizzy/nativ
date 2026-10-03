@@ -28,6 +28,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var projectID: UUID?
     var imageGenerationModelID: String?
+    var compaction: ChatCompactionState? = nil
     var workState: ChatWorkState?
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil

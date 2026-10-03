@@ -2345,6 +2345,7 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.removeAll()
         pendingAnnotations.removeAll()
         messages.removeAll()
+        currentSession?.compaction = nil
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
     }
@@ -2454,6 +2455,13 @@ final class ChatViewModel: ObservableObject {
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey
         )
+        let responsesClient = NativResponsesClient(
+            baseURL: queuedRequest.settings.serverBaseURL,
+            apiKey: queuedRequest.settings.serverAPIKey,
+            tenant: queuedRequest.sessionID.uuidString
+        )
+        let usesCompaction = queuedRequest.settings.compactionEnabled
+            ? try await responsesClient.supportsCompaction() : false
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
@@ -2525,11 +2533,49 @@ final class ChatViewModel: ObservableObject {
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
             let completion: MLXChatCompletion
             do {
-                completion = try await client.streamChat(
-                    request,
-                    onEvent: { event in
-                        eventRelay.submit(event)
-                    })
+                if usesCompaction {
+                    var contextLimit = try await responsesClient.contextLimit(for: request.model)
+                    for path in activeSettings.localModelSearchPaths.all {
+                        let metadata = await LocalModelDiscovery.configurationMetadata(
+                            repoID: request.model, path: path
+                        )
+                        if let limit = metadata?.contextSize, limit > 0 {
+                            contextLimit = min(contextLimit ?? limit, limit)
+                            break
+                        }
+                    }
+                    let threshold = try ChatCompactionState.threshold(
+                        modelContext: contextLimit,
+                        configuredContext: activeSettings.maxKVSize,
+                        maxOutput: request.maxTokens
+                    )
+                    let saved = currentSessionID == queuedRequest.sessionID
+                        ? currentSession?.compaction
+                        : storedSessions.first { $0.id == queuedRequest.sessionID }?.compaction
+                    let input = try saved?.input(for: request, serverURL: activeSettings.serverBaseURL)
+                        ?? NativResponsesClient.inputItems(request.messages)
+                    let result = try await responsesClient.streamResponse(
+                        request, input: input, compactThreshold: threshold,
+                        onEvent: { event in eventRelay.submit(event) }
+                    )
+                    try Task.checkCancellation()
+                    if let item = result.compaction {
+                        let state = try ChatCompactionState(
+                            item: item, request: request, serverURL: activeSettings.serverBaseURL
+                        )
+                        if currentSessionID == queuedRequest.sessionID {
+                            currentSession?.compaction = state
+                        } else if let index = storedSessions.firstIndex(where: { $0.id == queuedRequest.sessionID }) {
+                            storedSessions[index].compaction = state
+                        }
+                    }
+                    completion = result.completion
+                } else {
+                    completion = try await client.streamChat(
+                        request,
+                        onEvent: { event in eventRelay.submit(event) }
+                    )
+                }
                 eventRelay.finish()
             } catch {
                 eventRelay.cancel()

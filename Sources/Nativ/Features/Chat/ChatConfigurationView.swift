@@ -288,6 +288,10 @@ struct ModelConfigurationView: View {
             )
             .disabled(isLoadingModelConfiguration)
 
+            Toggle("Compact long conversations", isOn: $settings.compactionEnabled)
+            Text("Summarize older context as the conversation grows. Your full chat history stays visible. Requires a server with compaction support.")
+                .configurationHintStyle()
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("System prompt")
                     .font(.subheadline)
