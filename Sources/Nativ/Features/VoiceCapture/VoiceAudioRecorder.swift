@@ -173,7 +173,8 @@ final class VoiceAudioRecorder {
     @discardableResult
     func start(
         outputURL requestedOutputURL: URL? = nil,
-        deviceUniqueID: String? = nil
+        deviceUniqueID: String? = nil,
+        liveChunkEmitter: LiveAudioPCMEmitter? = nil
     ) throws -> URL {
         if let recordingURL, isRecording {
             return recordingURL
@@ -189,7 +190,10 @@ final class VoiceAudioRecorder {
         let id = UUID()
         recordingID = id
         lastRecordingError = nil
-        let writer = VoiceAudioRecordingWriter(outputURL: outputURL) { [weak self] error in
+        let writer = VoiceAudioRecordingWriter(
+            outputURL: outputURL,
+            liveChunkEmitter: liveChunkEmitter
+        ) { [weak self] error in
             Task { @MainActor [weak self] in
                 guard let self, self.recordingID == id else { return }
                 self.recordingFailed(error)
@@ -295,7 +299,7 @@ final class VoiceAudioRecorder {
         }
     }
 
-    private static func makeOutputURL() throws -> URL {
+    static func makeOutputURL() throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
@@ -315,9 +319,15 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
     private var converter: AVAudioConverter?
     private var conversionOutput: AVAudioPCMBuffer?
     private var pendingConversionBuffer: AVAudioPCMBuffer?
+    private let liveChunkEmitter: LiveAudioPCMEmitter?
 
-    init(outputURL: URL, onFailure: @escaping @Sendable (Error) -> Void = { _ in }) {
+    init(
+        outputURL: URL,
+        liveChunkEmitter: LiveAudioPCMEmitter? = nil,
+        onFailure: @escaping @Sendable (Error) -> Void = { _ in }
+    ) {
         self.outputURL = outputURL
+        self.liveChunkEmitter = liveChunkEmitter
         self.onFailure = onFailure
     }
 
@@ -346,6 +356,7 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
                 catch { reportFailure(error) }
             }
             audioFile?.close()
+            liveChunkEmitter?.finish()
             return hadFailure ? nil : failure
         }
         if let newFailure { onFailure(newFailure) }
@@ -404,6 +415,7 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
         }
         if buffer.format == audioFile.processingFormat {
             try audioFile.write(from: buffer)
+            try liveChunkEmitter?.append(buffer)
             writtenFrames += AVAudioFramePosition(buffer.frameLength)
             return
         }
@@ -454,6 +466,7 @@ final class VoiceAudioRecordingWriter: VoiceAudioBufferWriting, @unchecked Senda
             }
             if output.frameLength > 0 {
                 try audioFile.write(from: output)
+                try liveChunkEmitter?.append(output)
                 writtenFrames += AVAudioFramePosition(output.frameLength)
             }
             if status != .haveData { return }

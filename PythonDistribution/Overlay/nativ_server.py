@@ -26,7 +26,7 @@ else:
     truststore.inject_into_ssl()
 
 import mlx.core as mx
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, WebSocket
 from fastapi.responses import Response
 from mlx.utils import tree_flatten
 
@@ -34,6 +34,13 @@ import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
+
+
+@base.app.websocket("/v1/audio/realtime")
+async def audio_realtime_endpoint(websocket: WebSocket) -> None:
+    from mlx_audio.server import realtime_ws
+
+    await realtime_ws(websocket)
 
 
 def safe_failure_code(error: BaseException | None = None, status: int | None = None) -> str:

@@ -176,7 +176,7 @@ final class FnControlShortcutMonitor {
         preferences: VoiceShortcutPreferences? = nil,
         readModifiers: @escaping () -> VoiceShortcutModifiers = {
             VoiceShortcutModifiers(
-                cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+                cgEventFlags: CGEventSource.flagsState(.hidSystemState)
             )
         }
     ) {

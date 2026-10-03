@@ -909,6 +909,111 @@ final class NativAudioClientTests: XCTestCase {
     }
 }
 
+final class StreamingVoiceTranscriptStateTests: XCTestCase {
+    func testStreamsOnlyNewText() {
+        var state = StreamingVoiceTranscriptState(returnCommandTrigger: nil)
+
+        XCTAssertEqual(state.incrementalText(for: "hello"), "hello")
+        XCTAssertEqual(state.incrementalText(for: "hello from nativ"), " from nativ")
+        XCTAssertEqual(state.finalText(for: "hello from nativ"), "")
+    }
+
+    func testHoldsCommandWordsUntilFinalization() {
+        var state = StreamingVoiceTranscriptState(returnCommandTrigger: "send it")
+
+        XCTAssertEqual(
+            state.incrementalText(for: "hello from nativ"),
+            "hello from nativ"
+        )
+        XCTAssertEqual(
+            state.incrementalText(for: "hello from nativ send it"),
+            ""
+        )
+        XCTAssertEqual(state.finalText(for: "hello from nativ"), "")
+    }
+}
+
+private actor LiveAudioPacketProbe {
+    private(set) var packets: [Data] = []
+    private(set) var sampleRates: [Int] = []
+
+    func send(_ data: Data, sampleRate: Int) {
+        packets.append(data)
+        sampleRates.append(sampleRate)
+    }
+}
+
+final class LiveAudioPCMEmitterTests: XCTestCase {
+    func testRejectsAudioWhenBoundedBacklogIsFull() throws {
+        let emitter = LiveAudioPCMEmitter(maximumPendingPackets: 0) { _, _ in }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 1,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)
+        )
+        buffer.frameLength = 160
+
+        XCTAssertThrowsError(try emitter.append(buffer)) { error in
+            guard case LiveAudioPCMEmitterError.backlogExceeded = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRealtimeSessionRejectsAppendAfterCancellation() async throws {
+        let session = try NativRealtimeTranscriptionSession(
+            baseURL: URL(string: "http://127.0.0.1:8080")!,
+            model: "test-model"
+        ) { _ in }
+
+        await session.cancel()
+
+        do {
+            try await session.append(pcm16: Data([0, 0]), sampleRate: 16_000)
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {
+        }
+    }
+
+    func testConvertsBuffersToOrderedMonoPCM16Packets() async throws {
+        let probe = LiveAudioPacketProbe()
+        let emitter = LiveAudioPCMEmitter { data, sampleRate in
+            await probe.send(data, sampleRate: sampleRate)
+        }
+        let format = try XCTUnwrap(
+            AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: 16_000,
+                channels: 2,
+                interleaved: false
+            )
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 320)
+        )
+        buffer.frameLength = 320
+        buffer.floatChannelData?[0].initialize(repeating: 0.25, count: 320)
+        buffer.floatChannelData?[1].initialize(repeating: 0.25, count: 320)
+
+        for _ in 0..<3 {
+            try emitter.append(buffer)
+        }
+        try await emitter.drain()
+
+        let packets = await probe.packets
+        let sampleRates = await probe.sampleRates
+        XCTAssertEqual(packets.map(\.count), [640, 640, 640])
+        XCTAssertEqual(sampleRates, [16_000, 16_000, 16_000])
+    }
+
+}
+
 @MainActor
 final class VoiceAnimationPreferencesTests: XCTestCase {
     func testAnimationStyleOrderByPurpose() {
