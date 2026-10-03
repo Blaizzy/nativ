@@ -1815,22 +1815,57 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendWorkEdit(_ target: ChatWorkFeedback, request: String, using appModel: NativModel) async throws {
+        try await sendToolRequest(using: appModel) { settings in
+            try appendWorkEdit(target, request: request, settings: settings)
+        }
+    }
+
+    func sendCreatePullRequest(branch: String, path: String, using appModel: NativModel) async throws {
+        try await sendToolRequest(using: appModel) { settings in
+            try appendCreatePullRequest(branch: branch, path: path, settings: settings)
+        }
+    }
+
+    func appendCreatePullRequest(branch: String, path: String, settings: NativSettings) throws -> ChatTranscriptMessage {
+        guard let session = currentSession, canModifySession(session.id), promptEditContext == nil else {
+            throw ChatWorkError.invalid("Finish editing your message before requesting a pull request.")
+        }
+        let scope = toolScope(for: session.id, settings: settings)
+        guard scope.projectToolsAreAvailable, scope.rootPath == path,
+              session.worktree?.isReady != false, !branch.isEmpty else {
+            throw ChatWorkError.invalid("Open an available checkout and enable project tools before creating a pull request.")
+        }
+        let message = ChatTranscriptMessage(role: .user, content: """
+            Create a draft GitHub pull request for branch \(branch) in \(path).
+            Verify that this is still the current branch before making changes. Review its diff, \
+            push the branch if needed, and write a concise title and description. \
+            If a pull request already exists, use it instead of creating a duplicate. Return the pull request link.
+            """, modelID: settings.languageModelID)
+        try persistSubmission(messages + [message], settings: settings)
+        return message
+    }
+
+    private func sendToolRequest(using appModel: NativModel,
+                                 appendMessage: (NativSettings) throws -> ChatTranscriptMessage) async throws {
+        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
         let modelID = try submissionSettings(using: appModel).languageModelID
         let models = try await LocalModelDiscovery.scan(searchPaths: appModel.settings.localModelSearchPaths)
         try Task.checkCancellation()
         let settings = try submissionSettings(using: appModel)
+        guard currentSessionID == sessionID else {
+            throw ChatWorkError.invalid("Return to the original chat before sending this request.")
+        }
         guard settings.languageModelID == modelID else {
-            throw ChatWorkError.invalid("The model changed. Send the edit request again when it is ready.")
+            throw ChatWorkError.invalid("The model changed. Send the request again when it is ready.")
         }
         guard let localModel = models.first(where: { $0.repoID == modelID }),
               localModel.capabilities.contains(.tools) else {
-            throw ChatWorkError.invalid("Choose a model that supports tools to edit this file.")
+            throw ChatWorkError.invalid("Choose a model that supports tools for this request.")
         }
         if !importedContinuationIsAvailable(contextWindow: localModel.contextSize) {
             throw ChatWorkError.invalid("This chat exceeds the selected model’s context window.")
         }
-        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
-        let message = try appendWorkEdit(target, request: request, settings: settings)
+        let message = try appendMessage(settings)
         enqueueGeneration(for: message.id, in: sessionID, settings: settings,
                           languageModelSupportsTools: true,
                           languageModelSupportsVision: localModel.capabilities.contains(.vision), appModel: appModel)

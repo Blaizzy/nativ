@@ -206,8 +206,10 @@ private struct ChatProjectContextControls: View {
     @State private var showsProjectPicker = false
     @State private var isProjectHovered = false
     @State private var isSummaryMenuHovered = false
+    @State private var isCreatingPullRequest = false
     var isSummary = false
     var isVisible: Binding<Bool> = .constant(true)
+    var onCreatePullRequest: ((String, String) async throws -> Void)?
 
     private var path: String {
         chat.currentWorktree?.isReady == false ? project?.rootPath ?? "" : chat.currentWorktree?.projectPath ?? project?.rootPath ?? ""
@@ -445,6 +447,30 @@ private struct ChatProjectContextControls: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Pull request #\(request.number), \(request.title), \(request.status)")
                 .help("\(request.title) — \(request.status)\n\(request.url.absoluteString)")
+            } else if pullRequest == .notFound, case .branch(let name) = gitHead, let onCreatePullRequest {
+                Button {
+                    isCreatingPullRequest = true
+                    setupError = nil
+                    let repositoryPath = path
+                    Task {
+                        defer { isCreatingPullRequest = false }
+                        do {
+                            try await onCreatePullRequest(name, repositoryPath)
+                            isVisible.wrappedValue = false
+                        } catch { setupError = error.localizedDescription }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        gitHubIcon
+                        Text("Create pull request")
+                        Spacer(minLength: 0)
+                        if isCreatingPullRequest { ProgressView().controlSize(.mini) }
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isCreatingPullRequest)
+                .help("Ask the agent to create a draft pull request for this branch")
             } else {
                 gitHubIcon
                 Text(pullRequestMessage).lineLimit(1)
@@ -467,7 +493,7 @@ private struct ChatProjectContextControls: View {
         guard case .branch = gitHead else { return "No branch selected" }
         return switch pullRequest {
         case .found(let request): "Open pull request #\(request.number)"
-        case .notFound: "No pull request found"
+        case .notFound: "Create pull request"
         case .unavailable(let message): message
         case nil: "Checking pull request…"
         }
@@ -650,6 +676,7 @@ private struct ChatPinnedSummaryToggle: View {
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
     @ObservedObject var chat: ChatViewModel
+    let onCreatePullRequest: (String, String) async throws -> Void
     @EnvironmentObject private var projects: ChatProjectStore
     @State private var isPresented = false
     @State private var isHovered = false
@@ -673,7 +700,8 @@ private struct ChatPinnedSummaryToggle: View {
             NativArrowlessPopoverPresenter(isPresented: $isPresented, gap: 14, alignment: .trailing,
                                            edge: .bottom, cornerRadius: 10, title: "Pinned summary") {
                 ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
-                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true, isVisible: $isPresented)
+                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true, isVisible: $isPresented,
+                                           onCreatePullRequest: onCreatePullRequest)
                     .environmentObject(projects)
                     .padding(8)
                     .frame(width: 300)
@@ -828,7 +856,9 @@ private struct ChatTranscriptView: View {
             ZStack(alignment: .topTrailing) {
                 if !chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
                     ChatPinnedSummaryToggle(project: project, rootIsAvailable: projectRootIsAvailable,
-                                            toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
+                                            toolsEnabled: model.settings.projectToolsEnabled, chat: chat) { branch, path in
+                        try await chat.sendCreatePullRequest(branch: branch, path: path, using: model)
+                    }
                         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
                                  + (chat.workState.isVisible ? 0 : ControlPanelLayout.topControlSize * 2))
                         .padding(.top, ControlPanelLayout.topControlsTopPadding)
