@@ -288,37 +288,32 @@ struct ModelConfigurationView: View {
             )
             .disabled(isLoadingModelConfiguration)
 
-            Toggle("Compact long conversations", isOn: $settings.compactionEnabled)
-            Text("Summarize older context as the conversation grows. Your full chat history stays visible. Requires a server with compaction support.")
-                .configurationHintStyle()
-
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Compaction threshold")
+                HStack(spacing: 6) {
+                    Toggle("Auto compact", isOn: $settings.compactionEnabled)
+                        .fixedSize()
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                        .help("Summarize older context while keeping your full chat history visible. Set 20–90% on a 1–100% scale. Compaction may happen earlier to leave room for output. Requires a server with compaction support.")
+                        .accessibilityLabel("About auto compaction")
                     Spacer()
                     Text("\(settings.compactionThresholdPercent)%")
                         .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
-                .foregroundStyle(.secondary)
 
                 Slider(
                     value: compactionThresholdBinding,
                     in: 1...100,
-                    step: 1,
                     enabledBounds: 20...90
                 ) {
                     EmptyView()
-                } minimumValueLabel: {
-                    Text("1%")
-                } maximumValueLabel: {
-                    Text("100%")
                 }
+                .controlSize(.small)
+                .disabled(!settings.compactionEnabled)
                 .accessibilityLabel("Compaction threshold")
                 .accessibilityValue("\(settings.compactionThresholdPercent)%")
             }
-            .disabled(!settings.compactionEnabled)
-            Text("Choose 20–90% of the context window. May compact earlier to leave room for output.")
-                .configurationHintStyle()
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("System prompt")
