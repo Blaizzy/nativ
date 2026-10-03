@@ -44,6 +44,7 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
                 OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit),
                 with: parser
             )
+            if let error = parser.error { throw error }
             let text = parser.text
             guard !text.isEmpty else { continue }
             sections.append(ExtractedDocumentSection(
@@ -164,12 +165,17 @@ private final class SharedStringsParser: NSObject, XMLParserDelegate {
 
 /// Emits one tab-separated line per row, preserving column gaps so columns stay aligned.
 private final class WorksheetParser: NSObject, XMLParserDelegate {
+    private static let maximumColumnCount = 16_384
+    private static let maximumOutputCharacters = 16 * 1_024 * 1_024
+
     private let sharedStrings: [String]
     private var rows: [String] = []
+    private var outputCharacterCount = 0
     private var cells: [String] = []
     private var value = ""
     private var readsValue = false
     private var isSharedString = false
+    private(set) var error: DocumentTextExtractionError?
 
     init(sharedStrings: [String]) {
         self.sharedStrings = sharedStrings
@@ -186,13 +192,17 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
+        guard error == nil else { return }
         switch XMLTextParsing.localName(elementName) {
         case "row":
             cells = []
         case "c":
             isSharedString = (attributeDict["t"] ?? "") == "s"
             if let reference = attributeDict["r"] {
-                let target = Self.column(for: reference)
+                guard let target = Self.column(for: reference) else {
+                    error = .invalidDocument
+                    return
+                }
                 while cells.count < target { cells.append("") }
             }
         case "v", "t":
@@ -204,7 +214,7 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if readsValue { value.append(string) }
+        if error == nil, readsValue { value.append(string) }
     }
 
     func parser(
@@ -213,6 +223,7 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
+        guard error == nil else { return }
         switch XMLTextParsing.localName(elementName) {
         case "v", "t":
             guard readsValue else { return }
@@ -224,19 +235,38 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
             }
         case "row":
             while let last = cells.last, last.isEmpty { cells.removeLast() }
-            rows.append(cells.joined(separator: "\t"))
+            let row = cells.joined(separator: "\t")
+            let separatorCount = rows.isEmpty ? 0 : 1
+            guard outputCharacterCount + separatorCount + row.count
+                    <= Self.maximumOutputCharacters
+            else {
+                error = .archiveTooLarge
+                return
+            }
+            rows.append(row)
+            outputCharacterCount += separatorCount + row.count
         default:
             break
         }
     }
 
     /// Zero-based column index from a cell reference such as `BC12`.
-    private static func column(for reference: String) -> Int {
+    private static func column(for reference: String) -> Int? {
         var index = 0
+        var letterCount = 0
+        var hasRow = false
         for character in reference {
-            guard let ascii = character.asciiValue, ascii >= 65, ascii <= 90 else { break }
+            guard let ascii = character.asciiValue else { return nil }
+            if ascii >= 48, ascii <= 57 {
+                guard letterCount > 0 else { return nil }
+                hasRow = true
+                continue
+            }
+            guard !hasRow, ascii >= 65, ascii <= 90, letterCount < 3 else { return nil }
             index = index * 26 + Int(ascii - 64)
+            letterCount += 1
         }
-        return max(0, index - 1)
+        guard hasRow, index <= maximumColumnCount else { return nil }
+        return index - 1
     }
 }

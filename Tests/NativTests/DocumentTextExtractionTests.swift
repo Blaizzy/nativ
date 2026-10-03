@@ -105,6 +105,53 @@ final class DocumentTextExtractionTests: XCTestCase {
         }
     }
 
+    func testXLSXRejectsCellReferencesBeyondTheExcelColumnLimit() async throws {
+        let data = try spreadsheetData(rows: ["<row><c r=\"ZZZZZZ1\"><v>1</v></c></row>"])
+
+        do {
+            _ = try await DocumentTextExtractionRouter().extract(
+                data: data,
+                filename: "malformed.xlsx",
+                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                format: .spreadsheet
+            )
+            XCTFail("Expected an invalid document error")
+        } catch {
+            XCTAssertEqual(error as? DocumentTextExtractionError, .invalidDocument)
+        }
+    }
+
+    func testXLSXAcceptsTheLastValidExcelColumn() async throws {
+        let data = try spreadsheetData(rows: ["<row><c r=\"XFD1\"><v>1</v></c></row>"])
+
+        let content = try await DocumentTextExtractionRouter().extract(
+            data: data,
+            filename: "boundary.xlsx",
+            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            format: .spreadsheet
+        )
+
+        XCTAssertEqual(content.sections.first?.text.count, 16_384)
+        XCTAssertTrue(content.sections.first?.text.hasSuffix("1") == true)
+    }
+
+    func testXLSXRejectsSparseOutputExpansionBeyondTheSafetyLimit() async throws {
+        let rows = (1...1_024).map { "<row><c r=\"XFD\($0)\"><v>1</v></c></row>" }
+        let data = try spreadsheetData(rows: rows)
+
+        do {
+            _ = try await DocumentTextExtractionRouter().extract(
+                data: data,
+                filename: "oversized.xlsx",
+                mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                format: .spreadsheet
+            )
+            XCTFail("Expected an archive-too-large error")
+        } catch {
+            XCTAssertEqual(error as? DocumentTextExtractionError, .archiveTooLarge)
+        }
+    }
+
     private func powerpointData(slides: [Int: String]) throws -> Data {
         let url = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -127,6 +174,39 @@ final class DocumentTextExtractionTests: XCTestCase {
                 provider: { position, size in
                     let start = Int(position)
                     return xml.subdata(in: start..<min(start + size, xml.count))
+                }
+            )
+        }
+        return try Data(contentsOf: url)
+    }
+
+    private func spreadsheetData(rows: [String]) throws -> Data {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appendingPathExtension("xlsx")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let archive = try Archive(url: url, accessMode: .create)
+        let files = [
+            "xl/workbook.xml": """
+                <workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <sheets><sheet name="Sheet1" r:id="rId1"/></sheets>
+                </workbook>
+                """,
+            "xl/_rels/workbook.xml.rels": """
+                <Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>
+                """,
+            "xl/worksheets/sheet1.xml": "<worksheet><sheetData>\(rows.joined())</sheetData></worksheet>",
+        ]
+        for (path, contents) in files {
+            let data = Data(contents.utf8)
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: Int64(data.count),
+                provider: { position, size in
+                    let start = Int(position)
+                    return data.subdata(in: start..<min(start + size, data.count))
                 }
             )
         }
