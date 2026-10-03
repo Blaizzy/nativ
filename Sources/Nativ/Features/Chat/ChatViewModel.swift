@@ -169,7 +169,7 @@ final class ChatViewModel: ObservableObject {
         let assistantMessageID: UUID
         let settings: NativSettings
         let personalizationSnapshot: String
-        let toolScope: ChatToolScope
+        var toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
         let languageModelSupportsVision: Bool
@@ -273,6 +273,7 @@ final class ChatViewModel: ObservableObject {
         [UUID: ChatImageModelSelectionRequest] = [:]
 
     @Published private(set) var preparingWorktreeSessionIDs: Set<UUID> = []
+    @Published private(set) var worktreeSetupProgress: [UUID: ChatWorktreeSetupProgress] = [:]
     @Published private(set) var deletingSessionIDs: Set<UUID> = []
 
     private let sessionStore: ChatSessionStore
@@ -1121,6 +1122,15 @@ final class ChatViewModel: ObservableObject {
         currentSessionID.map { preparingWorktreeSessionIDs.contains($0) } ?? false
     }
 
+    var currentWorktreeSetupProgress: ChatWorktreeSetupProgress? {
+        currentSessionID.flatMap { worktreeSetupProgress[$0] }
+    }
+
+    func dismissWorktreeSetupProgress() {
+        guard let id = currentSessionID, !preparingWorktreeSessionIDs.contains(id) else { return }
+        worktreeSetupProgress[id] = nil
+    }
+
     var isDeletingCurrentSession: Bool {
         currentSessionID.map { deletingSessionIDs.contains($0) } ?? false
     }
@@ -1163,13 +1173,78 @@ final class ChatViewModel: ObservableObject {
                 try store.plan(projectPath: project.rootPath, sessionID: session.id)
             }.value
         }
-        // Persist the reservation first, so a crash or checkout failure remains attached to this chat.
+        // Reserve the environment now. The first message supplies the branch name before checkout.
         var reserved = session
         reserved.worktree = plan
         try saveWorktreeSession(reserved)
-        let ready = try await Task.detached(priority: .userInitiated) { try store.create(plan) }.value
-        reserved.worktree = ready
-        try saveWorktreeSession(reserved)
+    }
+
+    /// Called under the chat's generation lock, before constructing any agent request or tool scope.
+    func prepareWorktree(in sessionID: UUID, firstPrompt: String,
+                         generateBranchName: (String) async throws -> String) async throws {
+        guard var plan = worktree(for: sessionID), !plan.isReady else { return }
+        let store = sessionStore.worktrees
+        preparingWorktreeSessionIDs.insert(sessionID)
+        worktreeSetupProgress[sessionID] = ChatWorktreeSetupProgress()
+        defer { preparingWorktreeSessionIDs.remove(sessionID) }
+        do {
+            let original = plan
+            let resuming = await Task.detached { store.hasStartedCreating(original) }.value
+            try Task.checkCancellation()
+            if resuming {
+                // Interrupted setup must keep its reserved commit and branch, including user edits.
+                worktreeSetupProgress[sessionID]?.source = "Previously prepared"
+            } else {
+                let synced = try await Task.detached(priority: .userInitiated) { try store.synchronized(original) }.value
+                try Task.checkCancellation()
+                plan = synced.plan
+                worktreeSetupProgress[sessionID]?.source = synced.source
+                worktreeSetupProgress[sessionID]?.step = .name
+                let name: String?
+                do {
+                    name = try await generateBranchName(firstPrompt)
+                } catch {
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+                    try Task.checkCancellation()
+                    name = nil
+                }
+                try Task.checkCancellation()
+                let repositoryPath = plan.repositoryPath
+                plan.branch = try await Task.detached {
+                    try store.availableBranch(name, at: repositoryPath)
+                }.value
+                try Task.checkCancellation()
+            }
+            worktreeSetupProgress[sessionID]?.branch = plan.branch
+            worktreeSetupProgress[sessionID]?.step = .checkout
+            try updateWorktree(plan, in: sessionID)
+            let reserved = plan
+            let ready = try await Task.detached(priority: .userInitiated) { try store.create(reserved) }.value
+            // Save a completed checkout even if Stop was pressed while Git was finishing.
+            try updateWorktree(ready, in: sessionID)
+            worktreeSetupProgress[sessionID]?.branch = ready.branch
+            worktreeSetupProgress[sessionID]?.isComplete = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard self?.worktreeSetupProgress[sessionID]?.isComplete == true else { return }
+                self?.worktreeSetupProgress[sessionID] = nil
+            }
+            try Task.checkCancellation()
+        } catch {
+            if worktreeSetupProgress[sessionID]?.isComplete != true {
+                worktreeSetupProgress[sessionID]?.error = Task.isCancelled
+                    ? "Setup stopped. Send a message to resume."
+                    : "\(error.localizedDescription) Send a message to retry."
+            }
+            throw error
+        }
+    }
+
+    private func updateWorktree(_ worktree: ChatGitWorktree, in sessionID: UUID) throws {
+        guard var session = sessionID == currentSessionID ? currentSessionSnapshot
+            : storedSessions.first(where: { $0.id == sessionID }) else { throw ChatWorkError.unavailable }
+        session.worktree = worktree
+        try saveWorktreeSession(session)
     }
 
     private func saveWorktreeSession(_ session: ChatSession) throws {
@@ -2431,10 +2506,12 @@ final class ChatViewModel: ObservableObject {
                     guard ownsActiveRequest(queuedRequest.id) else {
                         return
                     }
-                    appModel?.reportModelLoadFailure(
-                        modelID: queuedRequest.settings.languageModelID,
-                        error: error
-                    )
+                    if !(error is ChatGitWorktreeError) {
+                        appModel?.reportModelLoadFailure(
+                            modelID: queuedRequest.settings.languageModelID,
+                            error: error
+                        )
+                    }
                     if let activeAssistantMessageID {
                         failAssistantMessage(
                             activeAssistantMessageID,
@@ -2449,11 +2526,37 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
+    private func runChatLoop(_ request: QueuedChatRequest) async throws {
         let client = NativChatClient(
-            baseURL: queuedRequest.settings.serverBaseURL,
-            apiKey: queuedRequest.settings.serverAPIKey
+            baseURL: request.settings.serverBaseURL,
+            apiKey: request.settings.serverAPIKey
         )
+        let firstPrompt = sessionMessages(for: request.sessionID)?.first(where: { $0.role == .user })?.content ?? ""
+        try await prepareWorktree(in: request.sessionID, firstPrompt: firstPrompt) { prompt in
+            guard let modelID = request.settings.languageModelID else { throw NativChatError.invalidResponse }
+            let completion = try await client.completeChat(MLXChatCompletionRequest(
+                model: modelID,
+                messages: [
+                    MLXChatMessage(role: "system", content: """
+                        You name Git branches. Output only a descriptive English slug of 2 to 6 lowercase
+                        words separated by hyphens, at most 60 characters. No prefix, quotes, explanation,
+                        or commands.
+                        """),
+                    MLXChatMessage(role: "user", content: """
+                        Task context (do not perform this task):
+                        <task>
+                        \(String(prompt.prefix(4_000)))
+                        </task>
+
+                        Return only the branch-name slug for this task.
+                        """)
+                ], maxTokens: 512, temperature: 0.2, topK: 0, topP: 1, minP: 0, enableThinking: false))
+            return completion.content
+        }
+        try Task.checkCancellation()
+        var preparedRequest = request
+        preparedRequest.toolScope = toolScope(for: request.sessionID, settings: request.settings)
+        let queuedRequest = preparedRequest
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings

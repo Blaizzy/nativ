@@ -139,6 +139,58 @@ private enum ChatTranscriptLayout {
     static let scrollIndicatorClearance: CGFloat = 17
 }
 
+private struct ChatWorktreeSetupView: View {
+    let progress: ChatWorktreeSetupProgress
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(progress.isComplete ? "Worktree ready" : progress.error == nil ? "Preparing worktree" : "Worktree setup stopped")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                if progress.isComplete || progress.error != nil {
+                    Button(action: dismiss) { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Dismiss setup progress").accessibilityLabel("Dismiss setup progress")
+                }
+            }
+            ForEach(ChatWorktreeSetupProgress.Step.allCases, id: \.rawValue) { step in
+                let complete = progress.isComplete || step.rawValue < progress.step.rawValue
+                let active = !progress.isComplete && step == progress.step
+                HStack(spacing: 8) {
+                    Group {
+                        if complete {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else if active && progress.error != nil {
+                            Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        } else if active {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "circle").foregroundStyle(.tertiary)
+                        }
+                    }.frame(width: 14, height: 14)
+                    Text(step.title)
+                    Spacer(minLength: 8)
+                    if let detail = step == .sync ? progress.source : step == .name ? progress.branch : nil {
+                        Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(detail)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(complete ? "Complete" : active ? (progress.error == nil ? "In progress" : "Stopped") : "Waiting")
+            }
+            if let error = progress.error {
+                Text(error).foregroundStyle(.secondary).lineLimit(3).help(error).textSelection(.enabled)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
+            .fill(Color.primary.opacity(0.035)))
+    }
+}
+
 private struct ChatProjectContextControls: View {
     let project: ChatProject?
     let rootIsAvailable: Bool
@@ -229,9 +281,9 @@ private struct ChatProjectContextControls: View {
         }
         .sheet(isPresented: $showsWorktreeSetup) {
             VStack(alignment: .leading, spacing: 16) {
-                Label("Create worktree", systemImage: "arrow.triangle.branch").font(.headline)
+                Label("Use worktree", systemImage: "arrow.triangle.branch").font(.headline)
                 Text("Give this chat its own checkout and branch. File tools and terminals will start there.")
-                Text("Starts from the project's current commit. Uncommitted changes stay in the local folder.")
+                Text("When you send your first message, Nativ syncs the remote default branch, asks your model to name the new branch, and creates the checkout before starting work. Repositories without a remote use the local commit.")
                     .font(.callout).foregroundStyle(.secondary)
                 if let setupError { Text(setupError).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
                 HStack {
@@ -239,7 +291,7 @@ private struct ChatProjectContextControls: View {
                     Button("Cancel") { showsWorktreeSetup = false }
                         .keyboardShortcut(.cancelAction)
                         .disabled(chat.isPreparingCurrentWorktree)
-                    Button(chat.isPreparingCurrentWorktree ? "Creating…" : "Create worktree") {
+                    Button(chat.isPreparingCurrentWorktree ? "Preparing…" : "Use worktree") {
                         setupError = nil
                         Task {
                             do {
@@ -261,17 +313,13 @@ private struct ChatProjectContextControls: View {
     private var environmentMenu: some View {
         Menu {
             if let worktree = chat.currentWorktree {
-                Text(gitHead?.displayName ?? "Branch unavailable")
+                Text(gitHead?.displayName ?? (worktree.isReady ? "Branch unavailable" : "Setup starts when you send a message"))
                 switch gitHead {
                 case .branch(let name):
                     Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
                 case .detached(let commit):
                     Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
                 case nil: EmptyView()
-                }
-                if !worktree.isReady {
-                    Button("Retry worktree setup…") { showsWorktreeSetup = true }
-                        .disabled(!chat.canCreateCurrentWorktree)
                 }
             } else {
                 Label("Local", systemImage: "checkmark")
@@ -695,7 +743,9 @@ private struct ChatComposerContainer: View {
 
     @ViewBuilder
     private var contextHeader: some View {
-        if chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
+        if let progress = chat.currentWorktreeSetupProgress {
+            ChatWorktreeSetupView(progress: progress, dismiss: chat.dismissWorktreeSetupProgress)
+        } else if chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
             ChatProjectContextControls(project: project, rootIsAvailable: projectRootIsAvailable,
                                        toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
         }

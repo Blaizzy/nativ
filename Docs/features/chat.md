@@ -53,9 +53,21 @@ its recorded token count exceeds the selected model's context window.
 
 New project chats start in **Local**, using the project's existing folder. Before sending
 messages or opening work-pane items, choose **Local > Worktree…** above the composer to
-create a separate Git checkout and a `nativ/<chat-id>` branch for that chat. The project
-must be a Git repository with at least one commit. Worktree creation starts at its current
-commit; it leaves uncommitted files and the project's current branch unchanged.
+reserve a separate Git checkout for that chat. The project must be a Git repository with
+at least one commit. On the first message, before the agent starts, Nativ fetches the remote's
+default branch, asks the selected model for a descriptive branch name based on that message,
+and creates the checkout on `nativ/<name>` without a chat ID or numeric suffix. If naming fails,
+returns an invalid name, or names an existing local branch, Nativ picks two random words such
+as `nativ/quiet-cedar`, excluding existing local branches. It prefers `origin`, otherwise the current
+branch's remote or the sole configured remote. Repositories without a remote use their local
+commit. The project's current branch and uncommitted files stay unchanged.
+
+A setup card above the composer shows **Sync remote**, **Name branch**, and **Create worktree**,
+with a spinner on the active step and circular checkmarks on completed steps. The completed
+card closes automatically after one second. Sync or checkout
+failures stop the request before the agent can act; send another message to retry using the
+original first prompt. Existing worktrees are never synced or renamed automatically, and an
+interrupted checkout resumes its saved branch and commit.
 
 File read/write/search tools, project MCP scope, and new terminals use the chat's checkout.
 Projects rooted in a repository subfolder keep that relative folder in the checkout.
@@ -72,7 +84,7 @@ The environment menu shows the current Git branch and provides **Copy branch nam
 **Copy folder path**, and **Show in Finder**. Checkouts live under the app profile's
 `Chat/Worktrees/<chat-id>` folder. Each chat keeps this association across launches;
 an unavailable checkout disables project tools instead of redirecting them to Local.
-Failed setup remains attached to the chat and can be retried from the environment menu.
+Pending or failed setup remains attached to the chat across launches and resumes when a message is sent.
 Agents can create, switch, or rename branches through the approved terminal. Git is the
 source of truth: the visible controls refresh every two seconds and agent context reads HEAD
 on every model request, including follow-ups in the same turn. Detached HEAD shows the commit

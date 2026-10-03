@@ -31,8 +31,8 @@ struct ChatGitWorktree: Codable, Equatable, Sendable {
     let commonDirectory: String
     let path: String
     let projectSubpath: String
-    let branch: String // The branch Nativ created and owns, not necessarily the current branch.
-    let baseCommit: String
+    var branch: String // The branch Nativ created and owns, not necessarily the current branch.
+    var baseCommit: String
     var isReady = false
 
     var projectPath: String {
@@ -100,6 +100,26 @@ struct ChatGitWorktreeError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct ChatWorktreeSetupProgress: Equatable {
+    enum Step: Int, CaseIterable {
+        case sync, name, checkout
+
+        var title: String {
+            switch self {
+            case .sync: "Sync remote"
+            case .name: "Name branch"
+            case .checkout: "Create worktree"
+            }
+        }
+    }
+
+    var step: Step = .sync
+    var isComplete = false
+    var error: String?
+    var source: String?
+    var branch: String?
+}
+
 struct ChatGitWorktreeRemoval: Sendable {
     let hasCheckout: Bool
     let checkoutHead: ChatGitHead?
@@ -163,14 +183,18 @@ struct ChatGitWorktreeStore: Sendable {
             }
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let existingCommit = try? git(["rev-parse", "--verify", "refs/heads/\(plan.branch)"], at: plan.repositoryPath)
-            if let existingCommit {
+            if let existingCommit, usesSessionBranch(plan) {
                 guard existingCommit == plan.baseCommit else {
                     throw ChatGitWorktreeError(message: "The worktree branch already contains different work. It has been preserved: \(plan.branch)")
                 }
                 // Git may have created the branch before a previous checkout was interrupted.
                 _ = try git(["worktree", "add", "--", plan.path, plan.branch], at: plan.repositoryPath)
             } else {
-                _ = try git(["worktree", "add", "-b", plan.branch, "--", plan.path, plan.baseCommit], at: plan.repositoryPath)
+                guard existingCommit == nil else {
+                    throw ChatGitWorktreeError(message: "The branch \(plan.branch) already exists. It has been preserved. Start a new chat with a different task name.")
+                }
+                // Git refuses a concurrent collision; never adopt an existing user's branch.
+                _ = try git(["worktree", "add", "-b", result.branch, "--", plan.path, plan.baseCommit], at: plan.repositoryPath)
             }
         }
         result.isReady = true
@@ -180,11 +204,86 @@ struct ChatGitWorktreeStore: Sendable {
         return result
     }
 
+    /// Fetch only the remote default branch. Never pull, reset, or change the user's checkout.
+    func synchronized(_ plan: ChatGitWorktree) throws -> (plan: ChatGitWorktree, source: String) {
+        let path = plan.repositoryPath
+        let remotes = try git(["remote"], at: path).split(separator: "\n").map(String.init)
+        var result = plan
+        guard !remotes.isEmpty else {
+            result.baseCommit = try git(["rev-parse", "--verify", "HEAD^{commit}"], at: path)
+            return (result, "No remote · Using local commit")
+        }
+        let trackingRemote = try? git(["config", "--get", "branch.\(currentHead(at: path)?.displayName ?? "").remote"], at: path)
+        guard let remote = remotes.contains("origin") ? "origin"
+            : trackingRemote.flatMap({ remotes.contains($0) ? $0 : nil }) ?? (remotes.count == 1 ? remotes[0] : nil) else {
+            throw ChatGitWorktreeError(message: "Choose an origin remote or configure the current branch's upstream before creating a worktree.")
+        }
+        let advertised = try git(["ls-remote", "--symref", "--", remote, "HEAD"], at: path)
+        let prefix = "ref: refs/heads/"
+        guard let line = advertised.components(separatedBy: "\n").first(where: { $0.hasPrefix(prefix) && $0.hasSuffix("\tHEAD") }) else {
+            throw ChatGitWorktreeError(message: "The default branch of \(remote) could not be found. Check the remote's HEAD and try again.")
+        }
+        let branch = String(line.dropFirst(prefix.count).dropLast("\tHEAD".count))
+        let ref = "refs/remotes/\(remote)/\(branch)"
+        _ = try git(["fetch", "--no-tags", "--", remote, "+refs/heads/\(branch):\(ref)"], at: path)
+        result.baseCommit = try git(["rev-parse", "--verify", "\(ref)^{commit}"], at: path)
+        return (result, "\(remote)/\(branch)")
+    }
+
+    func hasStartedCreating(_ plan: ChatGitWorktree) -> Bool {
+        plan.registered || (usesSessionBranch(plan)
+            && (try? git(["rev-parse", "--verify", "refs/heads/\(plan.branch)"], at: plan.repositoryPath)) != nil)
+    }
+
+    private func usesSessionBranch(_ plan: ChatGitWorktree) -> Bool {
+        let id = URL(fileURLWithPath: plan.path).lastPathComponent
+        return plan.branch == "nativ/\(id)" || plan.branch.hasSuffix("-\(id)")
+    }
+
+    static let fallbackBranches: [String] = {
+        let adjectives = "bright calm clear cool crisp early fair gentle golden green happy hidden kind light lively lucky mellow misty noble quiet rapid silver smooth soft steady still sunny swift vivid warm wild wise".split(separator: " ")
+        let nouns = "birch brook cedar cloud coast coral cove crane dawn dune elm fern field finch forest fox glade grove heron hill lake leaf maple meadow moon moss oak pine reed river stone willow".split(separator: " ")
+        return adjectives.flatMap { adjective in nouns.map { "nativ/\(adjective)-\($0)" } }
+    }()
+
+    static func availableBranch(_ response: String?, excluding existing: Set<String>) throws -> String {
+        if let response, let branch = try? namedBranch(response), !existing.contains(branch) {
+            return branch
+        }
+        guard let branch = fallbackBranches.filter({ !existing.contains($0) }).randomElement() else {
+            throw ChatGitWorktreeError(message: "All random branch names are in use. Retry with a descriptive task name.")
+        }
+        return branch
+    }
+
+    func availableBranch(_ response: String?, at repositoryPath: String) throws -> String {
+        let branches = try git(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"], at: repositoryPath)
+        return try Self.availableBranch(response, excluding: Set(branches.split(separator: "\n").map(String.init)))
+    }
+
+    static func namedBranch(_ response: String) throws -> String {
+        let slug = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
+            .lowercased()
+        // Treat the model's response only as a name, never as Git arguments or shell code.
+        guard (3...60).contains(slug.count), slug.first?.isLetter == true || slug.first?.isNumber == true,
+              slug.last?.isLetter == true || slug.last?.isNumber == true,
+              !slug.contains("--"), slug.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
+            throw ChatGitWorktreeError(message: "The model did not return a valid branch name. Retry the request to name the worktree.")
+        }
+        return "nativ/\(slug)"
+    }
+
     func removal(_ worktree: ChatGitWorktree, sessionID: UUID) throws -> ChatGitWorktreeRemoval {
         let id = sessionID.uuidString.lowercased()
         let storage = FileWriteAccessPolicy.configuredRootURL(rootPath: root.path)
         let expectedPath = storage?.appendingPathComponent(id, isDirectory: true).path
-        guard worktree.path == expectedPath, worktree.branch == "nativ/\(id)" else {
+        let legacyName = worktree.branch == "nativ/\(id)" || (worktree.branch.hasPrefix("nativ/")
+            && worktree.branch.hasSuffix("-\(id)")
+            && (try? Self.namedBranch(String(worktree.branch.dropFirst(6).dropLast(id.count + 1))))
+                == String(worktree.branch.dropLast(id.count + 1)))
+        let namedBranch = (try? Self.namedBranch(String(worktree.branch.dropFirst(6)))) == worktree.branch
+        guard worktree.path == expectedPath, legacyName || namedBranch else {
             throw ChatGitWorktreeError(message: "This checkout is outside the chat's managed worktree folder. It has been preserved.")
         }
         let common = try git(["rev-parse", "--path-format=absolute", "--git-common-dir"], at: worktree.repositoryPath)
@@ -234,7 +333,8 @@ struct ChatGitWorktreeStore: Sendable {
         } ?? false
         // Never delete a user branch. Remove our original branch only if its history is in
         // the snapshot and no other checkout uses it; otherwise leave that branch intact.
-        let removesBranch = !branchIsInUseElsewhere && ownedCommit.flatMap { owned in
+        let removesBranch = (legacyName || worktree.isReady || checkout != nil)
+            && !branchIsInUseElsewhere && ownedCommit.flatMap { owned in
             commit.map { (try? git(["merge-base", "--is-ancestor", owned, $0], at: worktree.repositoryPath)) != nil }
         } == true
         return ChatGitWorktreeRemoval(hasCheckout: checkout != nil, checkoutHead: head, headCommit: commit,
