@@ -18,15 +18,6 @@ public final class NativResponsesClient: @unchecked Sendable {
         self.session = session
     }
 
-    public func supportsCompaction() async throws -> Bool {
-        let (data, response) = try await session.data(for: makeRequest(path: "openapi.json"))
-        if (response as? HTTPURLResponse)?.statusCode == 404 { return false }
-        try validate(response, body: String(decoding: data, as: UTF8.self))
-        let schema = try MLXJSONValue(jsonData: data)
-        return schema["paths"]?["/responses/compact"] != nil
-            || schema["paths"]?["/v1/responses/compact"] != nil
-    }
-
     public func contextLimit(for model: String) async throws -> Int? {
         let (data, response) = try await session.data(for: makeRequest(path: "health"))
         try validate(response, body: String(decoding: data, as: UTF8.self))

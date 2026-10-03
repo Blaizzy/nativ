@@ -163,14 +163,12 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertFalse(try JSONDecoder().decode(NativSettings.self, from: saved).compactionEnabled)
     }
 
-    func testHTTPStreamAndCapabilityDetection() async throws {
+    func testHTTPStreamAndContextLimit() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [CompactionURLProtocol.self]
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         let client = NativResponsesClient(baseURL: server, tenant: "chat-test", session: session)
-        let supported = try await client.supportsCompaction()
-        XCTAssertTrue(supported)
         let contextLimit = try await client.contextLimit(for: "test-model")
         XCTAssertEqual(contextLimit, 10000)
         let otherLimit = try await client.contextLimit(for: "another-model")
@@ -183,8 +181,15 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(response.completion.content, "Hello")
         XCTAssertNotNil(response.compaction)
         let oldClient = NativResponsesClient(baseURL: server.appendingPathComponent("old"), tenant: "chat-test", session: session)
-        let oldSupportsCompaction = try await oldClient.supportsCompaction()
-        XCTAssertFalse(oldSupportsCompaction)
+        do {
+            _ = try await oldClient.streamResponse(
+                chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: 24000,
+                onEvent: { _ in }
+            )
+            XCTFail("Unsupported Responses requests must fail without a Chat Completions fallback.")
+        } catch NativChatError.httpStatus(let status, _) {
+            XCTAssertEqual(status, 404)
+        }
     }
 
     func testLiveMiniCPMCompactionAndReplay() async throws {
@@ -193,8 +198,6 @@ final class ChatCompactionTests: XCTestCase {
             throw XCTSkip("Set NATIV_COMPACTION_TEST_URL to an isolated MiniCPM server with a 10K context limit.")
         }
         let client = NativResponsesClient(baseURL: url, tenant: UUID().uuidString)
-        let supported = try await client.supportsCompaction()
-        XCTAssertTrue(supported)
         var chat = request([
             .init(role: "system", content: "Follow the user's requirements. Answer factual questions briefly."),
             .init(role: "user", content: "Our project is ORCHID. Deployment port is 7319. Never modify secrets.env."),
@@ -275,8 +278,8 @@ private final class CompactionURLProtocol: URLProtocol {
     override func startLoading() {
         let body: String
         let contentType: String
-        if request.url!.path.hasSuffix("openapi.json") {
-            body = request.url!.path.hasPrefix("/old") ? #"{"paths":{}}"# : #"{"paths":{"/responses/compact":{}}}"#
+        if request.url!.path == "/old/v1/responses" {
+            body = #"{"detail":"Not Found"}"#
             contentType = "application/json"
         } else if request.url!.path == "/health" {
             body = #"{"loaded_model":"test-model","effective_context_limit":10000}"#
@@ -293,7 +296,7 @@ private final class CompactionURLProtocol: URLProtocol {
             """
             contentType = "text/event-stream"
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: request.url!.path.hasPrefix("/old/") ? 404 : 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)

@@ -2460,8 +2460,6 @@ final class ChatViewModel: ObservableObject {
             apiKey: queuedRequest.settings.serverAPIKey,
             tenant: queuedRequest.sessionID.uuidString
         )
-        let usesCompaction = queuedRequest.settings.compactionEnabled
-            ? try await responsesClient.supportsCompaction() : false
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
@@ -2533,7 +2531,7 @@ final class ChatViewModel: ObservableObject {
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
             let completion: MLXChatCompletion
             do {
-                if usesCompaction {
+                if queuedRequest.settings.compactionEnabled {
                     var contextLimit = try await responsesClient.contextLimit(for: request.model)
                     for path in activeSettings.localModelSearchPaths.all {
                         let metadata = await LocalModelDiscovery.configurationMetadata(

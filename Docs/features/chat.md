@@ -39,9 +39,10 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
-Older servers keep the existing Chat Completions path. To build against the unreleased
-compaction API in [mlx-vlm PR #2408](https://github.com/Blaizzy/mlx-vlm/pull/2408),
-point the bundle build at a checkout of that branch:
+Compaction requires a server that supports the Responses compaction API. Unsupported
+servers return an error. To build against the unreleased compaction API in
+[mlx-vlm PR #2408](https://github.com/Blaizzy/mlx-vlm/pull/2408), point the bundle
+build at a checkout of that branch:
 
 ```sh
 MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
