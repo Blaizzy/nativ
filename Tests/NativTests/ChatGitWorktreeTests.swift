@@ -1,6 +1,61 @@
 import Foundation
 import XCTest
 
+final class ChatGitHubPullRequestTests: XCTestCase {
+    private func output(_ text: String = "", error: String = "", code: Int32 = 0,
+                        timedOut: Bool = false, truncated: Bool = false) -> TerminalProcessResult {
+        .init(stdout: text, stderr: error, exitCode: code, terminationSignal: nil, timedOut: timedOut,
+              durationMilliseconds: 0, outputTruncated: truncated)
+    }
+
+    func testPRStatesAndBranchIdentity() throws {
+        for (state, draft, label) in [("OPEN", false, "Open"), ("OPEN", true, "Draft"),
+                                      ("MERGED", false, "Merged"), ("CLOSED", false, "Closed")] {
+            let json = """
+            {"number":656,"title":"Worktrees","url":"https://github.com/Blaizzy/nativ/pull/656",
+             "state":"\(state)","isDraft":\(draft),"headRefName":"123"}
+            """
+            guard case .found(let request) = ChatGitHubPullRequestDetector.decode(output(json), branch: "123") else {
+                return XCTFail("Expected matching PR")
+            }
+            XCTAssertEqual(request.status, label)
+            XCTAssertEqual(ChatGitHubPullRequestDetector.decode(output(json), branch: "other"), .notFound)
+            XCTAssertEqual(ChatGitHubPullRequestDetector.decode(output(json), branch: "local", upstreamBranch: "123"), .found(request))
+            for invalid in [json.replacingOccurrences(of: "https://", with: "file:///"), "not json"] {
+                guard case .unavailable = ChatGitHubPullRequestDetector.decode(output(invalid), branch: "123") else {
+                    return XCTFail("Invalid PR data must not create a clickable link")
+                }
+            }
+        }
+    }
+
+    func testNoPRIsDistinctFromAuthenticationAndLookupFailures() {
+        let none = output(error: "no pull requests found for branch \"main\"\n", code: 1)
+        XCTAssertEqual(ChatGitHubPullRequestDetector.decode(none, branch: "main"), .notFound)
+        for failure in [output(code: 4), output(error: "please run gh auth login", code: 1),
+                        output(code: 127), output(error: "network error", code: 1),
+                        output(timedOut: true), output(truncated: true)] {
+            guard case .unavailable = ChatGitHubPullRequestDetector.decode(failure, branch: "main") else {
+                return XCTFail("Lookup errors must not be reported as no PR")
+            }
+        }
+    }
+
+    func testLookupUsesCheckoutWithoutInterpolatingBranchOrStartingInteractiveAuth() async throws {
+        let response = output(error: "no pull requests found for branch \"123\"\n", code: 1)
+        let result = try await ChatGitHubPullRequestDetector.lookup(at: "/tmp/project with spaces", branch: "123") { request in
+            XCTAssertEqual(request.command, "exec gh pr view --json number,title,url,state,isDraft,headRefName")
+            XCTAssertEqual(request.currentDirectoryURL.path, "/tmp/project with spaces")
+            XCTAssertEqual(request.environment["GH_PROMPT_DISABLED"], "1")
+            XCTAssertNil(request.environment["GH_REPO"])
+            XCTAssertNil(request.environment["GIT_DIR"])
+            XCTAssertEqual(request.timeout, 15)
+            return response
+        }
+        XCTAssertEqual(result, .notFound)
+    }
+}
+
 private struct WorktreeFixture {
     let root: URL
     let repository: URL

@@ -201,10 +201,13 @@ private struct ChatProjectContextControls: View {
     @State private var setupError: String?
     @State private var gitHead: ChatGitHead?
     @State private var gitDiff: ChatGitDiffStat?
+    @State private var pullRequest: ChatPullRequestLookup?
+    @State private var pullRequestRevision = 0
     @State private var showsProjectPicker = false
     @State private var isProjectHovered = false
     @State private var isSummaryMenuHovered = false
     var isSummary = false
+    var isVisible: Binding<Bool> = .constant(true)
 
     private var path: String {
         chat.currentWorktree?.isReady == false ? project?.rootPath ?? "" : chat.currentWorktree?.projectPath ?? project?.rootPath ?? ""
@@ -214,6 +217,7 @@ private struct ChatProjectContextControls: View {
     }
 
     private var branch: String? { gitHead?.displayName }
+    private var activePath: String { isVisible.wrappedValue ? path : "" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: isSummary ? 4 : 12) {
@@ -329,6 +333,7 @@ private struct ChatProjectContextControls: View {
                 }
                 .padding(.horizontal, 8)
                 .frame(height: 30)
+                pullRequestRow
                 Divider().padding(.horizontal, 8).padding(.vertical, 4)
                 summaryRow("Files", icon: "folder", value: "\(chat.workState.items.filter(\.canEdit).count)")
                 summaryRow("Project tools", icon: "wrench.and.screwdriver",
@@ -349,11 +354,13 @@ private struct ChatProjectContextControls: View {
             showsProjectPicker = false
             setupError = nil
         }
-        .task(id: path) {
+        .task(id: activePath) {
             gitHead = nil
             gitDiff = nil
-            guard !path.isEmpty else { return }
-            let directory = path
+            pullRequest = nil
+            pullRequestRevision = 0
+            guard !activePath.isEmpty else { return }
+            let directory = activePath
             let worktree = chat.currentWorktree
             let includeDiff = isSummary
             let (events, refresh) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -387,9 +394,82 @@ private struct ChatProjectContextControls: View {
                     return (head, diff)
                 }.value
                 guard !Task.isCancelled else { return }
+                if gitHead != head { pullRequest = nil }
                 gitHead = head
                 gitDiff = diff
+                if includeDiff { pullRequestRevision += 1 }
             }
+        }
+        .task(id: "\(activePath)\0\(pullRequestRevision)") {
+            guard isSummary, !activePath.isEmpty, case .branch(let name) = gitHead else { return }
+            do {
+                // Opening checks immediately. Subsequent file events wait for a brief
+                // pause, cancelling superseded lookups instead of querying on every write.
+                if pullRequestRevision > 1 { try await Task.sleep(for: .seconds(1)) }
+                let result = try await ChatGitHubPullRequestDetector.lookup(at: path, branch: name)
+                try Task.checkCancellation()
+                guard gitHead == .branch(name) else { return }
+                pullRequest = result
+            } catch is CancellationError {
+            } catch {
+                if !Task.isCancelled { pullRequest = .unavailable("Couldn’t check GitHub pull requests") }
+            }
+        }
+    }
+
+    private var pullRequestRow: some View {
+        HStack(spacing: 8) {
+            if case .found(let request) = pullRequest {
+                Button {
+                    do {
+                        if let item = chat.workState.items.first(where: { $0.url == request.url.absoluteString }) {
+                            chat.openWorkItem(item.id)
+                        } else {
+                            try chat.createWorkItem(title: "#\(request.number) \(request.title)", kind: .website,
+                                                    url: request.url.absoluteString)
+                        }
+                    } catch { setupError = error.localizedDescription }
+                } label: {
+                    HStack(spacing: 8) {
+                        gitHubIcon
+                        Text("#\(request.number) \(request.title)").lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(request.statusIconName).renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 14, height: 14)
+                            .foregroundStyle(request.state == .merged ? Color.purple : request.state == .closed ? .red : request.isDraft ? .secondary : .green)
+                            .help(request.status)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pull request #\(request.number), \(request.title), \(request.status)")
+                .help("\(request.title) — \(request.status)\n\(request.url.absoluteString)")
+            } else {
+                gitHubIcon
+                Text(pullRequestMessage).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+        }
+        .foregroundStyle(pullRequest == nil ? Color.secondary : .primary)
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .help(pullRequestMessage)
+    }
+
+    private var gitHubIcon: some View {
+        Image("GitHubMark").renderingMode(.template).resizable().scaledToFit()
+            .frame(width: 14, height: 14)
+            .accessibilityHidden(true)
+    }
+
+    private var pullRequestMessage: String {
+        guard case .branch = gitHead else { return "No branch selected" }
+        return switch pullRequest {
+        case .found(let request): "Open pull request #\(request.number)"
+        case .notFound: "No pull request found"
+        case .unavailable(let message): message
+        case nil: "Checking pull request…"
         }
     }
 
@@ -593,7 +673,7 @@ private struct ChatPinnedSummaryToggle: View {
             NativArrowlessPopoverPresenter(isPresented: $isPresented, gap: 14, alignment: .trailing,
                                            edge: .bottom, cornerRadius: 10, title: "Pinned summary") {
                 ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
-                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true)
+                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true, isVisible: $isPresented)
                     .environmentObject(projects)
                     .padding(8)
                     .frame(width: 300)

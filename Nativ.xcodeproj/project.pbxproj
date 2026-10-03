@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		913496CF99724F13845873F5 /* ChatGitHubPullRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A2D2CC43884176A7E1D7A8 /* ChatGitHubPullRequest.swift */; };
+		C92C2187CB3844BBA049D810 /* ChatGitHubPullRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A2D2CC43884176A7E1D7A8 /* ChatGitHubPullRequest.swift */; };
 		000EAB97CDF74A172ED79748 /* ChatWebReadTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8158351DC9E135F30DA83A01 /* ChatWebReadTool.swift */; };
 		009747F9B06053A59F9040A7 /* FileSyntaxValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 846F6324EA769406B747062D /* FileSyntaxValidator.swift */; };
 		01A65582AEB5E196FDEFDBE8 /* AudioInputDevicePreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = D23B2DDDCBC745B54A08174D /* AudioInputDevicePreferences.swift */; };
@@ -640,6 +642,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		17A2D2CC43884176A7E1D7A8 /* ChatGitHubPullRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatGitHubPullRequest.swift; sourceTree = "<group>"; };
 		028A6EB95776995CFF6F82A9 /* ControlPanelState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelState.swift; sourceTree = "<group>"; };
 		03496D30CE58F138CA30EB0D /* ControlPanelDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanelDetail.swift; sourceTree = "<group>"; };
 		05586B0B909EAD6C76485D57 /* HubModelSizeResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModelSizeResolverTests.swift; sourceTree = "<group>"; };
@@ -1645,6 +1648,7 @@
 				8A176708720937F2AEF36812 /* ChatDocumentContextBuilder.swift */,
 				5375C079FD79C48C0CB41C82 /* ChatDocumentExtractionCache.swift */,
 				7A9C24932DBACE75BA4E0CCB /* ChatFontScale.swift */,
+				17A2D2CC43884176A7E1D7A8 /* ChatGitHubPullRequest.swift */,
 				EBE367FA9B5C5C130C430C14 /* ChatGitWorktree.swift */,
 				11C93EA21443CFCDE79FBFC0 /* ChatGitWorktreeRecovery.swift */,
 				F9988535384E783847070506 /* ChatImportAlert.swift */,
@@ -2109,6 +2113,7 @@
 				6EFBB86CDB0CCCF393D7598E /* ChatDocumentExtractionCache.swift in Sources */,
 				9593586AAFCA2B97C6A7438B /* ChatFileWriteTools.swift in Sources */,
 				E1A4AA0C4AA32599FF2D54E7 /* ChatFontScale.swift in Sources */,
+				913496CF99724F13845873F5 /* ChatGitHubPullRequest.swift in Sources */,
 				E5BD7EA6ABA2CFD71F7A2338 /* ChatGitWorktree.swift in Sources */,
 				0498B9A2D69F102415CB7CBD /* ChatGitWorktreeRecovery.swift in Sources */,
 				2BF78B0A20ED752102326A38 /* ChatImageModelSelection.swift in Sources */,
@@ -2356,6 +2361,7 @@
 				2042F97FFB6520AC2CF63514 /* ChatFileWriteTools.swift in Sources */,
 				1ABD92E9E35F57FA506F58DD /* ChatFolderMigrationTests.swift in Sources */,
 				B53F0BCBE1C538AB55D8D62F /* ChatFontScale.swift in Sources */,
+				C92C2187CB3844BBA049D810 /* ChatGitHubPullRequest.swift in Sources */,
 				97E650D432DEF7B2F1A4D5C0 /* ChatGitWorktree.swift in Sources */,
 				0ABFB3808D7F6496E17DC889 /* ChatGitWorktreeRecovery.swift in Sources */,
 				59A7C54C84CB784C864C3825 /* ChatGitWorktreeTests.swift in Sources */,
