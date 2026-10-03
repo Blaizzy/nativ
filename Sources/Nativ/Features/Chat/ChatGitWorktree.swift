@@ -25,6 +25,21 @@ enum ChatGitHead: Codable, Equatable, Sendable {
     }
 }
 
+struct ChatGitDiffStat: Equatable, Sendable {
+    var additions = 0
+    var deletions = 0
+
+    mutating func include(_ numstat: String) {
+        for line in numstat.split(separator: "\n") {
+            let fields = line.split(separator: "\t", maxSplits: 2)
+            // Git reports binary changes as "-", which have no line count.
+            guard fields.count == 3, let added = Int(fields[0]), let removed = Int(fields[1]) else { continue }
+            additions += added
+            deletions += removed
+        }
+    }
+}
+
 /// Persisted with the chat so reopening it never falls back to the local project.
 struct ChatGitWorktree: Codable, Equatable, Sendable {
     let repositoryPath: String
@@ -145,6 +160,30 @@ struct ChatGitWorktreeStore: Sendable {
         let directory = try git(["rev-parse", "--absolute-git-dir"], at: path)
         return ChatGitHead(contents: try String(contentsOf: URL(fileURLWithPath: directory)
             .appendingPathComponent("HEAD"), encoding: .utf8))
+    }
+
+    func diffStat(at path: String, baseCommit: String? = nil) throws -> ChatGitDiffStat {
+        let directory = try git(["rev-parse", "--show-toplevel"], at: path)
+        let base: String
+        if let baseCommit {
+            base = baseCommit
+        } else {
+            // Ordinary project chats use the local default-branch reference; never fetch for a counter.
+            let reference = ["refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master"].first {
+                (try? git(["rev-parse", "--verify", "\($0)^{commit}"], at: directory)) != nil
+            } ?? "HEAD"
+            base = try git(["merge-base", reference, "HEAD"], at: directory)
+        }
+        var result = ChatGitDiffStat()
+        let options = ["--numstat", "--no-ext-diff", "--no-textconv", "--find-renames"]
+        result.include(try git(["diff"] + options + [base, "--"], at: directory))
+        let untracked = try git(["ls-files", "--others", "--exclude-standard", "-z"], at: directory, trimOutput: false)
+        for file in untracked.split(separator: "\0") {
+            // Use Git's own binary and line-count handling, without touching the user's index.
+            result.include(try git(["diff", "--no-index"] + options + ["--", "/dev/null", String(file)],
+                                   at: directory, acceptedExitCodes: [0, 1]))
+        }
+        return result
     }
 
     func plan(projectPath: String, sessionID: UUID) throws -> ChatGitWorktree {
@@ -380,7 +419,8 @@ struct ChatGitWorktreeStore: Sendable {
         }
     }
 
-    func git(_ arguments: [String], at path: String, environment extraEnvironment: [String: String] = [:]) throws -> String {
+    func git(_ arguments: [String], at path: String, environment extraEnvironment: [String: String] = [:],
+             acceptedExitCodes: Set<Int32> = [0], trimOutput: Bool = true) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         // A checkout must not execute repository hooks in the background.
@@ -400,8 +440,9 @@ struct ChatGitWorktreeStore: Sendable {
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         timeout.cancel()
-        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else {
+        let outputText = String(decoding: data, as: UTF8.self)
+        let text = trimOutput ? outputText.trimmingCharacters(in: .whitespacesAndNewlines) : outputText
+        guard acceptedExitCodes.contains(process.terminationStatus) else {
             throw ChatGitWorktreeError(message: text.isEmpty ? "Git could not prepare the worktree." : String(text.prefix(2_000)))
         }
         return text

@@ -200,8 +200,10 @@ private struct ChatProjectContextControls: View {
     @EnvironmentObject private var projects: ChatProjectStore
     @State private var setupError: String?
     @State private var gitHead: ChatGitHead?
+    @State private var gitDiff: ChatGitDiffStat?
     @State private var showsProjectPicker = false
     @State private var isProjectHovered = false
+    @State private var isSummaryMenuHovered = false
     var isSummary = false
 
     private var path: String {
@@ -214,9 +216,29 @@ private struct ChatProjectContextControls: View {
     private var branch: String? { gitHead?.displayName }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: isSummary ? 4 : 12) {
             HStack(spacing: 10) {
-                if !isSummary, chat.canChangeCurrentProject {
+                if isSummary {
+                    Text(project?.name ?? "Worktree")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(path)
+                    Spacer(minLength: 4)
+                    Menu { projectActions } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(isSummaryMenuHovered ? Color.primary.opacity(0.08) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(.rect)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .onHover { isSummaryMenuHovered = $0 }
+                    .help("Project actions")
+                    .accessibilityLabel("Project actions")
+                } else if chat.canChangeCurrentProject {
                     Button { showsProjectPicker.toggle() } label: {
                         projectLabel
                             .padding(.horizontal, 6)
@@ -247,11 +269,11 @@ private struct ChatProjectContextControls: View {
                         .lineLimit(1).truncationMode(.middle)
                         .help(branch)
                 }
-                Spacer(minLength: 4)
+                if !isSummary { Spacer(minLength: 4) }
                 if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
                     ProgressView().controlSize(.small)
                 }
-                if project != nil, chat.currentWorktree?.isReady != true {
+                if !isSummary, project != nil, chat.currentWorktree?.isReady != true {
                     HStack(spacing: 6) {
                         Text("Worktree")
                         Toggle("Worktree", isOn: Binding(
@@ -278,22 +300,39 @@ private struct ChatProjectContextControls: View {
                         .accessibilityLabel(available ? "Project tools are off" : "Project folder unavailable")
                 }
             }
+            .padding(.horizontal, isSummary ? 8 : 0)
             if let setupError {
                 Text(setupError).foregroundStyle(.red).textSelection(.enabled)
             }
             if isSummary {
-                Divider()
-                if let branch {
-                    branchLabel(branch)
-                        .lineLimit(2).textSelection(.enabled)
+                HStack(spacing: 10) {
+                    if let branch {
+                        branchLabel(branch)
+                            .lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .help(branch)
+                    } else {
+                        Text("—").foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    if let gitDiff, gitDiff.additions != 0 || gitDiff.deletions != 0 {
+                        HStack(spacing: 4) {
+                            Text("+\(gitDiff.additions)").foregroundStyle(.green)
+                            Text("−\(gitDiff.deletions)").foregroundStyle(.red)
+                        }
+                        .monospacedDigit()
+                        .fixedSize()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(gitDiff.additions) lines added, \(gitDiff.deletions) lines removed")
+                        .help("Branch changes, including uncommitted edits and new files")
+                    }
                 }
-                Text(path)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Divider()
-                LabeledContent("Project tools", value: available ? (toolsEnabled ? "Enabled" : "Off") : "Folder unavailable")
-                LabeledContent("Files", value: "\(chat.workState.items.filter(\.canEdit).count)")
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                Divider().padding(.horizontal, 8).padding(.vertical, 4)
+                summaryRow("Files", icon: "folder", value: "\(chat.workState.items.filter(\.canEdit).count)")
+                summaryRow("Project tools", icon: "wrench.and.screwdriver",
+                           value: available ? (toolsEnabled ? "Enabled" : "Off") : "Folder unavailable")
             }
         }
         .font(.system(size: 12))
@@ -312,19 +351,26 @@ private struct ChatProjectContextControls: View {
         }
         .task(id: path) {
             gitHead = nil
+            gitDiff = nil
             guard !path.isEmpty else { return }
             let directory = path
             let worktree = chat.currentWorktree
+            let includeDiff = isSummary
             // This runs only while the controls are visible. It also catches branch changes
             // from the user's shell, not just commands invoked by the agent.
             while !Task.isCancelled {
-                let head = await Task.detached {
-                    if let worktree, worktree.isReady { return worktree.currentHead }
-                    return try? ChatGitWorktreeStore(root: URL(fileURLWithPath: directory)).currentHead(at: directory)
+                let (head, diff) = await Task.detached {
+                    let store = ChatGitWorktreeStore(root: URL(fileURLWithPath: directory))
+                    let head = worktree?.isReady == true ? worktree?.currentHead : try? store.currentHead(at: directory)
+                    let diff = includeDiff && head != nil
+                        ? try? store.diffStat(at: directory, baseCommit: worktree?.isReady == true ? worktree?.baseCommit : nil)
+                        : nil
+                    return (head, diff)
                 }.value
                 guard !Task.isCancelled else { return }
                 gitHead = head
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                gitDiff = diff
+                do { try await Task.sleep(for: .seconds(includeDiff ? 5 : 2)) } catch { return }
             }
         }
     }
@@ -336,6 +382,18 @@ private struct ChatProjectContextControls: View {
         .fixedSize(horizontal: false, vertical: true)
         .help(path)
         .accessibilityLabel("Project folder")
+    }
+
+    private func summaryRow(_ title: String, icon: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 14)
+            Text(title)
+            Spacer(minLength: 12)
+            Text(value).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .accessibilityElement(children: .combine)
     }
 
     private var projectLabel: some View {
@@ -494,7 +552,9 @@ private struct ChatPinnedSummaryToggle: View {
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
     @ObservedObject var chat: ChatViewModel
+    @EnvironmentObject private var projects: ChatProjectStore
     @State private var isPresented = false
+    @State private var isHovered = false
 
     var body: some View {
         Button { isPresented.toggle() } label: {
@@ -502,22 +562,25 @@ private struct ChatPinnedSummaryToggle: View {
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(isPresented ? Color.primary : Color.secondary)
                 .frame(width: ControlPanelLayout.topControlSize, height: ControlPanelLayout.topControlSize)
-                .background(isPresented ? Color.primary.opacity(0.08) : .clear,
+                .background(Color.primary.opacity(isPresented ? 0.1 : isHovered ? 0.06 : 0),
                             in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
         .help(isPresented ? "Hide pinned summary" : "Show pinned summary")
         .accessibilityLabel("Pinned summary")
         .accessibilityValue(isPresented ? "Shown" : "Hidden")
-        .popover(isPresented: $isPresented, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Pinned summary").font(.headline)
+        .background {
+            NativArrowlessPopoverPresenter(isPresented: $isPresented, gap: 14, alignment: .trailing,
+                                           edge: .bottom, cornerRadius: 10, title: "Pinned summary") {
                 ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
                                            toolsEnabled: toolsEnabled, chat: chat, isSummary: true)
+                    .environmentObject(projects)
+                    .padding(8)
+                    .frame(width: 300)
+                    .background(Color(nsColor: .controlBackgroundColor))
             }
-            .padding(20)
-            .frame(width: 340)
         }
         .onChange(of: chat.currentSessionID) { _, _ in isPresented = false }
     }

@@ -38,6 +38,42 @@ private struct WorktreeFixture {
 }
 
 final class ChatGitWorktreeTests: XCTestCase {
+    func testDiffCounterIncludesBranchAndUncommittedChangesWithoutChangingTheIndex() throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgSign=false", "commit", "-m", "Changes"]
+        try "old\nrows\n".write(to: fixture.repository.appendingPathComponent("removed.txt"), atomically: true, encoding: .utf8)
+        try "same\n".write(to: fixture.repository.appendingPathComponent("rename.txt"), atomically: true, encoding: .utf8)
+        try "ignored.txt\n".write(to: fixture.repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", fixture.repository.path, "add", "."])
+        try WorktreeFixture.git(["-C", fixture.repository.path] + commit)
+        let tree = try fixture.store.create(fixture.store.plan(projectPath: fixture.repository.appendingPathComponent("Sources").path, sessionID: UUID()))
+        let root = URL(fileURLWithPath: tree.path)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), ChatGitDiffStat())
+        let value = root.appendingPathComponent("Sources/value.txt")
+        try "first\nsecond\n".write(to: value, atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path] + commit)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path), ChatGitDiffStat(additions: 2, deletions: 1))
+        try "first\nstaged\n".write(to: value, atomically: true, encoding: .utf8)
+        try "staged\n".write(to: root.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path, "mv", "rename.txt", "renamed.txt"])
+        try "first\nfinal\nthird\n".write(to: value, atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("removed.txt"))
+        try "new\nlast line".write(to: root.appendingPathComponent("\tNew\nfile.txt"), atomically: true, encoding: .utf8)
+        try "ignored\n".write(to: root.appendingPathComponent("ignored.txt"), atomically: true, encoding: .utf8)
+        try Data([0, 1, 2]).write(to: root.appendingPathComponent("binary.bin"))
+        let index = try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"])
+        let expected = ChatGitDiffStat(additions: 6, deletions: 3)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), expected)
+        XCTAssertEqual(try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"]), index)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path] + commit)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path, baseCommit: tree.baseCommit), expected)
+        XCTAssertThrowsError(try fixture.store.diffStat(at: fixture.root.path))
+    }
+
     func testRandomFallbackPreservesValidNamesAndExcludesOccupiedNames() throws {
         let all = Set(ChatGitWorktreeStore.fallbackBranches)
         let available = "nativ/quiet-cedar"

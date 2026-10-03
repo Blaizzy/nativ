@@ -5,6 +5,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var gap: CGFloat = 8
     var alignment: HorizontalAlignment = .center
+    var edge: VerticalEdge = .top
     var cornerRadius: CGFloat = 18
     var title: String = ""
     var showsBorder: Bool = true
@@ -25,6 +26,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             isPresented: $isPresented,
             gap: gap,
             alignment: alignment,
+            edge: edge,
             cornerRadius: cornerRadius,
             title: title,
             showsBorder: showsBorder,
@@ -45,12 +47,14 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
         private var isPresented: Binding<Bool>?
         private var gap: CGFloat = 8
         private var alignment: HorizontalAlignment = .center
+        private var edge: VerticalEdge = .top
 
         func update(
             anchorView: NSView,
             isPresented: Binding<Bool>,
             gap: CGFloat,
             alignment: HorizontalAlignment,
+            edge: VerticalEdge,
             cornerRadius: CGFloat,
             title: String,
             showsBorder: Bool,
@@ -61,6 +65,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             self.isPresented = isPresented
             self.gap = gap
             self.alignment = alignment
+            self.edge = edge
 
             guard isPresented.wrappedValue else {
                 dismiss(updateBinding: false)
@@ -168,7 +173,8 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 x: alignment == .leading ? screenRect.minX - shadowPadding
                     : alignment == .trailing ? screenRect.maxX - size.width + shadowPadding
                     : screenRect.midX - (size.width / 2),
-                y: screenRect.maxY + gap - shadowPadding
+                y: edge == .top ? screenRect.maxY + gap - shadowPadding
+                    : screenRect.minY - gap - size.height + shadowPadding
             )
 
             if let visibleFrame = parentWindow.screen?.visibleFrame {
