@@ -734,7 +734,7 @@ enum ChatTextSelectionReader {
                 )
             }
         }
-        for root in [window.firstResponder as? NSObject, window.contentView, NSApplication.shared] {
+        for root in [window.firstResponder, window.contentView, NSApplication.shared] {
             guard let root, let focused = focusedElement(of: root),
                   let result = selection(from: focused, fallbackFrame: fallbackFrame) else { continue }
             return result
@@ -770,28 +770,16 @@ enum ChatTextSelectionReader {
 
     static func selection(from object: NSObject, fallbackFrame: CGRect? = nil) -> Selection? {
         let element = object as AnyObject
-        if let text = element.accessibilitySelectedText?(), !text.isEmpty,
-           let range = element.accessibilitySelectedTextRange?() {
-            guard range.location != NSNotFound, range.location >= 0, range.length > 0 else { return nil }
-            let frame = element.accessibilityFrame?(for: NSRange(location: range.location, length: 1))
-                ?? .zero
-            let valueSelector = NSSelectorFromString("accessibilityValue")
-            let fullText = object.responds(to: valueSelector)
-                ? object.perform(valueSelector)?.takeUnretainedValue() as? String : nil
-            return Selection(text: text, fullText: fullText,
-                             range: range, frame: frame.isEmpty ? (fallbackFrame ?? .zero) : frame)
-        }
-        guard object.responds(to: NSSelectorFromString("accessibilityAttributeValue:")),
-              object.responds(to: NSSelectorFromString("accessibilityAttributeValue:forParameter:")),
-              let text = object.accessibilityAttributeValue(.selectedText) as? String, !text.isEmpty,
-              let value = object.accessibilityAttributeValue(.selectedTextRange) as? NSValue
+        guard let text = element.accessibilitySelectedText?(), !text.isEmpty,
+              let range = element.accessibilitySelectedTextRange?()
         else { return nil }
-        let range = value.rangeValue
         guard range.location != NSNotFound, range.location >= 0, range.length > 0 else { return nil }
-        guard let bounds = object.accessibilityAttributeValue(
-            .boundsForRange, forParameter: NSValue(range: NSRange(location: range.location, length: 1))
-        ) as? NSValue else { return nil }
-        return Selection(text: text, fullText: object.accessibilityAttributeValue(.value) as? String,
-                         range: range, frame: bounds.rectValue)
+        let frame = element.accessibilityFrame?(for: NSRange(location: range.location, length: 1))
+            ?? .zero
+        let valueSelector = NSSelectorFromString("accessibilityValue")
+        let fullText = object.responds(to: valueSelector)
+            ? object.perform(valueSelector)?.takeUnretainedValue() as? String : nil
+        return Selection(text: text, fullText: fullText,
+                         range: range, frame: frame.isEmpty ? (fallbackFrame ?? .zero) : frame)
     }
 }
