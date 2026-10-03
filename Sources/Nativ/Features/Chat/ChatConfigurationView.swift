@@ -292,13 +292,32 @@ struct ModelConfigurationView: View {
             Text("Summarize older context as the conversation grows. Your full chat history stays visible. Requires a server with compaction support.")
                 .configurationHintStyle()
 
-            ConfigurationIntegerField(
-                title: "Compaction threshold (%)",
-                value: $settings.compactionThresholdPercent,
-                range: 20...90
-            )
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Compaction threshold")
+                    Spacer()
+                    Text("\(settings.compactionThresholdPercent)%")
+                        .monospacedDigit()
+                }
+                .foregroundStyle(.secondary)
+
+                Slider(
+                    value: compactionThresholdBinding,
+                    in: 1...100,
+                    step: 1,
+                    enabledBounds: 20...90
+                ) {
+                    EmptyView()
+                } minimumValueLabel: {
+                    Text("1%")
+                } maximumValueLabel: {
+                    Text("100%")
+                }
+                .accessibilityLabel("Compaction threshold")
+                .accessibilityValue("\(settings.compactionThresholdPercent)%")
+            }
             .disabled(!settings.compactionEnabled)
-            Text("Percentage of the context window used before compaction. May compact earlier to leave room for output.")
+            Text("Choose 20–90% of the context window. May compact earlier to leave room for output.")
                 .configurationHintStyle()
 
             VStack(alignment: .leading, spacing: 8) {
@@ -360,6 +379,13 @@ struct ModelConfigurationView: View {
                 }
             }
         }
+    }
+
+    private var compactionThresholdBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.compactionThresholdPercent) },
+            set: { settings.compactionThresholdPercent = min(max(Int($0.rounded()), 20), 90) }
+        )
     }
 
     private var modelConfigurationLookupID: String {
