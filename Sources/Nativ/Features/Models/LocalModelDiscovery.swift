@@ -2051,17 +2051,6 @@ enum LocalModelDiscovery {
 }
 
 extension LocalModelDiscovery {
-    static func supportsRealtimeSpeechToText(_ model: LocalModel) -> Bool {
-        guard let snapshotURL = model.snapshotURL,
-              let data = try? Data(contentsOf: snapshotURL.appendingPathComponent("config.json")),
-              let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let modelType = (config["model_type"] as? String)?.lowercased()
-        else {
-            return false
-        }
-        return realtimeSpeechToTextModelTypes.contains(modelType)
-    }
-
     static func speechToTextModelID(
         in models: [LocalModel],
         selectedModelID: String?
@@ -2079,10 +2068,6 @@ extension LocalModelDiscovery {
         }.first?.repoID
     }
 
-    private static let realtimeSpeechToTextModelTypes: Set<String> = [
-        "nemotron_asr",
-        "voxtral_realtime",
-    ]
 }
 
 enum LocalModelDiscoveryError: LocalizedError, Equatable {

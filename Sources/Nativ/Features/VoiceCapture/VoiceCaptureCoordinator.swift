@@ -242,14 +242,10 @@ final class VoiceCaptureCoordinator {
                 if let configuration = self.transcriptionConfigurationProvider?(),
                    configuration.serverIsRunning
                 {
-                    do {
-                        liveTranscriptionPipeline = try await LiveAudioTranscriptionPipeline(
-                            configuration: configuration
-                        ) { transcript in
-                            await streamingTranscriptInserter.insertUpdate(transcript)
-                        }
-                    } catch LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime {
-                        liveTranscriptionPipeline = nil
+                    liveTranscriptionPipeline = try await LiveAudioTranscriptionPipeline(
+                        configuration: configuration
+                    ) { transcript in
+                        await streamingTranscriptInserter.insertUpdate(transcript)
                     }
                 } else {
                     liveTranscriptionPipeline = nil

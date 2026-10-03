@@ -59,7 +59,6 @@ struct StreamingVoiceTranscriptState {
 enum LiveAudioTranscriptionPipelineError: Error {
     case serverNotRunning
     case missingSpeechModel
-    case modelDoesNotSupportRealtime
 }
 
 enum LiveAudioPCMEmitterError: Error {
@@ -71,7 +70,7 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
 
     private let session: NativRealtimeTranscriptionSession
     private let modelID: String
-    private var preparationTask: Task<Void, Never>?
+    private var preparationTask: Task<Void, Error>?
 
     init(
         configuration: VoiceTranscriptionConfiguration,
@@ -90,11 +89,8 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
         guard let modelID = LocalModelDiscovery.speechToTextModelID(
             in: installedModels,
             selectedModelID: configuration.selectedModelID
-        ), let model = installedModels.first(where: { $0.repoID == modelID }) else {
+        ) else {
             throw LiveAudioTranscriptionPipelineError.missingSpeechModel
-        }
-        guard LocalModelDiscovery.supportsRealtimeSpeechToText(model) else {
-            throw LiveAudioTranscriptionPipelineError.modelDoesNotSupportRealtime
         }
         self.modelID = modelID
 
@@ -104,11 +100,13 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
             model: modelID
         ) { transcript in await onTranscriptUpdate(transcript) }
         self.session = session
-        emitter = LiveAudioPCMEmitter { data, sampleRate in
-            try await session.append(pcm16: data, sampleRate: sampleRate)
+        let preparationTask = Task {
+            try await session.prepare()
         }
-        preparationTask = Task {
-            try? await session.prepare()
+        self.preparationTask = preparationTask
+        emitter = LiveAudioPCMEmitter { data, sampleRate in
+            try await preparationTask.value
+            try await session.append(pcm16: data, sampleRate: sampleRate)
         }
     }
 
