@@ -231,7 +231,7 @@ private struct ChatProjectContextControls: View {
                         .accessibilityLabel("Change project")
                         .accessibilityValue(showsProjectPicker ? "Shown" : "Hidden")
                         .background {
-                            NativArrowlessPopoverPresenter(isPresented: $showsProjectPicker, gap: 20,
+                            NativArrowlessPopoverPresenter(isPresented: $showsProjectPicker, gap: 14,
                                                            alignment: .leading, cornerRadius: 10, title: "Choose project") {
                                 ChatProjectPicker(projects: projects, selectedID: chat.currentProjectID,
                                                   onSelect: selectProject, onCreate: createProject)
@@ -297,7 +297,8 @@ private struct ChatProjectContextControls: View {
             }
         }
         .font(.system(size: 12))
-        .padding(isSummary ? 0 : 12)
+        .padding(.horizontal, isSummary ? 0 : 12)
+        .padding(.vertical, isSummary ? 0 : 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             if !isSummary {
