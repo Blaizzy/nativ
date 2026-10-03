@@ -160,16 +160,30 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048), 24000)
         XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 64000, maxOutput: 2048), 6928)
         XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 0, maxOutput: 20000), 42976)
+        for (percent, expected) in [(50, 5000), (90, 8720), (-10, 100), (200, 8720)] {
+            XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: 256, percent: percent), expected)
+        }
+        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 60), 19200)
+        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: nil, configuredContext: 0, maxOutput: 256, percent: 50), 4096)
         XCTAssertThrowsError(try ChatCompactionState.threshold(modelContext: 4096, configuredContext: 0, maxOutput: 4096))
     }
 
     func testCompactionSettingDefaultsAndRoundTrips() throws {
         let legacy = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
         XCTAssertTrue(legacy.compactionEnabled)
+        XCTAssertEqual(legacy.compactionThresholdPercent, 75)
         var settings = legacy
         settings.compactionEnabled = false
+        settings.compactionThresholdPercent = 50
         let saved = try JSONEncoder().encode(settings)
-        XCTAssertFalse(try JSONDecoder().decode(NativSettings.self, from: saved).compactionEnabled)
+        let restored = try JSONDecoder().decode(NativSettings.self, from: saved)
+        XCTAssertFalse(restored.compactionEnabled)
+        XCTAssertEqual(restored.compactionThresholdPercent, 50)
+        XCTAssertTrue(settings.hasSameLaunchConfiguration(as: legacy))
+        for (percent, expected) in [(-10, 1), (50, 50), (200, 100)] {
+            settings.compactionThresholdPercent = percent
+            XCTAssertEqual(settings.normalized().compactionThresholdPercent, expected)
+        }
     }
 
     func testHTTPStreamAndContextLimit() async throws {

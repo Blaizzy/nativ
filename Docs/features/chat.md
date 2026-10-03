@@ -27,10 +27,13 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
 
 **Compact long conversations** is enabled by default in Model Configuration. With
 a compaction-capable mlx-vlm server, chat uses `/v1/responses` and asks the server
-to summarize older context before generation. The trigger is 75% of the effective
-context limit, or earlier when needed to reserve the configured output budget and
-1,024 tokens of summary headroom. If neither server nor local model metadata gives
-a limit, Nativ uses an 8,192-token fallback.
+to summarize older context before generation. Set **Compaction threshold (%)** under
+**Model Context** to choose when it triggers (1–100%, default 75%). Changes apply to
+the next message without restarting the server. With a 10,000-token context window,
+50% triggers at 5,000 input tokens. Compaction can happen earlier when needed to
+reserve the configured output budget and 1,024 tokens of summary headroom.
+If neither server nor local model metadata gives a limit, Nativ uses an
+8,192-token fallback.
 
 Chat shows compaction progress and a completed notice with server-measured input
 token counts when available. The completed notice is saved with the transcript;

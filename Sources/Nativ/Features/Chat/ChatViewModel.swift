@@ -2545,7 +2545,8 @@ final class ChatViewModel: ObservableObject {
                     let threshold = try ChatCompactionState.threshold(
                         modelContext: contextLimit,
                         configuredContext: activeSettings.maxKVSize,
-                        maxOutput: request.maxTokens
+                        maxOutput: request.maxTokens,
+                        percent: activeSettings.compactionThresholdPercent
                     )
                     let saved = currentSessionID == queuedRequest.sessionID
                         ? currentSession?.compaction

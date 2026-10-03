@@ -656,6 +656,7 @@ struct NativSettings: Codable, Equatable {
     var maxTokens: Int
     var maxKVSize: Int
     var compactionEnabled: Bool
+    var compactionThresholdPercent: Int
     var systemPrompt: String
     var personalization: NativPersonalization
     var temperature: Double
@@ -716,6 +717,7 @@ struct NativSettings: Codable, Equatable {
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
         compactionEnabled: Bool = true,
+        compactionThresholdPercent: Int = 75,
         systemPrompt: String = "",
         personalization: NativPersonalization = NativPersonalization(),
         temperature: Double = 0,
@@ -774,6 +776,7 @@ struct NativSettings: Codable, Equatable {
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
         self.compactionEnabled = compactionEnabled
+        self.compactionThresholdPercent = compactionThresholdPercent
         self.systemPrompt = systemPrompt
         self.personalization = personalization
         self.temperature = temperature
@@ -835,6 +838,7 @@ struct NativSettings: Codable, Equatable {
         case maxTokens
         case maxKVSize
         case compactionEnabled
+        case compactionThresholdPercent
         case systemPrompt
         case personalization
         case temperature
@@ -941,6 +945,9 @@ struct NativSettings: Codable, Equatable {
         compactionEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .compactionEnabled)
             ?? defaults.compactionEnabled
+        compactionThresholdPercent =
+            try container.decodeIfPresent(Int.self, forKey: .compactionThresholdPercent)
+            ?? defaults.compactionThresholdPercent
         systemPrompt =
             try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? defaults.systemPrompt
@@ -1056,6 +1063,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
         try container.encode(compactionEnabled, forKey: .compactionEnabled)
+        try container.encode(compactionThresholdPercent, forKey: .compactionThresholdPercent)
         try container.encode(systemPrompt, forKey: .systemPrompt)
         try container.encode(personalization, forKey: .personalization)
         try container.encode(temperature, forKey: .temperature)
@@ -1266,6 +1274,7 @@ struct NativSettings: Codable, Equatable {
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
+        settings.compactionThresholdPercent = min(max(settings.compactionThresholdPercent, 1), 100)
         settings.systemPrompt = settings.systemPrompt.trimmingCharacters(
             in: .whitespacesAndNewlines)
         settings.temperature = min(max(settings.temperature, 0), 2)

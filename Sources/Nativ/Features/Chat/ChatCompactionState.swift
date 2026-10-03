@@ -31,9 +31,10 @@ struct ChatCompactionState: Codable, Equatable {
         return [item] + (try NativResponsesClient.inputItems(Array(request.messages.dropFirst(messageCount))))
     }
 
-    static func threshold(modelContext: Int?, configuredContext: Int, maxOutput: Int) throws -> Int {
+    static func threshold(modelContext: Int?, configuredContext: Int, maxOutput: Int, percent: Int = 75) throws -> Int {
         let context = [modelContext, configuredContext].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
-        let threshold = min(context * 3 / 4, context - maxOutput - 1024)
+        let percent = min(max(percent, 1), 100)
+        let threshold = min(context * percent / 100, context - maxOutput - 1024)
         guard threshold > 0 else {
             throw NativChatError.serverError("Lower Max output to leave room for conversation compaction.")
         }

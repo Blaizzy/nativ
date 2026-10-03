@@ -292,6 +292,15 @@ struct ModelConfigurationView: View {
             Text("Summarize older context as the conversation grows. Your full chat history stays visible. Requires a server with compaction support.")
                 .configurationHintStyle()
 
+            ConfigurationIntegerField(
+                title: "Compaction threshold (%)",
+                value: $settings.compactionThresholdPercent,
+                range: 1...100
+            )
+            .disabled(!settings.compactionEnabled)
+            Text("Percentage of the context window used before compaction. May compact earlier to leave room for output.")
+                .configurationHintStyle()
+
             VStack(alignment: .leading, spacing: 8) {
                 Text("System prompt")
                     .font(.subheadline)
@@ -803,6 +812,7 @@ private struct ConfigurationIntegerField: View {
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             TextField("", value: $value, format: .number)
+                .accessibilityLabel(title)
                 .font(.body)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 104)
