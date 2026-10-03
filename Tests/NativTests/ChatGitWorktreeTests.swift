@@ -1,6 +1,61 @@
 import Foundation
 import XCTest
 
+final class ChatGitHubPullRequestTests: XCTestCase {
+    private func output(_ text: String = "", error: String = "", code: Int32 = 0,
+                        timedOut: Bool = false, truncated: Bool = false) -> TerminalProcessResult {
+        .init(stdout: text, stderr: error, exitCode: code, terminationSignal: nil, timedOut: timedOut,
+              durationMilliseconds: 0, outputTruncated: truncated)
+    }
+
+    func testPRStatesAndBranchIdentity() throws {
+        for (state, draft, label) in [("OPEN", false, "Open"), ("OPEN", true, "Draft"),
+                                      ("MERGED", false, "Merged"), ("CLOSED", false, "Closed")] {
+            let json = """
+            {"number":656,"title":"Worktrees","url":"https://github.com/Blaizzy/nativ/pull/656",
+             "state":"\(state)","isDraft":\(draft),"headRefName":"123"}
+            """
+            guard case .found(let request) = ChatGitHubPullRequestDetector.decode(output(json), branch: "123") else {
+                return XCTFail("Expected matching PR")
+            }
+            XCTAssertEqual(request.status, label)
+            XCTAssertEqual(ChatGitHubPullRequestDetector.decode(output(json), branch: "other"), .notFound)
+            XCTAssertEqual(ChatGitHubPullRequestDetector.decode(output(json), branch: "local", upstreamBranch: "123"), .found(request))
+            for invalid in [json.replacingOccurrences(of: "https://", with: "file:///"), "not json"] {
+                guard case .unavailable = ChatGitHubPullRequestDetector.decode(output(invalid), branch: "123") else {
+                    return XCTFail("Invalid PR data must not create a clickable link")
+                }
+            }
+        }
+    }
+
+    func testNoPRIsDistinctFromAuthenticationAndLookupFailures() {
+        let none = output(error: "no pull requests found for branch \"main\"\n", code: 1)
+        XCTAssertEqual(ChatGitHubPullRequestDetector.decode(none, branch: "main"), .notFound)
+        for failure in [output(code: 4), output(error: "please run gh auth login", code: 1),
+                        output(code: 127), output(error: "network error", code: 1),
+                        output(timedOut: true), output(truncated: true)] {
+            guard case .unavailable = ChatGitHubPullRequestDetector.decode(failure, branch: "main") else {
+                return XCTFail("Lookup errors must not be reported as no PR")
+            }
+        }
+    }
+
+    func testLookupUsesCheckoutWithoutInterpolatingBranchOrStartingInteractiveAuth() async throws {
+        let response = output(error: "no pull requests found for branch \"123\"\n", code: 1)
+        let result = try await ChatGitHubPullRequestDetector.lookup(at: "/tmp/project with spaces", branch: "123") { request in
+            XCTAssertEqual(request.command, "exec gh pr view --json number,title,url,state,isDraft,headRefName")
+            XCTAssertEqual(request.currentDirectoryURL.path, "/tmp/project with spaces")
+            XCTAssertEqual(request.environment["GH_PROMPT_DISABLED"], "1")
+            XCTAssertNil(request.environment["GH_REPO"])
+            XCTAssertNil(request.environment["GIT_DIR"])
+            XCTAssertEqual(request.timeout, 15)
+            return response
+        }
+        XCTAssertEqual(result, .notFound)
+    }
+}
+
 private struct WorktreeFixture {
     let root: URL
     let repository: URL
@@ -38,6 +93,138 @@ private struct WorktreeFixture {
 }
 
 final class ChatGitWorktreeTests: XCTestCase {
+    @MainActor
+    func testGitChangeObserverSeesNestedEditsAndWorktreeBranchChangesAndStops() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let tree = try fixture.store.create(fixture.store.plan(projectPath: fixture.repository.appendingPathComponent("Sources").path, sessionID: UUID()))
+        let paths = try fixture.store.observationPaths(at: tree.projectPath)
+        let canonical = { (path: String) in
+            URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        }
+        XCTAssertEqual(Set(paths.map(canonical)), Set([tree.path, tree.commonDirectory].map(canonical)))
+
+        let edited = expectation(description: "Nested file changed")
+        edited.assertForOverFulfill = false
+        let observer = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { edited.fulfill() })
+        try "edited\n".write(to: URL(fileURLWithPath: tree.projectPath).appendingPathComponent("value.txt"), atomically: true, encoding: .utf8)
+        await fulfillment(of: [edited], timeout: 5)
+        observer.stop()
+        observer.stop() // Cancellation and deinit can both stop the same observer.
+
+        let renamed = expectation(description: "Worktree Git metadata changed")
+        renamed.assertForOverFulfill = false
+        let metadataObserver = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { renamed.fulfill() })
+        try WorktreeFixture.git(["-C", tree.path, "branch", "-m", "renamed-branch"])
+        await fulfillment(of: [renamed], timeout: 5)
+        XCTAssertEqual(tree.currentHead, .branch("renamed-branch"))
+        metadataObserver.stop()
+
+        let stopped = expectation(description: "Stopped observer stays silent")
+        stopped.isInverted = true
+        let stoppedObserver = try XCTUnwrap(ChatGitChangeObserver(paths: paths) { stopped.fulfill() })
+        stoppedObserver.stop()
+        try "later\n".write(to: URL(fileURLWithPath: tree.projectPath).appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        await fulfillment(of: [stopped], timeout: 1)
+    }
+
+    func testDiffCounterIncludesBranchAndUncommittedChangesWithoutChangingTheIndex() throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgSign=false", "commit", "-m", "Changes"]
+        try "old\nrows\n".write(to: fixture.repository.appendingPathComponent("removed.txt"), atomically: true, encoding: .utf8)
+        try "same\n".write(to: fixture.repository.appendingPathComponent("rename.txt"), atomically: true, encoding: .utf8)
+        try "ignored.txt\n".write(to: fixture.repository.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", fixture.repository.path, "add", "."])
+        try WorktreeFixture.git(["-C", fixture.repository.path] + commit)
+        let tree = try fixture.store.create(fixture.store.plan(projectPath: fixture.repository.appendingPathComponent("Sources").path, sessionID: UUID()))
+        let root = URL(fileURLWithPath: tree.path)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), ChatGitDiffStat())
+        let value = root.appendingPathComponent("Sources/value.txt")
+        try "first\nsecond\n".write(to: value, atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path] + commit)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path), ChatGitDiffStat(additions: 2, deletions: 1))
+        try "first\nstaged\n".write(to: value, atomically: true, encoding: .utf8)
+        try "staged\n".write(to: root.appendingPathComponent("staged.txt"), atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path, "mv", "rename.txt", "renamed.txt"])
+        try "first\nfinal\nthird\n".write(to: value, atomically: true, encoding: .utf8)
+        try FileManager.default.removeItem(at: root.appendingPathComponent("removed.txt"))
+        try "new\nlast line".write(to: root.appendingPathComponent("\tNew\nfile.txt"), atomically: true, encoding: .utf8)
+        try "ignored\n".write(to: root.appendingPathComponent("ignored.txt"), atomically: true, encoding: .utf8)
+        try Data([0, 1, 2]).write(to: root.appendingPathComponent("binary.bin"))
+        let index = try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"])
+        let expected = ChatGitDiffStat(additions: 6, deletions: 3)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), expected)
+        XCTAssertEqual(try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"]), index)
+        try WorktreeFixture.git(["-C", tree.path, "add", "."])
+        try WorktreeFixture.git(["-C", tree.path] + commit)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path, baseCommit: tree.baseCommit), expected)
+        XCTAssertThrowsError(try fixture.store.diffStat(at: fixture.root.path))
+    }
+
+    func testRandomFallbackPreservesValidNamesAndExcludesOccupiedNames() throws {
+        let all = Set(ChatGitWorktreeStore.fallbackBranches)
+        let available = "nativ/quiet-cedar"
+        let occupied = all.subtracting([available])
+        XCTAssertEqual(try ChatGitWorktreeStore.availableBranch("fix-login", excluding: occupied), "nativ/fix-login")
+        for response in [nil, "", "../../main", "Here is the branch: fix-login", String(repeating: "x", count: 61), "quiet-cloud"] {
+            XCTAssertEqual(try ChatGitWorktreeStore.availableBranch(response, excluding: occupied), available)
+        }
+        XCTAssertThrowsError(try ChatGitWorktreeStore.availableBranch(nil, excluding: all))
+    }
+
+    func testNamedBranchHasNoSessionSuffixAndPreservesExistingBranches() throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let id = UUID()
+        var plan = try fixture.store.plan(projectPath: fixture.repository.path, sessionID: id)
+        plan.branch = try ChatGitWorktreeStore.namedBranch("`Fix-Login-Flow`")
+        XCTAssertEqual(plan.branch, "nativ/fix-login-flow")
+        try WorktreeFixture.git(["-C", fixture.repository.path, "branch", plan.branch])
+        XCTAssertFalse(fixture.store.hasStartedCreating(plan))
+        XCTAssertThrowsError(try fixture.store.create(plan))
+        XCTAssertFalse(try fixture.store.removal(plan, sessionID: id).removesManagedBranch)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: plan.path))
+        XCTAssertEqual(try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", plan.branch]), plan.baseCommit)
+    }
+
+    func testSyncUsesFreshRemoteDefaultBranchWithoutChangingLocalCheckout() throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try WorktreeFixture.git(["-C", fixture.repository.path, "branch", "-m", "trunk"])
+        let remote = fixture.root.appendingPathComponent("remote.git")
+        try WorktreeFixture.git(["clone", "--bare", fixture.repository.path, remote.path])
+        try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "add", "origin", remote.path])
+        let writer = fixture.root.appendingPathComponent("writer")
+        try WorktreeFixture.git(["clone", remote.path, writer.path])
+        try "remote update".write(to: writer.appendingPathComponent("Sources/value.txt"), atomically: true, encoding: .utf8)
+        try WorktreeFixture.git(["-C", writer.path, "add", "."])
+        try WorktreeFixture.git(["-C", writer.path, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                                 "-c", "commit.gpgSign=false", "commit", "-m", "Remote update"])
+        try WorktreeFixture.git(["-C", writer.path, "push", "origin", "trunk"])
+        try WorktreeFixture.git(["-C", fixture.repository.path, "switch", "-c", "local-feature"])
+        let localHead = try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", "HEAD"])
+        let localFile = fixture.repository.appendingPathComponent("Sources/value.txt")
+        try "local edits".write(to: localFile, atomically: true, encoding: .utf8)
+        let id = UUID()
+        var synced = try fixture.store.synchronized(fixture.store.plan(projectPath: fixture.repository.path, sessionID: id))
+        XCTAssertEqual(synced.source, "origin/trunk")
+        XCTAssertEqual(synced.plan.baseCommit, try WorktreeFixture.git(["-C", writer.path, "rev-parse", "HEAD"]))
+        synced.plan.branch = try ChatGitWorktreeStore.namedBranch("fix-login-flow")
+        let ready = try fixture.store.create(synced.plan)
+        XCTAssertEqual(try String(contentsOf: URL(fileURLWithPath: ready.path).appendingPathComponent("Sources/value.txt"), encoding: .utf8), "remote update")
+        XCTAssertEqual(try String(contentsOf: localFile, encoding: .utf8), "local edits")
+        XCTAssertEqual(try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", "HEAD"]), localHead)
+        XCTAssertEqual(try WorktreeFixture.git(["-C", fixture.repository.path, "branch", "--show-current"]), "local-feature")
+        try fixture.store.remove(ready, sessionID: id)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ready.path))
+        for invalid in ["", "../../main", "fix; rm -rf /", "Here is the branch: fix-login", "fix\nlogin", "fix--login"] {
+            XCTAssertThrowsError(try ChatGitWorktreeStore.namedBranch(invalid))
+        }
+    }
+
     func testIndependentCheckoutsUseCommittedFilesAndPreserveLocalEdits() throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -453,6 +640,257 @@ final class ChatGitWorktreeTests: XCTestCase {
 
 @MainActor
 final class ChatWorktreeSessionTests: XCTestCase {
+    func testProjectPickerPreservesDraftAndReplansOnlyUncreatedWorktrees() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let first = try projects.createProject(directoryURL: fixture.repository)
+        let other = fixture.root.appendingPathComponent("Other")
+        try WorktreeFixture.git(["clone", fixture.repository.path, other.path])
+        let second = try projects.createProject(directoryURL: other)
+        let nongit = try projects.createProject(directoryURL: fixture.root)
+        let chatRoot = fixture.root.appendingPathComponent("Chat")
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(chat)
+        let id = try XCTUnwrap(chat.currentSessionID)
+        chat.draft = "Keep this draft"
+        let attachment = ChatImageAttachment(filename: "notes.txt", mimeType: "text/plain", base64Data: Data("Notes".utf8).base64EncodedString())
+        chat.stageAttachment(attachment)
+        XCTAssertTrue(chat.canChangeCurrentProject)
+        try await chat.setCurrentProject(first.id)
+        try await chat.setCurrentWorktreeEnabled(true)
+        let pending = chat.currentWorktree
+        do { try await chat.setCurrentProject(nongit.id); XCTFail("Cannot replan a worktree outside Git") }
+        catch { }
+        XCTAssertEqual(chat.currentProjectID, first.id)
+        XCTAssertEqual(chat.currentWorktree, pending)
+        try await chat.setCurrentProject(second.id)
+        XCTAssertEqual(chat.currentSessionID, id)
+        XCTAssertEqual(chat.currentProjectID, second.id)
+        XCTAssertEqual(chat.currentWorktree?.repositoryPath, second.rootPath)
+        XCTAssertEqual(chat.currentWorktree?.isReady, false)
+        XCTAssertEqual(chat.draft, "Keep this draft")
+        XCTAssertEqual(chat.pendingImageAttachments.map(\.id), [attachment.id])
+        let saved = try XCTUnwrap(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id))
+        XCTAssertEqual(saved.projectID, second.id)
+        XCTAssertEqual(saved.worktree, chat.currentWorktree)
+        try await chat.setCurrentProject(nil)
+        XCTAssertNil(chat.currentProjectID)
+        XCTAssertNil(chat.currentWorktree)
+        XCTAssertNil(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.projectID)
+        XCTAssertTrue(chat.canChangeCurrentProject)
+        XCTAssertFalse(chat.canChangeCurrentWorktree)
+        XCTAssertFalse(chat.toolScope(for: id, settings: NativSettings()).isProject)
+        do { try await chat.setCurrentProject(UUID()); XCTFail("Cannot choose a missing project") }
+        catch { XCTAssertEqual(error as? ChatProjectStoreError, .projectNotFound) }
+        XCTAssertNil(chat.currentProjectID)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Saved work")
+        XCTAssertFalse(chat.canChangeCurrentProject)
+        do { try await chat.setCurrentProject(first.id); XCTFail("Cannot move chat files to another project") }
+        catch { }
+        XCTAssertNil(chat.currentProjectID)
+    }
+
+    func testNamingErrorsInvalidResponsesAndCollisionsUseRandomBranches() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let project = try projects.createProject(directoryURL: fixture.repository)
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
+        try await loaded(chat)
+        try WorktreeFixture.git(["-C", fixture.repository.path, "branch", "nativ/fix-login"])
+        let original = try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", "nativ/fix-login"])
+        var names = Set<String>()
+        for response in [nil, "", String(repeating: "x", count: 61), "fix-login"] {
+            chat.createSession(projectID: project.id)
+            try await chat.setCurrentWorktreeEnabled(true)
+            let id = try XCTUnwrap(chat.currentSessionID)
+            try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in
+                guard let response else { throw URLError(.timedOut) }
+                return response
+            }
+            let ready = try XCTUnwrap(chat.currentWorktree)
+            XCTAssertTrue(ready.isReady)
+            XCTAssertNotNil(ready.branch.range(of: "^nativ/[a-z]+-[a-z]+$", options: .regularExpression))
+            XCTAssertTrue(names.insert(ready.branch).inserted)
+            XCTAssertEqual(try WorktreeFixture.git(["-C", ready.path, "branch", "--show-current"]), ready.branch)
+            XCTAssertEqual(ChatSessionStore(chatDirectory: fixture.root.appendingPathComponent("Chat")).loadSession(id: id)?.worktree, ready)
+        }
+        XCTAssertEqual(try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", "nativ/fix-login"]), original)
+    }
+
+    func testFirstPromptPreparationPersistsSelectionAndFinishesInOriginalChat() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let project = try projects.createProject(directoryURL: fixture.repository)
+        let chatRoot = fixture.root.appendingPathComponent("Chat")
+        let original = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(original)
+        original.createSession(projectID: project.id)
+        try await original.setCurrentWorktreeEnabled(true)
+        let id = try XCTUnwrap(original.currentSessionID)
+        let pending = try XCTUnwrap(original.currentWorktree)
+        XCTAssertFalse(pending.isReady)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        original.draft = "Keep this draft"
+        try await original.setCurrentWorktreeEnabled(false)
+        XCTAssertNil(original.currentWorktree)
+        XCTAssertNil(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree)
+        XCTAssertEqual(original.draft, "Keep this draft")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        try await original.setCurrentWorktreeEnabled(true)
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(chat)
+        chat.selectSession(id)
+        XCTAssertEqual(chat.currentWorktree, pending)
+        try await chat.prepareWorktree(in: id, firstPrompt: "Fix the login button") { prompt in
+            XCTAssertEqual(prompt, "Fix the login button")
+            XCTAssertEqual(chat.currentWorktreeSetupProgress?.step, .name)
+            XCTAssertEqual(chat.currentWorktreeSetupProgress?.source, "No remote · Using local commit")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+            XCTAssertTrue(chat.isPreparingCurrentWorktree)
+            chat.createSession()
+            return "fix-login-button"
+        }
+        XCTAssertNil(chat.currentWorktree)
+        XCTAssertNil(chat.currentWorktreeSetupProgress)
+        chat.selectSession(id)
+        let ready = try XCTUnwrap(chat.currentWorktree)
+        XCTAssertTrue(ready.isReady)
+        XCTAssertEqual(ready.branch, "nativ/fix-login-button")
+        XCTAssertEqual(chat.currentWorktreeSetupProgress?.isComplete, true)
+        XCTAssertEqual(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree, ready)
+        var settings = NativSettings()
+        settings.projectToolsEnabled = true
+        XCTAssertEqual(chat.toolScope(for: id, settings: settings).terminalWorkingDirectory, ready.path)
+        try await chat.prepareWorktree(in: id, firstPrompt: "Another prompt") { _ in
+            XCTFail("Existing worktrees must never sync or be renamed again")
+            return "another-name"
+        }
+        XCTAssertEqual(chat.currentWorktree, ready)
+        XCTAssertFalse(chat.canChangeCurrentWorktree)
+        XCTAssertFalse(chat.canChangeCurrentProject)
+        do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot detach an existing checkout") }
+        catch { }
+        do { try await chat.setCurrentProject(nil); XCTFail("Cannot detach an existing checkout from its project") }
+        catch { }
+        XCTAssertEqual(chat.currentWorktree, ready)
+        XCTAssertNotNil(ready.availableRootPath)
+        try await Task.sleep(for: .milliseconds(1_100))
+        XCTAssertNil(chat.currentWorktreeSetupProgress)
+    }
+
+    func testDocumentsAndTerminalsWorkBeforeSetupAndDocumentsMigrateWhenReady() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let project = try projects.createProject(directoryURL: fixture.repository.appendingPathComponent("Sources"))
+        let chatRoot = fixture.root.appendingPathComponent("Chat")
+        let store = ChatSessionStore(chatDirectory: chatRoot)
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(chat)
+        chat.createSession(projectID: project.id)
+        let id = try XCTUnwrap(chat.currentSessionID)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original")
+        let document = try XCTUnwrap(chat.workState.selectedItem)
+        let stagedFile = try XCTUnwrap(chat.workFileURL(for: document))
+        try await chat.setCurrentWorktreeEnabled(true)
+        let pending = try XCTUnwrap(chat.currentWorktree)
+        chat.setWorkPaneVisible(true)
+        chat.openWorkNewTab()
+        try chat.refreshWorkFiles()
+        XCTAssertEqual(chat.workFilesDirectory, store.workFiles.directory(for: id))
+        try chat.updateWorkItem(document.id, content: "Edited", previousContent: "Original")
+        XCTAssertEqual(try String(contentsOf: stagedFile, encoding: .utf8), "Edited")
+        try chat.createWorkItem(title: "Terminal", kind: .terminal)
+        var terminalItem = try XCTUnwrap(chat.workState.selectedItem)
+        XCTAssertEqual(terminalItem.terminalWorkingDirectory, project.rootPath)
+        terminalItem.terminalWorkingDirectory = pending.projectPath // Tab saved by an older build.
+        let terminal = chat.workTerminal(for: terminalItem, sessionID: id)
+        terminal.startIfNeeded(arguments: ["-f"])
+        defer { terminal.stop() }
+        XCTAssertTrue(terminal.isRunning)
+        XCTAssertEqual(terminal.directory, project.rootPath)
+        try await chat.setCurrentWorktreeEnabled(false)
+        try await chat.setCurrentWorktreeEnabled(true)
+        do {
+            try await chat.prepareWorktree(in: id, firstPrompt: "Edit notes") { _ in throw CancellationError() }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        XCTAssertEqual(chat.workFileURL(for: document), stagedFile)
+        try await chat.prepareWorktree(in: id, firstPrompt: "Edit notes") { _ in
+            try "Edited during setup".write(to: stagedFile, atomically: true, encoding: .utf8)
+            return "edit-notes"
+        }
+        let ready = try XCTUnwrap(chat.currentWorktree)
+        let migrated = try XCTUnwrap(chat.workState.items.first { $0.id == document.id })
+        let file = try XCTUnwrap(chat.workFileURL(for: migrated))
+        XCTAssertTrue(file.path.hasPrefix(ready.projectPath + "/Nativ Files/"))
+        XCTAssertEqual(migrated.content, "Edited during setup")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), migrated.content)
+        XCTAssertEqual(store.loadSession(id: id)?.workFilesInWorktree, true)
+        XCTAssertTrue(chat.workTerminal(for: terminalItem, sessionID: id) === terminal)
+        XCTAssertTrue(terminal.isRunning)
+        XCTAssertEqual(terminal.directory, project.rootPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: URL(fileURLWithPath: project.rootPath).appendingPathComponent("Nativ Files").path))
+        try chat.createWorkItem(title: "New terminal", kind: .terminal)
+        XCTAssertEqual(chat.workState.selectedItem?.terminalWorkingDirectory, ready.projectPath)
+        let restarted = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(restarted)
+        restarted.selectSession(id)
+        try restarted.refreshWorkFiles()
+        XCTAssertEqual(restarted.workFileURL(for: migrated), file)
+        XCTAssertEqual(restarted.workState.items.first { $0.id == document.id }?.content, migrated.content)
+    }
+
+    func testSetupFailureAndCancellationDoNotStartCheckoutAndCanRetry() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let project = try projects.createProject(directoryURL: fixture.repository)
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
+        try await loaded(chat)
+        chat.createSession(projectID: project.id)
+        try await chat.setCurrentWorktreeEnabled(true)
+        let id = try XCTUnwrap(chat.currentSessionID)
+        let path = try XCTUnwrap(chat.currentWorktree?.path)
+        try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "add", "origin", fixture.root.appendingPathComponent("missing.git").path])
+        do {
+            try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in
+                XCTFail("A failed sync must stop before model naming")
+                return "fix-login"
+            }
+            XCTFail("Expected a sync failure")
+        } catch { }
+        XCTAssertEqual(chat.currentWorktreeSetupProgress?.step, .sync)
+        XCTAssertNotNil(chat.currentWorktreeSetupProgress?.error)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "remove", "origin"])
+        let task = Task {
+            try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in
+                withUnsafeCurrentTask { $0?.cancel() }
+                return "fix-login"
+            }
+        }
+        do { try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        XCTAssertFalse(chat.isPreparingCurrentWorktree)
+        XCTAssertEqual(chat.currentWorktreeSetupProgress?.step, .name)
+        for error: Error in [CancellationError(), URLError(.cancelled)] {
+            do {
+                try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in throw error }
+                XCTFail("Cancelled naming must not create a random branch")
+            } catch { }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+        }
+        try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in "fix-login" }
+        XCTAssertTrue(chat.currentWorktree?.isReady == true)
+        XCTAssertEqual(chat.currentWorktreeSetupProgress?.isComplete, true)
+        XCTAssertNil(chat.currentWorktreeSetupProgress?.error)
+    }
+
     func testSetupLocksOtherWindowsAndFinishesInTheOriginalChatAfterNavigation() async throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -471,11 +909,12 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(second)
         second.selectSession(id)
         first.draft = "A pending request"
-        let setup = Task { try await first.createCurrentWorktree() }
+        let setup = Task { try await first.setCurrentWorktreeEnabled(true) }
         for _ in 0..<100 where !first.isPreparingCurrentWorktree { try await Task.sleep(for: .milliseconds(1)) }
         XCTAssertTrue(first.isPreparingCurrentWorktree)
         XCTAssertFalse(first.canSend(isRunning: true, selectedModelID: "model"))
-        XCTAssertFalse(second.canCreateCurrentWorktree)
+        XCTAssertFalse(second.canChangeCurrentWorktree)
+        XCTAssertFalse(second.canChangeCurrentProject)
         XCTAssertFalse(second.canModifySession(id))
         first.createSession()
         let newID = first.currentSessionID
@@ -483,6 +922,8 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertEqual(first.currentSessionID, newID)
         XCTAssertNil(first.currentWorktree)
         first.selectSession(id)
+        XCTAssertFalse(first.currentWorktree?.isReady == true)
+        try await first.prepareWorktree(in: id, firstPrompt: first.draft) { _ in "pending-request" }
         XCTAssertTrue(first.currentWorktree?.isReady == true)
         XCTAssertTrue(second.canModifySession(id))
         XCTAssertEqual(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree, first.currentWorktree)
@@ -498,7 +939,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(chat)
         chat.createSession(projectID: project.id)
         let firstID = try XCTUnwrap(chat.currentSessionID)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let first = try XCTUnwrap(chat.currentWorktree)
         var settings = NativSettings()
         settings.projectToolsEnabled = true
@@ -512,7 +953,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertNotEqual(chat.currentSessionID, firstID)
         XCTAssertNil(chat.currentWorktree)
         XCTAssertEqual(chat.toolScope(for: try XCTUnwrap(chat.currentSessionID), settings: settings).rootPath, project.rootPath)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat, name: "another-task")
         XCTAssertNotEqual(chat.currentWorktree?.path, first.path)
         XCTAssertEqual(chat.toolScope(for: firstID, settings: settings), scope)
         let restored = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
@@ -539,7 +980,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
         try await loaded(chat)
         chat.createSession(projectID: project.id)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let firstID = try XCTUnwrap(chat.currentSessionID)
         let tree = try XCTUnwrap(chat.currentWorktree)
         let directory = URL(fileURLWithPath: tree.projectPath).appendingPathComponent("Nativ Files", isDirectory: true)
@@ -582,7 +1023,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertTrue(chat.workState.items.contains { $0.id == terminalID })
 
         chat.createSession(projectID: project.id)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat, name: "another-task")
         try chat.createWorkItem(title: "Renamed.md", kind: .document, content: "Second checkout")
         let secondFile = try XCTUnwrap(chat.workFileURL(for: XCTUnwrap(chat.workState.selectedItem)))
         XCTAssertFalse(secondFile.path.hasPrefix(tree.path + "/"))
@@ -694,7 +1135,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
         try await loaded(chat)
         chat.createSession(projectID: project.id)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let tree = try XCTUnwrap(chat.currentWorktree)
         let directory = try XCTUnwrap(chat.workFilesDirectory)
         try FileManager.default.createSymbolicLink(at: directory, withDestinationURL: fixture.repository)
@@ -723,7 +1164,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
         try await loaded(chat)
         chat.createSession(projectID: project.id)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let reference = try XCTUnwrap(chat.currentWorktree)
         try FileManager.default.removeItem(at: URL(fileURLWithPath: reference.path))
         var settings = NativSettings()
@@ -763,11 +1204,17 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         let existing = path.appendingPathComponent("keep.txt")
         try "Keep me".write(to: existing, atomically: true, encoding: .utf8)
-        do { try await chat.createCurrentWorktree(); XCTFail("Expected checkout conflict") }
+        do { try await createReadyWorktree(chat); XCTFail("Expected checkout conflict") }
         catch { XCTAssertTrue(error.localizedDescription.contains("already exists")) }
         XCTAssertEqual(chat.currentWorktree?.isReady, false)
         XCTAssertFalse(chat.isPreparingCurrentWorktree)
-        XCTAssertTrue(chat.canCreateCurrentWorktree)
+        XCTAssertTrue(chat.canChangeCurrentWorktree)
+        do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot forget pending worktree files") }
+        catch { }
+        do { try await chat.setCurrentProject(nil); XCTFail("Cannot detach pending worktree files") }
+        catch { }
+        XCTAssertEqual(chat.currentProjectID, project.id)
+        XCTAssertNotNil(chat.currentWorktree)
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "Keep me")
         XCTAssertEqual(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree, chat.currentWorktree)
     }
@@ -783,7 +1230,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(chat)
         chat.createSession(projectID: project.id)
         let id = try XCTUnwrap(chat.currentSessionID)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let worktree = try XCTUnwrap(chat.currentWorktree)
         let file = URL(fileURLWithPath: worktree.path).appendingPathComponent("keep.txt")
         try "Keep me".write(to: file, atomically: true, encoding: .utf8)
@@ -816,7 +1263,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(chat)
         chat.createSession(projectID: project.id)
         let id = try XCTUnwrap(chat.currentSessionID)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let worktree = try XCTUnwrap(chat.currentWorktree)
         try WorktreeFixture.git(["-C", fixture.repository.path, "worktree", "lock", worktree.path])
         do { try await chat.deleteSession(id); XCTFail("Locked checkout must be preserved") }
@@ -841,9 +1288,9 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
         try await loaded(chat)
         var checkouts: [ChatGitWorktree] = []
-        for _ in 0..<2 {
+        for name in ["first-task", "second-task"] {
             chat.createSession(projectID: project.id)
-            try await chat.createCurrentWorktree()
+            try await createReadyWorktree(chat, name: name)
             checkouts.append(try XCTUnwrap(chat.currentWorktree))
         }
         let removed = try await chat.removeProjectSessions(projectID: project.id, disposition: .deleteChats)
@@ -864,7 +1311,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(chat)
         chat.createSession(projectID: project.id)
         let oldID = try XCTUnwrap(chat.currentSessionID)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let oldTree = try XCTUnwrap(chat.currentWorktree)
         let html = "<!DOCTYPE html><html><body>Restored game</body></html>"
         try chat.createWorkItem(title: "Game", kind: .document, content: html)
@@ -916,7 +1363,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(chat)
         chat.createSession(projectID: project.id)
         let id = try XCTUnwrap(chat.currentSessionID)
-        try await chat.createCurrentWorktree()
+        try await createReadyWorktree(chat)
         let tree = try XCTUnwrap(chat.currentWorktree)
         try "blocked".write(to: chat.worktreeRecoveryStore.recoveryRoot, atomically: true, encoding: .utf8)
         do { try await chat.deleteSession(id); XCTFail("Cannot delete without a verified snapshot") }
@@ -925,6 +1372,11 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertNotNil(tree.availableRootPath)
         XCTAssertTrue(chat.canModifySession(id))
         XCTAssertFalse(chat.isDeletingCurrentSession)
+    }
+
+    private func createReadyWorktree(_ chat: ChatViewModel, name: String = "test-task") async throws {
+        try await chat.setCurrentWorktreeEnabled(true)
+        try await chat.prepareWorktree(in: XCTUnwrap(chat.currentSessionID), firstPrompt: name) { _ in name }
     }
 
     private func loaded(_ chat: ChatViewModel) async throws {

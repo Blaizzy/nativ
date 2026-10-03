@@ -85,6 +85,9 @@ struct ChatWorkPane: View {
             refreshFiles()
         }
         .onAppear { refreshFiles() }
+        .onChange(of: chat.isPreparingCurrentWorktree) { _, preparing in
+            if !preparing { refreshFiles() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshFiles()
         }
