@@ -1099,13 +1099,13 @@ private struct ChatCompactionNotice: View {
 
     private var detail: String {
         if message.isCompacting {
-            return "Summarizing older context. Your full chat history stays visible."
+            return "Summarizing older context…"
         }
         if let before = message.compactionMetrics?.inputTokensBefore,
            let after = message.compactionMetrics?.inputTokensAfter {
-            return "\(before.formatted()) → \(after.formatted()) input tokens. Full chat history is preserved."
+            return "Compacted • \(before.formatted()) → \(after.formatted()) tokens."
         }
-        return "Full chat history is preserved."
+        return "Compacted."
     }
 
     private var rule: some View {
