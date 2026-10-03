@@ -10,7 +10,7 @@ enum ChatFileWriteToolRegistry {
         function: MLXChatFunctionDefinition(
             name: writeToolName,
             description:
-                "Create a UTF-8 text file or completely overwrite one inside the user-authorized write folder. Always replaces the entire file; use patch for targeted edits. A successful call writes all supplied content or fails. The returned diff may be a truncated preview; verified=true confirms the complete write, so do not re-read or rewrite solely to verify it.",
+                "Create a UTF-8 text file or completely overwrite one inside the user-authorized write folder. File creation and replacement always write the entire file; use patch for targeted edits. A successful call writes all supplied content or fails. The returned diff may be a truncated preview; verified=true confirms the complete write, so do not re-read or rewrite solely to verify it.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),

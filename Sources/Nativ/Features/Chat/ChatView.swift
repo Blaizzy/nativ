@@ -143,6 +143,7 @@ private struct ChatProjectContextControls: View {
     let project: ChatProject?
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
+    let toolExposureModes: [String: ToolExposureMode]
     @ObservedObject var chat: ChatViewModel
     @State private var showsWorktreeSetup = false
     @State private var setupError: String?
@@ -153,6 +154,9 @@ private struct ChatProjectContextControls: View {
     private var available: Bool { chat.currentWorktree.map { $0.availableRootPath != nil } ?? rootIsAvailable }
 
     private var branch: String? { gitHead?.displayName }
+    private var disabledToolNames: [String] {
+        toolExposureModes.filter { $0.value == .off }.keys.sorted()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -179,11 +183,11 @@ private struct ChatProjectContextControls: View {
                         .lineLimit(1).truncationMode(.middle)
                         .help(branch)
                 }
-                if !isSummary && (!available || !toolsEnabled) {
+                if !isSummary && (!available || !toolsEnabled || !disabledToolNames.isEmpty) {
                     Image(systemName: "exclamationmark.circle")
                         .foregroundStyle(available ? Color.secondary : Color.orange)
-                        .help(available ? "Project tools are off" : "Project folder unavailable")
-                        .accessibilityLabel(available ? "Project tools are off" : "Project folder unavailable")
+                        .help(projectToolStatus)
+                        .accessibilityLabel(projectToolStatus)
                 }
             }
             if isSummary {
@@ -198,6 +202,9 @@ private struct ChatProjectContextControls: View {
                     .textSelection(.enabled)
                 Divider()
                 LabeledContent("Project tools", value: available ? (toolsEnabled ? "Enabled" : "Off") : "Folder unavailable")
+                if !disabledToolNames.isEmpty {
+                    LabeledContent("Tools turned off", value: disabledToolNames.joined(separator: ", "))
+                }
                 LabeledContent("Files", value: "\(chat.workState.items.filter(\.canEdit).count)")
             }
         }
@@ -258,6 +265,12 @@ private struct ChatProjectContextControls: View {
         }
     }
 
+    private var projectToolStatus: String {
+        if !available { return "Project folder unavailable" }
+        if !toolsEnabled { return "Project tools are off" }
+        return "Turned off: \(disabledToolNames.joined(separator: ", "))"
+    }
+
     private var environmentMenu: some View {
         Menu {
             if let worktree = chat.currentWorktree {
@@ -303,6 +316,7 @@ private struct ChatPinnedSummaryToggle: View {
     let project: ChatProject?
     let rootIsAvailable: Bool
     let toolsEnabled: Bool
+    let toolExposureModes: [String: ToolExposureMode]
     @ObservedObject var chat: ChatViewModel
     @State private var isPresented = false
 
@@ -324,7 +338,9 @@ private struct ChatPinnedSummaryToggle: View {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Pinned summary").font(.headline)
                 ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
-                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true)
+                                           toolsEnabled: toolsEnabled,
+                                           toolExposureModes: toolExposureModes,
+                                           chat: chat, isSummary: true)
             }
             .padding(20)
             .frame(width: 340)
@@ -374,6 +390,12 @@ private struct ChatTranscriptView: View {
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
+    }
+
+    private var projectToolExposureModes: [String: ToolExposureMode] {
+        Dictionary(uniqueKeysWithValues: ChatToolScope.projectToolNames.map {
+            ($0, model.settings.toolExposureMode(for: $0))
+        })
     }
 
     var body: some View {
@@ -477,7 +499,9 @@ private struct ChatTranscriptView: View {
             ZStack(alignment: .topTrailing) {
                 if !chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
                     ChatPinnedSummaryToggle(project: project, rootIsAvailable: projectRootIsAvailable,
-                                            toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
+                                            toolsEnabled: model.settings.projectToolsEnabled,
+                                            toolExposureModes: projectToolExposureModes,
+                                            chat: chat)
                         .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
                                  + (chat.workState.isVisible ? 0 : ControlPanelLayout.topControlSize * 2))
                         .padding(.top, ControlPanelLayout.topControlsTopPadding)
@@ -697,8 +721,16 @@ private struct ChatComposerContainer: View {
     private var contextHeader: some View {
         if chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
             ChatProjectContextControls(project: project, rootIsAvailable: projectRootIsAvailable,
-                                       toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
+                                       toolsEnabled: model.settings.projectToolsEnabled,
+                                       toolExposureModes: projectToolExposureModes,
+                                       chat: chat)
         }
+    }
+
+    private var projectToolExposureModes: [String: ToolExposureMode] {
+        Dictionary(uniqueKeysWithValues: ChatToolScope.projectToolNames.map {
+            ($0, model.settings.toolExposureMode(for: $0))
+        })
     }
 }
 
