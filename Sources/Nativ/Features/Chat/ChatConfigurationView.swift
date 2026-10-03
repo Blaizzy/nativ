@@ -295,7 +295,7 @@ struct ModelConfigurationView: View {
             ConfigurationIntegerField(
                 title: "Compaction threshold (%)",
                 value: $settings.compactionThresholdPercent,
-                range: 1...100
+                range: 20...90
             )
             .disabled(!settings.compactionEnabled)
             Text("Percentage of the context window used before compaction. May compact earlier to leave room for output.")

@@ -28,7 +28,7 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
 **Compact long conversations** is enabled by default in Model Configuration. With
 a compaction-capable mlx-vlm server, chat uses `/v1/responses` and asks the server
 to summarize older context before generation. Set **Compaction threshold (%)** under
-**Model Context** to choose when it triggers (1–100%, default 75%). Changes apply to
+**Model Context** to choose when it triggers (20–90%, default 75%). Changes apply to
 the next message without restarting the server. With a 10,000-token context window,
 50% triggers at 5,000 input tokens. Compaction can happen earlier when needed to
 reserve the configured output budget and 1,024 tokens of summary headroom.

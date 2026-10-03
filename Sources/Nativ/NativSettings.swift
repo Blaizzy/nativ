@@ -1274,7 +1274,7 @@ struct NativSettings: Codable, Equatable {
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
-        settings.compactionThresholdPercent = min(max(settings.compactionThresholdPercent, 1), 100)
+        settings.compactionThresholdPercent = min(max(settings.compactionThresholdPercent, 20), 90)
         settings.systemPrompt = settings.systemPrompt.trimmingCharacters(
             in: .whitespacesAndNewlines)
         settings.temperature = min(max(settings.temperature, 0), 2)
