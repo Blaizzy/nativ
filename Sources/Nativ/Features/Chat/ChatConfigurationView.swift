@@ -275,46 +275,6 @@ struct ModelConfigurationView: View {
 
     private var modelContextSection: some View {
         ChatConfigurationSection(title: "Model Context") {
-            ConfigurationIntegerField(
-                title: "Max output",
-                value: $settings.maxTokens,
-                range: 1...262_144
-            )
-
-            ConfigurationIntegerField(
-                title: "Context window",
-                value: modelContextBinding,
-                range: 0...1_048_576
-            )
-            .disabled(isLoadingModelConfiguration)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Toggle("Auto compact", isOn: $settings.compactionEnabled)
-                        .fixedSize()
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                        .help("Summarize older context while keeping your full chat history visible. Set 20–90% on a 1–100% scale. Compaction may happen earlier to leave room for output. Requires a server with compaction support.")
-                        .accessibilityLabel("About auto compaction")
-                    Spacer()
-                    Text("\(settings.compactionThresholdPercent)%")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-
-                Slider(
-                    value: compactionThresholdBinding,
-                    in: 1...100,
-                    enabledBounds: 20...90
-                ) {
-                    EmptyView()
-                }
-                .controlSize(.small)
-                .disabled(!settings.compactionEnabled)
-                .accessibilityLabel("Compaction threshold")
-                .accessibilityValue("\(settings.compactionThresholdPercent)%")
-            }
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("System prompt")
                     .font(.subheadline)
@@ -372,6 +332,46 @@ struct ModelConfigurationView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+            }
+
+            ConfigurationIntegerField(
+                title: "Max output",
+                value: $settings.maxTokens,
+                range: 1...262_144
+            )
+
+            ConfigurationIntegerField(
+                title: "Context window",
+                value: modelContextBinding,
+                range: 0...1_048_576
+            )
+            .disabled(isLoadingModelConfiguration)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Toggle("Auto compact", isOn: $settings.compactionEnabled)
+                        .fixedSize()
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                        .help("Summarize older context while keeping your full chat history visible. Set 20–90% on a 1–100% scale. Compaction may happen earlier to leave room for output. Requires a server with compaction support.")
+                        .accessibilityLabel("About auto compaction")
+                    Spacer()
+                    Text("\(settings.compactionThresholdPercent)%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: compactionThresholdBinding,
+                    in: 1...100,
+                    enabledBounds: 20...90
+                ) {
+                    EmptyView()
+                }
+                .controlSize(.small)
+                .disabled(!settings.compactionEnabled)
+                .accessibilityLabel("Compaction threshold")
+                .accessibilityValue("\(settings.compactionThresholdPercent)%")
             }
         }
     }
