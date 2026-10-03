@@ -253,11 +253,12 @@ enum DrafterModelCompatibility {
     }
 
     private static let modelNameSeparators = CharacterSet(charactersIn: "-_ ")
+    /// A dtype name missing from this list silently breaks drafter pairing.
     private static let nonTargetComponents: Set<String> = [
         "assistant", "dflash", "dflash2", "draft", "drafter", "draftmodel",
         "dspark", "eagle", "eagle3", "gguf", "mlx", "mtp", "speculator",
         "bf16", "f16", "float16", "fp16", "fp8", "int4", "int8", "mxfp4",
-        "mxfp8", "quantized",
+        "mxfp8", "nvfp4", "quantized",
     ]
 
     private static func pairingKey(for modelID: String) -> String {
