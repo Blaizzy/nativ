@@ -3,6 +3,7 @@ import Foundation
 public struct MLXResponseCompletion: Sendable {
     public let completion: MLXChatCompletion
     public let compaction: MLXJSONValue?
+    public let inputTokensBeforeCompaction: Int?
 }
 
 public final class NativResponsesClient: @unchecked Sendable {
@@ -67,10 +68,24 @@ public final class NativResponsesClient: @unchecked Sendable {
         _ request: MLXChatCompletionRequest,
         input: [MLXJSONValue],
         compactThreshold: Int,
+        onCompaction: (@Sendable (Int) async -> Void)? = nil,
         onEvent: @escaping @Sendable (MLXChatStreamDelta) async -> Void
     ) async throws -> MLXResponseCompletion {
         let startedAt = Date()
         let urlRequest = try makeResponseRequest(request, input: input, compactThreshold: compactThreshold)
+        var inputTokens: Int?
+        if let onCompaction {
+            var countRequest = urlRequest
+            countRequest.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
+            countRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+            countRequest.timeoutInterval = 10
+            // Token counts are presentation data; an unavailable count must not block generation.
+            inputTokens = try? await countInputTokens(countRequest)
+            try Task.checkCancellation()
+            if let inputTokens, inputTokens >= compactThreshold {
+                await onCompaction(inputTokens)
+            }
+        }
         let (bytes, response) = try await session.bytes(for: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NativChatError.invalidResponse
@@ -93,7 +108,15 @@ public final class NativResponsesClient: @unchecked Sendable {
             if stream.response != nil { break }
         }
         try Task.checkCancellation()
-        return try stream.result(elapsed: Date().timeIntervalSince(startedAt))
+        return try stream.result(
+            elapsed: Date().timeIntervalSince(startedAt), inputTokensBeforeCompaction: inputTokens
+        )
+    }
+
+    private func countInputTokens(_ request: URLRequest) async throws -> Int? {
+        let (data, response) = try await session.data(for: request)
+        try validate(response, body: String(decoding: data, as: UTF8.self))
+        return try MLXJSONValue(jsonData: data)["input_tokens"]?.intValue
     }
 
     private func makeRequest(path: String) -> URLRequest {
@@ -147,7 +170,7 @@ struct MLXResponseStream {
         return nil
     }
 
-    func result(elapsed: TimeInterval) throws -> MLXResponseCompletion {
+    func result(elapsed: TimeInterval, inputTokensBeforeCompaction: Int? = nil) throws -> MLXResponseCompletion {
         guard let response, let output = response["output"]?.arrayValue else {
             throw NativChatError.invalidResponse
         }
@@ -182,7 +205,8 @@ struct MLXResponseStream {
                 usage: usage,
                 requestElapsedSeconds: elapsed
             ),
-            compaction: output.last { $0["type"]?.stringValue == "compaction" }
+            compaction: output.last { $0["type"]?.stringValue == "compaction" },
+            inputTokensBeforeCompaction: inputTokensBeforeCompaction
         )
     }
 

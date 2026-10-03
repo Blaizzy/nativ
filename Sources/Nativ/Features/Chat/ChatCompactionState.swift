@@ -2,6 +2,11 @@ import CryptoKit
 import Foundation
 import NativServerKit
 
+struct ChatCompactionMetrics: Codable, Equatable {
+    let inputTokensBefore: Int?
+    let inputTokensAfter: Int?
+}
+
 struct ChatCompactionState: Codable, Equatable {
     let model: String
     let serverURL: URL

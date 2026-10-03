@@ -73,6 +73,8 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(result.completion.finishReason, "tool_calls")
         XCTAssertEqual(result.completion.usage?.promptTokens, 1000)
         XCTAssertEqual(result.completion.usage?.completionTokens, 20)
+        let measured = try stream.result(elapsed: 1, inputTokensBeforeCompaction: 8000)
+        XCTAssertEqual(measured.inputTokensBeforeCompaction, 8000)
     }
 
     func testFailedOrUnfinishedStreamCannotCommitCompaction() throws {
@@ -133,7 +135,14 @@ final class ChatCompactionTests: XCTestCase {
     }
 
     func testSessionPersistsCapsuleWithoutReplacingTranscriptAndLoadsLegacyJSON() throws {
-        let messages = [ChatTranscriptMessage(role: .user, content: "Keep this visible")]
+        var answer = ChatTranscriptMessage(role: .assistant, content: "Project ORCHID")
+        answer.compactionMetrics = .init(inputTokensBefore: 8000, inputTokensAfter: 2000)
+        answer.isCompacting = true
+        let restored = try JSONDecoder().decode(ChatTranscriptMessage.self, from: JSONEncoder().encode(answer))
+        XCTAssertFalse(restored.isCompacting)
+        XCTAssertEqual(restored.compactionMetrics, answer.compactionMetrics)
+        XCTAssertEqual(restored.apiMessage?.content, answer.apiMessage?.content)
+        let messages = [ChatTranscriptMessage(role: .user, content: "Keep this visible"), restored]
         var session = ChatSession(id: UUID(), title: "test", createdAt: Date(), updatedAt: Date(), messages: messages)
         session.compaction = try ChatCompactionState(item: capsule, request: request(messages.compactMap(\.apiMessage)), serverURL: server)
         let encoded = try JSONEncoder().encode(session)
@@ -174,12 +183,32 @@ final class ChatCompactionTests: XCTestCase {
         let otherLimit = try await client.contextLimit(for: "another-model")
         XCTAssertNil(otherLimit)
         let chat = request([.init(role: "user", content: "Hello")])
+        let progress = CompactionProgressRecorder()
         let response = try await client.streamResponse(
             chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: 24000,
+            onCompaction: { await progress.record($0) },
             onEvent: { _ in }
         )
         XCTAssertEqual(response.completion.content, "Hello")
         XCTAssertNotNil(response.compaction)
+        XCTAssertEqual(response.inputTokensBeforeCompaction, 25000)
+        let recorded = await progress.tokens
+        XCTAssertEqual(recorded, [25000])
+        for (path, threshold) in [("", 30000), ("uncounted", 24000)] {
+            let observation = CompactionProgressRecorder()
+            let optionalCountClient = NativResponsesClient(
+                baseURL: path.isEmpty ? server : server.appendingPathComponent(path),
+                tenant: "chat-test", session: session
+            )
+            let result = try await optionalCountClient.streamResponse(
+                chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: threshold,
+                onCompaction: { await observation.record($0) }, onEvent: { _ in }
+            )
+            XCTAssertEqual(result.completion.content, "Hello")
+            let events = await observation.tokens
+            XCTAssertTrue(events.isEmpty)
+            if !path.isEmpty { XCTAssertNil(result.inputTokensBeforeCompaction) }
+        }
         let oldClient = NativResponsesClient(baseURL: server.appendingPathComponent("old"), tenant: "chat-test", session: session)
         do {
             _ = try await oldClient.streamResponse(
@@ -270,6 +299,11 @@ final class ChatCompactionTests: XCTestCase {
     }
 }
 
+private actor CompactionProgressRecorder {
+    private(set) var tokens: [Int] = []
+    func record(_ value: Int) { tokens.append(value) }
+}
+
 private final class CompactionURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -278,8 +312,12 @@ private final class CompactionURLProtocol: URLProtocol {
     override func startLoading() {
         let body: String
         let contentType: String
-        if request.url!.path == "/old/v1/responses" {
+        if request.url!.path.hasPrefix("/old/") || request.url!.path == "/uncounted/v1/responses/input_tokens" {
             body = #"{"detail":"Not Found"}"#
+            contentType = "application/json"
+        } else if request.url!.path == "/v1/responses/input_tokens" {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-APC-Tenant"), "chat-test")
+            body = #"{"input_tokens":25000}"#
             contentType = "application/json"
         } else if request.url!.path == "/health" {
             body = #"{"loaded_model":"test-model","effective_context_limit":10000}"#
@@ -296,7 +334,7 @@ private final class CompactionURLProtocol: URLProtocol {
             """
             contentType = "text/event-stream"
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: request.url!.path.hasPrefix("/old/") ? 404 : 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!
+        let response = HTTPURLResponse(url: request.url!, statusCode: body == #"{"detail":"Not Found"}"# ? 404 : 200, httpVersion: nil, headerFields: ["Content-Type": contentType])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)

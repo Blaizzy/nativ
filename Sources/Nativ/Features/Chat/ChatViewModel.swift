@@ -2554,10 +2554,19 @@ final class ChatViewModel: ObservableObject {
                         ?? NativResponsesClient.inputItems(request.messages)
                     let result = try await responsesClient.streamResponse(
                         request, input: input, compactThreshold: threshold,
+                        onCompaction: { [weak self] _ in
+                            await self?.markCompacting(streamingMessageID, in: streamingSessionID)
+                        },
                         onEvent: { event in eventRelay.submit(event) }
                     )
                     try Task.checkCancellation()
                     if let item = result.compaction {
+                        updateMessage(streamingMessageID, in: streamingSessionID) { message in
+                            message.compactionMetrics = ChatCompactionMetrics(
+                                inputTokensBefore: result.inputTokensBeforeCompaction,
+                                inputTokensAfter: result.completion.usage?.promptTokens
+                            )
+                        }
                         let state = try ChatCompactionState(
                             item: item, request: request, serverURL: activeSettings.serverBaseURL
                         )
@@ -3556,6 +3565,10 @@ final class ChatViewModel: ObservableObject {
         searchLibrary.invalidate(sessionID, from: self)
     }
 
+    private func markCompacting(_ id: UUID, in sessionID: UUID) {
+        updateMessage(id, in: sessionID) { $0.isCompacting = true }
+    }
+
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
         let content = event.content ?? ""
         let reasoning = event.reasoningContent ?? ""
@@ -3565,6 +3578,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         updateMessage(id, in: sessionID) { message in
+            message.isCompacting = false
             if !reasoning.isEmpty {
                 message.reasoningContent.append(reasoning)
             }
@@ -3627,6 +3641,7 @@ final class ChatViewModel: ObservableObject {
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         updateMessage(id, in: sessionID) { message in
             message.isStreaming = false
+            message.isCompacting = false
             if message.content.isEmpty {
                 message.content = fallbackContent
             }
@@ -3664,6 +3679,7 @@ final class ChatViewModel: ObservableObject {
                     message.role = .error
                     message.content = error.localizedDescription
                     message.isStreaming = false
+                    message.isCompacting = false
                     if !message.reasoningContent.isEmpty,
                         message.thinkingDuration == nil
                     {

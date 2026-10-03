@@ -32,6 +32,10 @@ context limit, or earlier when needed to reserve the configured output budget an
 1,024 tokens of summary headroom. If neither server nor local model metadata gives
 a limit, Nativ uses an 8,192-token fallback.
 
+Chat shows compaction progress and a completed notice with server-measured input
+token counts when available. The completed notice is saved with the transcript;
+an interrupted progress indicator is not restored after relaunch.
+
 The full transcript stays visible and editable. Encrypted compaction state is saved
 separately with the session and replayed with subsequent messages, including tool
 results. Editing covered messages or changing the model, server, or instructions

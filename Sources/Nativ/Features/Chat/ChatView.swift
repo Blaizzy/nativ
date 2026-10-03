@@ -744,11 +744,15 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             if displaysModelTitle && !title.isEmpty {
                 HStack(spacing: 8) {
                     Text(title)
-                    ServerPrefillProgressLabel(progress: prefillProgress)
+                    if !message.isCompacting {
+                        ServerPrefillProgressLabel(progress: prefillProgress)
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+
+            ChatCompactionNotice(message: message)
 
             if message.role == .tool {
                 ChatAgentStepCell(
@@ -1053,6 +1057,32 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 }
 
+private struct ChatCompactionNotice: View {
+    let message: ChatTranscriptMessage
+
+    var body: some View {
+        if message.isCompacting {
+            Label("Compacting conversation…", systemImage: "arrow.down.right.and.arrow.up.left")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else if let compaction = message.compactionMetrics {
+            VStack(alignment: .leading, spacing: 3) {
+                Label("Conversation compacted", systemImage: "checkmark.circle")
+                    .fontWeight(.medium)
+                if let before = compaction.inputTokensBefore, let after = compaction.inputTokensAfter {
+                    Text("\(before.formatted()) → \(after.formatted()) input tokens")
+                        .monospacedDigit()
+                }
+                Text("Full chat history is preserved.")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            .padding(.vertical, 8)
+            .accessibilityElement(children: .combine)
+        }
+    }
+}
+
 private struct ChatAgentTurnRow: View {
     let turn: ChatAgentTurnPresentation
     var prefillProgress = NativPrefillProgressState()
@@ -1070,10 +1100,16 @@ private struct ChatAgentTurnRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text(modelTitle)
-                ServerPrefillProgressLabel(progress: prefillProgress)
+                if !turn.assistantMessages.contains(where: \.isCompacting) {
+                    ServerPrefillProgressLabel(progress: prefillProgress)
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            ForEach(turn.assistantMessages.filter { $0.id != turn.finalAssistantMessage?.id }) { message in
+                ChatCompactionNotice(message: message)
+            }
 
             if showsThinkingBubble {
                 ChatThinkingBubble(
@@ -1148,7 +1184,8 @@ private struct ChatAgentTurnRow: View {
     }
 
     private func shouldRender(_ message: ChatTranscriptMessage) -> Bool {
-        !message.content.isEmpty
+        message.isCompacting || message.compactionMetrics != nil
+            || !message.content.isEmpty
             || !message.imageAttachments.isEmpty
             || message.responseMetrics != nil
             || canForkAssistantResponse
