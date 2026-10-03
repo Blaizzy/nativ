@@ -109,6 +109,14 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertFalse(model.capabilities.contains(.text))
+        XCTAssertEqual(
+            LocalModelDiscovery.languageModelPreloadEligibility(
+                repoID: model.repoID,
+                searchRoots: searchPaths.all
+            ),
+            false
+        )
     }
 
     func testDoesNotClassifyCausalLanguageModelAsEmbeddingModel() async throws {
@@ -123,6 +131,95 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let model = try XCTUnwrap(models.first)
         XCTAssertFalse(model.capabilities.contains(.embeddings))
         XCTAssertTrue(model.capabilities.contains(.text))
+    }
+
+    func testClassifiesNemotronOmniAsTextFromLanguageConfiguration() async throws {
+        try makeTextModelSnapshot(
+            repoID: "mlx-community/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-4bit",
+            modelType: "NemotronH_Nano_Omni_Reasoning_V3",
+            architectures: ["NemotronH_Nano_Omni_Reasoning_V3"],
+            sentenceTransformer: false,
+            additionalConfig: ["llm_config": [:], "vision_config": [:]]
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first)
+
+        XCTAssertTrue(model.capabilities.contains(.text))
+        XCTAssertTrue(model.capabilities.contains(.vision))
+        XCTAssertTrue(model.isEligibleForLanguageModelPicker)
+        XCTAssertEqual(
+            LocalModelDiscovery.languageModelPreloadEligibility(
+                repoID: model.repoID,
+                searchRoots: searchPaths.all
+            ),
+            true
+        )
+    }
+
+    func testPreloadEligibilityAcceptsCustomVisionLanguageArchitectures() async throws {
+        let fixtures: [(String, String, String, [String: Any])] = [
+            ("org/internvl", "internvl_chat", "InternVLChatModel", ["llm_config": [:]]),
+            ("org/moondream", "moondream3", "HfMoondream", ["text_config": [:]]),
+            ("org/deepseek-vl", "deepseek_vl_v2", "DeepseekVLV2ForCausalLM", ["text_config": [:]]),
+            ("org/minicpm", "minicpmo", "MiniCPMO", ["eos_token_id": 2, "vocab_size": 32_000]),
+        ]
+        for (repoID, modelType, architecture, languageConfig) in fixtures {
+            var additionalConfig = languageConfig
+            additionalConfig["vision_config"] = [:]
+            try makeTextModelSnapshot(
+                repoID: repoID,
+                modelType: modelType,
+                architectures: [architecture],
+                sentenceTransformer: false,
+                additionalConfig: additionalConfig
+            )
+        }
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        XCTAssertEqual(models.count, fixtures.count)
+        for model in models {
+            XCTAssertTrue(model.isEligibleForLanguageModelPicker, model.repoID)
+            XCTAssertEqual(
+                LocalModelDiscovery.languageModelPreloadEligibility(
+                    repoID: model.repoID,
+                    searchRoots: searchPaths.all
+                ),
+                true,
+                model.repoID
+            )
+        }
+    }
+
+    func testPreloadEligibilityRejectsStandaloneVisionModel() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/standalone-vision",
+            modelType: "standalone_vision",
+            architectures: ["StandaloneVisionModel"],
+            sentenceTransformer: false,
+            additionalConfig: ["vision_config": [:]]
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first)
+
+        XCTAssertTrue(model.isEligibleForLanguageModelPicker)
+        XCTAssertEqual(
+            LocalModelDiscovery.languageModelPreloadEligibility(
+                repoID: model.repoID,
+                searchRoots: searchPaths.all
+            ),
+            false
+        )
+    }
+
+    func testPreloadEligibilityFailsOpenWhenModelMetadataIsUnavailable() {
+        XCTAssertNil(
+            LocalModelDiscovery.languageModelPreloadEligibility(
+                repoID: "org/missing-model",
+                searchRoots: searchPaths.all
+            )
+        )
     }
 
     func testClassifiesGraniteSpeech5CTCAsSpeechToText() async throws {
@@ -152,6 +249,13 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertEqual(
+            LocalModelDiscovery.languageModelPreloadEligibility(
+                repoID: model.repoID,
+                searchRoots: searchPaths.all
+            ),
+            false
+        )
     }
 
     func testClassifiesStampedModelAsEmbeddingModel() async throws {
@@ -548,7 +652,8 @@ final class LocalModelDiscoveryTests: XCTestCase {
         modelType: String,
         architectures: [String],
         sentenceTransformer: Bool,
-        stamp: [String: String]? = nil
+        stamp: [String: String]? = nil,
+        additionalConfig: [String: Any] = [:]
     ) throws {
         let repository = temporaryCache.appendingPathComponent(
             "models--" + repoID.replacingOccurrences(of: "/", with: "--"),
@@ -564,6 +669,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
         var config: [String: Any] = [
             "model_type": modelType, "architectures": architectures,
         ]
+        config.merge(additionalConfig) { _, newValue in newValue }
         if let stamp {
             config["mlx_embeddings"] = stamp
         }
