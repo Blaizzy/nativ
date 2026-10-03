@@ -215,6 +215,9 @@ final class IntegrationServicesTests: XCTestCase {
         let configurationURL = manager.configurationURL(for: .openCode)
         let root = try json(at: configurationURL)
         XCTAssertEqual(root["model"] as? String, "nativ/\(selectedModel.id)")
+        let compaction = try XCTUnwrap(root["compaction"] as? [String: Any])
+        XCTAssertEqual(compaction["auto"] as? Bool, true)
+        XCTAssertEqual(compaction["reserved"] as? Int, 6_553)
         let providers = try XCTUnwrap(root["provider"] as? [String: Any])
         let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
         XCTAssertEqual(provider["npm"] as? String, "@ai-sdk/openai-compatible")
@@ -226,10 +229,10 @@ final class IntegrationServicesTests: XCTestCase {
         XCTAssertEqual(selected["tool_call"] as? Bool, true)
         XCTAssertEqual(selected["interleaved"] as? [String: String], ["field": "reasoning_content"])
         let selectedLimit = try XCTUnwrap(selected["limit"] as? [String: Int])
-        XCTAssertEqual(selectedLimit, ["context": 32_768, "output": 32_768])
+        XCTAssertEqual(selectedLimit, ["context": 32_768, "input": 16_384, "output": 16_384])
         let basic = try XCTUnwrap(models[basicModel.id] as? [String: Any])
         let basicLimit = try XCTUnwrap(basic["limit"] as? [String: Int])
-        XCTAssertEqual(basicLimit, ["context": 131_072, "output": 65_536])
+        XCTAssertEqual(basicLimit, ["context": 131_072, "input": 65_536, "output": 65_536])
         XCTAssertEqual(
             launchCommand(for: .openCode),
             """
@@ -238,6 +241,50 @@ final class IntegrationServicesTests: XCTestCase {
             '/tools/opencode' '--model' 'nativ/org/local-model'
             """
         )
+    }
+
+    func testOpenCodeReservesRoomForOutputAndTheNextTurn() throws {
+        let cases: [(context: Int, output: Int, models: [IntegrationModelDescriptor], limits: [[String: Int]], reserve: Int)] = [
+            (10_000, 1_024, [selectedModel, basicModel], [
+                ["context": 10_000, "input": 8_976, "output": 1_024],
+                ["context": 10_000, "input": 8_976, "output": 1_024]
+            ], 2_000),
+            (64_000, 1_024, [selectedModel, basicModel], [
+                ["context": 32_768, "input": 31_744, "output": 1_024],
+                ["context": 64_000, "input": 62_976, "output": 1_024]
+            ], 6_553),
+            (0, 2_048, [basicModel], [
+                ["context": 131_072, "input": 129_024, "output": 2_048]
+            ], 20_000),
+            (10_000, 65_536, [selectedModel], [
+                ["context": 10_000, "input": 5_000, "output": 5_000]
+            ], 2_000)
+        ]
+        for testCase in cases {
+            try manager.configure(
+                tool: .openCode,
+                selectedModelID: testCase.models[0].id,
+                models: testCase.models,
+                maxOutputTokens: testCase.output,
+                contextLimit: testCase.context
+            )
+            let root = try json(at: manager.configurationURL(for: .openCode))
+            let compaction = try XCTUnwrap(root["compaction"] as? [String: Any])
+            XCTAssertEqual(compaction["auto"] as? Bool, true)
+            let reserve = try XCTUnwrap(compaction["reserved"] as? Int)
+            XCTAssertEqual(reserve, testCase.reserve)
+            let providers = try XCTUnwrap(root["provider"] as? [String: Any])
+            let provider = try XCTUnwrap(providers["nativ"] as? [String: Any])
+            let models = try XCTUnwrap(provider["models"] as? [String: Any])
+            for (model, expected) in zip(testCase.models, testCase.limits) {
+                let entry = try XCTUnwrap(models[model.id] as? [String: Any])
+                let limit = try XCTUnwrap(entry["limit"] as? [String: Int])
+                XCTAssertEqual(limit, expected, "\(model.id), server context \(testCase.context)")
+                let trigger = try XCTUnwrap(limit["input"]) - reserve
+                XCTAssertGreaterThan(trigger, 0)
+                XCTAssertEqual(trigger + reserve + (try XCTUnwrap(limit["output"])), limit["context"])
+            }
+        }
     }
 
     func testAiderConfigurationAndLaunchCommand() throws {
