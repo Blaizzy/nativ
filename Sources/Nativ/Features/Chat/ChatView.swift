@@ -391,7 +391,8 @@ private struct ChatProjectContextControls: View {
                     let store = ChatGitWorktreeStore(root: URL(fileURLWithPath: directory))
                     let head = worktree?.isReady == true ? worktree?.currentHead : try? store.currentHead(at: directory)
                     let diff = includeDiff && head != nil
-                        ? try? store.diffStat(at: directory, baseCommit: worktree?.isReady == true ? worktree?.baseCommit : nil)
+                        ? try? store.diffStat(at: directory, baseReference: worktree?.isReady == true ? worktree?.baseReference : nil,
+                                              fallbackBaseCommit: worktree?.isReady == true ? worktree?.baseCommit : nil)
                         : nil
                     return (head, diff)
                 }.value

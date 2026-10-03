@@ -83,6 +83,7 @@ struct ChatGitWorktree: Codable, Equatable, Sendable {
     let projectSubpath: String
     var branch: String // The branch Nativ created and owns, not necessarily the current branch.
     var baseCommit: String
+    var baseReference: String? = nil
     var isReady = false
 
     var projectPath: String {
@@ -205,18 +206,16 @@ struct ChatGitWorktreeStore: Sendable {
             .appendingPathComponent("HEAD"), encoding: .utf8))
     }
 
-    func diffStat(at path: String, baseCommit: String? = nil) throws -> ChatGitDiffStat {
+    func diffStat(at path: String, baseReference: String? = nil, fallbackBaseCommit: String? = nil) throws -> ChatGitDiffStat {
         let directory = try git(["rev-parse", "--show-toplevel"], at: path)
-        let base: String
-        if let baseCommit {
-            base = baseCommit
-        } else {
-            // Ordinary project chats use the local default-branch reference; never fetch for a counter.
-            let reference = ["refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master"].first {
-                (try? git(["rev-parse", "--verify", "\($0)^{commit}"], at: directory)) != nil
-            } ?? "HEAD"
-            base = try git(["merge-base", reference, "HEAD"], at: directory)
-        }
+        // Follow the base branch as it advances, including after merges, rebases and restoration.
+        // Older chats fall back to the local default-branch refs; the counter never fetches.
+        let references = [baseReference].compactMap { $0 }
+            + ["refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master"]
+        let reference = references.first {
+            (try? git(["rev-parse", "--verify", "\($0)^{commit}"], at: directory)) != nil
+        } ?? fallbackBaseCommit ?? "HEAD"
+        let base = try git(["merge-base", reference, "HEAD"], at: directory)
         var result = ChatGitDiffStat()
         let options = ["--numstat", "--no-ext-diff", "--no-textconv", "--find-renames"]
         // A read must not refresh the index and trigger another filesystem notification.
@@ -288,28 +287,47 @@ struct ChatGitWorktreeStore: Sendable {
     }
 
     /// Fetch only the remote default branch. Never pull, reset, or change the user's checkout.
-    func synchronized(_ plan: ChatGitWorktree) throws -> (plan: ChatGitWorktree, source: String) {
+    func synchronized(_ plan: ChatGitWorktree) async throws -> (plan: ChatGitWorktree, source: String) {
+        let cancellation = ChatGitProcessCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await Task.detached(priority: .userInitiated) {
+                try synchronize(plan, cancellation: cancellation)
+            }.value
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func synchronize(_ plan: ChatGitWorktree, cancellation: ChatGitProcessCancellation) throws -> (plan: ChatGitWorktree, source: String) {
         let path = plan.repositoryPath
-        let remotes = try git(["remote"], at: path).split(separator: "\n").map(String.init)
+        func git(_ arguments: [String]) throws -> String {
+            try self.git(arguments, at: path, cancellation: cancellation)
+        }
+        let remotes = try git(["remote"]).split(separator: "\n").map(String.init)
         var result = plan
         guard !remotes.isEmpty else {
-            result.baseCommit = try git(["rev-parse", "--verify", "HEAD^{commit}"], at: path)
+            result.baseCommit = try git(["rev-parse", "--verify", "HEAD^{commit}"])
+            result.baseReference = try? git(["symbolic-ref", "-q", "HEAD"])
+            try cancellation.checkCancellation()
             return (result, "No remote · Using local commit")
         }
-        let trackingRemote = try? git(["config", "--get", "branch.\(currentHead(at: path)?.displayName ?? "").remote"], at: path)
+        let trackingRemote = try? git(["config", "--get", "branch.\(currentHead(at: path)?.displayName ?? "").remote"])
+        try cancellation.checkCancellation()
         guard let remote = remotes.contains("origin") ? "origin"
             : trackingRemote.flatMap({ remotes.contains($0) ? $0 : nil }) ?? (remotes.count == 1 ? remotes[0] : nil) else {
             throw ChatGitWorktreeError(message: "Choose an origin remote or configure the current branch's upstream before creating a worktree.")
         }
-        let advertised = try git(["ls-remote", "--symref", "--", remote, "HEAD"], at: path)
+        let advertised = try git(["ls-remote", "--symref", "--", remote, "HEAD"])
         let prefix = "ref: refs/heads/"
         guard let line = advertised.components(separatedBy: "\n").first(where: { $0.hasPrefix(prefix) && $0.hasSuffix("\tHEAD") }) else {
             throw ChatGitWorktreeError(message: "The default branch of \(remote) could not be found. Check the remote's HEAD and try again.")
         }
         let branch = String(line.dropFirst(prefix.count).dropLast("\tHEAD".count))
         let ref = "refs/remotes/\(remote)/\(branch)"
-        _ = try git(["fetch", "--no-tags", "--", remote, "+refs/heads/\(branch):\(ref)"], at: path)
-        result.baseCommit = try git(["rev-parse", "--verify", "\(ref)^{commit}"], at: path)
+        _ = try git(["fetch", "--no-tags", "--", remote, "+refs/heads/\(branch):\(ref)"])
+        result.baseCommit = try git(["rev-parse", "--verify", "\(ref)^{commit}"])
+        result.baseReference = ref
         return (result, "\(remote)/\(branch)")
     }
 
@@ -464,7 +482,8 @@ struct ChatGitWorktreeStore: Sendable {
     }
 
     func git(_ arguments: [String], at path: String, environment extraEnvironment: [String: String] = [:],
-             acceptedExitCodes: Set<Int32> = [0], trimOutput: Bool = true) throws -> String {
+             acceptedExitCodes: Set<Int32> = [0], trimOutput: Bool = true,
+             cancellation: ChatGitProcessCancellation? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         // A checkout must not execute repository hooks in the background.
@@ -478,17 +497,69 @@ struct ChatGitWorktreeStore: Sendable {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
-        try process.run()
+        if let cancellation { try cancellation.start(process) }
+        else { try process.run() }
+        defer { cancellation?.finish() }
         let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: timeout)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         timeout.cancel()
+        try cancellation?.checkCancellation()
         let outputText = String(decoding: data, as: UTF8.self)
         let text = trimOutput ? outputText.trimmingCharacters(in: .whitespacesAndNewlines) : outputText
         guard acceptedExitCodes.contains(process.terminationStatus) else {
             throw ChatGitWorktreeError(message: text.isEmpty ? "Git could not prepare the worktree." : String(text.prefix(2_000)))
         }
         return text
+    }
+}
+
+/// Owns only the current sync command, including Git's SSH/transport children.
+final class ChatGitProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var processGroup: pid_t?
+    private var cancelled = false
+
+    func start(_ process: Process) throws {
+        try lock.withLock {
+            guard !cancelled else { throw CancellationError() }
+            try process.run()
+            self.process = process
+            let pid = process.processIdentifier
+            processGroup = getpgid(pid) == pid ? pid : nil
+        }
+    }
+
+    func finish() {
+        lock.withLock {
+            process = nil
+            processGroup = nil
+        }
+    }
+
+    func checkCancellation() throws {
+        if lock.withLock({ cancelled }) { throw CancellationError() }
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            guard let process, processGroup != nil || process.isRunning else { return }
+            let pid = process.processIdentifier
+            // Foundation launches macOS processes in their own group. Check before signalling
+            // it so cancellation can never reach Nativ or other unrelated processes.
+            let target = processGroup.map { -$0 } ?? pid
+            kill(target, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) { [self] in
+                lock.withLock {
+                    // Keep ownership until the output pipe closes, even if Git exits before
+                    // a transport child. A child holding that pipe must not block cancellation.
+                    guard self.process === process else { return }
+                    kill(target, SIGKILL)
+                }
+            }
+        }
     }
 }

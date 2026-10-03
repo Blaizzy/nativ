@@ -1257,7 +1257,7 @@ final class ChatViewModel: ObservableObject {
                 // Interrupted setup must keep its reserved commit and branch, including user edits.
                 worktreeSetupProgress[sessionID]?.source = "Previously prepared"
             } else {
-                let synced = try await Task.detached(priority: .userInitiated) { try store.synchronized(original) }.value
+                let synced = try await store.synchronized(original)
                 try Task.checkCancellation()
                 plan = synced.plan
                 worktreeSetupProgress[sessionID]?.source = synced.source

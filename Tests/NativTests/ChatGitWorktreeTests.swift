@@ -139,7 +139,7 @@ final class ChatGitWorktreeTests: XCTestCase {
         try WorktreeFixture.git(["-C", fixture.repository.path] + commit)
         let tree = try fixture.store.create(fixture.store.plan(projectPath: fixture.repository.appendingPathComponent("Sources").path, sessionID: UUID()))
         let root = URL(fileURLWithPath: tree.path)
-        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), ChatGitDiffStat())
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, fallbackBaseCommit: tree.baseCommit), ChatGitDiffStat())
         let value = root.appendingPathComponent("Sources/value.txt")
         try "first\nsecond\n".write(to: value, atomically: true, encoding: .utf8)
         try WorktreeFixture.git(["-C", tree.path, "add", "."])
@@ -156,12 +156,44 @@ final class ChatGitWorktreeTests: XCTestCase {
         try Data([0, 1, 2]).write(to: root.appendingPathComponent("binary.bin"))
         let index = try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"])
         let expected = ChatGitDiffStat(additions: 6, deletions: 3)
-        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, baseCommit: tree.baseCommit), expected)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.projectPath, fallbackBaseCommit: tree.baseCommit), expected)
         XCTAssertEqual(try WorktreeFixture.git(["-C", tree.path, "ls-files", "--stage"]), index)
         try WorktreeFixture.git(["-C", tree.path, "add", "."])
         try WorktreeFixture.git(["-C", tree.path] + commit)
-        XCTAssertEqual(try fixture.store.diffStat(at: tree.path, baseCommit: tree.baseCommit), expected)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path, fallbackBaseCommit: tree.baseCommit), expected)
         XCTAssertThrowsError(try fixture.store.diffStat(at: fixture.root.path))
+    }
+
+    func testDiffCounterFollowsRemoteBaseThroughMergeAndRestore() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        // No origin/HEAD or local main/master: use the actual remote default branch.
+        try WorktreeFixture.git(["-C", fixture.repository.path, "branch", "-m", "trunk"])
+        let remote = fixture.root.appendingPathComponent("remote.git")
+        try WorktreeFixture.git(["clone", "--bare", fixture.repository.path, remote.path])
+        try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "add", "origin", remote.path])
+        let id = UUID()
+        let synced = try await fixture.store.synchronized(fixture.store.plan(projectPath: fixture.repository.path, sessionID: id))
+        let tree = try fixture.store.create(synced.plan)
+        XCTAssertEqual(tree.baseReference, "refs/remotes/origin/trunk")
+        let identity = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgSign=false"]
+        for (path, name, content) in [(tree.path, "feature.txt", "branch change\n"),
+                                      (fixture.repository.path, "upstream.txt", "main line 1\nmain line 2\n")] {
+            try content.write(to: URL(fileURLWithPath: path).appendingPathComponent(name), atomically: true, encoding: .utf8)
+            try WorktreeFixture.git(["-C", path, "add", "."])
+            try WorktreeFixture.git(["-C", path] + identity + ["commit", "-m", name])
+        }
+        try WorktreeFixture.git(["-C", fixture.repository.path, "push", "origin", "trunk"])
+        try WorktreeFixture.git(["-C", tree.path] + identity + ["merge", "--no-edit", "origin/trunk"])
+        let expected = ChatGitDiffStat(additions: 1, deletions: 0)
+        XCTAssertEqual(try fixture.store.diffStat(at: tree.path, baseReference: tree.baseReference,
+                                                 fallbackBaseCommit: tree.baseCommit), expected)
+        try fixture.store.remove(tree, sessionID: id)
+        let record = try XCTUnwrap(fixture.store.snapshots().first)
+        let restored = try fixture.store.restore(record.id, to: fixture.store.restorationPlan(record, sessionID: UUID()))
+        XCTAssertEqual(restored.baseReference, tree.baseReference)
+        XCTAssertEqual(try fixture.store.diffStat(at: restored.path, baseReference: restored.baseReference,
+                                                 fallbackBaseCommit: restored.baseCommit), expected)
     }
 
     func testRandomFallbackPreservesValidNamesAndExcludesOccupiedNames() throws {
@@ -190,7 +222,7 @@ final class ChatGitWorktreeTests: XCTestCase {
         XCTAssertEqual(try WorktreeFixture.git(["-C", fixture.repository.path, "rev-parse", plan.branch]), plan.baseCommit)
     }
 
-    func testSyncUsesFreshRemoteDefaultBranchWithoutChangingLocalCheckout() throws {
+    func testSyncUsesFreshRemoteDefaultBranchWithoutChangingLocalCheckout() async throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         try WorktreeFixture.git(["-C", fixture.repository.path, "branch", "-m", "trunk"])
@@ -209,7 +241,7 @@ final class ChatGitWorktreeTests: XCTestCase {
         let localFile = fixture.repository.appendingPathComponent("Sources/value.txt")
         try "local edits".write(to: localFile, atomically: true, encoding: .utf8)
         let id = UUID()
-        var synced = try fixture.store.synchronized(fixture.store.plan(projectPath: fixture.repository.path, sessionID: id))
+        var synced = try await fixture.store.synchronized(fixture.store.plan(projectPath: fixture.repository.path, sessionID: id))
         XCTAssertEqual(synced.source, "origin/trunk")
         XCTAssertEqual(synced.plan.baseCommit, try WorktreeFixture.git(["-C", writer.path, "rev-parse", "HEAD"]))
         synced.plan.branch = try ChatGitWorktreeStore.namedBranch("fix-login-flow")
@@ -889,6 +921,62 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertTrue(chat.currentWorktree?.isReady == true)
         XCTAssertEqual(chat.currentWorktreeSetupProgress?.isComplete, true)
         XCTAssertNil(chat.currentWorktreeSetupProgress?.error)
+    }
+
+    func testCancellingRemoteSyncStopsTransportAndAllowsRetry() async throws {
+        // Stall ls-remote, then fetch. The second transport ignores TERM to exercise escalation.
+        for pauseOn in 1...2 {
+            let fixture = try WorktreeFixture()
+            defer { try? FileManager.default.removeItem(at: fixture.root) }
+            let remote = fixture.root.appendingPathComponent("remote.git")
+            try WorktreeFixture.git(["clone", "--bare", fixture.repository.path, remote.path])
+            try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "add", "origin", remote.path])
+            let upload = fixture.root.appendingPathComponent("slow-upload.sh")
+            try """
+                #!/bin/sh
+                if [ -e "$0.called" ]; then call=2; else call=1; touch "$0.called"; fi
+                if [ "$call" = "\(pauseOn)" ]; then
+                    \(pauseOn == 2 ? "trap '' TERM" : "")
+                    touch "$0.started"
+                    exec /bin/sleep 10
+                fi
+                exec /usr/bin/git-upload-pack "$@"
+                """.write(to: upload, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: upload.path)
+            try WorktreeFixture.git(["-C", fixture.repository.path, "config", "remote.origin.uploadpack", upload.path])
+            let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+            let project = try projects.createProject(directoryURL: fixture.repository)
+            let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
+            try await loaded(chat)
+            chat.createSession(projectID: project.id)
+            chat.draft = "Fix login"
+            try await chat.setCurrentWorktreeEnabled(true)
+            let id = try XCTUnwrap(chat.currentSessionID)
+            let plan = try XCTUnwrap(chat.currentWorktree)
+            let task = Task {
+                try await chat.prepareWorktree(in: id, firstPrompt: chat.draft) { _ in
+                    XCTFail("Cancelled sync must not reach naming")
+                    return "fix-login"
+                }
+            }
+            defer { task.cancel() }
+            let marker = upload.path + ".started"
+            for _ in 0..<250 where !FileManager.default.fileExists(atPath: marker) {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: marker))
+            let cancelledAt = Date()
+            task.cancel()
+            do { try await task.value; XCTFail("Expected cancellation") } catch is CancellationError { }
+            XCTAssertLessThan(Date().timeIntervalSince(cancelledAt), 2)
+            XCTAssertFalse(chat.isPreparingCurrentWorktree)
+            XCTAssertTrue(chat.canSend(isRunning: true, selectedModelID: "model"))
+            XCTAssertEqual(chat.currentWorktree, plan)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: plan.path))
+            try WorktreeFixture.git(["-C", fixture.repository.path, "config", "--unset", "remote.origin.uploadpack"])
+            try await chat.prepareWorktree(in: id, firstPrompt: chat.draft) { _ in "fix-login" }
+            XCTAssertTrue(chat.currentWorktree?.isReady == true)
+        }
     }
 
     func testSetupLocksOtherWindowsAndFinishesInTheOriginalChatAfterNavigation() async throws {
