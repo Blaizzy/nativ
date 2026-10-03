@@ -186,9 +186,9 @@ final class ChatMarkdownRendererTests: XCTestCase {
 }
 
 final class ChatStreamingRenderPolicyTests: XCTestCase {
-    func testStreamingUsesSmoothTwentyHertzCadence() {
-        XCTAssertEqual(ChatStreamingRenderPolicy.updatesPerSecond, 20)
-        XCTAssertEqual(ChatStreamingRenderPolicy.flushInterval, .seconds(1.0 / 20.0))
+    func testStreamingUsesSmoothSixtyHertzCadence() {
+        XCTAssertEqual(ChatStreamingRenderPolicy.updatesPerSecond, 60)
+        XCTAssertEqual(ChatStreamingRenderPolicy.flushInterval, .seconds(1.0 / 60.0))
     }
 }
 

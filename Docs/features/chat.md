@@ -23,6 +23,44 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
 - The active model is chosen from the model picker; only language-capable models are
   selectable as the conversation model.
 
+## Conversation compaction
+
+**Auto compact** is enabled by default in Model Configuration. With
+a compaction-capable mlx-vlm server, chat uses `/v1/responses` and asks the server
+to summarize older context before generation. Use the slider below **Auto compact**
+under **Model Context** to choose when it triggers; hover the info icon for details.
+Its scale runs from 1–100%, with
+the handle limited to 20–90% (default 75%). Changes apply to
+the next message without restarting the server. With a 10,000-token context window,
+50% triggers at 5,000 input tokens. Compaction can happen earlier when needed to
+reserve the configured output budget and 1,024 tokens of summary headroom.
+If neither server nor local model metadata gives a limit, Nativ uses an
+8,192-token fallback.
+
+Chat shows compaction progress and a completed notice with server-measured input
+token counts when available. The completed notice is saved with the transcript;
+an interrupted progress indicator is not restored after relaunch.
+
+The full transcript stays visible and editable. Encrypted compaction state is saved
+separately with the session and replayed with subsequent messages, including tool
+results. Editing covered messages or changing the model, server, or instructions
+rebuilds the request from the transcript. Failed or cancelled requests do not replace
+saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
+the new compacted prefix. Compaction also works with caching disabled.
+
+Compaction requires a server that supports the Responses compaction API. Unsupported
+servers return an error. To build against the unreleased compaction API in
+[mlx-vlm PR #2408](https://github.com/Blaizzy/mlx-vlm/pull/2408), point the bundle
+build at a checkout of that branch:
+
+```sh
+MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
+```
+
+Keep the server's compaction encryption key across restarts. A changed or missing
+key makes existing capsules unusable; the transcript is still preserved. Disabling
+compaction sends the full transcript through Chat Completions.
+
 ## Sessions
 
 Each conversation is one session, persisted as a JSON file under

@@ -2345,6 +2345,7 @@ final class ChatViewModel: ObservableObject {
         pendingImageAttachments.removeAll()
         pendingAnnotations.removeAll()
         messages.removeAll()
+        currentSession?.compaction = nil
         persistCurrentSession(updateTimestamp: true)
         bumpScroll()
     }
@@ -2454,6 +2455,11 @@ final class ChatViewModel: ObservableObject {
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey
         )
+        let responsesClient = NativResponsesClient(
+            baseURL: queuedRequest.settings.serverBaseURL,
+            apiKey: queuedRequest.settings.serverAPIKey,
+            tenant: queuedRequest.sessionID.uuidString
+        )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings
@@ -2525,11 +2531,59 @@ final class ChatViewModel: ObservableObject {
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
             let completion: MLXChatCompletion
             do {
-                completion = try await client.streamChat(
-                    request,
-                    onEvent: { event in
-                        eventRelay.submit(event)
-                    })
+                if queuedRequest.settings.compactionEnabled {
+                    var contextLimit = try await responsesClient.contextLimit(for: request.model)
+                    for path in activeSettings.localModelSearchPaths.all {
+                        let metadata = await LocalModelDiscovery.configurationMetadata(
+                            repoID: request.model, path: path
+                        )
+                        if let limit = metadata?.contextSize, limit > 0 {
+                            contextLimit = min(contextLimit ?? limit, limit)
+                            break
+                        }
+                    }
+                    let threshold = try ChatCompactionState.threshold(
+                        modelContext: contextLimit,
+                        configuredContext: activeSettings.maxKVSize,
+                        maxOutput: request.maxTokens,
+                        percent: activeSettings.compactionThresholdPercent
+                    )
+                    let saved = currentSessionID == queuedRequest.sessionID
+                        ? currentSession?.compaction
+                        : storedSessions.first { $0.id == queuedRequest.sessionID }?.compaction
+                    let input = try saved?.input(for: request, serverURL: activeSettings.serverBaseURL)
+                        ?? NativResponsesClient.inputItems(request.messages)
+                    let result = try await responsesClient.streamResponse(
+                        request, input: input, compactThreshold: threshold,
+                        onCompaction: { [weak self] _ in
+                            await self?.markCompacting(streamingMessageID, in: streamingSessionID)
+                        },
+                        onEvent: { event in eventRelay.submit(event) }
+                    )
+                    try Task.checkCancellation()
+                    if let item = result.compaction {
+                        updateMessage(streamingMessageID, in: streamingSessionID) { message in
+                            message.compactionMetrics = ChatCompactionMetrics(
+                                inputTokensBefore: result.inputTokensBeforeCompaction,
+                                inputTokensAfter: result.completion.usage?.promptTokens
+                            )
+                        }
+                        let state = try ChatCompactionState(
+                            item: item, request: request, serverURL: activeSettings.serverBaseURL
+                        )
+                        if currentSessionID == queuedRequest.sessionID {
+                            currentSession?.compaction = state
+                        } else if let index = storedSessions.firstIndex(where: { $0.id == queuedRequest.sessionID }) {
+                            storedSessions[index].compaction = state
+                        }
+                    }
+                    completion = result.completion
+                } else {
+                    completion = try await client.streamChat(
+                        request,
+                        onEvent: { event in eventRelay.submit(event) }
+                    )
+                }
                 eventRelay.finish()
             } catch {
                 eventRelay.cancel()
@@ -3512,6 +3566,10 @@ final class ChatViewModel: ObservableObject {
         searchLibrary.invalidate(sessionID, from: self)
     }
 
+    private func markCompacting(_ id: UUID, in sessionID: UUID) {
+        updateMessage(id, in: sessionID) { $0.isCompacting = true }
+    }
+
     private func append(event: MLXChatStreamDelta, to id: UUID, in sessionID: UUID) {
         let content = event.content ?? ""
         let reasoning = event.reasoningContent ?? ""
@@ -3521,6 +3579,7 @@ final class ChatViewModel: ObservableObject {
         }
 
         updateMessage(id, in: sessionID) { message in
+            message.isCompacting = false
             if !reasoning.isEmpty {
                 message.reasoningContent.append(reasoning)
             }
@@ -3583,6 +3642,7 @@ final class ChatViewModel: ObservableObject {
         liveDecodeRateRefreshDates.removeValue(forKey: id)
         updateMessage(id, in: sessionID) { message in
             message.isStreaming = false
+            message.isCompacting = false
             if message.content.isEmpty {
                 message.content = fallbackContent
             }
@@ -3620,6 +3680,7 @@ final class ChatViewModel: ObservableObject {
                     message.role = .error
                     message.content = error.localizedDescription
                     message.isStreaming = false
+                    message.isCompacting = false
                     if !message.reasoningContent.isEmpty,
                         message.thinkingDuration == nil
                     {

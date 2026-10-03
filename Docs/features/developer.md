@@ -21,7 +21,8 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 Available routes:
 
-- OpenAI-compatible: `/v1/chat/completions`, `/v1/responses`, `/v1/models`, and image, audio, and
+- OpenAI-compatible: `/v1/chat/completions`, `/v1/responses`, `/v1/responses/compact`
+  (with a compaction-capable runtime), `/v1/models`, and image, audio, and
   embeddings routes.
 - Anthropic-compatible: `/v1/messages` and token-counting routes.
 - Operational: `/health`, `/metrics`, cache statistics, cache reset, and model unload.
