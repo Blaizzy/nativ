@@ -200,36 +200,49 @@ private struct ChatProjectContextControls: View {
     @State private var gitHead: ChatGitHead?
     var isSummary = false
 
-    private var path: String { chat.currentWorktree?.projectPath ?? project?.rootPath ?? "" }
-    private var available: Bool { chat.currentWorktree.map { $0.availableRootPath != nil } ?? rootIsAvailable }
+    private var path: String {
+        chat.currentWorktree?.isReady == false ? project?.rootPath ?? "" : chat.currentWorktree?.projectPath ?? project?.rootPath ?? ""
+    }
+    private var available: Bool {
+        chat.currentWorktree?.isReady == false ? rootIsAvailable : chat.currentWorktree.map { $0.availableRootPath != nil } ?? rootIsAvailable
+    }
 
     private var branch: String? { gitHead?.displayName }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: available ? "folder" : "folder.badge.questionmark")
-                    .foregroundStyle(available ? Color.secondary : Color.orange)
-                Text(project?.name ?? "Worktree")
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(path)
-                Spacer(minLength: 4)
-                if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
-                    ProgressView().controlSize(.small)
-                    Text(chat.isDeletingCurrentSession ? "Deleting…" : "Creating…")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    environmentMenu
-                }
+                projectMenu
                 if !isSummary, let branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .font(.system(size: 12))
+                    branchLabel(branch)
                         .foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                         .help(branch)
                 }
+                Spacer(minLength: 4)
+                if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
+                    ProgressView().controlSize(.small)
+                }
+                HStack(spacing: 6) {
+                    Text("Worktree")
+                    Toggle("Worktree", isOn: Binding(
+                        get: { chat.currentWorktree != nil },
+                        set: { enabled in
+                            setupError = nil
+                            Task {
+                                do { try await chat.setCurrentWorktreeEnabled(enabled) }
+                                catch { setupError = error.localizedDescription }
+                            }
+                        }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(!chat.canChangeCurrentWorktree)
+                }
+                .fixedSize()
+                .help(chat.currentWorktree?.isReady == true
+                      ? "This chat uses its own worktree"
+                      : "Use a separate checkout when you send your first message")
                 if !isSummary && (!available || !toolsEnabled) {
                     Image(systemName: "exclamationmark.circle")
                         .foregroundStyle(available ? Color.secondary : Color.orange)
@@ -243,7 +256,7 @@ private struct ChatProjectContextControls: View {
             if isSummary {
                 Divider()
                 if let branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
+                    branchLabel(branch)
                         .lineLimit(2).textSelection(.enabled)
                 }
                 Text(path)
@@ -273,7 +286,7 @@ private struct ChatProjectContextControls: View {
             // from the user's shell, not just commands invoked by the agent.
             while !Task.isCancelled {
                 let head = await Task.detached {
-                    if let worktree { return worktree.currentHead }
+                    if let worktree, worktree.isReady { return worktree.currentHead }
                     return try? ChatGitWorktreeStore(root: URL(fileURLWithPath: directory)).currentHead(at: directory)
                 }.value
                 guard !Task.isCancelled else { return }
@@ -283,27 +296,17 @@ private struct ChatProjectContextControls: View {
         }
     }
 
-    private var environmentMenu: some View {
+    private var projectMenu: some View {
         Menu {
-            if let worktree = chat.currentWorktree {
-                Text(gitHead?.displayName ?? (worktree.isReady ? "Branch unavailable" : "Setup starts when you send a message"))
-                switch gitHead {
-                case .branch(let name):
-                    Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
-                case .detached(let commit):
-                    Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
-                case nil: EmptyView()
-                }
-            } else {
-                Label("Local", systemImage: "checkmark")
-                Button("Worktree", systemImage: "arrow.triangle.branch") {
-                    setupError = nil
-                    Task {
-                        do { try await chat.createCurrentWorktree() }
-                        catch { setupError = error.localizedDescription }
-                    }
-                }
-                .disabled(!chat.canCreateCurrentWorktree)
+            if chat.currentWorktree?.isReady == false {
+                Text("Setup starts when you send a message")
+            }
+            switch gitHead {
+            case .branch(let name):
+                Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
+            case .detached(let commit):
+                Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
+            case nil: EmptyView()
             }
             Divider()
             Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
@@ -311,13 +314,25 @@ private struct ChatProjectContextControls: View {
                 NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
             }.disabled(!available)
         } label: {
-            Label(chat.currentWorktree == nil ? "Local" : "Worktree",
-                  systemImage: chat.currentWorktree == nil ? "desktopcomputer" : "arrow.triangle.branch")
-                .font(.system(size: 12))
+            Label(project?.name ?? "Worktree", systemImage: available ? "folder" : "folder.badge.questionmark")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(available ? Color.secondary : Color.orange)
+                .lineLimit(1).truncationMode(.middle)
         }
-        .fixedSize()
-        .help(branch ?? "Choose Local or Worktree before starting a project chat")
-        .accessibilityLabel("Chat environment")
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(path)
+        .accessibilityLabel("Project folder")
+    }
+
+    private func branchLabel(_ name: String) -> some View {
+        Label {
+            Text(name)
+        } icon: {
+            Image(systemName: "arrow.triangle.branch")
+                .rotationEffect(.degrees(90))
+        }
     }
 
     private func copy(_ value: String) {

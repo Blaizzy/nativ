@@ -52,9 +52,11 @@ its recorded token count exceeds the selected model's context window.
 ## Project chat environments
 
 New project chats start in **Local**, using the project's existing folder. Before sending
-messages or opening work-pane items, choose **Local > Worktree** above the composer to
-reserve a separate Git checkout directly, without a confirmation popup. The project must be
-a Git repository with at least one commit. On the first message, before the agent starts, Nativ fetches the remote's
+messages or opening work-pane items, check **Worktree** above the composer to reserve a separate
+Git checkout directly, without a confirmation popup. Uncheck it before the first message to
+return to the local project folder. Once the chat starts or a checkout exists, the choice is locked.
+The project must be a Git repository with at least one commit. On the first message, before
+the agent starts, Nativ fetches the remote's
 default branch, asks the selected model for a descriptive branch name based on that message,
 and creates the checkout on `nativ/<name>` without a chat ID or numeric suffix. If naming fails,
 returns an invalid name, or names an existing local branch, Nativ picks two random words such
@@ -80,7 +82,7 @@ never fall back to the local project or chat storage.
 Empty project chats show project, environment, and branch controls directly above the composer.
 Once the conversation starts, the **Pinned summary** toolbar toggle opens these controls,
 the checkout path, project-tool status, and file count without a full-width header.
-The environment menu shows the current Git branch and provides **Copy branch name**,
+The project menu beside the branch name provides **Copy branch name**,
 **Copy folder path**, and **Show in Finder**. Checkouts live under the app profile's
 `Chat/Worktrees/<chat-id>` folder. Each chat keeps this association across launches;
 an unavailable checkout disables project tools instead of redirecting them to Local.

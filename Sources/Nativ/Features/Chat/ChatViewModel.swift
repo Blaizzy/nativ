@@ -1135,7 +1135,7 @@ final class ChatViewModel: ObservableObject {
         currentSessionID.map { deletingSessionIDs.contains($0) } ?? false
     }
 
-    var canCreateCurrentWorktree: Bool {
+    var canChangeCurrentWorktree: Bool {
         guard let session = currentSession, session.projectID != nil,
               session.worktree?.isReady != true else { return false }
         return messages.isEmpty && workState.items.isEmpty && !isSessionBusy(session.id)
@@ -1150,8 +1150,8 @@ final class ChatViewModel: ObservableObject {
         sessionID == currentSessionID ? currentSession?.worktree : storedSessions.first { $0.id == sessionID }?.worktree
     }
 
-    func createCurrentWorktree() async throws {
-        guard canCreateCurrentWorktree, let session = currentSessionSnapshot,
+    func setCurrentWorktreeEnabled(_ enabled: Bool) async throws {
+        guard canChangeCurrentWorktree, let session = currentSessionSnapshot,
               let projectID = session.projectID, let project = projectStore.project(withID: projectID) else {
             throw ChatGitWorktreeError(message: "Choose Worktree in a new, empty project chat.")
         }
@@ -1165,6 +1165,21 @@ final class ChatViewModel: ObservableObject {
             inferenceActivity.end(resource: .chat(session.id), operationID: operationID)
         }
         let store = sessionStore.worktrees
+        if !enabled {
+            if let previous = session.worktree {
+                let hasCheckout = await Task.detached {
+                    store.hasStartedCreating(previous) || FileManager.default.fileExists(atPath: previous.path)
+                }.value
+                guard !hasCheckout else {
+                    throw ChatGitWorktreeError(message: "This chat already has worktree files. Keep Worktree enabled or start a new local chat.")
+                }
+            }
+            var local = session
+            local.worktree = nil
+            try saveWorktreeSession(local)
+            worktreeSetupProgress[session.id] = nil
+            return
+        }
         let plan: ChatGitWorktree
         if let previous = session.worktree {
             plan = previous

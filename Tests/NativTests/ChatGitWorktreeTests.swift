@@ -526,7 +526,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         var names = Set<String>()
         for response in [nil, "", String(repeating: "x", count: 61), "fix-login"] {
             chat.createSession(projectID: project.id)
-            try await chat.createCurrentWorktree()
+            try await chat.setCurrentWorktreeEnabled(true)
             let id = try XCTUnwrap(chat.currentSessionID)
             try await chat.prepareWorktree(in: id, firstPrompt: "Fix login") { _ in
                 guard let response else { throw URLError(.timedOut) }
@@ -551,11 +551,18 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let original = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
         try await loaded(original)
         original.createSession(projectID: project.id)
-        try await original.createCurrentWorktree()
+        try await original.setCurrentWorktreeEnabled(true)
         let id = try XCTUnwrap(original.currentSessionID)
         let pending = try XCTUnwrap(original.currentWorktree)
         XCTAssertFalse(pending.isReady)
         XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        original.draft = "Keep this draft"
+        try await original.setCurrentWorktreeEnabled(false)
+        XCTAssertNil(original.currentWorktree)
+        XCTAssertNil(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree)
+        XCTAssertEqual(original.draft, "Keep this draft")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        try await original.setCurrentWorktreeEnabled(true)
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
         try await loaded(chat)
         chat.selectSession(id)
@@ -585,6 +592,11 @@ final class ChatWorktreeSessionTests: XCTestCase {
             return "another-name"
         }
         XCTAssertEqual(chat.currentWorktree, ready)
+        XCTAssertFalse(chat.canChangeCurrentWorktree)
+        do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot detach an existing checkout") }
+        catch { }
+        XCTAssertEqual(chat.currentWorktree, ready)
+        XCTAssertNotNil(ready.availableRootPath)
         try await Task.sleep(for: .milliseconds(1_100))
         XCTAssertNil(chat.currentWorktreeSetupProgress)
     }
@@ -597,7 +609,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
         let chat = ChatViewModel(projectStore: projects, sessionDirectory: fixture.root.appendingPathComponent("Chat"))
         try await loaded(chat)
         chat.createSession(projectID: project.id)
-        try await chat.createCurrentWorktree()
+        try await chat.setCurrentWorktreeEnabled(true)
         let id = try XCTUnwrap(chat.currentSessionID)
         let path = try XCTUnwrap(chat.currentWorktree?.path)
         try WorktreeFixture.git(["-C", fixture.repository.path, "remote", "add", "origin", fixture.root.appendingPathComponent("missing.git").path])
@@ -653,11 +665,11 @@ final class ChatWorktreeSessionTests: XCTestCase {
         try await loaded(second)
         second.selectSession(id)
         first.draft = "A pending request"
-        let setup = Task { try await first.createCurrentWorktree() }
+        let setup = Task { try await first.setCurrentWorktreeEnabled(true) }
         for _ in 0..<100 where !first.isPreparingCurrentWorktree { try await Task.sleep(for: .milliseconds(1)) }
         XCTAssertTrue(first.isPreparingCurrentWorktree)
         XCTAssertFalse(first.canSend(isRunning: true, selectedModelID: "model"))
-        XCTAssertFalse(second.canCreateCurrentWorktree)
+        XCTAssertFalse(second.canChangeCurrentWorktree)
         XCTAssertFalse(second.canModifySession(id))
         first.createSession()
         let newID = first.currentSessionID
@@ -951,7 +963,10 @@ final class ChatWorktreeSessionTests: XCTestCase {
         catch { XCTAssertTrue(error.localizedDescription.contains("already exists")) }
         XCTAssertEqual(chat.currentWorktree?.isReady, false)
         XCTAssertFalse(chat.isPreparingCurrentWorktree)
-        XCTAssertTrue(chat.canCreateCurrentWorktree)
+        XCTAssertTrue(chat.canChangeCurrentWorktree)
+        do { try await chat.setCurrentWorktreeEnabled(false); XCTFail("Cannot forget pending worktree files") }
+        catch { }
+        XCTAssertNotNil(chat.currentWorktree)
         XCTAssertEqual(try String(contentsOf: existing, encoding: .utf8), "Keep me")
         XCTAssertEqual(ChatSessionStore(chatDirectory: chatRoot).loadSession(id: id)?.worktree, chat.currentWorktree)
     }
@@ -1112,7 +1127,7 @@ final class ChatWorktreeSessionTests: XCTestCase {
     }
 
     private func createReadyWorktree(_ chat: ChatViewModel, name: String = "test-task") async throws {
-        try await chat.createCurrentWorktree()
+        try await chat.setCurrentWorktreeEnabled(true)
         try await chat.prepareWorktree(in: XCTUnwrap(chat.currentSessionID), firstPrompt: name) { _ in name }
     }
 
