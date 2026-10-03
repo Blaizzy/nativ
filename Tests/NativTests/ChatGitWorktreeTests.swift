@@ -655,6 +655,70 @@ final class ChatWorktreeSessionTests: XCTestCase {
         XCTAssertNil(chat.currentWorktreeSetupProgress)
     }
 
+    func testDocumentsAndTerminalsWorkBeforeSetupAndDocumentsMigrateWhenReady() async throws {
+        let fixture = try WorktreeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let projects = ChatProjectStore(storageURL: fixture.root.appendingPathComponent("projects.json"))
+        let project = try projects.createProject(directoryURL: fixture.repository.appendingPathComponent("Sources"))
+        let chatRoot = fixture.root.appendingPathComponent("Chat")
+        let store = ChatSessionStore(chatDirectory: chatRoot)
+        let chat = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(chat)
+        chat.createSession(projectID: project.id)
+        let id = try XCTUnwrap(chat.currentSessionID)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original")
+        let document = try XCTUnwrap(chat.workState.selectedItem)
+        let stagedFile = try XCTUnwrap(chat.workFileURL(for: document))
+        try await chat.setCurrentWorktreeEnabled(true)
+        let pending = try XCTUnwrap(chat.currentWorktree)
+        chat.setWorkPaneVisible(true)
+        chat.openWorkNewTab()
+        try chat.refreshWorkFiles()
+        XCTAssertEqual(chat.workFilesDirectory, store.workFiles.directory(for: id))
+        try chat.updateWorkItem(document.id, content: "Edited", previousContent: "Original")
+        XCTAssertEqual(try String(contentsOf: stagedFile, encoding: .utf8), "Edited")
+        try chat.createWorkItem(title: "Terminal", kind: .terminal)
+        var terminalItem = try XCTUnwrap(chat.workState.selectedItem)
+        XCTAssertEqual(terminalItem.terminalWorkingDirectory, project.rootPath)
+        terminalItem.terminalWorkingDirectory = pending.projectPath // Tab saved by an older build.
+        let terminal = chat.workTerminal(for: terminalItem, sessionID: id)
+        terminal.startIfNeeded(arguments: ["-f"])
+        defer { terminal.stop() }
+        XCTAssertTrue(terminal.isRunning)
+        XCTAssertEqual(terminal.directory, project.rootPath)
+        try await chat.setCurrentWorktreeEnabled(false)
+        try await chat.setCurrentWorktreeEnabled(true)
+        do {
+            try await chat.prepareWorktree(in: id, firstPrompt: "Edit notes") { _ in throw CancellationError() }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError { }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pending.path))
+        XCTAssertEqual(chat.workFileURL(for: document), stagedFile)
+        try await chat.prepareWorktree(in: id, firstPrompt: "Edit notes") { _ in
+            try "Edited during setup".write(to: stagedFile, atomically: true, encoding: .utf8)
+            return "edit-notes"
+        }
+        let ready = try XCTUnwrap(chat.currentWorktree)
+        let migrated = try XCTUnwrap(chat.workState.items.first { $0.id == document.id })
+        let file = try XCTUnwrap(chat.workFileURL(for: migrated))
+        XCTAssertTrue(file.path.hasPrefix(ready.projectPath + "/Nativ Files/"))
+        XCTAssertEqual(migrated.content, "Edited during setup")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), migrated.content)
+        XCTAssertEqual(store.loadSession(id: id)?.workFilesInWorktree, true)
+        XCTAssertTrue(chat.workTerminal(for: terminalItem, sessionID: id) === terminal)
+        XCTAssertTrue(terminal.isRunning)
+        XCTAssertEqual(terminal.directory, project.rootPath)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: URL(fileURLWithPath: project.rootPath).appendingPathComponent("Nativ Files").path))
+        try chat.createWorkItem(title: "New terminal", kind: .terminal)
+        XCTAssertEqual(chat.workState.selectedItem?.terminalWorkingDirectory, ready.projectPath)
+        let restarted = ChatViewModel(projectStore: projects, sessionDirectory: chatRoot)
+        try await loaded(restarted)
+        restarted.selectSession(id)
+        try restarted.refreshWorkFiles()
+        XCTAssertEqual(restarted.workFileURL(for: migrated), file)
+        XCTAssertEqual(restarted.workState.items.first { $0.id == document.id }?.content, migrated.content)
+    }
+
     func testSetupFailureAndCancellationDoNotStartCheckoutAndCanRetry() async throws {
         let fixture = try WorktreeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }

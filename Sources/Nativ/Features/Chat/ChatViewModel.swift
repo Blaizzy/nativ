@@ -695,7 +695,7 @@ final class ChatViewModel: ObservableObject {
 
     var workFilesDirectory: URL? {
         guard let sessionID = currentSessionID,
-              currentWorktree == nil || currentWorktree?.availableRootPath != nil else { return nil }
+              currentWorktree?.isReady != true || currentWorktree?.availableRootPath != nil else { return nil }
         return workFiles(in: sessionID).directory(for: sessionID)
     }
 
@@ -711,16 +711,17 @@ final class ChatViewModel: ObservableObject {
         guard let sessionID = requestedSessionID ?? currentSessionID,
               let state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         guard canModifySession(sessionID) else { return }
-        if worktree(for: sessionID) != nil,
+        let usesCheckout = worktree(for: sessionID)?.isReady == true
+        if usesCheckout,
            sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
             // Materialize legacy sources before reading the checkout, preserving external edits.
             try saveWorkState(state, in: sessionID, updateTimestamp: false)
         }
-        if let worktree = worktree(for: sessionID), worktree.availableRootPath == nil {
+        if usesCheckout, worktree(for: sessionID)?.availableRootPath == nil {
             throw ChatWorkError.invalid("The chat worktree is unavailable. Restore its checkout before changing files.")
         }
         let refreshed = try workFiles(in: sessionID).refreshed(state, sessionID: sessionID,
-                                                             droppingMissing: worktree(for: sessionID) != nil)
+                                                             droppingMissing: usesCheckout)
         if refreshed != state {
             try saveWorkState(refreshed, in: sessionID, updateTimestamp: true)
         } else {
@@ -731,7 +732,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func terminalDirectory(in sessionID: UUID) -> String {
-        if let worktree = worktree(for: sessionID) { return worktree.projectPath }
+        if let worktree = worktree(for: sessionID) {
+            return worktree.isReady ? worktree.projectPath
+                : URL(fileURLWithPath: worktree.repositoryPath).appendingPathComponent(worktree.projectSubpath).path
+        }
         if let projectID = projectID(for: sessionID), let project = projectStore.project(withID: projectID) {
             return project.rootPath
         }
@@ -739,10 +743,14 @@ final class ChatViewModel: ObservableObject {
     }
 
     func workTerminal(for item: ChatWorkItem, sessionID: UUID) -> ChatWorkTerminalSession {
-        workTerminals.session(for: item, sessionID: sessionID,
-                              directory: item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID),
-                              startupError: worktree(for: sessionID).flatMap {
-                                  $0.availableRootPath == nil ? "The chat worktree is unavailable: \($0.projectPath)" : nil
+        let worktree = worktree(for: sessionID)
+        // Older pending tabs recorded the future checkout as their starting directory.
+        let directory = worktree?.isReady == false && item.terminalWorkingDirectory == worktree?.projectPath
+            ? terminalDirectory(in: sessionID) : item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID)
+        return workTerminals.session(for: item, sessionID: sessionID,
+                              directory: directory,
+                              startupError: worktree.flatMap {
+                                  $0.isReady && $0.availableRootPath == nil ? "The chat worktree is unavailable: \($0.projectPath)" : nil
                               })
     }
 
@@ -1136,7 +1144,8 @@ final class ChatViewModel: ObservableObject {
     }
 
     var canChangeCurrentWorktree: Bool {
-        currentProjectID != nil && canChangeCurrentProject
+        guard let session = currentSession, currentProjectID != nil, session.worktree?.isReady != true else { return false }
+        return messages.isEmpty && !isSessionBusy(session.id) && canModifySession(session.id) && !isLoadingSessions
     }
 
     var canChangeCurrentProject: Bool {
@@ -1198,7 +1207,7 @@ final class ChatViewModel: ObservableObject {
     func setCurrentWorktreeEnabled(_ enabled: Bool) async throws {
         guard canChangeCurrentWorktree, let session = currentSessionSnapshot,
               let projectID = session.projectID, let project = projectStore.project(withID: projectID) else {
-            throw ChatGitWorktreeError(message: "Choose Worktree in a new, empty project chat.")
+            throw ChatGitWorktreeError(message: "Choose Worktree before sending the first message in a project chat.")
         }
         let operationID = UUID()
         guard inferenceActivity.begin(resource: .chat(session.id), windowID: windowID, operationID: operationID) else {
@@ -1296,6 +1305,10 @@ final class ChatViewModel: ObservableObject {
     private func updateWorktree(_ worktree: ChatGitWorktree, in sessionID: UUID) throws {
         guard var session = sessionID == currentSessionID ? currentSessionSnapshot
             : storedSessions.first(where: { $0.id == sessionID }) else { throw ChatWorkError.unavailable }
+        if worktree.isReady, session.worktree?.isReady == false, let state = session.workState {
+            // Include edits made to staged documents during setup before migrating them.
+            session.workState = try sessionStore.workFiles(for: session.worktree).refreshed(state, sessionID: sessionID)
+        }
         session.worktree = worktree
         try saveProjectSession(session)
     }
@@ -1310,6 +1323,8 @@ final class ChatViewModel: ObservableObject {
             currentSession?.worktree = session.worktree
             currentSession?.projectID = session.projectID
             currentProjectID = session.projectID
+            currentSession?.workState = session.workState
+            workState = session.workState ?? ChatWorkState()
         }
         refreshSessionList()
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
