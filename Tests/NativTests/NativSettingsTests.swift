@@ -18,6 +18,9 @@ final class NativSettingsTests: XCTestCase {
                 var expected: [String] = []
                 if emoji != .default { expected.append("Emoji usage:\n" + emoji.systemPrompt) }
                 if markdown != .default { expected.append("Markdown usage:\n" + markdown.systemPrompt) }
+                if !expected.isEmpty {
+                    expected.append("Style, emoji, and formatting preferences are defaults; explicit user requests override them.")
+                }
                 XCTAssertEqual(decoded.personalization.systemPrompt, expected.joined(separator: "\n\n"))
             }
         }
@@ -68,7 +71,11 @@ final class NativSettingsTests: XCTestCase {
             if style == .default {
                 XCTAssertTrue(decoded.personalization.systemPrompt.isEmpty)
             } else {
-                XCTAssertEqual(decoded.personalization.systemPrompt, "Conversation style:\n" + style.systemPrompt)
+                XCTAssertEqual(
+                    decoded.personalization.systemPrompt,
+                    "Conversation style:\n" + style.systemPrompt
+                        + "\n\nStyle, emoji, and formatting preferences are defaults; explicit user requests override them."
+                )
             }
         }
     }
