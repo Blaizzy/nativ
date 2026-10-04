@@ -26,6 +26,8 @@ public enum NativModelTypeRegistryError: Error, Equatable, Sendable {
 /// A validated view of the loaders shipped inside Nativ's bundled MLX runtime.
 public struct NativModelTypeRegistry: Equatable, Sendable {
     private let entries: [NativModelCapability: Entry]
+    /// Versions of the bundled runtime packages, keyed by package name.
+    public let packageVersions: [String: String]
 
     public init(data: Data) throws {
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
@@ -127,6 +129,7 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
         }
 
         entries = validatedEntries
+        packageVersions = manifest.packageVersions
     }
 
     public func canonicalModelTypes(

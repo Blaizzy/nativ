@@ -332,10 +332,6 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case modelConfiguration = "config"
     }
 
-    private static let supportClassifier = try? HuggingFaceModelSupportClassifier(
-        registry: Nativ.modelTypeRegistry()
-    )
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
@@ -365,7 +361,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             isGated = false
         }
 
-        support = Self.supportClassifier?.classify(
+        support = HuggingFaceModelSupportClassifier.bundled?.classify(
             configuration: supportConfiguration,
             pipelineTag: pipelineTag,
             tags: tags
@@ -443,8 +439,8 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
     }
 }
 
-private struct HuggingFaceHubClient: Sendable {
-    func search(
+struct HuggingFaceHubClient: Sendable {
+    fileprivate func search(
         query: String,
         sort: HuggingFaceModelSort,
         capabilities: Set<LocalModelCapability>,
@@ -518,7 +514,7 @@ private struct HuggingFaceHubClient: Sendable {
         return data
     }
 
-    func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
+    fileprivate func page(at url: URL, token: String?) async throws -> HuggingFaceModelPage {
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
         request.setValue("MLXPlatform/1.0", forHTTPHeaderField: "User-Agent")
@@ -544,7 +540,7 @@ private struct HuggingFaceHubClient: Sendable {
         )
     }
 
-    func pages(at urls: [URL], token: String?) async throws -> HuggingFaceModelPage {
+    fileprivate func pages(at urls: [URL], token: String?) async throws -> HuggingFaceModelPage {
         let indexedPages = try await withThrowingTaskGroup(
             of: (Int, HuggingFaceModelPage).self,
             returning: [(Int, HuggingFaceModelPage)].self

@@ -59,6 +59,11 @@ struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
 }
 
 struct HuggingFaceModelSupportClassifier: Sendable {
+    /// Classifier for the loaders shipped in this build's MLX runtime.
+    static let bundled = try? HuggingFaceModelSupportClassifier(
+        registry: Nativ.modelTypeRegistry()
+    )
+
     private let registry: NativModelTypeRegistry
 
     init(registry: NativModelTypeRegistry) {
