@@ -55,3 +55,10 @@ jobs:
             -derivedDataPath build/NativDevelopmentDerivedData \
             CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
             -only-testing:NativTests/SoftwareUpdaterTests test
+
+      - name: Test MCP catalog entries
+        run: |
+          xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
+            -derivedDataPath build/NativDevelopmentDerivedData \
+            CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
+            -only-testing:NativTests/MCPServerCatalogTests test
