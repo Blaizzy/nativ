@@ -2101,9 +2101,12 @@ final class ChatViewModel: ObservableObject {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
+        // Derived from the format map so a newly supported extension is selectable without
+        // anyone remembering to widen this list.
         panel.allowedContentTypes =
-            [.image, .pdf, .text, .rtf, .commaSeparatedText]
-            + ["doc", "docx", "pptx"].compactMap { UTType(filenameExtension: $0) }
+            [.image, .text]
+            + ChatDocumentFormat.formatsByFileExtension.keys
+                .compactMap { UTType(filenameExtension: $0) }
 
         guard panel.runModal() == .OK else {
             return

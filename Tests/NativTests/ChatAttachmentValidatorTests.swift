@@ -110,20 +110,35 @@ final class ChatAttachmentValidatorTests: XCTestCase {
     }
 
     func testUnsupportedFormatsAreImmediatelyBlocked() throws {
-        let spreadsheet = attachment(
-            filename: "budget.xlsx",
-            mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        let archive = attachment(
+            filename: "legacy.xls",
+            mimeType: "application/vnd.ms-excel"
         )
 
         let validation = try XCTUnwrap(
-            ChatAttachmentValidator.immediateValidation(for: spreadsheet)
+            ChatAttachmentValidator.immediateValidation(for: archive)
         )
 
         XCTAssertTrue(validation.preventsSending)
         guard case .blocked(let message) = validation else {
             return XCTFail("Expected unsupported attachment to be blocked")
         }
-        XCTAssertTrue(message.contains("isn’t supported in chat yet"))
+        XCTAssertTrue(message.contains("isn\u{2019}t supported in chat yet"))
+    }
+
+    func testNewlySupportedDocumentFormatsAreNotBlocked() throws {
+        for filename in ["budget.xlsx", "book.epub", "notes.odt", "sheet.ods", "run.ipynb"] {
+            let supported = attachment(filename: filename, mimeType: "application/octet-stream")
+            XCTAssertNotEqual(
+                supported.chatAttachmentKind,
+                .unsupported,
+                filename
+            )
+            XCTAssertNil(
+                ChatAttachmentValidator.immediateValidation(for: supported),
+                filename
+            )
+        }
     }
 
     func testPDFWithoutEmbeddedTextExplainsOCRLimitation() async throws {
