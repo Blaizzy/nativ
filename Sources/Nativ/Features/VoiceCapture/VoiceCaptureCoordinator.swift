@@ -2,6 +2,17 @@ import AppKit
 import Combine
 import NativServerKit
 
+struct VoiceTranscriptionConfiguration: Sendable {
+    let modelSearchPath: String
+    let additionalModelSearchPaths: [String]
+    let selectedModelID: String?
+    let languageModelID: String?
+    let maxTokens: Int
+    let serverBaseURL: URL
+    let serverAPIKey: String?
+    let serverIsRunning: Bool
+}
+
 @MainActor
 final class VoiceCaptureCoordinator {
     var transcriptionConfigurationProvider:
@@ -233,7 +244,6 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                let recordingURL = try VoiceAudioRecorder.makeOutputURL()
                 let streamingTranscriptInserter = StreamingVoiceTranscriptInserter(
                     target: self.insertionTarget,
                     returnCommandTrigger: VoiceShortcutPreferences.shared.activeReturnCommandTrigger
@@ -252,7 +262,6 @@ final class VoiceCaptureCoordinator {
                 }
                 do {
                     try self.recorder.start(
-                        outputURL: recordingURL,
                         deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID,
                         liveChunkEmitter: liveTranscriptionPipeline?.emitter
                     )
@@ -350,9 +359,7 @@ final class VoiceCaptureCoordinator {
                     )
                 } catch {
                     guard !Task.isCancelled else { return }
-                    if LiveAudioTranscriptionFallbackPolicy.usesBatchTranscription(
-                        hasInsertedText: streamingTranscriptInserter.hasInsertedText
-                    ) {
+                    if !streamingTranscriptInserter.hasInsertedText {
                         self.transcribe(
                             recordingURL,
                             target: target,

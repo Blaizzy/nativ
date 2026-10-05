@@ -2,17 +2,6 @@ import AVFoundation
 import Foundation
 import NativServerKit
 
-struct VoiceTranscriptionConfiguration: Sendable {
-    let modelSearchPath: String
-    let additionalModelSearchPaths: [String]
-    let selectedModelID: String?
-    let languageModelID: String?
-    let maxTokens: Int
-    let serverBaseURL: URL
-    let serverAPIKey: String?
-    let serverIsRunning: Bool
-}
-
 struct StreamingVoiceTranscriptState {
     private let commandWords: [String]
     private(set) var insertedText = ""
@@ -63,12 +52,6 @@ enum LiveAudioTranscriptionPipelineError: Error {
 
 enum LiveAudioPCMEmitterError: Error {
     case backlogExceeded
-}
-
-enum LiveAudioTranscriptionFallbackPolicy {
-    static func usesBatchTranscription(hasInsertedText: Bool) -> Bool {
-        !hasInsertedText
-    }
 }
 
 final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
@@ -128,7 +111,6 @@ final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
         emitter.cancel()
         await session.cancel()
     }
-
 }
 
 final class LiveAudioPCMEmitter: @unchecked Sendable {

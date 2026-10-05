@@ -299,7 +299,7 @@ final class VoiceAudioRecorder {
         }
     }
 
-    static func makeOutputURL() throws -> URL {
+    private static func makeOutputURL() throws -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss.SSS"
