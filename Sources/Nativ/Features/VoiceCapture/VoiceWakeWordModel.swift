@@ -88,7 +88,7 @@ struct VoiceWakeWordWindow {
 /// Created and used only inside the listener's detached inference task.
 /// The fixed HN-2 model and frontend require no server or third-party runtime.
 final class VoiceWakeWordModel {
-    static let threshold: Float = 0.3
+    let threshold: Float
     private let model: MLModel
     private let features: VoiceWakeWordFeatures
     private let input: MLMultiArray
@@ -100,6 +100,9 @@ final class VoiceWakeWordModel {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .cpuAndNeuralEngine
         model = try MLModel(contentsOf: url, configuration: configuration)
+        threshold = try Self.detectionThreshold(
+            metadata: model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
+        )
         features = try VoiceWakeWordFeatures()
         guard let constraint = model.modelDescription.inputDescriptionsByName["mels"]?.multiArrayConstraint,
               constraint.shape.map(\.intValue) == [1, 128, 200],
@@ -119,9 +122,18 @@ final class VoiceWakeWordModel {
             let shouldScore = window.append(sample)
             guard shouldScore, !detected else { continue }
             try Task.checkCancellation()
-            if try probability(audio: window.snapshot()) >= Self.threshold { detected = true }
+            if try probability(audio: window.snapshot()) >= threshold { detected = true }
         }
         return detected
+    }
+
+    static func detectionThreshold(metadata: [String: String]) throws -> Float {
+        guard let value = metadata["default_threshold"],
+              let threshold = Float(value), threshold.isFinite, (0...1).contains(threshold)
+        else {
+            throw VoiceWakeWordModelError.invalidModel("The Hey Nativ model has a missing or invalid detection threshold.")
+        }
+        return threshold
     }
 
     func probability(audio: [Float]) throws -> Float {
