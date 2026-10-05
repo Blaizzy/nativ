@@ -192,6 +192,7 @@ targets:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
+      - path: Sources/Nativ/LaunchSplashPreferences.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
