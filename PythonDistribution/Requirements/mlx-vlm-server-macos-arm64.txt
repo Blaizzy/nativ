@@ -62,5 +62,4 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.7.0
 uvicorn==0.46.0
-webrtcvad-wheels==2.0.14.post1
 yarl==1.23.0

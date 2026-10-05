@@ -2067,7 +2067,6 @@ extension LocalModelDiscovery {
             $0.repoID.localizedCaseInsensitiveCompare($1.repoID) == .orderedAscending
         }.first?.repoID
     }
-
 }
 
 enum LocalModelDiscoveryError: LocalizedError, Equatable {
