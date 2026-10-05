@@ -816,7 +816,8 @@ struct ChatSessionStore {
     }
 
     func workFiles(for worktree: ChatGitWorktree?) -> ChatWorkFileStore {
-        guard let worktree else { return workFiles }
+        // Stage files in chat storage until the first message creates the checkout.
+        guard let worktree, worktree.isReady else { return workFiles }
         return ChatWorkFileStore(root: URL(fileURLWithPath: worktree.projectPath)
             .appendingPathComponent("Nativ Files", isDirectory: true), worktree: worktree)
     }
@@ -896,7 +897,7 @@ struct ChatSessionStore {
             }
             let files = workFiles(for: persisted.worktree)
             if let state = persisted.workState, hasEditableFiles {
-                if persisted.worktree != nil, persisted.workFilesInWorktree != true {
+                if persisted.worktree?.isReady == true, persisted.workFilesInWorktree != true {
                     try files.migrate(state, previous: previous, from: workFiles, sessionID: persisted.id)
                     persisted.workFilesInWorktree = true
                 } else {

@@ -1,4 +1,39 @@
+import CoreServices
 import Foundation
+
+/// Watches nested files and Git metadata; its owner stops it when the summary closes.
+final class ChatGitChangeObserver {
+    private var stream: FSEventStreamRef?
+    private let onChange: @Sendable () -> Void
+
+    init?(paths: [String], onChange: @escaping @Sendable () -> Void) {
+        self.onChange = onChange
+        guard !paths.isEmpty else { return nil }
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+                                           retain: nil, release: nil, copyDescription: nil)
+        guard let stream = FSEventStreamCreate(nil, { _, info, _, _, _, _ in
+            guard let info else { return }
+            Unmanaged<ChatGitChangeObserver>.fromOpaque(info).takeUnretainedValue().onChange()
+        }, &context, paths as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 0.5,
+           FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot)) else { return nil }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, .main)
+        guard FSEventStreamStart(stream) else {
+            stop()
+            return nil
+        }
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        self.stream = nil
+    }
+
+    deinit { stop() }
+}
 
 /// Read from Git each time it is needed, rather than persisting a second current-branch value.
 enum ChatGitHead: Codable, Equatable, Sendable {
@@ -25,14 +60,30 @@ enum ChatGitHead: Codable, Equatable, Sendable {
     }
 }
 
+struct ChatGitDiffStat: Equatable, Sendable {
+    var additions = 0
+    var deletions = 0
+
+    mutating func include(_ numstat: String) {
+        for line in numstat.split(separator: "\n") {
+            let fields = line.split(separator: "\t", maxSplits: 2)
+            // Git reports binary changes as "-", which have no line count.
+            guard fields.count == 3, let added = Int(fields[0]), let removed = Int(fields[1]) else { continue }
+            additions += added
+            deletions += removed
+        }
+    }
+}
+
 /// Persisted with the chat so reopening it never falls back to the local project.
 struct ChatGitWorktree: Codable, Equatable, Sendable {
     let repositoryPath: String
     let commonDirectory: String
     let path: String
     let projectSubpath: String
-    let branch: String // The branch Nativ created and owns, not necessarily the current branch.
-    let baseCommit: String
+    var branch: String // The branch Nativ created and owns, not necessarily the current branch.
+    var baseCommit: String
+    var baseReference: String? = nil
     var isReady = false
 
     var projectPath: String {
@@ -100,6 +151,26 @@ struct ChatGitWorktreeError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct ChatWorktreeSetupProgress: Equatable {
+    enum Step: Int, CaseIterable {
+        case sync, name, checkout
+
+        var title: String {
+            switch self {
+            case .sync: "Sync remote"
+            case .name: "Name branch"
+            case .checkout: "Create worktree"
+            }
+        }
+    }
+
+    var step: Step = .sync
+    var isComplete = false
+    var error: String?
+    var source: String?
+    var branch: String?
+}
+
 struct ChatGitWorktreeRemoval: Sendable {
     let hasCheckout: Bool
     let checkoutHead: ChatGitHead?
@@ -121,10 +192,41 @@ struct ChatGitWorktreeRemoval: Sendable {
 struct ChatGitWorktreeStore: Sendable {
     let root: URL
 
+    func observationPaths(at path: String) throws -> [String] {
+        // A linked worktree's Git metadata lives outside its checkout. Watch both,
+        // even when the project itself is a subfolder of the repository.
+        let checkout = try git(["rev-parse", "--show-toplevel"], at: path)
+        let common = try git(["rev-parse", "--path-format=absolute", "--git-common-dir"], at: path)
+        return [checkout, common]
+    }
+
     func currentHead(at path: String) throws -> ChatGitHead? {
         let directory = try git(["rev-parse", "--absolute-git-dir"], at: path)
         return ChatGitHead(contents: try String(contentsOf: URL(fileURLWithPath: directory)
             .appendingPathComponent("HEAD"), encoding: .utf8))
+    }
+
+    func diffStat(at path: String, baseReference: String? = nil, fallbackBaseCommit: String? = nil) throws -> ChatGitDiffStat {
+        let directory = try git(["rev-parse", "--show-toplevel"], at: path)
+        // Follow the base branch as it advances, including after merges, rebases and restoration.
+        // Older chats fall back to the local default-branch refs; the counter never fetches.
+        let references = [baseReference].compactMap { $0 }
+            + ["refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master"]
+        let reference = references.first {
+            (try? git(["rev-parse", "--verify", "\($0)^{commit}"], at: directory)) != nil
+        } ?? fallbackBaseCommit ?? "HEAD"
+        let base = try git(["merge-base", reference, "HEAD"], at: directory)
+        var result = ChatGitDiffStat()
+        let options = ["--numstat", "--no-ext-diff", "--no-textconv", "--find-renames"]
+        // A read must not refresh the index and trigger another filesystem notification.
+        result.include(try git(["--no-optional-locks", "diff"] + options + [base, "--"], at: directory))
+        let untracked = try git(["ls-files", "--others", "--exclude-standard", "-z"], at: directory, trimOutput: false)
+        for file in untracked.split(separator: "\0") {
+            // Use Git's own binary and line-count handling, without touching the user's index.
+            result.include(try git(["diff", "--no-index"] + options + ["--", "/dev/null", String(file)],
+                                   at: directory, acceptedExitCodes: [0, 1]))
+        }
+        return result
     }
 
     func plan(projectPath: String, sessionID: UUID) throws -> ChatGitWorktree {
@@ -163,14 +265,18 @@ struct ChatGitWorktreeStore: Sendable {
             }
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let existingCommit = try? git(["rev-parse", "--verify", "refs/heads/\(plan.branch)"], at: plan.repositoryPath)
-            if let existingCommit {
+            if let existingCommit, usesSessionBranch(plan) {
                 guard existingCommit == plan.baseCommit else {
                     throw ChatGitWorktreeError(message: "The worktree branch already contains different work. It has been preserved: \(plan.branch)")
                 }
                 // Git may have created the branch before a previous checkout was interrupted.
                 _ = try git(["worktree", "add", "--", plan.path, plan.branch], at: plan.repositoryPath)
             } else {
-                _ = try git(["worktree", "add", "-b", plan.branch, "--", plan.path, plan.baseCommit], at: plan.repositoryPath)
+                guard existingCommit == nil else {
+                    throw ChatGitWorktreeError(message: "The branch \(plan.branch) already exists. It has been preserved. Start a new chat with a different task name.")
+                }
+                // Git refuses a concurrent collision; never adopt an existing user's branch.
+                _ = try git(["worktree", "add", "-b", result.branch, "--", plan.path, plan.baseCommit], at: plan.repositoryPath)
             }
         }
         result.isReady = true
@@ -180,11 +286,105 @@ struct ChatGitWorktreeStore: Sendable {
         return result
     }
 
+    /// Fetch only the remote default branch. Never pull, reset, or change the user's checkout.
+    func synchronized(_ plan: ChatGitWorktree) async throws -> (plan: ChatGitWorktree, source: String) {
+        let cancellation = ChatGitProcessCancellation()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await Task.detached(priority: .userInitiated) {
+                try synchronize(plan, cancellation: cancellation)
+            }.value
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    private func synchronize(_ plan: ChatGitWorktree, cancellation: ChatGitProcessCancellation) throws -> (plan: ChatGitWorktree, source: String) {
+        let path = plan.repositoryPath
+        func git(_ arguments: [String]) throws -> String {
+            try self.git(arguments, at: path, cancellation: cancellation)
+        }
+        let remotes = try git(["remote"]).split(separator: "\n").map(String.init)
+        var result = plan
+        guard !remotes.isEmpty else {
+            result.baseCommit = try git(["rev-parse", "--verify", "HEAD^{commit}"])
+            result.baseReference = try? git(["symbolic-ref", "-q", "HEAD"])
+            try cancellation.checkCancellation()
+            return (result, "No remote · Using local commit")
+        }
+        let trackingRemote = try? git(["config", "--get", "branch.\(currentHead(at: path)?.displayName ?? "").remote"])
+        try cancellation.checkCancellation()
+        guard let remote = remotes.contains("origin") ? "origin"
+            : trackingRemote.flatMap({ remotes.contains($0) ? $0 : nil }) ?? (remotes.count == 1 ? remotes[0] : nil) else {
+            throw ChatGitWorktreeError(message: "Choose an origin remote or configure the current branch's upstream before creating a worktree.")
+        }
+        let advertised = try git(["ls-remote", "--symref", "--", remote, "HEAD"])
+        let prefix = "ref: refs/heads/"
+        guard let line = advertised.components(separatedBy: "\n").first(where: { $0.hasPrefix(prefix) && $0.hasSuffix("\tHEAD") }) else {
+            throw ChatGitWorktreeError(message: "The default branch of \(remote) could not be found. Check the remote's HEAD and try again.")
+        }
+        let branch = String(line.dropFirst(prefix.count).dropLast("\tHEAD".count))
+        let ref = "refs/remotes/\(remote)/\(branch)"
+        _ = try git(["fetch", "--no-tags", "--", remote, "+refs/heads/\(branch):\(ref)"])
+        result.baseCommit = try git(["rev-parse", "--verify", "\(ref)^{commit}"])
+        result.baseReference = ref
+        return (result, "\(remote)/\(branch)")
+    }
+
+    func hasStartedCreating(_ plan: ChatGitWorktree) -> Bool {
+        plan.registered || (usesSessionBranch(plan)
+            && (try? git(["rev-parse", "--verify", "refs/heads/\(plan.branch)"], at: plan.repositoryPath)) != nil)
+    }
+
+    private func usesSessionBranch(_ plan: ChatGitWorktree) -> Bool {
+        let id = URL(fileURLWithPath: plan.path).lastPathComponent
+        return plan.branch == "nativ/\(id)" || plan.branch.hasSuffix("-\(id)")
+    }
+
+    static let fallbackBranches: [String] = {
+        let adjectives = "bright calm clear cool crisp early fair gentle golden green happy hidden kind light lively lucky mellow misty noble quiet rapid silver smooth soft steady still sunny swift vivid warm wild wise".split(separator: " ")
+        let nouns = "birch brook cedar cloud coast coral cove crane dawn dune elm fern field finch forest fox glade grove heron hill lake leaf maple meadow moon moss oak pine reed river stone willow".split(separator: " ")
+        return adjectives.flatMap { adjective in nouns.map { "nativ/\(adjective)-\($0)" } }
+    }()
+
+    static func availableBranch(_ response: String?, excluding existing: Set<String>) throws -> String {
+        if let response, let branch = try? namedBranch(response), !existing.contains(branch) {
+            return branch
+        }
+        guard let branch = fallbackBranches.filter({ !existing.contains($0) }).randomElement() else {
+            throw ChatGitWorktreeError(message: "All random branch names are in use. Retry with a descriptive task name.")
+        }
+        return branch
+    }
+
+    func availableBranch(_ response: String?, at repositoryPath: String) throws -> String {
+        let branches = try git(["for-each-ref", "--format=%(refname:strip=2)", "refs/heads"], at: repositoryPath)
+        return try Self.availableBranch(response, excluding: Set(branches.split(separator: "\n").map(String.init)))
+    }
+
+    static func namedBranch(_ response: String) throws -> String {
+        let slug = response.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
+            .lowercased()
+        // Treat the model's response only as a name, never as Git arguments or shell code.
+        guard (3...60).contains(slug.count), slug.first?.isLetter == true || slug.first?.isNumber == true,
+              slug.last?.isLetter == true || slug.last?.isNumber == true,
+              !slug.contains("--"), slug.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
+            throw ChatGitWorktreeError(message: "The model did not return a valid branch name. Retry the request to name the worktree.")
+        }
+        return "nativ/\(slug)"
+    }
+
     func removal(_ worktree: ChatGitWorktree, sessionID: UUID) throws -> ChatGitWorktreeRemoval {
         let id = sessionID.uuidString.lowercased()
         let storage = FileWriteAccessPolicy.configuredRootURL(rootPath: root.path)
         let expectedPath = storage?.appendingPathComponent(id, isDirectory: true).path
-        guard worktree.path == expectedPath, worktree.branch == "nativ/\(id)" else {
+        let legacyName = worktree.branch == "nativ/\(id)" || (worktree.branch.hasPrefix("nativ/")
+            && worktree.branch.hasSuffix("-\(id)")
+            && (try? Self.namedBranch(String(worktree.branch.dropFirst(6).dropLast(id.count + 1))))
+                == String(worktree.branch.dropLast(id.count + 1)))
+        let namedBranch = (try? Self.namedBranch(String(worktree.branch.dropFirst(6)))) == worktree.branch
+        guard worktree.path == expectedPath, legacyName || namedBranch else {
             throw ChatGitWorktreeError(message: "This checkout is outside the chat's managed worktree folder. It has been preserved.")
         }
         let common = try git(["rev-parse", "--path-format=absolute", "--git-common-dir"], at: worktree.repositoryPath)
@@ -234,7 +434,8 @@ struct ChatGitWorktreeStore: Sendable {
         } ?? false
         // Never delete a user branch. Remove our original branch only if its history is in
         // the snapshot and no other checkout uses it; otherwise leave that branch intact.
-        let removesBranch = !branchIsInUseElsewhere && ownedCommit.flatMap { owned in
+        let removesBranch = (legacyName || worktree.isReady || checkout != nil)
+            && !branchIsInUseElsewhere && ownedCommit.flatMap { owned in
             commit.map { (try? git(["merge-base", "--is-ancestor", owned, $0], at: worktree.repositoryPath)) != nil }
         } == true
         return ChatGitWorktreeRemoval(hasCheckout: checkout != nil, checkoutHead: head, headCommit: commit,
@@ -280,7 +481,9 @@ struct ChatGitWorktreeStore: Sendable {
         }
     }
 
-    func git(_ arguments: [String], at path: String, environment extraEnvironment: [String: String] = [:]) throws -> String {
+    func git(_ arguments: [String], at path: String, environment extraEnvironment: [String: String] = [:],
+             acceptedExitCodes: Set<Int32> = [0], trimOutput: Bool = true,
+             cancellation: ChatGitProcessCancellation? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         // A checkout must not execute repository hooks in the background.
@@ -294,16 +497,69 @@ struct ChatGitWorktreeStore: Sendable {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
-        try process.run()
+        if let cancellation { try cancellation.start(process) }
+        else { try process.run() }
+        defer { cancellation?.finish() }
         let timeout = DispatchWorkItem { if process.isRunning { process.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: timeout)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         timeout.cancel()
-        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard process.terminationStatus == 0 else {
+        try cancellation?.checkCancellation()
+        let outputText = String(decoding: data, as: UTF8.self)
+        let text = trimOutput ? outputText.trimmingCharacters(in: .whitespacesAndNewlines) : outputText
+        guard acceptedExitCodes.contains(process.terminationStatus) else {
             throw ChatGitWorktreeError(message: text.isEmpty ? "Git could not prepare the worktree." : String(text.prefix(2_000)))
         }
         return text
+    }
+}
+
+/// Owns only the current sync command, including Git's SSH/transport children.
+final class ChatGitProcessCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var processGroup: pid_t?
+    private var cancelled = false
+
+    func start(_ process: Process) throws {
+        try lock.withLock {
+            guard !cancelled else { throw CancellationError() }
+            try process.run()
+            self.process = process
+            let pid = process.processIdentifier
+            processGroup = getpgid(pid) == pid ? pid : nil
+        }
+    }
+
+    func finish() {
+        lock.withLock {
+            process = nil
+            processGroup = nil
+        }
+    }
+
+    func checkCancellation() throws {
+        if lock.withLock({ cancelled }) { throw CancellationError() }
+    }
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            guard let process, processGroup != nil || process.isRunning else { return }
+            let pid = process.processIdentifier
+            // Foundation launches macOS processes in their own group. Check before signalling
+            // it so cancellation can never reach Nativ or other unrelated processes.
+            let target = processGroup.map { -$0 } ?? pid
+            kill(target, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) { [self] in
+                lock.withLock {
+                    // Keep ownership until the output pipe closes, even if Git exits before
+                    // a transport child. A child holding that pipe must not block cancellation.
+                    guard self.process === process else { return }
+                    kill(target, SIGKILL)
+                }
+            }
+        }
     }
 }

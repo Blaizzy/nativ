@@ -1,5 +1,4 @@
 import AVFoundation
-import CoreAudio
 import Foundation
 
 enum VoiceAudioRecorderError: LocalizedError {
@@ -140,14 +139,14 @@ final class VoiceAudioRecorder {
     private(set) var lastRecordingDuration: TimeInterval?
     private(set) var lastRecordingError: Error?
 
-    private let inputSession: AudioInputEngineSession
+    private let inputSession: AudioInputCaptureSession
     private var recordingID: UUID?
     private var recordingWriter: VoiceAudioRecordingWriter?
     private var recordingURL: URL?
     private var realtimeMeter: RealtimeAudioMeter?
     private var meterPublisherTask: Task<Void, Never>?
 
-    init(inputSession: AudioInputEngineSession = AudioInputEngineSession()) {
+    init(inputSession: AudioInputCaptureSession = AudioInputCaptureSession()) {
         self.inputSession = inputSession
     }
 
@@ -174,7 +173,7 @@ final class VoiceAudioRecorder {
     func start(
         outputURL requestedOutputURL: URL? = nil,
         deviceUniqueID: String? = nil
-    ) throws -> URL {
+    ) async throws -> URL {
         if let recordingURL, isRecording {
             return recordingURL
         }
@@ -195,20 +194,27 @@ final class VoiceAudioRecorder {
                 self.recordingFailed(error)
             }
         }
+        recordingWriter = writer
+        recordingURL = outputURL
         let realtimeMeter = RealtimeAudioMeter(profile: .recording)
         do {
-            try inputSession.start(
+            try await inputSession.start(
                 deviceUniqueID: deviceUniqueID,
                 tap: Self.makeTap(writer: writer, realtimeMeter: realtimeMeter)
             ) { [weak self] error in
                 guard let self, self.recordingID == id else { return }
                 self.recordingFailed(error)
             }
+            guard recordingID == id else { throw CancellationError() }
         } catch {
-            recordingID = nil
-            inputSession.stop()
-            writer.finish()
-            try? FileManager.default.removeItem(at: outputURL)
+            if recordingID == id {
+                recordingID = nil
+                inputSession.stop()
+                recordingWriter = nil
+                recordingURL = nil
+                writer.finish()
+                try? FileManager.default.removeItem(at: outputURL)
+            }
             throw error
         }
 

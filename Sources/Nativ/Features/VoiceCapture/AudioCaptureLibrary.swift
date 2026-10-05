@@ -407,7 +407,7 @@ final class AudioCaptureLibrary: ObservableObject {
             let microphoneDeviceID = AudioInputDevicePreferences.shared.effectiveDeviceID
             switch kind {
             case .voiceNote:
-                try voiceRecorder.start(
+                try await voiceRecorder.start(
                     outputURL: outputURL,
                     deviceUniqueID: microphoneDeviceID
                 )
@@ -420,7 +420,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .systemAndMicrophone
                 } else {
-                    try voiceRecorder.start(
+                    try await voiceRecorder.start(
                         outputURL: outputURL,
                         deviceUniqueID: microphoneDeviceID
                     )

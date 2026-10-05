@@ -250,6 +250,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatGitHubPullRequest.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktree.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktreeRecovery.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
@@ -326,6 +327,7 @@ targets:
       - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
+      - path: Sources/Nativ/Features/SystemMonitor/SystemTelemetry.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
       - path: Sources/Nativ/Utilities/ServerPortProbe.swift

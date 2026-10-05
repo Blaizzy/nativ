@@ -3,6 +3,25 @@ import Foundation
 import Testing
 
 struct VoiceWakeWordTests {
+    @Test func testDetectionThresholdUsesModelMetadata() throws {
+        for threshold in [Float(0), 0.25, 0.5901581, 1] {
+            #expect(try VoiceWakeWordModel.detectionThreshold(
+                metadata: ["default_threshold": String(threshold)]
+            ) == threshold)
+        }
+    }
+
+    @Test func testDetectionThresholdRejectsMissingOrInvalidMetadata() {
+        #expect(throws: VoiceWakeWordModelError.self) {
+            try VoiceWakeWordModel.detectionThreshold(metadata: [:])
+        }
+        for value in ["", "invalid", "nan", "inf", "-inf", "-0.1", "1.1"] {
+            #expect(throws: VoiceWakeWordModelError.self) {
+                try VoiceWakeWordModel.detectionThreshold(metadata: ["default_threshold": value])
+            }
+        }
+    }
+
     @Test func testWindowSkipsSilenceAndExpiresSpeechAfterHangover() {
         var window = VoiceWakeWordWindow()
         var scoringBoundaries = 0

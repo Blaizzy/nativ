@@ -264,6 +264,45 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testTabReorderingPreservesSelectionContentsAndSavedOrder() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        for (title, kind) in [("Terminal", ChatWorkItem.Kind.terminal), ("Notes.md", .document), ("index.html", .website)] {
+            try chat.createWorkItem(title: title, kind: kind)
+        }
+        let original = chat.workState
+        let ids = original.openIDs
+        let modifiedAt = try XCTUnwrap(store.loadSession(id: session.id)?.updatedAt)
+        XCTAssertTrue(try chat.moveWorkTab(ids[2], to: ids[0], in: session.id))
+        XCTAssertEqual(chat.workState.openIDs, [ids[2], ids[0], ids[1]])
+        XCTAssertTrue(try chat.moveWorkTab(ids[0], to: ids[1], in: session.id))
+        XCTAssertEqual(chat.workState.openIDs, [ids[2], ids[1], ids[0]])
+        XCTAssertEqual(chat.workState.selectedID, original.selectedID)
+        XCTAssertEqual(chat.workState.items, original.items)
+        XCTAssertEqual(store.loadSession(id: session.id)?.updatedAt, modifiedAt)
+
+        let saved = chat.workState
+        for (source, target, sessionID) in [
+            (ids[0], ids[0], session.id), (UUID(), ids[1], session.id),
+            (ids[0], UUID(), session.id), (ids[0], ids[1], UUID())
+        ] {
+            XCTAssertFalse(try chat.moveWorkTab(source, to: target, in: sessionID))
+            XCTAssertEqual(chat.workState, saved)
+        }
+        let reopened = subject(root)
+        try await loaded(reopened)
+        reopened.selectSession(session.id)
+        XCTAssertEqual(reopened.workState, saved)
+        reopened.closeWorkItem(ids[2])
+        XCTAssertEqual(reopened.workState.selectedID, ids[1])
+        XCTAssertFalse(try reopened.moveWorkTab(ids[2], to: ids[0], in: session.id))
+        reopened.openWorkNewTab()
+        XCTAssertTrue(try reopened.moveWorkTab(ids[0], to: ids[1], in: session.id))
+        XCTAssertNil(reopened.workState.selectedID)
+        XCTAssertEqual(reopened.workState.openIDs, [ids[0], ids[1]])
+    }
+
     func testSharedTerminalRunsInTheExistingShellAndKeepsConsentBoundToItsTarget() async throws {
         let (root, _, original) = try fixture()
         let folder = root.appendingPathComponent("with spaces")
@@ -487,6 +526,40 @@ final class ChatWorkSessionTests: XCTestCase {
             XCTAssertThrowsError(try chat.addWorkFeedback(target))
             chat.selectSession(session.id)
         }
+    }
+
+    func testCreatePullRequestPreservesComposerAndRequiresTheCurrentCheckout() async throws {
+        let (root, store, original) = try fixture()
+        let projects = ChatProjectStore(storageURL: root.appendingPathComponent("Projects.json"))
+        let project = try projects.createProject(directoryURL: root)
+        var session = original
+        session.projectID = project.id
+        XCTAssertTrue(store.saveSession(session))
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Keep my notes")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        try chat.addWorkFeedback(.init(item: item, sessionID: session.id, annotation: nil, selectedText: item.content))
+        chat.draft = "Unsent draft"
+        chat.attachPastedText("Pasted context", replacing: NSRange(location: 12, length: 0), undoManager: nil)
+        let draft = ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts)
+        let annotations = chat.pendingAnnotations
+        var settings = NativSettings()
+        settings.projectToolsEnabled = false
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings))
+        settings.projectToolsEnabled = true
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: "/another/checkout", settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
+        let message = try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings)
+        XCTAssertTrue(message.content.contains("draft GitHub pull request for branch feature in \(project.rootPath)"))
+        XCTAssertTrue(message.annotations.isEmpty)
+        XCTAssertEqual(store.loadSession(id: session.id)?.messages.map(\.id), [message.id])
+        XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
+        XCTAssertEqual(chat.pendingAnnotations, annotations)
+        XCTAssertEqual(chat.workState.selectedItem?.content, item.content)
+        chat.createSession()
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
     }
 
     func testInlineEditPersistsSelectionWithoutConsumingTheDraftAndRejectsStaleTargets() async throws {
