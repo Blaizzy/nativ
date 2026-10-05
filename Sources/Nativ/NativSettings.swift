@@ -405,6 +405,28 @@ struct ModelConfigProfile: Codable, Equatable {
     }
 }
 
+enum ToolExposureMode: String, Codable, CaseIterable, Equatable, Sendable {
+    case off
+    case automatic
+    case on
+
+    var next: Self {
+        switch self {
+        case .off: .automatic
+        case .automatic: .on
+        case .on: .off
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .automatic: "Discoverable"
+        case .on: "On"
+        }
+    }
+}
+
 struct NativPersonalization: Codable, Equatable {
     enum ConversationStyle: String, CaseIterable, Codable, Identifiable {
         case `default`, concise, friendly, professional, detailed
@@ -641,6 +663,9 @@ struct NativSettings: Codable, Equatable {
     var mcpServers: [MCPServerConfig]
     var customTools: [CustomTool]
     var disabledToolNames: [String]
+    var toolExposureModes: [String: ToolExposureMode]
+    var mcpServerExposureModes: [String: ToolExposureMode]
+    var toolExposureModesMigrated: Bool
     var fileReadRootPath: String?
     var fileWriteRootPath: String?
     var projectToolsEnabled: Bool
@@ -700,6 +725,9 @@ struct NativSettings: Codable, Equatable {
         mcpServers: [MCPServerConfig] = [],
         customTools: [CustomTool] = [],
         disabledToolNames: [String] = [],
+        toolExposureModes: [String: ToolExposureMode] = [:],
+        mcpServerExposureModes: [String: ToolExposureMode] = [:],
+        toolExposureModesMigrated: Bool = true,
         fileReadRootPath: String? = nil,
         fileWriteRootPath: String? = nil,
         projectToolsEnabled: Bool = true,
@@ -757,6 +785,9 @@ struct NativSettings: Codable, Equatable {
         self.mcpServers = mcpServers
         self.customTools = customTools
         self.disabledToolNames = disabledToolNames
+        self.toolExposureModes = toolExposureModes
+        self.mcpServerExposureModes = mcpServerExposureModes
+        self.toolExposureModesMigrated = toolExposureModesMigrated
         self.fileReadRootPath = fileReadRootPath
         self.fileWriteRootPath = fileWriteRootPath
         self.projectToolsEnabled = projectToolsEnabled
@@ -816,6 +847,9 @@ struct NativSettings: Codable, Equatable {
         case mcpServers
         case customTools
         case disabledToolNames
+        case toolExposureModes
+        case mcpServerExposureModes
+        case toolExposureModesMigrated
         case fileReadRootPath
         case fileWriteRootPath
         case projectToolsEnabled
@@ -897,6 +931,19 @@ struct NativSettings: Codable, Equatable {
         disabledToolNames =
             try container.decodeIfPresent([String].self, forKey: .disabledToolNames)
             ?? defaults.disabledToolNames
+        toolExposureModes =
+            try container.decodeIfPresent(
+                [String: ToolExposureMode].self,
+                forKey: .toolExposureModes
+            ) ?? defaults.toolExposureModes
+        mcpServerExposureModes =
+            try container.decodeIfPresent(
+                [String: ToolExposureMode].self,
+                forKey: .mcpServerExposureModes
+            ) ?? defaults.mcpServerExposureModes
+        toolExposureModesMigrated =
+            try container.decodeIfPresent(Bool.self, forKey: .toolExposureModesMigrated)
+            ?? container.contains(.toolExposureModes)
         fileReadRootPath =
             try container.decodeIfPresent(String.self, forKey: .fileReadRootPath)
             ?? defaults.fileReadRootPath
@@ -1036,6 +1083,9 @@ struct NativSettings: Codable, Equatable {
         try container.encode(mcpServers, forKey: .mcpServers)
         try container.encode(customTools, forKey: .customTools)
         try container.encode(disabledToolNames, forKey: .disabledToolNames)
+        try container.encode(toolExposureModes, forKey: .toolExposureModes)
+        try container.encode(mcpServerExposureModes, forKey: .mcpServerExposureModes)
+        try container.encode(toolExposureModesMigrated, forKey: .toolExposureModesMigrated)
         try container.encodeIfPresent(fileReadRootPath, forKey: .fileReadRootPath)
         try container.encodeIfPresent(fileWriteRootPath, forKey: .fileWriteRootPath)
         try container.encode(projectToolsEnabled, forKey: .projectToolsEnabled)
@@ -1241,6 +1291,12 @@ struct NativSettings: Codable, Equatable {
         {
             settings.disabledToolNames.append("search_files")
         }
+        settings.disabledToolNames = Array(Set(settings.disabledToolNames)).sorted()
+        settings.toolExposureModes = settings.toolExposureModes.filter { !$0.key.isEmpty }
+        let configuredMCPServerIDs = Set(settings.mcpServers.map { $0.id.uuidString })
+        settings.mcpServerExposureModes = settings.mcpServerExposureModes.filter {
+            configuredMCPServerIDs.contains($0.key) && $0.value != .off
+        }
         settings.languageModelID = Self.normalizedModelID(settings.languageModelID)
         settings.imageGenerationModelID = Self.normalizedModelID(settings.imageGenerationModelID)
         if let imageModelID = settings.imageGenerationModelID,
@@ -1321,15 +1377,104 @@ struct NativSettings: Codable, Equatable {
             && !draftModelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    static let defaultDirectToolNames: Set<String> = [
+        ChatToolDiscoveryRegistry.toolName,
+        "read_file",
+        "search_files",
+        "write_file",
+        "patch",
+        "terminal",
+        ChatWorkToolRegistry.toolName,
+    ]
+
+    static func defaultToolExposureMode(for toolName: String) -> ToolExposureMode {
+        defaultDirectToolNames.contains(toolName) ? .on : .automatic
+    }
+
+    var disabledProjectToolNames: [String] {
+        ChatToolScope.projectToolNames.filter { toolExposureMode(for: $0) == .off }.sorted()
+    }
+
+    mutating func enableDisabledProjectTools() {
+        setToolExposureMode(.on, toolNames: disabledProjectToolNames)
+    }
+
+    func toolExposureMode(
+        for toolName: String,
+        default defaultMode: ToolExposureMode? = nil
+    ) -> ToolExposureMode {
+        if disabledToolNames.contains(toolName) {
+            return .off
+        }
+        if let explicit = toolExposureModes[toolName] {
+            return explicit
+        }
+        if let defaultMode {
+            return defaultMode
+        }
+        guard toolExposureModesMigrated else { return .on }
+        return Self.defaultToolExposureMode(for: toolName)
+    }
+
+    mutating func setToolExposureMode(
+        _ mode: ToolExposureMode,
+        toolName: String,
+        default defaultMode: ToolExposureMode? = nil
+    ) {
+        let implicitMode = defaultMode
+            ?? (toolExposureModesMigrated ? Self.defaultToolExposureMode(for: toolName) : .on)
+        disabledToolNames.removeAll { $0 == toolName }
+        if mode == .off {
+            disabledToolNames.append(toolName)
+            toolExposureModes.removeValue(forKey: toolName)
+        } else if mode == implicitMode {
+            toolExposureModes.removeValue(forKey: toolName)
+        } else {
+            toolExposureModes[toolName] = mode
+        }
+    }
+
+    mutating func setToolExposureMode(
+        _ mode: ToolExposureMode,
+        toolNames: [String],
+        default defaultMode: ToolExposureMode? = nil
+    ) {
+        for toolName in toolNames {
+            setToolExposureMode(mode, toolName: toolName, default: defaultMode)
+        }
+    }
+
+    func mcpServerExposureMode(for server: MCPServerConfig) -> ToolExposureMode {
+        guard server.isEnabled else { return .off }
+        if let explicit = mcpServerExposureModes[server.id.uuidString] {
+            return explicit
+        }
+        return toolExposureModesMigrated ? .automatic : .on
+    }
+
+    mutating func setMCPServerExposureMode(
+        _ mode: ToolExposureMode,
+        serverID: UUID
+    ) {
+        guard let index = mcpServers.firstIndex(where: { $0.id == serverID }) else { return }
+        mcpServers[index].isEnabled = mode != .off
+        if mode == .automatic || mode == .off {
+            mcpServerExposureModes.removeValue(forKey: serverID.uuidString)
+        } else {
+            mcpServerExposureModes[serverID.uuidString] = mode
+        }
+    }
+
+    mutating func removeMCPServerExposureMode(serverID: UUID) {
+        mcpServerExposureModes.removeValue(forKey: serverID.uuidString)
+    }
+
     func isToolEnabled(_ toolName: String) -> Bool {
-        !disabledToolNames.contains(toolName)
+        toolExposureMode(for: toolName) != .off
     }
 
     mutating func setToolEnabled(_ enabled: Bool, toolName: String) {
-        disabledToolNames.removeAll { $0 == toolName }
-        if !enabled {
-            disabledToolNames.append(toolName)
-        }
+        setToolExposureMode(enabled ? .on : .off, toolName: toolName)
     }
 
     func hasSameLaunchConfiguration(as other: Self) -> Bool {
@@ -1340,9 +1485,6 @@ struct NativSettings: Codable, Equatable {
         return lhs.modelSearchPath == rhs.modelSearchPath
             && lhs.externalModelCache?.volumeIdentifier == rhs.externalModelCache?.volumeIdentifier
             && lhs.languageModelID == rhs.languageModelID
-            && lhs.mcpServers == rhs.mcpServers
-            && lhs.disabledToolNames == rhs.disabledToolNames
-            && lhs.skills == rhs.skills
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
