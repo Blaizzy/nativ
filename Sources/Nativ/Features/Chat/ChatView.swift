@@ -1450,18 +1450,16 @@ private struct ChatCompactionNotice: View {
             HStack(spacing: 12) {
                 rule
                 HStack(spacing: 7) {
-                    if message.isCompacting && !reduceMotion {
-                        PhaseAnimator([false, true]) { compact in
-                            symbol(compact: compact)
-                        } animation: { _ in
-                            .easeInOut(duration: 1.1)
+                    symbol
+                    Group {
+                        if message.isCompacting {
+                            ChatThinkingShimmerText(title)
+                        } else {
+                            Text(title)
                         }
-                    } else {
-                        symbol(compact: true)
                     }
-                    Text(title)
-                        .contentTransition(.opacity)
-                        .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .lineLimit(1)
                 }
                 .fixedSize()
                 rule
@@ -1500,7 +1498,7 @@ private struct ChatCompactionNotice: View {
             .accessibilityHidden(true)
     }
 
-    private func symbol(compact: Bool) -> some View {
+    private var symbol: some View {
         ZStack {
             Path { path in
                 path.move(to: CGPoint(x: 4, y: 2))
@@ -1509,10 +1507,10 @@ private struct ChatCompactionNotice: View {
                 path.addLines([CGPoint(x: 17, y: 16), CGPoint(x: 17, y: 5), CGPoint(x: 14, y: 2)])
             }
             .stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
-                Capsule().frame(width: compact ? 7 : 9, height: 1.4)
-                Capsule().frame(width: compact ? 7 : 9, height: 1.4)
-                Capsule().frame(width: compact ? 4 : 6, height: 1.4)
+            VStack(alignment: .leading, spacing: 2) {
+                Capsule().frame(width: 7, height: 1.4)
+                Capsule().frame(width: 7, height: 1.4)
+                Capsule().frame(width: 4, height: 1.4)
             }
         }
         .frame(width: 18, height: 18)
