@@ -65,6 +65,12 @@ enum LiveAudioPCMEmitterError: Error {
     case backlogExceeded
 }
 
+enum LiveAudioTranscriptionFallbackPolicy {
+    static func usesBatchTranscription(hasInsertedText: Bool) -> Bool {
+        !hasInsertedText
+    }
+}
+
 final class LiveAudioTranscriptionPipeline: @unchecked Sendable {
     let emitter: LiveAudioPCMEmitter
 

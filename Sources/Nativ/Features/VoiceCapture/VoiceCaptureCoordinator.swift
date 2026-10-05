@@ -350,18 +350,20 @@ final class VoiceCaptureCoordinator {
                     )
                 } catch {
                     guard !Task.isCancelled else { return }
-                    if streamingTranscriptInserter.hasInsertedText {
-                        self.finishOverlayTranscription(overlayTranscriptionID)
-                        self.showTranscriptionError(
-                            title: "Transcription failed",
-                            message: error.localizedDescription
-                        )
-                    } else {
+                    if LiveAudioTranscriptionFallbackPolicy.usesBatchTranscription(
+                        hasInsertedText: streamingTranscriptInserter.hasInsertedText
+                    ) {
                         self.transcribe(
                             recordingURL,
                             target: target,
                             durationSeconds: duration,
                             overlayTranscriptionID: overlayTranscriptionID
+                        )
+                    } else {
+                        self.finishOverlayTranscription(overlayTranscriptionID)
+                        self.showTranscriptionError(
+                            title: "Transcription failed",
+                            message: error.localizedDescription
                         )
                     }
                 }

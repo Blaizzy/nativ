@@ -944,6 +944,22 @@ private actor LiveAudioPacketProbe {
 }
 
 final class LiveAudioPCMEmitterTests: XCTestCase {
+    func testRealtimeFailureBeforeInsertionUsesBatchFallback() {
+        XCTAssertTrue(
+            LiveAudioTranscriptionFallbackPolicy.usesBatchTranscription(
+                hasInsertedText: false
+            )
+        )
+    }
+
+    func testRealtimeFailureAfterInsertionDoesNotDuplicateWithBatchFallback() {
+        XCTAssertFalse(
+            LiveAudioTranscriptionFallbackPolicy.usesBatchTranscription(
+                hasInsertedText: true
+            )
+        )
+    }
+
     func testRejectsAudioWhenBoundedBacklogIsFull() throws {
         let emitter = LiveAudioPCMEmitter(maximumPendingPackets: 0) { _, _ in }
         let format = try XCTUnwrap(
