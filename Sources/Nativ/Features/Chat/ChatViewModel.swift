@@ -667,6 +667,15 @@ final class ChatViewModel: ObservableObject {
         updateWorkPresentation { $0.open(id) }
     }
 
+    @discardableResult
+    func moveWorkTab(_ id: UUID, to targetID: UUID, in sessionID: UUID) throws -> Bool {
+        guard currentSessionID == sessionID else { return false }
+        var state = workState
+        guard state.moveTab(id, to: targetID) else { return false }
+        try saveWorkState(state, in: sessionID, updateTimestamp: false)
+        return true
+    }
+
     func closeWorkItem(_ id: UUID) {
         guard let sessionID = currentSessionID else { return }
         var state = workState

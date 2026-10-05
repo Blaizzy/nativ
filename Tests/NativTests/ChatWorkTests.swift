@@ -264,6 +264,45 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testTabReorderingPreservesSelectionContentsAndSavedOrder() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        for (title, kind) in [("Terminal", ChatWorkItem.Kind.terminal), ("Notes.md", .document), ("index.html", .website)] {
+            try chat.createWorkItem(title: title, kind: kind)
+        }
+        let original = chat.workState
+        let ids = original.openIDs
+        let modifiedAt = try XCTUnwrap(store.loadSession(id: session.id)?.updatedAt)
+        XCTAssertTrue(try chat.moveWorkTab(ids[2], to: ids[0], in: session.id))
+        XCTAssertEqual(chat.workState.openIDs, [ids[2], ids[0], ids[1]])
+        XCTAssertTrue(try chat.moveWorkTab(ids[0], to: ids[1], in: session.id))
+        XCTAssertEqual(chat.workState.openIDs, [ids[2], ids[1], ids[0]])
+        XCTAssertEqual(chat.workState.selectedID, original.selectedID)
+        XCTAssertEqual(chat.workState.items, original.items)
+        XCTAssertEqual(store.loadSession(id: session.id)?.updatedAt, modifiedAt)
+
+        let saved = chat.workState
+        for (source, target, sessionID) in [
+            (ids[0], ids[0], session.id), (UUID(), ids[1], session.id),
+            (ids[0], UUID(), session.id), (ids[0], ids[1], UUID())
+        ] {
+            XCTAssertFalse(try chat.moveWorkTab(source, to: target, in: sessionID))
+            XCTAssertEqual(chat.workState, saved)
+        }
+        let reopened = subject(root)
+        try await loaded(reopened)
+        reopened.selectSession(session.id)
+        XCTAssertEqual(reopened.workState, saved)
+        reopened.closeWorkItem(ids[2])
+        XCTAssertEqual(reopened.workState.selectedID, ids[1])
+        XCTAssertFalse(try reopened.moveWorkTab(ids[2], to: ids[0], in: session.id))
+        reopened.openWorkNewTab()
+        XCTAssertTrue(try reopened.moveWorkTab(ids[0], to: ids[1], in: session.id))
+        XCTAssertNil(reopened.workState.selectedID)
+        XCTAssertEqual(reopened.workState.openIDs, [ids[0], ids[1]])
+    }
+
     func testSharedTerminalRunsInTheExistingShellAndKeepsConsentBoundToItsTarget() async throws {
         let (root, _, original) = try fixture()
         let folder = root.appendingPathComponent("with spaces")
