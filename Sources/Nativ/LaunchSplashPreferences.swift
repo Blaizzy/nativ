@@ -1,7 +1,7 @@
 import Foundation
 
 enum LaunchSplashPreferences {
-    static let viewedKey = "hasViewedWorkspaceLaunchSplash4"
+    static let viewedKey = "hasViewedWorkspaceLaunchSplash2026"
 
     // November 1, 2026 at midnight UTC, regardless of the user's calendar.
     static let expirationDate = DateComponents(
