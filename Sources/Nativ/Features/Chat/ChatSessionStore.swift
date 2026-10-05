@@ -28,6 +28,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var sessionOrder: Int?
     var projectID: UUID?
     var imageGenerationModelID: String?
+    var compaction: ChatCompactionState? = nil
     var workState: ChatWorkState?
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
@@ -238,6 +239,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var thinkingDuration: TimeInterval?
     var imageAttachments: [ChatImageAttachment]
     var responseMetrics: ChatResponseMetrics?
+    var compactionMetrics: ChatCompactionMetrics?
+    var isCompacting = false
     var toolCalls: [MLXChatToolCall]
     var toolCallID: String?
     var toolName: String?
@@ -294,6 +297,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case thinkingDuration
         case imageAttachments
         case responseMetrics
+        case compactionMetrics
         case toolCalls
         case toolCallID
         case toolName
@@ -322,6 +326,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
             ?? []
         responseMetrics = try container.decodeIfPresent(
             ChatResponseMetrics.self, forKey: .responseMetrics)
+        compactionMetrics = try container.decodeIfPresent(ChatCompactionMetrics.self, forKey: .compactionMetrics)
         toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
@@ -355,6 +360,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(thinkingDuration, forKey: .thinkingDuration)
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encodeIfPresent(responseMetrics, forKey: .responseMetrics)
+        try container.encodeIfPresent(compactionMetrics, forKey: .compactionMetrics)
         try container.encode(toolCalls, forKey: .toolCalls)
         try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
         try container.encodeIfPresent(toolName, forKey: .toolName)

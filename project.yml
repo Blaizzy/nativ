@@ -314,6 +314,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatSearch.swift
       - path: Sources/Nativ/Features/Chat/ChatSearchStore.swift
       - path: Sources/Nativ/Features/Chat/ChatLibrarySearch.swift
+      - path: Sources/Nativ/Features/Chat/ChatCompactionState.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift

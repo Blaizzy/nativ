@@ -148,6 +148,7 @@ enum ChatArchiveCodec {
                 toolStatus: historicalStatus(message.toolStatus),
                 toolArguments: message.toolArguments
             )
+            imported.compactionMetrics = message.compactionMetrics
             imported.annotations = message.annotations.map { annotation in
                 var annotation = annotation
                 if let sourceID = annotation.sourceMessageID {
