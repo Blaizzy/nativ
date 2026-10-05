@@ -250,6 +250,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatGitHubPullRequest.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktree.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktreeRecovery.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift

@@ -528,6 +528,40 @@ final class ChatWorkSessionTests: XCTestCase {
         }
     }
 
+    func testCreatePullRequestPreservesComposerAndRequiresTheCurrentCheckout() async throws {
+        let (root, store, original) = try fixture()
+        let projects = ChatProjectStore(storageURL: root.appendingPathComponent("Projects.json"))
+        let project = try projects.createProject(directoryURL: root)
+        var session = original
+        session.projectID = project.id
+        XCTAssertTrue(store.saveSession(session))
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Keep my notes")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        try chat.addWorkFeedback(.init(item: item, sessionID: session.id, annotation: nil, selectedText: item.content))
+        chat.draft = "Unsent draft"
+        chat.attachPastedText("Pasted context", replacing: NSRange(location: 12, length: 0), undoManager: nil)
+        let draft = ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts)
+        let annotations = chat.pendingAnnotations
+        var settings = NativSettings()
+        settings.projectToolsEnabled = false
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings))
+        settings.projectToolsEnabled = true
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: "/another/checkout", settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
+        let message = try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings)
+        XCTAssertTrue(message.content.contains("draft GitHub pull request for branch feature in \(project.rootPath)"))
+        XCTAssertTrue(message.annotations.isEmpty)
+        XCTAssertEqual(store.loadSession(id: session.id)?.messages.map(\.id), [message.id])
+        XCTAssertEqual(ChatPastedTextDraft(text: chat.draft, pastedTexts: chat.pendingPastedTexts), draft)
+        XCTAssertEqual(chat.pendingAnnotations, annotations)
+        XCTAssertEqual(chat.workState.selectedItem?.content, item.content)
+        chat.createSession()
+        XCTAssertThrowsError(try chat.appendCreatePullRequest(branch: "feature", path: project.rootPath, settings: settings))
+        XCTAssertTrue(chat.messages.isEmpty)
+    }
+
     func testInlineEditPersistsSelectionWithoutConsumingTheDraftAndRejectsStaleTargets() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)

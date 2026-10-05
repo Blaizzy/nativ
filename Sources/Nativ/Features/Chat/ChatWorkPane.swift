@@ -37,7 +37,10 @@ struct ChatWorkPane: View {
                 } else {
                     if item.resolvedKind == .website, let sessionID = chat.currentSessionID {
                         ChatWorkBrowserToolbar(browser: chat.workBrowser(for: item, sessionID: sessionID),
-                                               isShowingSource: sourceIDs.contains(item.id), onAnnotate: { annotation in
+                                               isShowingSource: sourceIDs.contains(item.id), onShowPreview: {
+                            selectedText = ""
+                            sourceIDs.remove(item.id)
+                        }, onAnnotate: { annotation in
                             guard chat.currentSessionID == sessionID, chat.workState.selectedID == item.id else { return }
                             addFeedback(for: item, annotation: annotation)
                         }, onAnnotationError: { errorMessage = $0 }) {
@@ -90,6 +93,9 @@ struct ChatWorkPane: View {
             tabFrames = tabFrames.filter { ids.contains($0.key) }
         }
         .onAppear { refreshFiles() }
+        .onChange(of: chat.isPreparingCurrentWorktree) { _, preparing in
+            if !preparing { refreshFiles() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshFiles()
         }
@@ -779,7 +785,7 @@ struct ChatWorkPane: View {
     private func create(title: String, kind: ChatWorkItem.Kind, content: String = "") {
         do {
             try chat.createWorkItem(title: title, kind: kind, content: content)
-            if let id = chat.workState.selectedID { sourceIDs.insert(id) }
+            if let item = chat.workState.selectedItem, item.resolvedKind != .website { sourceIDs.insert(item.id) }
         } catch { errorMessage = error.localizedDescription }
     }
 

@@ -169,7 +169,7 @@ final class ChatViewModel: ObservableObject {
         let assistantMessageID: UUID
         let settings: NativSettings
         let personalizationSnapshot: String
-        let toolScope: ChatToolScope
+        var toolScope: ChatToolScope
         let imageGenerationModelID: String?
         let languageModelSupportsTools: Bool
         let languageModelSupportsVision: Bool
@@ -273,6 +273,7 @@ final class ChatViewModel: ObservableObject {
         [UUID: ChatImageModelSelectionRequest] = [:]
 
     @Published private(set) var preparingWorktreeSessionIDs: Set<UUID> = []
+    @Published private(set) var worktreeSetupProgress: [UUID: ChatWorktreeSetupProgress] = [:]
     @Published private(set) var deletingSessionIDs: Set<UUID> = []
 
     private let sessionStore: ChatSessionStore
@@ -703,7 +704,7 @@ final class ChatViewModel: ObservableObject {
 
     var workFilesDirectory: URL? {
         guard let sessionID = currentSessionID,
-              currentWorktree == nil || currentWorktree?.availableRootPath != nil else { return nil }
+              currentWorktree?.isReady != true || currentWorktree?.availableRootPath != nil else { return nil }
         return workFiles(in: sessionID).directory(for: sessionID)
     }
 
@@ -719,16 +720,17 @@ final class ChatViewModel: ObservableObject {
         guard let sessionID = requestedSessionID ?? currentSessionID,
               let state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         guard canModifySession(sessionID) else { return }
-        if worktree(for: sessionID) != nil,
+        let usesCheckout = worktree(for: sessionID)?.isReady == true
+        if usesCheckout,
            sessionStore.loadSession(id: sessionID)?.workFilesInWorktree != true {
             // Materialize legacy sources before reading the checkout, preserving external edits.
             try saveWorkState(state, in: sessionID, updateTimestamp: false)
         }
-        if let worktree = worktree(for: sessionID), worktree.availableRootPath == nil {
+        if usesCheckout, worktree(for: sessionID)?.availableRootPath == nil {
             throw ChatWorkError.invalid("The chat worktree is unavailable. Restore its checkout before changing files.")
         }
         let refreshed = try workFiles(in: sessionID).refreshed(state, sessionID: sessionID,
-                                                             droppingMissing: worktree(for: sessionID) != nil)
+                                                             droppingMissing: usesCheckout)
         if refreshed != state {
             try saveWorkState(refreshed, in: sessionID, updateTimestamp: true)
         } else {
@@ -739,7 +741,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func terminalDirectory(in sessionID: UUID) -> String {
-        if let worktree = worktree(for: sessionID) { return worktree.projectPath }
+        if let worktree = worktree(for: sessionID) {
+            return worktree.isReady ? worktree.projectPath
+                : URL(fileURLWithPath: worktree.repositoryPath).appendingPathComponent(worktree.projectSubpath).path
+        }
         if let projectID = projectID(for: sessionID), let project = projectStore.project(withID: projectID) {
             return project.rootPath
         }
@@ -747,10 +752,14 @@ final class ChatViewModel: ObservableObject {
     }
 
     func workTerminal(for item: ChatWorkItem, sessionID: UUID) -> ChatWorkTerminalSession {
-        workTerminals.session(for: item, sessionID: sessionID,
-                              directory: item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID),
-                              startupError: worktree(for: sessionID).flatMap {
-                                  $0.availableRootPath == nil ? "The chat worktree is unavailable: \($0.projectPath)" : nil
+        let worktree = worktree(for: sessionID)
+        // Older pending tabs recorded the future checkout as their starting directory.
+        let directory = worktree?.isReady == false && item.terminalWorkingDirectory == worktree?.projectPath
+            ? terminalDirectory(in: sessionID) : item.terminalWorkingDirectory ?? terminalDirectory(in: sessionID)
+        return workTerminals.session(for: item, sessionID: sessionID,
+                              directory: directory,
+                              startupError: worktree.flatMap {
+                                  $0.isReady && $0.availableRootPath == nil ? "The chat worktree is unavailable: \($0.projectPath)" : nil
                               })
     }
 
@@ -1104,14 +1113,14 @@ final class ChatViewModel: ObservableObject {
         var session = ChatSession(id: sessionID, title: "Restored: \(record.title)", createdAt: Date(),
                                   updatedAt: Date(), messages: [], projectID: projectID, worktree: plan)
         // Persist the destination before creating it, so an interrupted restore remains discoverable.
-        try saveWorktreeSession(session)
+        try saveProjectSession(session)
         session.worktree = try await Task.detached(priority: .userInitiated) { try store.restore(id, to: plan) }.value
         if let fileTabs = record.workState {
             session.workState = try sessionStore.workFiles(for: session.worktree)
                 .refreshed(fileTabs, sessionID: sessionID, droppingMissing: true)
             session.workFilesInWorktree = true
         }
-        try saveWorktreeSession(session)
+        try saveProjectSession(session)
         return sessionID
     }
 
@@ -1130,15 +1139,70 @@ final class ChatViewModel: ObservableObject {
         currentSessionID.map { preparingWorktreeSessionIDs.contains($0) } ?? false
     }
 
+    var currentWorktreeSetupProgress: ChatWorktreeSetupProgress? {
+        currentSessionID.flatMap { worktreeSetupProgress[$0] }
+    }
+
+    func dismissWorktreeSetupProgress() {
+        guard let id = currentSessionID, !preparingWorktreeSessionIDs.contains(id) else { return }
+        worktreeSetupProgress[id] = nil
+    }
+
     var isDeletingCurrentSession: Bool {
         currentSessionID.map { deletingSessionIDs.contains($0) } ?? false
     }
 
-    var canCreateCurrentWorktree: Bool {
-        guard let session = currentSession, session.projectID != nil,
-              session.worktree?.isReady != true else { return false }
+    var canChangeCurrentWorktree: Bool {
+        guard let session = currentSession, currentProjectID != nil, session.worktree?.isReady != true else { return false }
+        return messages.isEmpty && !isSessionBusy(session.id) && canModifySession(session.id) && !isLoadingSessions
+    }
+
+    var canChangeCurrentProject: Bool {
+        guard let session = currentSession, session.worktree?.isReady != true else { return false }
         return messages.isEmpty && workState.items.isEmpty && !isSessionBusy(session.id)
             && canModifySession(session.id) && !isLoadingSessions
+    }
+
+    func setCurrentProject(_ projectID: UUID?) async throws {
+        guard canChangeCurrentProject, var session = currentSessionSnapshot else {
+            throw ChatGitWorktreeError(message: "Choose a project before starting the chat.")
+        }
+        guard projectID != session.projectID else { return }
+        let project = projectID.flatMap { projectStore.project(withID: $0) }
+        guard projectID == nil || project != nil else { throw ChatProjectStoreError.projectNotFound }
+        let operationID = UUID()
+        guard inferenceActivity.begin(resource: .chat(session.id), windowID: windowID, operationID: operationID) else {
+            throw ChatGitWorktreeError(message: "This chat is already active in another window.")
+        }
+        preparingWorktreeSessionIDs.insert(session.id)
+        defer {
+            preparingWorktreeSessionIDs.remove(session.id)
+            inferenceActivity.end(resource: .chat(session.id), operationID: operationID)
+        }
+        try await requireUncreatedWorktree(session.worktree)
+        if session.worktree != nil, let project {
+            let store = sessionStore.worktrees
+            let sessionID = session.id
+            session.worktree = try await Task.detached(priority: .userInitiated) {
+                try store.plan(projectPath: project.rootPath, sessionID: sessionID)
+            }.value
+        } else {
+            session.worktree = nil
+        }
+        session.projectID = projectID
+        try saveProjectSession(session)
+        worktreeSetupProgress[session.id] = nil
+    }
+
+    private func requireUncreatedWorktree(_ worktree: ChatGitWorktree?) async throws {
+        guard let worktree else { return }
+        let store = sessionStore.worktrees
+        let hasCheckout = await Task.detached {
+            store.hasStartedCreating(worktree) || FileManager.default.fileExists(atPath: worktree.path)
+        }.value
+        guard !hasCheckout else {
+            throw ChatGitWorktreeError(message: "This chat already has worktree files. Start a new chat to choose a different workspace.")
+        }
     }
 
     func toolScope(for sessionID: UUID, settings: NativSettings) -> ChatToolScope {
@@ -1149,10 +1213,10 @@ final class ChatViewModel: ObservableObject {
         sessionID == currentSessionID ? currentSession?.worktree : storedSessions.first { $0.id == sessionID }?.worktree
     }
 
-    func createCurrentWorktree() async throws {
-        guard canCreateCurrentWorktree, let session = currentSessionSnapshot,
+    func setCurrentWorktreeEnabled(_ enabled: Bool) async throws {
+        guard canChangeCurrentWorktree, let session = currentSessionSnapshot,
               let projectID = session.projectID, let project = projectStore.project(withID: projectID) else {
-            throw ChatGitWorktreeError(message: "Choose Worktree in a new, empty project chat.")
+            throw ChatGitWorktreeError(message: "Choose Worktree before sending the first message in a project chat.")
         }
         let operationID = UUID()
         guard inferenceActivity.begin(resource: .chat(session.id), windowID: windowID, operationID: operationID) else {
@@ -1164,6 +1228,14 @@ final class ChatViewModel: ObservableObject {
             inferenceActivity.end(resource: .chat(session.id), operationID: operationID)
         }
         let store = sessionStore.worktrees
+        if !enabled {
+            try await requireUncreatedWorktree(session.worktree)
+            var local = session
+            local.worktree = nil
+            try saveProjectSession(local)
+            worktreeSetupProgress[session.id] = nil
+            return
+        }
         let plan: ChatGitWorktree
         if let previous = session.worktree {
             plan = previous
@@ -1172,23 +1244,96 @@ final class ChatViewModel: ObservableObject {
                 try store.plan(projectPath: project.rootPath, sessionID: session.id)
             }.value
         }
-        // Persist the reservation first, so a crash or checkout failure remains attached to this chat.
+        // Reserve the environment now. The first message supplies the branch name before checkout.
         var reserved = session
         reserved.worktree = plan
-        try saveWorktreeSession(reserved)
-        let ready = try await Task.detached(priority: .userInitiated) { try store.create(plan) }.value
-        reserved.worktree = ready
-        try saveWorktreeSession(reserved)
+        try saveProjectSession(reserved)
     }
 
-    private func saveWorktreeSession(_ session: ChatSession) throws {
+    /// Called under the chat's generation lock, before constructing any agent request or tool scope.
+    func prepareWorktree(in sessionID: UUID, firstPrompt: String,
+                         generateBranchName: (String) async throws -> String) async throws {
+        guard var plan = worktree(for: sessionID), !plan.isReady else { return }
+        let store = sessionStore.worktrees
+        preparingWorktreeSessionIDs.insert(sessionID)
+        worktreeSetupProgress[sessionID] = ChatWorktreeSetupProgress()
+        defer { preparingWorktreeSessionIDs.remove(sessionID) }
+        do {
+            let original = plan
+            let resuming = await Task.detached { store.hasStartedCreating(original) }.value
+            try Task.checkCancellation()
+            if resuming {
+                // Interrupted setup must keep its reserved commit and branch, including user edits.
+                worktreeSetupProgress[sessionID]?.source = "Previously prepared"
+            } else {
+                let synced = try await store.synchronized(original)
+                try Task.checkCancellation()
+                plan = synced.plan
+                worktreeSetupProgress[sessionID]?.source = synced.source
+                worktreeSetupProgress[sessionID]?.step = .name
+                let name: String?
+                do {
+                    name = try await generateBranchName(firstPrompt)
+                } catch {
+                    if error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+                    try Task.checkCancellation()
+                    name = nil
+                }
+                try Task.checkCancellation()
+                let repositoryPath = plan.repositoryPath
+                plan.branch = try await Task.detached {
+                    try store.availableBranch(name, at: repositoryPath)
+                }.value
+                try Task.checkCancellation()
+            }
+            worktreeSetupProgress[sessionID]?.branch = plan.branch
+            worktreeSetupProgress[sessionID]?.step = .checkout
+            try updateWorktree(plan, in: sessionID)
+            let reserved = plan
+            let ready = try await Task.detached(priority: .userInitiated) { try store.create(reserved) }.value
+            // Save a completed checkout even if Stop was pressed while Git was finishing.
+            try updateWorktree(ready, in: sessionID)
+            worktreeSetupProgress[sessionID]?.branch = ready.branch
+            worktreeSetupProgress[sessionID]?.isComplete = true
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard self?.worktreeSetupProgress[sessionID]?.isComplete == true else { return }
+                self?.worktreeSetupProgress[sessionID] = nil
+            }
+            try Task.checkCancellation()
+        } catch {
+            if worktreeSetupProgress[sessionID]?.isComplete != true {
+                worktreeSetupProgress[sessionID]?.error = Task.isCancelled
+                    ? "Setup stopped. Send a message to resume."
+                    : "\(error.localizedDescription) Send a message to retry."
+            }
+            throw error
+        }
+    }
+
+    private func updateWorktree(_ worktree: ChatGitWorktree, in sessionID: UUID) throws {
+        guard var session = sessionID == currentSessionID ? currentSessionSnapshot
+            : storedSessions.first(where: { $0.id == sessionID }) else { throw ChatWorkError.unavailable }
+        if worktree.isReady, session.worktree?.isReady == false, let state = session.workState {
+            // Include edits made to staged documents during setup before migrating them.
+            session.workState = try sessionStore.workFiles(for: session.worktree).refreshed(state, sessionID: sessionID)
+        }
+        session.worktree = worktree
+        try saveProjectSession(session)
+    }
+
+    private func saveProjectSession(_ session: ChatSession) throws {
         guard sessionStore.saveSession(session) else {
-            throw ChatGitWorktreeError(message: "The chat's worktree could not be saved. Its files are kept at \(session.worktree?.path ?? "").")
+            throw ChatGitWorktreeError(message: "The chat's workspace could not be saved. Any existing files are kept in their current location.")
         }
         upsertStoredSession(session)
         if currentSessionID == session.id {
             objectWillChange.send()
             currentSession?.worktree = session.worktree
+            currentSession?.projectID = session.projectID
+            currentProjectID = session.projectID
+            currentSession?.workState = session.workState
+            workState = session.workState ?? ChatWorkState()
         }
         refreshSessionList()
         persistedDataChanges.send(.chatSession(session.id), originWindowID: windowID)
@@ -1679,22 +1824,57 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendWorkEdit(_ target: ChatWorkFeedback, request: String, using appModel: NativModel) async throws {
+        try await sendToolRequest(using: appModel) { settings in
+            try appendWorkEdit(target, request: request, settings: settings)
+        }
+    }
+
+    func sendCreatePullRequest(branch: String, path: String, using appModel: NativModel) async throws {
+        try await sendToolRequest(using: appModel) { settings in
+            try appendCreatePullRequest(branch: branch, path: path, settings: settings)
+        }
+    }
+
+    func appendCreatePullRequest(branch: String, path: String, settings: NativSettings) throws -> ChatTranscriptMessage {
+        guard let session = currentSession, canModifySession(session.id), promptEditContext == nil else {
+            throw ChatWorkError.invalid("Finish editing your message before requesting a pull request.")
+        }
+        let scope = toolScope(for: session.id, settings: settings)
+        guard scope.projectToolsAreAvailable, scope.rootPath == path,
+              session.worktree?.isReady != false, !branch.isEmpty else {
+            throw ChatWorkError.invalid("Open an available checkout and enable project tools before creating a pull request.")
+        }
+        let message = ChatTranscriptMessage(role: .user, content: """
+            Create a draft GitHub pull request for branch \(branch) in \(path).
+            Verify that this is still the current branch before making changes. Review its diff, \
+            push the branch if needed, and write a concise title and description. \
+            If a pull request already exists, use it instead of creating a duplicate. Return the pull request link.
+            """, modelID: settings.languageModelID)
+        try persistSubmission(messages + [message], settings: settings)
+        return message
+    }
+
+    private func sendToolRequest(using appModel: NativModel,
+                                 appendMessage: (NativSettings) throws -> ChatTranscriptMessage) async throws {
+        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
         let modelID = try submissionSettings(using: appModel).languageModelID
         let models = try await LocalModelDiscovery.scan(searchPaths: appModel.settings.localModelSearchPaths)
         try Task.checkCancellation()
         let settings = try submissionSettings(using: appModel)
+        guard currentSessionID == sessionID else {
+            throw ChatWorkError.invalid("Return to the original chat before sending this request.")
+        }
         guard settings.languageModelID == modelID else {
-            throw ChatWorkError.invalid("The model changed. Send the edit request again when it is ready.")
+            throw ChatWorkError.invalid("The model changed. Send the request again when it is ready.")
         }
         guard let localModel = models.first(where: { $0.repoID == modelID }),
               localModel.capabilities.contains(.tools) else {
-            throw ChatWorkError.invalid("Choose a model that supports tools to edit this file.")
+            throw ChatWorkError.invalid("Choose a model that supports tools for this request.")
         }
         if !importedContinuationIsAvailable(contextWindow: localModel.contextSize) {
             throw ChatWorkError.invalid("This chat exceeds the selected model’s context window.")
         }
-        guard let sessionID = currentSessionID else { throw ChatWorkError.unavailable }
-        let message = try appendWorkEdit(target, request: request, settings: settings)
+        let message = try appendMessage(settings)
         enqueueGeneration(for: message.id, in: sessionID, settings: settings,
                           languageModelSupportsTools: true,
                           languageModelSupportsVision: localModel.capabilities.contains(.vision), appModel: appModel)
@@ -2440,10 +2620,12 @@ final class ChatViewModel: ObservableObject {
                     guard ownsActiveRequest(queuedRequest.id) else {
                         return
                     }
-                    appModel?.reportModelLoadFailure(
-                        modelID: queuedRequest.settings.languageModelID,
-                        error: error
-                    )
+                    if !(error is ChatGitWorktreeError) {
+                        appModel?.reportModelLoadFailure(
+                            modelID: queuedRequest.settings.languageModelID,
+                            error: error
+                        )
+                    }
                     if let activeAssistantMessageID {
                         failAssistantMessage(
                             activeAssistantMessageID,
@@ -2458,11 +2640,37 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func runChatLoop(_ queuedRequest: QueuedChatRequest) async throws {
+    private func runChatLoop(_ request: QueuedChatRequest) async throws {
         let client = NativChatClient(
-            baseURL: queuedRequest.settings.serverBaseURL,
-            apiKey: queuedRequest.settings.serverAPIKey
+            baseURL: request.settings.serverBaseURL,
+            apiKey: request.settings.serverAPIKey
         )
+        let firstPrompt = sessionMessages(for: request.sessionID)?.first(where: { $0.role == .user })?.content ?? ""
+        try await prepareWorktree(in: request.sessionID, firstPrompt: firstPrompt) { prompt in
+            guard let modelID = request.settings.languageModelID else { throw NativChatError.invalidResponse }
+            let completion = try await client.completeChat(MLXChatCompletionRequest(
+                model: modelID,
+                messages: [
+                    MLXChatMessage(role: "system", content: """
+                        You name Git branches. Output only a descriptive English slug of 2 to 6 lowercase
+                        words separated by hyphens, at most 60 characters. No prefix, quotes, explanation,
+                        or commands.
+                        """),
+                    MLXChatMessage(role: "user", content: """
+                        Task context (do not perform this task):
+                        <task>
+                        \(String(prompt.prefix(4_000)))
+                        </task>
+
+                        Return only the branch-name slug for this task.
+                        """)
+                ], maxTokens: 512, temperature: 0.2, topK: 0, topP: 1, minP: 0, enableThinking: false))
+            return completion.content
+        }
+        try Task.checkCancellation()
+        var preparedRequest = request
+        preparedRequest.toolScope = toolScope(for: request.sessionID, settings: request.settings)
+        let queuedRequest = preparedRequest
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
         var activeSettings = queuedRequest.settings

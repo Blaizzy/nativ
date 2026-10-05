@@ -548,6 +548,7 @@ struct ChatWorkNavigationButtons: View {
 struct ChatWorkBrowserToolbar<PageActions: View>: View {
     @ObservedObject var browser: ChatWorkBrowser
     let isShowingSource: Bool
+    let onShowPreview: () -> Void
     let onAnnotate: (ChatWorkPageAnnotation) -> Void
     let onAnnotationError: (String) -> Void
     @ViewBuilder let pageActions: () -> PageActions
@@ -566,8 +567,8 @@ struct ChatWorkBrowserToolbar<PageActions: View>: View {
                 .fixedSize()
             ChatWorkAddressField(address: browser.address, isLoading: browser.isLoading) { text in
                 try browser.navigate(ChatWorkState.addressURL(text).absoluteString)
+                onShowPreview()
             }
-            .disabled(isShowingSource)
             pageActions().fixedSize()
             if let url = browser.localPageURL {
                 Button { try? browser.navigate(url.absoluteString) } label: {
