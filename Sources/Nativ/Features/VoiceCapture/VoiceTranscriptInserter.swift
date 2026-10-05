@@ -106,14 +106,21 @@ enum VoiceTranscriptInserter {
         let targetApplication = target.flatMap {
             NSRunningApplication(processIdentifier: $0.processIdentifier)
         }
-        if let targetApplication, !targetApplication.isActive {
-            targetApplication.activate()
-        }
-
-        do {
-            try await Task.sleep(for: .milliseconds(targetApplication == nil ? 60 : 140))
-        } catch {
-            return false
+        if let targetApplication {
+            if !targetApplication.isActive {
+                targetApplication.activate()
+                do {
+                    try await Task.sleep(for: .milliseconds(140))
+                } catch {
+                    return false
+                }
+            }
+        } else {
+            do {
+                try await Task.sleep(for: .milliseconds(60))
+            } catch {
+                return false
+            }
         }
 
         if !transcript.isEmpty {
