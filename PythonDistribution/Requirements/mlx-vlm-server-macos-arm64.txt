@@ -12,6 +12,7 @@ attrs==26.1.0
 certifi==2026.4.22
 cffi==2.0.0
 charset-normalizer==3.4.7
+cryptography>=43.0.0
 click==8.4.2
 fastapi==0.136.1
 filelock==3.29.0

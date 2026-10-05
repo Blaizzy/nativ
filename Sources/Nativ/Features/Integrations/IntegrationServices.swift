@@ -121,7 +121,8 @@ struct IntegrationProfileManager {
         tool: IntegrationTool,
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int = 0
     ) throws {
         switch tool {
         case .pi:
@@ -142,7 +143,8 @@ struct IntegrationProfileManager {
                 openCodeConfiguration(
                     selectedModelID: selectedModelID,
                     models: models,
-                    maxOutputTokens: maxOutputTokens
+                    maxOutputTokens: maxOutputTokens,
+                    contextLimit: contextLimit
                 ),
                 to: configurationURL(for: tool)
             )
@@ -491,9 +493,11 @@ struct IntegrationProfileManager {
     private func openCodeConfiguration(
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int
     ) -> [String: Any] {
         var modelCatalog: [String: Any] = [:]
+        var smallestContext = 131_072
         for model in models {
             var entry: [String: Any] = [
                 "name": model.displayName,
@@ -506,10 +510,14 @@ struct IntegrationProfileManager {
                     "output": ["text"]
                 ]
             ]
-            let contextWindow = model.contextWindow ?? 131_072
+            let contextWindow = max(2, min(model.contextWindow ?? 131_072, contextLimit > 0 ? contextLimit : Int.max))
+            let outputTokens = min(max(maxOutputTokens, 1), contextWindow / 2)
+            smallestContext = min(smallestContext, contextWindow)
+            // OpenCode applies compaction.reserved only when an input limit is present.
             entry["limit"] = [
                 "context": contextWindow,
-                "output": min(max(maxOutputTokens, 1), contextWindow)
+                "input": contextWindow - outputTokens,
+                "output": outputTokens
             ]
             if model.supportsReasoning {
                 entry["interleaved"] = ["field": "reasoning_content"]
@@ -520,6 +528,7 @@ struct IntegrationProfileManager {
         return [
             "$schema": "https://opencode.ai/config.json",
             "model": "\(Self.providerID)/\(selectedModelID)",
+            "compaction": ["auto": true, "reserved": min(20_000, smallestContext / 5)],
             "provider": [
                 Self.providerID: [
                     "npm": "@ai-sdk/openai-compatible",
