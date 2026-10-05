@@ -21,8 +21,6 @@ struct ChatWorkPane: View {
     @State private var renameSessionID: UUID?
     @State private var fileName = ""
     @State private var fileSearch = ""
-    @State private var tabFrames: [UUID: CGRect] = [:]
-    @GestureState private var tabDrag: (id: UUID, location: CGPoint, offset: CGFloat)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -89,9 +87,6 @@ struct ChatWorkPane: View {
             fileSearch = ""
             refreshFiles()
         }
-        .onChange(of: chat.workState.openIDs) { _, ids in
-            tabFrames = tabFrames.filter { ids.contains($0.key) }
-        }
         .onAppear { refreshFiles() }
         .onChange(of: chat.isPreparingCurrentWorktree) { _, preparing in
             if !preparing { refreshFiles() }
@@ -135,25 +130,12 @@ struct ChatWorkPane: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 4) {
                         ForEach(chat.workState.openItems) { item in
-                            if let sessionID = chat.currentSessionID {
-                                workTab(title: item.title, symbol: item.resolvedKind.symbol,
-                                        isSelected: chat.workState.selectedID == item.id,
-                                        drag: ChatWorkTabDrag(sessionID: sessionID, itemID: item.id),
-                                        select: { chat.openWorkItem(item.id) },
-                                        close: { chat.closeWorkItem(item.id) })
-                                    .contextMenu { fileLocationActions(item) }
-                                    .onGeometryChange(for: CGRect.self) { proxy in
-                                        proxy.frame(in: .named("workTabs"))
-                                    } action: { tabFrames[item.id] = $0 }
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 8)
-                                            .strokeBorder(tabDropTarget == item.id ? Color.accentColor : .clear)
-                                            .allowsHitTesting(false)
-                                    }
-                                    .offset(x: tabDrag?.id == item.id ? tabDrag?.offset ?? 0 : 0)
-                                    .zIndex(tabDrag?.id == item.id ? 1 : 0)
-                                    .id(item.id.uuidString)
-                            }
+                            workTab(title: item.title, symbol: item.resolvedKind.symbol,
+                                    isSelected: chat.workState.selectedID == item.id,
+                                    select: { chat.openWorkItem(item.id) },
+                                    close: { chat.closeWorkItem(item.id) })
+                                .contextMenu { fileLocationActions(item) }
+                                .id(item.id.uuidString)
                         }
                         if chat.workState.selectedItem == nil {
                             workTab(title: showsFiles ? "Files" : "New tab", symbol: showsFiles ? "folder" : "globe", isSelected: true,
@@ -167,8 +149,6 @@ struct ChatWorkPane: View {
                         .accessibilityLabel("New tab")
                         .id("add")
                     }
-                    .coordinateSpace(name: "workTabs")
-                    .animation(.easeInOut(duration: 0.15), value: chat.workState.openIDs)
                 }
                 .scrollIndicators(.hidden)
                 .onChange(of: chat.workState.selectedID) { _, id in
@@ -191,7 +171,6 @@ struct ChatWorkPane: View {
             .keyboardShortcut("b", modifiers: [.command, .shift])
         }
         .buttonStyle(.plain)
-        .textSelection(.disabled)
         .font(.system(size: 12))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 8)
@@ -203,44 +182,16 @@ struct ChatWorkPane: View {
         .background(Color.primary.opacity(0.035))
     }
 
-    private var tabDropTarget: UUID? {
-        guard let drag = tabDrag else { return nil }
-        return tabID(at: drag.location, excluding: drag.id)
-    }
-
-    private func tabID(at location: CGPoint, excluding draggedID: UUID) -> UUID? {
-        chat.workState.openIDs.first { $0 != draggedID && tabFrames[$0]?.contains(location) == true }
-    }
-
-    private func workTab(title: String, symbol: String, isSelected: Bool, drag: ChatWorkTabDrag? = nil,
+    private func workTab(title: String, symbol: String, isSelected: Bool,
                          select: @escaping () -> Void, close: @escaping () -> Void) -> some View {
-        let label = Label(title, systemImage: symbol)
-            .lineLimit(1)
-            .frame(minWidth: 80, maxWidth: 170, alignment: .leading)
-            .padding(.leading, 10)
-            .frame(height: 28)
-            .contentShape(.rect)
-        return HStack(spacing: 4) {
-            Group {
-                if let drag {
-                    label
-                        .onTapGesture(perform: select)
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction(.default, select)
-                        .highPriorityGesture(
-                            DragGesture(minimumDistance: 4, coordinateSpace: .named("workTabs"))
-                                .updating($tabDrag) { value, state, _ in
-                                    state = (drag.itemID, value.location, value.translation.width)
-                                }
-                                .onEnded { value in
-                                    guard let target = tabID(at: value.location, excluding: drag.itemID) else { return }
-                                    do { try chat.moveWorkTab(drag.itemID, to: target, in: drag.sessionID) }
-                                    catch { errorMessage = error.localizedDescription }
-                                }
-                        )
-                } else {
-                    Button(action: select) { label }
-                }
+        HStack(spacing: 4) {
+            Button(action: select) {
+                Label(title, systemImage: symbol)
+                    .lineLimit(1)
+                    .frame(minWidth: 80, maxWidth: 170, alignment: .leading)
+                    .padding(.leading, 10)
+                    .frame(height: 28)
+                    .contentShape(.rect)
             }
             .help(title)
             Button(action: close) {
@@ -831,11 +782,6 @@ struct ChatWorkPane: View {
         translationText = trimmed
         showsTranslation = true
     }
-}
-
-private struct ChatWorkTabDrag {
-    let sessionID: UUID
-    let itemID: UUID
 }
 
 private struct ChatWorkCopyButton: View {

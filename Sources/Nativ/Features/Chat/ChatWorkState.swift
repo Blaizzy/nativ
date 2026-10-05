@@ -90,14 +90,6 @@ struct ChatWorkState: Codable, Equatable, Sendable {
     }
 
     @discardableResult
-    mutating func moveTab(_ id: UUID, to targetID: UUID) -> Bool {
-        guard let source = openIDs.firstIndex(of: id), let target = openIDs.firstIndex(of: targetID),
-              source != target else { return false }
-        openIDs.insert(openIDs.remove(at: source), at: target)
-        return true
-    }
-
-    @discardableResult
     mutating func create(
         title: String, kind: ChatWorkItem.Kind, content: String = "",
         url: String? = nil, language: String? = nil, sourceURL: String? = nil, author: String = "You",
