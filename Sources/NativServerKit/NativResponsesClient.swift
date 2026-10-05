@@ -28,7 +28,7 @@ public final class NativResponsesClient: @unchecked Sendable {
     }
 
     public static func inputItems(_ messages: [MLXChatMessage]) throws -> [MLXJSONValue] {
-        try messages.map { message in
+        try conversationMessages(messages).map { message in
             // Preserve the server's chat-message extensions for reasoning and grouped tool calls.
             var item = try JSONDecoder().decode(
                 [String: MLXJSONValue].self, from: JSONEncoder().encode(message)
@@ -36,6 +36,14 @@ public final class NativResponsesClient: @unchecked Sendable {
             item["type"] = .string("message")
             return .object(item)
         }
+    }
+
+    public static func conversationMessages(_ messages: [MLXChatMessage]) -> [MLXChatMessage] {
+        messages.filter { !isInstruction($0) }
+    }
+
+    private static func isInstruction(_ message: MLXChatMessage) -> Bool {
+        message.role == "system" || message.role == "developer"
     }
 
     func makeResponseRequest(
@@ -49,7 +57,12 @@ public final class NativResponsesClient: @unchecked Sendable {
         payload.removeValue(forKey: "messages")
         payload.removeValue(forKey: "stream_options")
         payload["max_output_tokens"] = payload.removeValue(forKey: "max_tokens")
-        payload["input"] = .array(input)
+        let instructions = request.messages.filter(Self.isInstruction)
+            .compactMap(\.textContent).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if !instructions.isEmpty {
+            payload["instructions"] = .string(instructions)
+        }
+        payload["input"] = .array(input + (try Self.inputItems(request.contextMessages)))
         payload["stream"] = .bool(true)
         payload["store"] = .bool(false)
         payload["context_management"] = .array([.object([
