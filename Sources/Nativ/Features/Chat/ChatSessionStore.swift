@@ -10,6 +10,20 @@ struct ChatPersistenceFailure: Equatable, Sendable {
     let message: String
 }
 
+struct ChatCapabilitySnapshot: Codable, Equatable, Sendable {
+    var disabledToolNames: [String]
+    var skills: [NativSkill]
+
+    init(settings: NativSettings) {
+        disabledToolNames = Array(Set(settings.disabledToolNames)).sorted()
+        skills = settings.skills.filter { $0.isEnabled && !$0.instructions.isEmpty }
+    }
+
+    func allowsTool(named name: String) -> Bool {
+        ChatToolRegistry.alwaysOnToolNames.contains(name) || !disabledToolNames.contains(name)
+    }
+}
+
 // Folder migration is intentionally lazy: Codable ignores the legacy `folderID`
 // key, so every existing chat loads without folder membership and appears in the
 // normal sidebar listing. The next save omits that key. Obsolete folders.json
@@ -34,12 +48,24 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
     var personalizationSnapshot: String? = nil
+    var sessionPromptSnapshot: String? = nil
+    var capabilitySnapshot: ChatCapabilitySnapshot? = nil
     var worktree: ChatGitWorktree? = nil
     var workFilesInWorktree: Bool? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }
         personalizationSnapshot = messages.isEmpty ? personalization.systemPrompt : ""
+    }
+
+    mutating func captureSnapshots(settings: NativSettings) {
+        capturePersonalization(settings.personalization)
+        if sessionPromptSnapshot == nil {
+            sessionPromptSnapshot = settings.systemPrompt
+        }
+        if capabilitySnapshot == nil {
+            capabilitySnapshot = ChatCapabilitySnapshot(settings: settings)
+        }
     }
 
     var summary: ChatSessionSummary {
