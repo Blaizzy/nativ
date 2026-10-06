@@ -69,13 +69,16 @@
 .article-body th:first-child { width: 30%; text-align: left; }
 .article-body tbody th { font-weight: 500; }
 .article-body tbody tr:nth-child(even) { background: #eae9e0; }
-.article-body .embedding-comparison { min-width: 980px; table-layout: fixed; }
-.article-body .embedding-comparison th:first-child { position: sticky; left: 0; width: 190px; background: var(--paper); box-shadow: 1px 0 var(--line); }
+.benchmark-comparison-block { margin: 30px 0; border: 1px solid var(--line); }
+.benchmark-comparison-block .article-table-wrap { margin: 0; border: 0; }
+.benchmark-heading { margin: 0; padding: 14px 18px; color: var(--ink); background: var(--paper-2); font: 500 10px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .02em; }
+.article-body .embedding-comparison { --benchmark-label-width: 190px; min-width: 980px; table-layout: fixed; }
+.article-body .embedding-comparison th:first-child { position: sticky; left: 0; z-index: 1; width: var(--benchmark-label-width); background: var(--paper); box-shadow: 1px 0 var(--line); }
 .article-body .embedding-comparison thead th { padding: 15px 10px; font-size: 11px; }
 .article-body .embedding-comparison thead th:first-child { padding-left: 16px; background: var(--ink); }
 .embedding-comparison thead small { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; }
 .article-body .embedding-comparison th:nth-child(2),
-.article-body .embedding-comparison td:nth-child(2) { color: var(--ink); background: var(--acid); }
+.article-body .embedding-comparison td:nth-child(2) { position: sticky; left: var(--benchmark-label-width); z-index: 1; color: var(--ink); background: var(--acid); box-shadow: 1px 0 var(--line); }
 .embedding-comparison .benchmark-group-start > * { border-top: 2px solid var(--ink); }
 .benchmark-category { display: block; margin-bottom: 5px; font: 500 9px/1.5 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
 .benchmark-scroll-hint { display: block; margin-top: 4px; color: var(--muted); text-transform: none; }
@@ -113,6 +116,8 @@
   .article-source { display: inline-block; padding: 0; border: 0; }
 }
 @media (max-width: 520px) {
+  .article-body .embedding-comparison { --benchmark-label-width: 125px; }
+  .article-body .embedding-comparison th:nth-child(2) { width: 110px; padding-inline: 6px; font-size: 10px; }
   .blog-card h2,
   .blog-card h3 { font-size: 30px; }
   .blog-card-subtitle { font-size: 27px; }

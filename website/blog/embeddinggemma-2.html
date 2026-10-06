@@ -112,9 +112,10 @@
             <p>Visual processing is configurable as well. Supported soft-token budgets range from 70 to 1,120 per image or frame. Video processing exposes sampling rate, frame limits, overflow handling, and optional timestamps. These controls affect how much visual information enters the encoder and therefore the computation required.</p>
             <h2 id="model-comparison">How it compares</h2>
             <p>Google DeepMind’s launch comparison places EmbeddingGemma 2 alongside five other compact embedding models. The table covers all nine text, vision, and audio benchmarks. These are <strong>published model-quality scores</strong>; our MLX-VLM measurements on Apple silicon follow in the next section.</p>
-            <div class="article-table-wrap" role="region" aria-label="Embedding model benchmark comparison; scroll horizontally to compare all six models" tabindex="0">
-              <table class="embedding-comparison" aria-describedby="comparison-notes comparison-sources">
-                <caption>Published benchmark scores · Higher is better · 6 October 2026<span class="benchmark-scroll-hint">Scroll horizontally to compare all models →</span></caption>
+            <div class="benchmark-comparison-block">
+              <p class="benchmark-heading"><span id="comparison-title">Published benchmark scores · Higher is better · 6 October 2026</span><span class="benchmark-scroll-hint">Scroll horizontally to compare all models →</span></p>
+              <div class="article-table-wrap" role="region" aria-label="Embedding model benchmark comparison; scroll horizontally to compare all six models" tabindex="0">
+              <table class="embedding-comparison" aria-labelledby="comparison-title" aria-describedby="comparison-notes comparison-sources">
                 <thead>
                   <tr>
                     <th scope="col">Benchmark</th>
@@ -138,6 +139,7 @@
                   <tr><th scope="row">MAEB</th><td>49.4</td><td aria-label="Modality not supported">*</td><td><strong>50.1</strong></td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td><td>35.0</td></tr>
                 </tbody>
               </table>
+              </div>
             </div>
             <p class="benchmark-notes" id="comparison-notes"><strong>Bold</strong> marks the highest reported score in rows with multiple results. * Modality not supported. — Score unavailable in the source comparison. † Google marks these results as not self-reported by the model’s authors. Scores are rounded to one decimal; model sizes use the source’s approximate counts.</p>
             <p class="benchmark-notes" id="comparison-sources">Sources: <a href="https://deepmind.google/models/gemma/embeddinggemma/#performance">Google DeepMind’s launch comparison</a> and the <a href="https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2#benchmark-results">EmbeddingGemma 2 model card</a>. EmbeddingGemma 2 uses the full-precision checkpoint at 768 dimensions. MIEB averages by task type; the other rows average by task. Compare scores within each row, since the benchmarks use different metrics.</p>
