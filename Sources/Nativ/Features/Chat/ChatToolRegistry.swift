@@ -124,6 +124,8 @@ enum ChatToolRegistry {
         descriptors(canEditImage: canEditImage).map(\.definition)
     }
 
+    static let alwaysOnToolNames: Set<String> = [ChatWorkToolRegistry.toolName]
+
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
             ChatNativeToolDescriptor(
