@@ -29,6 +29,8 @@
 .blog-card .text-link { margin-top: 28px; }
 .blog-card-image { display: grid; place-items: center; min-width: 0; padding: 22px; border-left: 1px solid var(--ink); background: #f4f6fa; }
 .blog-card-image img { width: 100%; height: auto; }
+.blog-card-logo img { width: min(42%, 220px); }
+.blog-feed .blog-card + .blog-card { margin-top: 28px; }
 .blog-card .text-link:hover,
 .blog-section-heading .text-link:hover { color: var(--muted); }
 
