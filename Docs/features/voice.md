@@ -38,15 +38,25 @@ and anything said before it. Spoken commands such as “enter” work as usual.
 Wake-started captures finish after at most two minutes. Steady background noise can delay
 automatic silence detection; use the record shortcut to finish in that case.
 
-The setting is off by default and independent of the keyboard's hands-free mode. While enabled,
+The setting is off by default and independent of the keyboard's hands-free mode. While listening,
 it keeps the selected microphone active. A running Nativ server and an installed speech-to-text
 model are required; your selected dictation model is used. Speech is processed locally.
+
+**Listening mode** defaults to **Automatic power saving**. On battery, listening pauses after
+five minutes without keyboard, mouse, or dictation activity, or one minute in Low Power Mode.
+A successful dictation keeps listening available for at least ten more minutes, including in
+Low Power Mode. While plugged in, listening stays available without an inactivity timeout.
+
+Move the mouse, press a key, wake the display, or use the dictation shortcut to resume.
+Saying “hey nativ” cannot resume a paused microphone. The settings panel shows when listening
+is paused to save power. Choose **Always listening** to turn off inactivity pauses. Automatic
+pausing lets an ongoing wake-word confirmation or dictation finish first.
 
 Wake-started recordings follow the normal five-minute retention policy. Retrying a recording
 also omits the wake phrase from its transcript.
 
-Listening pauses during transcription and other audio activity, and while your Mac is asleep
-or your login session is inactive. It resumes when available. The settings panel shows the
+Both modes pause listening during transcription and other audio activity, and while your Mac
+or display is asleep or your login session is inactive. It resumes when available. The settings panel shows the
 current status and offers **Try Again** if listening encounters an error.
 
 ### Keyboard shortcuts

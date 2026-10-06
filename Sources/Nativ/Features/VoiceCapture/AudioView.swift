@@ -2581,10 +2581,23 @@ struct AudioView: View {
             Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase, so the Nativ server must be running.")
+            Text("Uses your selected microphone and local speech model. The Nativ server must be running.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if shortcuts.isWakeWordEnabled {
+                Picker("Listening mode", selection: $shortcuts.wakeWordListeningMode) {
+                    ForEach(VoiceWakeWordListeningMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                if shortcuts.wakeWordListeningMode == .automatic {
+                    Text("On battery, pauses after 5 minutes without keyboard, mouse, or dictation activity—or 1 minute in Low Power Mode. A successful dictation keeps listening available for at least 10 minutes. Stays ready while plugged in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("While paused, move the mouse, press a key, or use your dictation shortcut to resume. Saying “hey nativ” cannot resume a paused microphone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Text(wakeWordMonitor.state.description)
                         .font(.caption)

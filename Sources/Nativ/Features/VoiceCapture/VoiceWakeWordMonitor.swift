@@ -6,13 +6,14 @@ import Foundation
 @MainActor
 final class VoiceWakeWordMonitor: ObservableObject {
     enum State: Equatable {
-        case off, paused, preparing, listening, confirming, capturing
+        case off, paused, pausedForInactivity, preparing, listening, confirming, capturing
         case unavailable(String)
 
         var description: String {
             switch self {
             case .off: "Wake word is off."
             case .paused: "Wake word is paused while audio is busy."
+            case .pausedForInactivity: "Paused to save power. Move the mouse or press a key to resume."
             case .preparing: "Preparing on-device wake word…"
             case .listening: "Listening for “hey nativ”."
             case .confirming: "Confirming “hey nativ”…"
@@ -34,6 +35,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private struct Configuration: Equatable {
         var enabled: Bool
         var suspended: Bool
+        var powerSavingPaused = false
         var deviceID: String?
     }
 
@@ -46,17 +48,20 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private var processor: VoiceWakeWordProcessor?
     private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
-    func configure(enabled: Bool, suspended: Bool, deviceID: String?) {
-        let next = Configuration(enabled: enabled, suspended: suspended, deviceID: deviceID)
+    func configure(enabled: Bool, suspended: Bool, deviceID: String?, powerSavingPaused: Bool = false) {
+        let next = Configuration(enabled: enabled, suspended: suspended, powerSavingPaused: powerSavingPaused, deviceID: deviceID)
         guard next != configuration else { return }
+        let needsRestart = next.enabled != configuration.enabled
+            || next.suspended != configuration.suspended || next.deviceID != configuration.deviceID
         configuration = next
-        restart()
+        if needsRestart { restart() } else { applyPowerSavingPause() }
     }
 
     func restart() {
         stopSession()
         guard configuration.enabled else { state = .off; return }
         guard !configuration.suspended else { state = .paused; return }
+        guard !configuration.powerSavingPaused else { state = .pausedForInactivity; return }
         state = .preparing
         let id = sessionID
         let deviceID = configuration.deviceID
@@ -65,6 +70,20 @@ final class VoiceWakeWordMonitor: ObservableObject {
             do { try await Task.sleep(for: .milliseconds(750)) }
             catch { return }
             await self?.listen(id: id, deviceID: deviceID)
+        }
+    }
+
+    private func applyPowerSavingPause() {
+        guard configuration.enabled, !configuration.suspended else { return }
+        switch state {
+        case .confirming, .capturing:
+            // Keep the new policy in configuration and apply it after the candidate
+            // resolves. An inactivity deadline must never truncate live dictation.
+            return
+        case .pausedForInactivity:
+            if !configuration.powerSavingPaused { restart() }
+        default:
+            if configuration.powerSavingPaused { restart() }
         }
     }
 
@@ -149,7 +168,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
                           self.isCurrent(id) else { return }
                     self.confirmationTask = nil
                     self.state = accepted ? .capturing : .listening
-                    if accepted { self.onConfirmed?() } else { self.onCancelled?() }
+                    if accepted {
+                        self.onConfirmed?()
+                    } else {
+                        self.onCancelled?()
+                        self.applyPowerSavingPause()
+                    }
                 } catch {
                     guard let self, self.isCurrent(id) else { return }
                     self.fail("Wake-word confirmation failed: \(error.localizedDescription)", id: id)
@@ -185,6 +209,10 @@ final class VoiceWakeWordMonitor: ObservableObject {
         guard isCurrent(id) else { return }
         stopSession()
         state = .unavailable(message)
+        if configuration.enabled, !configuration.suspended, configuration.powerSavingPaused {
+            state = .pausedForInactivity
+            return
+        }
         guard retry else { return }
         let retryID = sessionID
         task = Task { [weak self] in
