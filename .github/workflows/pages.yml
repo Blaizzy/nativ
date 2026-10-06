@@ -81,7 +81,7 @@ jobs:
               input: {
                 branch: {
                   repositoryNameWithOwner: `${context.repo.owner}/${context.repo.repo}`,
-                  refName: "main",
+                  branchName: "main",
                 },
                 expectedHeadOid,
                 message: { headline: "Update download and star history" },
