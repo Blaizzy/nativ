@@ -106,6 +106,91 @@ struct VoiceWakeWordTests {
         }
     }
 
+    private func featureTestAudio(count: Int) -> [Float] {
+        var state: UInt64 = 42
+        return (0..<count).map { index in
+            state = state &* 6_364_136_223_846_793_005 &+ 1
+            // Include silence, abrupt transitions, and nonzero samples at window edges.
+            return (index / 16_000) % 4 == 0 ? 0 : Float(Int(state >> 40) - 8_388_608) / 83_886_080
+        }
+    }
+
+    @Test func testCachedFeaturesMatchFullWindowsAcrossWrapsAndGaps() throws {
+        let cached = try VoiceWakeWordFeatures()
+        let reference = try VoiceWakeWordFeatures()
+        let stream = featureTestAudio(count: 200_000)
+        var output = [Float](repeating: 0, count: 128 * 200)
+        // More than a full cache revolution, followed by gate closures, unaligned
+        // windows, repeated offsets, and a rewind. All must match fresh extraction.
+        let ends = Array(stride(from: 32_000, through: 100_000, by: 320))
+            + [103_200, 135_200, 170_400, 170_560, 170_561, 170_881, 170_881, 32_000]
+        for end in ends {
+            let audio = Array(stream[(end - 32_000)..<end])
+            try output.withUnsafeMutableBufferPointer {
+                try cached.compute(audio, windowEnd: Int64(end), into: $0.baseAddress!)
+            }
+            let expected = try reference.compute(audio)
+            #expect(output == expected, "Window ending at \(end)")
+        }
+        cached.reset()
+        let unrelated = [Float](repeating: 0, count: 32_000)
+        try output.withUnsafeMutableBufferPointer {
+            try cached.compute(unrelated, windowEnd: 32_320, into: $0.baseAddress!)
+        }
+        #expect(output.allSatisfy { $0 == 0 })
+    }
+
+    @Test func testCachedFeaturesWriteStridedModelInputs() throws {
+        let cached = try VoiceWakeWordFeatures()
+        let reference = try VoiceWakeWordFeatures()
+        let stream = featureTestAudio(count: 33_000)
+        var output = [Float](repeating: -999, count: 128 * 403)
+        for end in [32_000, 32_320, 32_640] {
+            let audio = Array(stream[(end - 32_000)..<end])
+            try output.withUnsafeMutableBufferPointer {
+                try cached.compute(audio, windowEnd: Int64(end), into: $0.baseAddress!, melStride: 403, frameStride: 2)
+            }
+            let expected = try reference.compute(audio)
+            var maximumError: Float = 0
+            for mel in 0..<128 {
+                for frame in 0..<200 {
+                    maximumError = max(maximumError, abs(output[mel * 403 + frame * 2] - expected[mel * 200 + frame]))
+                    #expect(output[mel * 403 + frame * 2 + 1] == -999)
+                }
+                #expect(output[mel * 403 + 402] == -999)
+            }
+            #expect(maximumError < 0.00001)
+        }
+    }
+
+    @Test func testInvalidAudioInvalidatesFeatureCache() throws {
+        let cached = try VoiceWakeWordFeatures()
+        var output = [Float](repeating: 0, count: 128 * 200)
+        try output.withUnsafeMutableBufferPointer { destination in
+            try cached.compute(featureTestAudio(count: 32_000), windowEnd: 32_000, into: destination.baseAddress!)
+            #expect(throws: VoiceWakeWordModelError.self) {
+                try cached.compute([.nan], windowEnd: 32_320, into: destination.baseAddress!)
+            }
+            try cached.compute([Float](repeating: 0, count: 32_000), windowEnd: 32_640, into: destination.baseAddress!)
+        }
+        #expect(output.allSatisfy { $0 == 0 })
+    }
+
+    @Test func testWindowCopiesIntoReusableStorageAcrossWraps() {
+        var window = VoiceWakeWordWindow()
+        var output = [Float](repeating: 0, count: 32_000)
+        let stream = featureTestAudio(count: 70_001)
+        for index in stream.indices {
+            _ = window.append(stream[index])
+            if index % 7_000 == 0 {
+                window.copySamples(into: &output)
+                let suffix = Array(stream.prefix(index + 1).suffix(32_000))
+                #expect(output == [Float](repeating: 0, count: 32_000 - suffix.count) + suffix)
+                #expect(window.sampleCount == Int64(index + 1))
+            }
+        }
+    }
+
     @Test func testPreRollAndSpeechDuringConfirmationRemainContiguous() throws {
         var capture = VoiceWakeWordCapture()
         let before = (0..<112_000).map { Float($0) / 200_000 }

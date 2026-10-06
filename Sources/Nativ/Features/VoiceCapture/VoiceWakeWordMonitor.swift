@@ -247,6 +247,7 @@ final class VoiceWakeWordAudioBridge: @unchecked Sendable {
     private let onFailure: @Sendable () -> Void
     private var converter: AVAudioConverter?
     private var pendingBuffer: AVAudioPCMBuffer?
+    private var outputBuffer: AVAudioPCMBuffer?
     private var failed = false
     private var sampleOffset: Int64 = 0
 
@@ -271,9 +272,12 @@ final class VoiceWakeWordAudioBridge: @unchecked Sendable {
                 guard let converter else { throw VoiceAudioRecorderError.couldNotConvert }
                 pendingBuffer = buffer
                 defer { pendingBuffer = nil }
+                if outputBuffer == nil {
+                    outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096)
+                }
+                guard let output = outputBuffer else { throw VoiceAudioRecorderError.couldNotConvert }
                 while true {
-                    guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096)
-                    else { throw VoiceAudioRecorderError.couldNotConvert }
+                    output.frameLength = 0
                     var error: NSError?
                     let status = converter.convert(to: output, error: &error) { [self] _, status in
                         if let buffer = pendingBuffer {

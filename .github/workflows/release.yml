@@ -213,10 +213,9 @@ jobs:
 
   publish-preview:
     needs: build-notarize-publish
-    # Stable releases skip this job; RCs and explicit preview refreshes run it.
+    # Beta clients read only this feed, so refresh it after stable releases too.
     if: >-
-      ${{ !cancelled() && ((needs.build-notarize-publish.result == 'success' &&
-          needs.build-notarize-publish.outputs.release_channel == 'rc') ||
+      ${{ !cancelled() && (needs.build-notarize-publish.result == 'success' ||
           (github.event_name == 'workflow_dispatch' && inputs.tag == 'preview')) }}
     runs-on: ubuntu-latest
     env:
