@@ -69,6 +69,17 @@
 .article-body th:first-child { width: 30%; text-align: left; }
 .article-body tbody th { font-weight: 500; }
 .article-body tbody tr:nth-child(even) { background: #eae9e0; }
+.article-body .embedding-comparison { min-width: 980px; table-layout: fixed; }
+.article-body .embedding-comparison th:first-child { position: sticky; left: 0; width: 190px; background: var(--paper); box-shadow: 1px 0 var(--line); }
+.article-body .embedding-comparison thead th { padding: 15px 10px; font-size: 11px; }
+.article-body .embedding-comparison thead th:first-child { padding-left: 16px; background: var(--ink); }
+.embedding-comparison thead small { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; }
+.article-body .embedding-comparison th:nth-child(2),
+.article-body .embedding-comparison td:nth-child(2) { color: var(--ink); background: var(--acid); }
+.embedding-comparison .benchmark-group-start > * { border-top: 2px solid var(--ink); }
+.benchmark-category { display: block; margin-bottom: 5px; font: 500 9px/1.5 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.benchmark-scroll-hint { display: block; margin-top: 4px; color: var(--muted); text-transform: none; }
+.article-body .benchmark-notes { color: var(--muted); font-size: 12px; line-height: 1.8; }
 .article-figure { margin: 36px 0; }
 .article-figure img { width: 100%; height: auto; border: 1px solid #dce2ed; }
 .article-figure figcaption { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
