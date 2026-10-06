@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Engineering notes, model deep dives, and benchmarks from the world of local AI on Apple silicon." />
+    <meta name="theme-color" content="#f1f0e8" />
+    <meta property="og:title" content="Nativ blog — Notes on local AI" />
+    <meta property="og:description" content="Engineering notes, model deep dives, and benchmarks from the world of local AI on Apple silicon." />
+    <meta property="og:type" content="website" />
+    <link rel="icon" href="assets/app-icon.png" />
+    <link rel="apple-touch-icon" href="assets/app-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="blog.css" />
+    <title>Nativ blog — Notes on local AI</title>
+  </head>
+  <body class="blog-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header" data-header>
+      <a class="brand" href="./" aria-label="Nativ home">
+        <img class="brand-logo" src="assets/app-icon.png" alt="" />
+        <span>Nativ</span>
+      </a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="./#models">Models</a>
+        <a href="./#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="./#manifesto">Manifesto</a>
+        <a href="blog.html" aria-current="page">Blog</a>
+        <a href="downloads.html">Downloads</a>
+      </nav>
+      <div class="header-actions">
+        <a
+          class="github-link"
+          href="https://github.com/Blaizzy/nativ"
+          target="_blank"
+          rel="noreferrer"
+          aria-label="View Nativ on GitHub"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 .7a11.6 11.6 0 0 0-3.7 22.5c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.3 3 .1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6A11.6 11.6 0 0 0 12 .7Z" /></svg>
+          <span>★ <span data-stars>Open source</span></span>
+        </a>
+        <a
+          class="mini-download"
+          href="https://github.com/Blaizzy/nativ/releases/latest"
+          data-download
+        >Download</a>
+        <button class="menu-button" type="button" aria-label="Open menu" aria-expanded="false" data-menu-button>
+          <span></span><span></span>
+        </button>
+      </div>
+      <div class="mobile-menu" data-mobile-menu>
+        <a href="./#models">Models</a>
+        <a href="./#integrations">Integrations</a>
+        <a href="https://github.com/Blaizzy/nativ">Docs</a>
+        <a href="./#manifesto">Manifesto</a>
+        <a href="blog.html" aria-current="page">Blog</a>
+        <a href="downloads.html">Downloads</a>
+      </div>
+    </header>
+
+    <main id="main" class="blog-main">
+      <section class="blog-hero" aria-labelledby="blog-heading">
+        <p class="kicker">/ THE NATIV BLOG</p>
+        <h1 id="blog-heading">Local intelligence.<br /><em>Shared knowledge.</em></h1>
+        <p>Engineering notes, model deep dives, and experiments in running AI on your own hardware.</p>
+      </section>
+      <section class="blog-feed" aria-labelledby="latest-heading">
+        <div class="blog-feed-heading"><h2 id="latest-heading">Latest writing</h2><span>01 ARTICLE</span></div>
+        <article class="blog-card">
+          <div class="blog-card-copy">
+            <p class="post-meta"><span>Engineering</span><span>MLX-VLM</span><span>6 min read</span></p>
+            <h2><a href="blog/embeddinggemma-2.html">EmbeddingGemma 2 on MLX-VLM</a></h2>
+            <p class="blog-card-subtitle">Multimodal embeddings on Apple silicon</p>
+            <p class="blog-card-description">Meet Google DeepMind’s EmbeddingGemma 2: text, images, audio, and video in one embedding space, with day-zero support on Apple silicon through MLX-VLM.</p>
+            <a class="text-link" href="blog/embeddinggemma-2.html">Read the article <span aria-hidden="true">↗</span></a>
+          </div>
+          <a class="blog-card-image" href="blog/embeddinggemma-2.html" tabindex="-1" aria-hidden="true">
+            <img src="assets/blog/embeddinggemma-2-throughput.png" alt="" width="2914" height="2288" loading="lazy" />
+          </a>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <div class="footer-brand">Nativ</div>
+      <p>Built for Apple Silicon. 100% open source. A tribute to the hackers and ML researchers building a private, hackable future.</p>
+      <div class="footer-links">
+        <div><strong>CODE</strong><a href="https://github.com/Blaizzy/nativ">GitHub</a><a href="https://github.com/Blaizzy/nativ/issues">Issues</a><a href="https://github.com/Blaizzy/nativ/blob/main/LICENSE">License</a></div>
+        <div><strong>GET IT</strong><a href="https://github.com/Blaizzy/nativ/releases/latest" data-download>Download</a><a href="downloads.html">Download stats</a><a href="https://github.com/Blaizzy/nativ/releases">Releases</a><a href="https://github.com/Blaizzy/nativ#build-from-source">Install docs</a></div>
+        <div><strong>COMMUNITY</strong><a href="blog.html">Blog</a><a href="https://discord.gg/MFsUTjzyKP" target="_blank" rel="noreferrer">Discord</a><a href="https://github.com/Blaizzy/nativ/pulls">Contribute</a></div>
+      </div>
+      <div class="footer-bottom"><span>Nativ is MIT licensed · Free forever</span><span>Printed from the local cache</span><button type="button" data-to-top>Back to top ↑</button></div>
+    </footer>
+
+    <script src="script.js"></script>
+  </body>
+</html>
