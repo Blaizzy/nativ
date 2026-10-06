@@ -39,13 +39,26 @@ final class MCPHostManager: ObservableObject {
     }
 
     func toolDefinitions(projectScope: ChatToolScope? = nil) -> [MLXChatToolDefinition] {
-        connections.values.flatMap { connection -> [MLXChatToolDefinition] in
+        toolDefinitionsWithProviders(projectScope: projectScope).map(\.definition)
+    }
+
+    func toolDefinitionsWithProviders(
+        projectScope: ChatToolScope? = nil
+    ) -> [(definition: MLXChatToolDefinition, serverID: UUID, provider: String)] {
+        connections.values.flatMap { connection -> [(
+            definition: MLXChatToolDefinition,
+            serverID: UUID,
+            provider: String
+        )] in
             if let projectScope, projectScope.isProject,
                 !projectScope.projectToolsAreAvailable,
                 isProjectFilesystem(connection.config) {
                 return []
             }
-            return Self.toolDefinitions(for: connection)
+            let provider = connection.config.name.isEmpty ? connection.slug : connection.config.name
+            return Self.toolDefinitions(for: connection).map {
+                (definition: $0, serverID: connection.config.id, provider: provider)
+            }
         }
     }
 

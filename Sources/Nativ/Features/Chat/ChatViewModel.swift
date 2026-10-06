@@ -2861,11 +2861,6 @@ final class ChatViewModel: ObservableObject {
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
                 let selectedWorkItemAtConsent = workState(for: queuedRequest.sessionID)?.selectedID
-                // Freeze inferred targets before consent; tab selection or another read cannot retarget approval.
-                let workRequestAtConsent: Result<ChatWorkRequest, Error>? =
-                    toolCall.function?.name == ChatWorkToolRegistry.toolName
-                    ? Result { try resolvedWorkRequest(ChatWorkRequest.decode(toolCall), in: queuedRequest.sessionID) }
-                    : nil
                 let toolMessageID = UUID()
                 let initialToolStatus: ChatTranscriptMessage.ToolStatus =
                     switch toolCall.function?.name {
@@ -2887,12 +2882,92 @@ final class ChatViewModel: ObservableObject {
                 }
                 insertionAnchor = toolMessageID
 
-                let customTool = toolCall.function?.name.flatMap { toolName in
+                let availableCapabilities = availableToolCapabilities(
+                    canEditImage: !latestImageReferences(
+                        beforeOrAt: toolMessageID,
+                        in: queuedRequest.sessionID
+                    ).isEmpty,
+                    settings: queuedRequest.settings,
+                    scope: queuedRequest.toolScope
+                )
+                let searchableCapabilities = availableCapabilities.filter {
+                    $0.definition.function.name != ChatToolSearchToolRegistry.toolName
+                        && queuedRequest.capabilitySnapshot.exposure(for: $0) != .off
+                }
+                if let requestedToolName = toolCall.function?.name,
+                    !queuedRequest.capabilitySnapshot.allowsDirectInvocation(
+                        of: requestedToolName,
+                        in: availableCapabilities
+                    )
+                {
+                    updateToolMessage(
+                        toolMessageID,
+                        in: queuedRequest.sessionID,
+                        status: .failed,
+                        content: ChatToolDispatcher.failurePayload(
+                            toolName: requestedToolName,
+                            error: searchableCapabilities.contains {
+                                $0.definition.function.name == requestedToolName
+                            }
+                                ? ChatToolSearchError.directInvocationRequired(requestedToolName)
+                                : ChatToolSearchError.unknownTool(requestedToolName)
+                        ),
+                        attachments: []
+                    )
+                    continue
+                }
+                let executionCall: MLXChatToolCall
+                if toolCall.function?.name == ChatToolSearchToolRegistry.toolName {
+                    do {
+                        switch try ChatToolSearchToolExecutor.resolve(
+                            call: toolCall,
+                            capabilities: searchableCapabilities
+                        ) {
+                        case .searchResult(let content):
+                            updateToolMessage(
+                                toolMessageID,
+                                in: queuedRequest.sessionID,
+                                status: .succeeded,
+                                content: content,
+                                attachments: []
+                            )
+                            continue
+                        case .invocation(let invocation):
+                            executionCall = invocation
+                            _ = updateMessage(toolMessageID, in: queuedRequest.sessionID) {
+                                $0.toolName = invocation.function?.name
+                                $0.toolArguments = invocation.function?.arguments
+                            }
+                        }
+                    } catch {
+                        updateToolMessage(
+                            toolMessageID,
+                            in: queuedRequest.sessionID,
+                            status: .failed,
+                            content: ChatToolDispatcher.failurePayload(
+                                toolName: ChatToolSearchToolRegistry.toolName,
+                                error: error
+                            ),
+                            attachments: []
+                        )
+                        continue
+                    }
+                } else {
+                    executionCall = toolCall
+                }
+
+                // Freeze inferred targets before consent; tab selection or another read cannot retarget approval.
+                let workRequestAtConsent: Result<ChatWorkRequest, Error>? =
+                    executionCall.function?.name == ChatWorkToolRegistry.toolName
+                    ? Result { try resolvedWorkRequest(ChatWorkRequest.decode(executionCall), in: queuedRequest.sessionID) }
+                    : nil
+
+                let customTool = executionCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
                 var fileWriteApprovalGranted = false
                 var terminalApprovalGranted = false
-                if customTool?.kind == .script || toolCall.function?.name == ChatWorkToolRegistry.toolName {
+                if customTool?.kind == .script || executionCall.function?.name == ChatWorkToolRegistry.toolName {
                     if case .failure(let error) = workRequestAtConsent {
                         updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .failed,
                                           content: ChatToolDispatcher.failurePayload(toolName: ChatWorkToolRegistry.toolName, error: error),
@@ -2903,7 +2978,7 @@ final class ChatViewModel: ObservableObject {
                         toolMessageID,
                         in: queuedRequest.sessionID,
                         status: .awaitingConsent,
-                        content: workConsentContent(for: toolCall, in: queuedRequest.sessionID,
+                        content: workConsentContent(for: executionCall, in: queuedRequest.sessionID,
                                                     resolved: try? workRequestAtConsent?.get()),
                         attachments: []
                     )
@@ -2944,14 +3019,14 @@ final class ChatViewModel: ObservableObject {
 
                 let isNativeTerminal =
                     customTool == nil
-                    && !(toolCall.function?.name.flatMap {
+                    && !(executionCall.function?.name.flatMap {
                         mcpHost?.handlesTool(named: $0)
                     } ?? false)
-                    && toolCall.function?.name == ChatTerminalToolRegistry.toolName
+                    && executionCall.function?.name == ChatTerminalToolRegistry.toolName
                 if isNativeTerminal {
                     do {
                         try ChatTerminalToolExecutor().preflight(
-                            call: toolCall,
+                            call: executionCall,
                             defaultWorkingDirectory: queuedRequest.toolScope
                                 .terminalWorkingDirectory
                         )
@@ -3009,9 +3084,9 @@ final class ChatViewModel: ObservableObject {
                 }
 
                 if customTool == nil,
-                    !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
+                    !(executionCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
                     ChatFileWriteApprovalPolicy.requiresApproval(
-                        call: toolCall,
+                        call: executionCall,
                         rootPath: queuedRequest.toolScope.isProject
                             ? queuedRequest.toolScope.fileWriteRootPath
                             : queuedRequest.settings.fileWriteRootPath
@@ -3059,7 +3134,7 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
+                if executionCall.function?.name == ChatSwitchModelToolRegistry.toolName {
                     updateToolMessage(
                         toolMessageID,
                         in: queuedRequest.sessionID,
@@ -3113,7 +3188,7 @@ final class ChatViewModel: ObservableObject {
                     }
                     do {
                         let content = try await ChatSwitchModelToolExecutor().execute(
-                            call: toolCall, appModel: appModel)
+                            call: executionCall, appModel: appModel)
                         activeSettings.languageModelID =
                             appModel.settings.normalized().languageModelID
                         updateToolMessage(
@@ -3240,16 +3315,16 @@ final class ChatViewModel: ObservableObject {
                     if let customTool {
                         let result = try await CustomToolExecutor.execute(
                             customTool,
-                            argumentsJSON: toolCall.function?.arguments
+                            argumentsJSON: executionCall.function?.arguments
                         )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else if let host = mcpHost,
-                        let toolName = toolCall.function?.name,
+                        let toolName = executionCall.function?.name,
                         host.handlesTool(named: toolName)
                     {
                         let result = try await host.callTool(
                             named: toolName,
-                            argumentsJSON: toolCall.function?.arguments,
+                            argumentsJSON: executionCall.function?.arguments,
                             projectScope: queuedRequest.toolScope,
                             currentProjectScope: { [self] in
                                 toolScope(for: queuedRequest.sessionID, settings: appModel?.settings ?? queuedRequest.settings)
@@ -3258,7 +3333,7 @@ final class ChatViewModel: ObservableObject {
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {
                         outcome = try await ChatToolDispatcher.execute(
-                            call: toolCall, context: context)
+                            call: executionCall, context: context)
                     }
                     updateToolMessage(
                         toolMessageID,
@@ -3422,15 +3497,18 @@ final class ChatViewModel: ObservableObject {
         let precedingMessages = sessionMessages[..<assistantIndex]
 
         let advertisesToolsForModel = advertisesTools && queuedRequest.languageModelSupportsTools
-        let toolDefinitions = advertisesToolsForModel
-            ? availableToolDefinitions(
+        let availableToolCapabilities = advertisesToolsForModel
+            ? availableToolCapabilities(
                 canEditImage: precedingMessages.contains { message in
                     message.imageAttachments.contains { $0.chatAttachmentKind == .image }
                 },
                 settings: settings,
                 scope: queuedRequest.toolScope
-            ).filter { queuedRequest.capabilitySnapshot.allowsTool(named: $0.function.name) }
+            )
             : []
+        let toolDefinitions = availableToolCapabilities
+            .filter { queuedRequest.capabilitySnapshot.exposure(for: $0) == .on }
+            .map(\.definition)
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
         let requestMessages = Self.completionMessages(
@@ -3510,17 +3588,25 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func availableToolDefinitions(
+    private func availableToolCapabilities(
         canEditImage: Bool,
         settings: NativSettings,
         scope: ChatToolScope
-    ) -> [MLXChatToolDefinition] {
-        let definitions = ChatToolRegistry.definitions(canEditImage: canEditImage)
-            + settings.customTools.compactMap { try? $0.definition() }
-            + (mcpHost?.toolDefinitions(projectScope: scope) ?? [])
-        return definitions
-            .filter { toolIsAvailable($0.function.name, settings: settings, scope: scope) }
-            .sorted { $0.function.name < $1.function.name }
+    ) -> [ChatToolCapability] {
+        var capabilities = ChatToolRegistry.definitions(canEditImage: canEditImage).map {
+            ChatToolCapability(definition: $0, source: .native)
+        }
+        capabilities += settings.customTools.compactMap { tool in
+            guard let definition = try? tool.definition() else { return nil }
+            let provider = tool.name.isEmpty ? tool.slug : tool.name
+            return ChatToolCapability(definition: definition, source: .custom(provider))
+        }
+        capabilities += (mcpHost?.toolDefinitionsWithProviders(projectScope: scope) ?? []).map {
+            ChatToolCapability(definition: $0.definition, source: .mcp(serverID: $0.serverID, name: $0.provider))
+        }
+        return capabilities
+            .filter { toolIsAvailable($0.definition.function.name, settings: settings, scope: scope) }
+            .sorted { $0.definition.function.name < $1.definition.function.name }
     }
 
     private func insertAssistantMessage(for queuedRequest: QueuedChatRequest) -> Bool {

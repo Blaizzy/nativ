@@ -11,16 +11,39 @@ struct ChatPersistenceFailure: Equatable, Sendable {
 }
 
 struct ChatCapabilitySnapshot: Codable, Equatable, Sendable {
-    var disabledToolNames: [String]
+    var exposurePolicy: ToolExposurePolicy
     var skills: [NativSkill]
+    var includesToolSearch: Bool
 
     init(settings: NativSettings) {
-        disabledToolNames = Array(Set(settings.disabledToolNames)).sorted()
+        exposurePolicy = settings.toolExposurePolicy
         skills = settings.skills.filter { $0.isEnabled && !$0.instructions.isEmpty }
+        includesToolSearch = settings.customTools.contains { settings.toolExposureMode(for: $0.toolName) == .automatic }
+            || settings.mcpServers.contains { settings.mcpServerExposureMode(for: $0) == .automatic }
+            || settings.toolExposureModes.values.contains(.automatic)
     }
 
-    func allowsTool(named name: String) -> Bool {
-        ChatToolRegistry.alwaysOnToolNames.contains(name) || !disabledToolNames.contains(name)
+    func exposure(for capability: ChatToolCapability) -> ToolExposureMode {
+        let name = capability.definition.function.name
+        if ChatToolRegistry.alwaysOnToolNames.contains(name) {
+            return .on
+        }
+        if name == ChatToolSearchToolRegistry.toolName, !includesToolSearch {
+            return .off
+        }
+        if case .mcp(let serverID, _) = capability.source {
+            return exposurePolicy.mode(forTool: name, mcpServerID: serverID)
+        }
+        return exposurePolicy.mode(forTool: name)
+    }
+
+    func allowsDirectInvocation(
+        of toolName: String,
+        in capabilities: some Sequence<ChatToolCapability>
+    ) -> Bool {
+        capabilities.contains {
+            $0.definition.function.name == toolName && exposure(for: $0) == .on
+        }
     }
 }
 

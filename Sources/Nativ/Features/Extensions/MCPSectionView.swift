@@ -112,7 +112,10 @@ struct MCPSectionView: View {
         return MCPServerRow(
             server: presentation,
             state: configured.flatMap { host.states[$0.id] } ?? .disabled,
-            onToggle: { toggle(entry) },
+            exposureMode: Binding(
+                get: { configured.map(model.settings.mcpServerExposureMode) ?? .off },
+                set: { setExposureMode($0, for: entry) }
+            ),
             onReconnect: configured.map { server in { host.reconnect(server.id) } },
             onEdit: { editing = presentation },
             onDelete: configured.map { server in { pendingDelete = server } }
@@ -123,30 +126,28 @@ struct MCPSectionView: View {
         MCPServerRow(
             server: server,
             state: host.states[server.id],
-            onToggle: { toggle(server) },
+            exposureMode: Binding(
+                get: { model.settings.mcpServerExposureMode(for: server) },
+                set: { model.settings.setMCPServerExposureMode($0, serverID: server.id) }
+            ),
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
             onDelete: { pendingDelete = server }
         )
     }
 
-    private func toggle(_ entry: MCPCatalogEntry) {
-        var servers = model.settings.mcpServers
-        catalog.setEnabled(
-            !catalog.isEnabled(entry, in: servers),
-            for: entry,
-            in: &servers
-        )
-        model.settings.mcpServers = servers
-    }
-
-    private func toggle(_ server: MCPServerConfig) {
-        guard let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) else { return }
-        model.settings.mcpServers[i].isEnabled.toggle()
+    private func setExposureMode(_ mode: ToolExposureMode, for entry: MCPCatalogEntry) {
+        var settings = model.settings
+        catalog.setEnabled(mode != .off, for: entry, in: &settings.mcpServers)
+        if let server = catalog.configuredServer(for: entry, in: settings.mcpServers) {
+            settings.setMCPServerExposureMode(mode, serverID: server.id)
+        }
+        model.settings = settings
     }
 
     private func delete(_ server: MCPServerConfig) {
         model.settings.mcpServers.removeAll { $0.id == server.id }
+        model.settings.mcpServerExposureModes[server.id.uuidString] = nil
     }
 
     private func save(_ server: MCPServerConfig) {
@@ -163,7 +164,7 @@ struct MCPSectionView: View {
 private struct MCPServerRow: View {
     let server: MCPServerConfig
     let state: MCPServerConnectionState?
-    let onToggle: () -> Void
+    @Binding var exposureMode: ToolExposureMode
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: (() -> Void)?
@@ -208,10 +209,10 @@ private struct MCPServerRow: View {
                     .menuIndicator(.hidden)
                     .frame(width: 22)
                 }
-                Toggle("", isOn: Binding(get: { server.isEnabled }, set: { _ in onToggle() }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                ToolExposureModeControl(
+                    mode: $exposureMode,
+                    title: server.name.isEmpty ? "Untitled server" : server.name
+                )
             }
 
             if case .authorizingGitHub(let code, let verificationURL) = state {

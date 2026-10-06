@@ -152,35 +152,33 @@ struct ToolsSectionView: View {
                     onInspect: { inspect(tool) },
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool),
-                    isEnabled: enabledBinding(for: tool)
+                    exposureMode: exposureModeBinding(for: tool)
                 )
             }
         }
     }
 
-    private func enabledBinding(for tool: ToolItem) -> Binding<Bool>? {
-        guard tool.isBuiltIn else { return nil }
+    private func exposureModeBinding(for tool: ToolItem) -> Binding<ToolExposureMode>? {
+        guard let toolName = tool.toolNames.first else { return nil }
         return Binding(
             get: {
-                tool.toolNames.allSatisfy(model.settings.isToolEnabled)
-                    && (tool.configuration?.isConfigured ?? true)
+                guard tool.configuration?.isConfigured ?? true else { return .off }
+                return model.settings.toolExposureMode(for: toolName, mcpServerID: tool.mcpServerID)
             },
-            set: { enabled in
-                guard enabled else {
+            set: { mode in
+                guard mode != .off else {
                     setEnabled(false, for: tool)
                     return
                 }
-                guard let configuration = tool.configuration else {
-                    setEnabled(true, for: tool)
-                    return
-                }
-                guard configuration.isConfigured else {
+                if let configuration = tool.configuration, !configuration.isConfigured {
                     setEnabled(false, for: tool)
                     configurationPendingEnablement = tool.name
                     inspecting = tool
                     return
                 }
-                setEnabled(true, for: tool)
+                for toolName in tool.toolNames {
+                    model.settings.setToolExposureMode(mode, toolName: toolName, mcpServerID: tool.mcpServerID)
+                }
             }
         )
     }
@@ -264,6 +262,7 @@ struct ToolsSectionView: View {
         model.settings.customTools.map {
             ToolItem(
                 name: $0.toolName,
+                toolNames: [$0.toolName],
                 title: $0.name,
                 detail: $0.displaySummary,
                 parameters: try? $0.definition().function.parameters,
@@ -295,6 +294,7 @@ struct ToolsSectionView: View {
             }
             model.settings.customTools.removeAll { $0.id == tool.id }
             model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
+            model.settings.toolExposureModes[tool.toolName] = nil
             toolPendingRemoval = nil
         } catch {
             toolPendingRemoval = nil
@@ -308,10 +308,12 @@ struct ToolsSectionView: View {
             let def = defs.first { $0.function.name == pair.name }
             return ToolItem(
                 name: pair.name,
+                toolNames: [pair.name],
                 title: pair.displayName,
                 detail: def?.function.description ?? "",
                 parameters: def?.function.parameters,
-                isRunnable: true
+                isRunnable: true,
+                mcpServerID: server.id
             )
         }
     }
@@ -329,6 +331,7 @@ struct ToolItem: Identifiable {
     var customToolID: UUID?
     var executionHint: String?
     var configuration: ChatNativeToolConfiguration? = nil
+    var mcpServerID: UUID?
 }
 
 private struct ToolRow: View {
@@ -336,7 +339,7 @@ private struct ToolRow: View {
     let onInspect: () -> Void
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
-    var isEnabled: Binding<Bool>?
+    var exposureMode: Binding<ToolExposureMode>?
     @State private var hovering = false
 
     var body: some View {
@@ -361,13 +364,12 @@ private struct ToolRow: View {
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
             .help(tool.configuration == nil ? "Inspect / try" : "Configure")
-            if let isEnabled {
-                Toggle("", isOn: isEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help(isEnabled.wrappedValue ? "Disable \(tool.title)" : "Enable \(tool.title)")
-                    .accessibilityLabel("Enable \(tool.title)")
+            if let exposureMode {
+                ToolExposureModeControl(
+                    mode: exposureMode,
+                    title: tool.title,
+                    turnOffWarning: ChatToolRegistry.disableWarning(for: tool.name)
+                )
             }
             if let onEdit, let onRemove {
                 Menu {

@@ -2,6 +2,9 @@ import NativServerKit
 import XCTest
 
 final class ChatPromptSnapshotTests: XCTestCase {
+    private let terminal = ChatToolCapability(definition: ChatTerminalToolRegistry.definition, source: .native)
+    private let toolSearch = ChatToolCapability(definition: ChatToolSearchToolRegistry.definition, source: .native)
+
     func testSnapshotsKeepFirstSubmissionValues() {
         var session = ChatSession(id: UUID(), title: "Chat", createdAt: .now, updatedAt: .now, messages: [])
         var settings = NativSettings()
@@ -16,17 +19,56 @@ final class ChatPromptSnapshotTests: XCTestCase {
 
         XCTAssertEqual(session.sessionPromptSnapshot, "Original")
         XCTAssertEqual(session.capabilitySnapshot?.skills.map(\.instructions), ["Skill"])
-        XCTAssertEqual(session.capabilitySnapshot?.disabledToolNames, [])
+        XCTAssertEqual(session.capabilitySnapshot?.exposurePolicy.disabledToolNames, [])
     }
 
-    func testStartingSnapshotKeepsChatWorkAvailable() {
+    func testExposureDefaultsAndLegacySettings() {
+        let custom = ChatToolCapability(
+            definition: MLXChatToolDefinition(
+                function: MLXChatFunctionDefinition(name: "custom__weather", description: "", parameters: .object([:]))
+            ),
+            source: .custom("Weather")
+        )
+        let mcp = ChatToolCapability(
+            definition: MLXChatToolDefinition(
+                function: MLXChatFunctionDefinition(name: "mcp__git__status", description: "", parameters: .object([:]))
+            ),
+            source: .mcp(serverID: UUID(), name: "Git")
+        )
         var settings = NativSettings()
-        settings.setToolEnabled(false, toolName: ChatWorkToolRegistry.toolName)
-        settings.setToolEnabled(false, toolName: ChatTerminalToolRegistry.toolName)
         let snapshot = ChatCapabilitySnapshot(settings: settings)
+        XCTAssertEqual(snapshot.exposure(for: terminal), .on)
+        XCTAssertEqual(snapshot.exposure(for: custom), .automatic)
+        XCTAssertEqual(snapshot.exposure(for: mcp), .automatic)
 
-        XCTAssertTrue(snapshot.allowsTool(named: ChatWorkToolRegistry.toolName))
-        XCTAssertFalse(snapshot.allowsTool(named: ChatTerminalToolRegistry.toolName))
+        settings.toolExposureModesMigrated = false
+        let legacy = ChatCapabilitySnapshot(settings: settings)
+        XCTAssertEqual(legacy.exposure(for: custom), .on)
+        XCTAssertEqual(legacy.exposure(for: mcp), .on)
+    }
+
+    func testToolSearchRequiresADiscoverableCustomToolOrMCPServer() {
+        var settings = NativSettings()
+        XCTAssertEqual(ChatCapabilitySnapshot(settings: settings).exposure(for: toolSearch), .off)
+
+        settings.mcpServers = [MCPServerConfig(name: "Server", command: "server")]
+        XCTAssertEqual(ChatCapabilitySnapshot(settings: settings).exposure(for: toolSearch), .on)
+
+        settings.setMCPServerExposureMode(.on, serverID: settings.mcpServers[0].id)
+        XCTAssertEqual(ChatCapabilitySnapshot(settings: settings).exposure(for: toolSearch), .off)
+    }
+
+    func testExposureModesRoundTripAndLegacyDecode() throws {
+        var settings = NativSettings()
+        settings.setToolExposureMode(.on, toolName: "custom__weather")
+        let decoded = try PropertyListDecoder().decode(NativSettings.self, from: PropertyListEncoder().encode(settings))
+        XCTAssertEqual(decoded.toolExposureMode(for: "custom__weather"), .on)
+        XCTAssertTrue(decoded.toolExposureModesMigrated)
+
+        settings.setToolExposureMode(.automatic, toolName: "custom__weather")
+        XCTAssertNil(settings.toolExposureModes["custom__weather"])
+        settings.setToolExposureMode(.off, toolName: "custom__weather")
+        XCTAssertEqual(settings.disabledToolNames, ["custom__weather"])
     }
 
     @MainActor
