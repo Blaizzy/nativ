@@ -3813,6 +3813,7 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.generatedTokens,
                     decodeTokensPerSecond: event.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
+                    prefillTokensPerSecond: message.responseMetrics?.prefillTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
                     specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
