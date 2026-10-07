@@ -490,7 +490,7 @@ struct ChatComposer<ContextHeader: View>: View {
             )
         }
         .sheet(isPresented: $showsCapabilities) {
-            ChatCapabilitiesSheet(model: model)
+            ChatCapabilitiesSheet(model: model, mcpHost: viewModel.mcpHost)
         }
     }
 

@@ -34,6 +34,7 @@ private struct GlobalChatCapabilityItem: Identifiable {
 
 struct ChatCapabilitiesSheet: View {
     var model: NativModel
+    var mcpHost: MCPHostManager?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openExtensionsHubSection) private var openExtensionsHubSection
     @State private var query = ""
@@ -143,6 +144,8 @@ struct ChatCapabilitiesSheet: View {
                 .legacyTextStyle(.supporting)
                 .foregroundStyle(.secondary)
 
+            ToolExposureModeExplanation()
+
             TextField("Search directory", text: $query)
                 .textFieldStyle(.roundedBorder)
 
@@ -192,7 +195,7 @@ struct ChatCapabilitiesSheet: View {
 
     @ViewBuilder
     private func capabilityRow(_ item: GlobalChatCapabilityItem) -> some View {
-        if item.isAvailable {
+        if item.isAvailable, item.kind == .skill {
             Button {
                 toggle(item)
             } label: {
@@ -233,7 +236,24 @@ struct ChatCapabilitiesSheet: View {
 
             Spacer(minLength: 20)
 
-            if isEnabled(item) {
+            if let mode = exposureModeBinding(for: item) {
+                ToolExposureModeControl(
+                    mode: mode,
+                    title: item.title,
+                    turnOffWarning: {
+                        guard case .nativeTools(let toolNames) = item.target else { return nil }
+                        return toolNames.first.flatMap(ChatToolRegistry.disableWarning)
+                    }(),
+                    options: {
+                        guard case .nativeTools(let toolNames) = item.target, let toolName = toolNames.first else {
+                            return ToolExposureMode.allCases
+                        }
+                        return ToolExposureMode.options(forTool: toolName)
+                    }()
+                )
+                .disabled(item.target == .nativeTools([ChatToolSearchToolRegistry.toolName])
+                    && !ChatViewModel.toolSearchIsNeeded(settings: model.settings, mcpHost: mcpHost))
+            } else if isEnabled(item) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.green)
@@ -247,41 +267,48 @@ struct ChatCapabilitiesSheet: View {
     }
 
     private func isEnabled(_ item: GlobalChatCapabilityItem) -> Bool {
-        guard item.isAvailable else { return false }
-        switch item.target {
-        case .nativeTools(let toolNames):
-            return toolNames.allSatisfy(model.settings.isToolEnabled)
-        case .customTool(let toolName):
-            return model.settings.isToolEnabled(toolName)
-        case .skill(let id):
-            return model.settings.skills.first { $0.id == id }?.isEnabled == true
-        case .mcpServer(let id):
-            return model.settings.mcpServers.first { $0.id == id }?.isEnabled == true
-        }
+        guard item.isAvailable, case .skill(let id) = item.target else { return false }
+        return model.settings.skills.first { $0.id == id }?.isEnabled == true
     }
 
     private func toggle(_ item: GlobalChatCapabilityItem) {
+        guard case .skill(let id) = item.target,
+            let index = model.settings.skills.firstIndex(where: { $0.id == id })
+        else { return }
+        model.settings.skills[index].isEnabled.toggle()
+    }
+
+    private func exposureModeBinding(for item: GlobalChatCapabilityItem) -> Binding<ToolExposureMode>? {
+        guard item.isAvailable else { return nil }
         switch item.target {
         case .nativeTools(let toolNames):
-            let enabled = !toolNames.allSatisfy(model.settings.isToolEnabled)
-            for toolName in toolNames {
-                model.settings.setToolEnabled(enabled, toolName: toolName)
+            guard let toolName = toolNames.first else { return nil }
+            if toolName == ChatToolSearchToolRegistry.toolName,
+                !ChatViewModel.toolSearchIsNeeded(settings: model.settings, mcpHost: mcpHost)
+            {
+                return .constant(.off)
             }
-        case .customTool(let toolName):
-            model.settings.setToolEnabled(
-                !model.settings.isToolEnabled(toolName),
-                toolName: toolName
+            return Binding(
+                get: { model.settings.toolExposureMode(for: toolName) },
+                set: { mode in
+                    for toolName in toolNames {
+                        model.settings.setToolExposureMode(mode, toolName: toolName)
+                    }
+                }
             )
-        case .skill(let id):
-            guard let index = model.settings.skills.firstIndex(where: { $0.id == id }) else {
-                return
-            }
-            model.settings.skills[index].isEnabled.toggle()
+        case .customTool(let toolName):
+            return Binding(
+                get: { model.settings.toolExposureMode(for: toolName) },
+                set: { model.settings.setToolExposureMode($0, toolName: toolName) }
+            )
         case .mcpServer(let id):
-            guard let index = model.settings.mcpServers.firstIndex(where: { $0.id == id }) else {
-                return
-            }
-            model.settings.mcpServers[index].isEnabled.toggle()
+            guard let server = model.settings.mcpServers.first(where: { $0.id == id }) else { return nil }
+            return Binding(
+                get: { model.settings.mcpServerExposureMode(for: server) },
+                set: { model.settings.setMCPServerExposureMode($0, serverID: id) }
+            )
+        case .skill:
+            return nil
         }
     }
 
