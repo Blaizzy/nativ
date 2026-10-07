@@ -467,18 +467,6 @@ struct ChatResponseMetrics: Equatable, Codable {
             specAcceptanceRate: completion.usage?.specAcceptanceRate
         )
     }
-
-    func filling(from event: NativAnalyticsRequestEvent) -> ChatResponseMetrics {
-        ChatResponseMetrics(
-            totalTokens: totalTokens,
-            generatedTokens: generatedTokens,
-            decodeTokensPerSecond: decodeTokensPerSecond,
-            prefillTokensPerSecond: prefillTokensPerSecond ?? event.prefillTokensPerSecond,
-            peakMemoryGB: peakMemoryGB
-                ?? event.peakMemoryBytes.map { Double($0) / Double(1024 * 1024 * 1024) },
-            specAcceptanceRate: specAcceptanceRate
-        )
-    }
 }
 
 struct MediaAssetReference: Equatable, Codable, Hashable, Sendable {
