@@ -18,6 +18,7 @@ final class ChatCompactionTests: XCTestCase {
         let call = MLXChatToolCall(id: "call-1", function: .init(name: "read", arguments: "{}"))
         let messages = [
             MLXChatMessage(role: "system", content: "Follow the user's requirements."),
+            MLXChatMessage(role: "developer", content: "Use the supplied tools."),
             MLXChatMessage(role: "user", content: .parts([.init(text: "Describe"), .init(imageURL: "data:image/png;base64,abc")])),
             MLXChatMessage(role: "assistant", content: "", reasoningContent: "Need a file.", toolCalls: [call]),
             MLXChatMessage(role: "tool", content: "file contents", toolCallID: "call-1", name: "read"),
@@ -38,10 +39,14 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(body["store"], .bool(false))
         XCTAssertEqual(body["stream"], .bool(true))
         XCTAssertEqual(body["enable_thinking"], .bool(false))
+        XCTAssertEqual(body["instructions"], .string("Follow the user's requirements.\n\nUse the supplied tools."))
         XCTAssertEqual(body["context_management"]?.arrayValue?.first?["compact_threshold"], .number(24000))
-        XCTAssertEqual(input[1]["content"]?.arrayValue?.last?["image_url"]?["url"], .string("data:image/png;base64,abc"))
-        XCTAssertEqual(input[2]["reasoning_content"], .string("Need a file."))
-        XCTAssertEqual(input[2]["tool_calls"]?.arrayValue?.first?["id"], input[3]["tool_call_id"])
+        XCTAssertEqual(input.count, 3)
+        XCTAssertEqual(input.map { $0["role"]?.stringValue }, ["user", "assistant", "tool"])
+        XCTAssertEqual(body["input"], .array(input))
+        XCTAssertEqual(input[0]["content"]?.arrayValue?.last?["image_url"]?["url"], .string("data:image/png;base64,abc"))
+        XCTAssertEqual(input[1]["reasoning_content"], .string("Need a file."))
+        XCTAssertEqual(input[1]["tool_calls"]?.arrayValue?.first?["id"], input[2]["tool_call_id"])
         XCTAssertEqual(body["tools"]?.arrayValue?.first?["function"]?["name"], .string("read"))
     }
 
@@ -114,24 +119,87 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(recompacted.last?["content"], .string("Continue"))
     }
 
-    func testChangedScopeOrHistoryRebuildsInput() throws {
+    func testChangedModelServerOrHistoryRebuildsInput() throws {
         let original = request([.init(role: "system", content: "Be precise"), .init(role: "user", content: "Port 7319")])
         let state = try ChatCompactionState(item: capsule, request: original, serverURL: server)
         var model = original
         model.model = "other-model"
         var edited = original
         edited.messages[1].content = .text("Port 8421")
-        var system = original
-        system.messages[0].content = .text("New instructions")
         var truncated = original
         truncated.messages.removeLast()
-        for (candidate, url) in [(model, server), (edited, server), (system, server), (truncated, server), (original, URL(string: "http://127.0.0.1:9090")!)] {
+        for (candidate, url) in [(model, server), (edited, server), (truncated, server), (original, URL(string: "http://127.0.0.1:9090")!)] {
             XCTAssertEqual(try state.input(for: candidate, serverURL: url), try NativResponsesClient.inputItems(candidate.messages))
         }
         var damaged = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
         damaged["messageCount"] = -1
         let decoded = try JSONDecoder().decode(ChatCompactionState.self, from: JSONSerialization.data(withJSONObject: damaged))
         XCTAssertEqual(try decoded.input(for: original, serverURL: server), try NativResponsesClient.inputItems(original.messages))
+    }
+
+    func testChangingWorkContextPreservesPrefixAndCompactionReplay() throws {
+        var chat = request([
+            .init(role: "system", content: "Use chat_work. Work-pane context is environment data, not a new user request."),
+            .init(role: "user", content: "Create release notes in the worktree."),
+        ])
+        chat.tools = [.init(function: .init(name: "read_notes", description: "Read release notes", parameters: .object(["type": .string("object")])))]
+        chat.transientContext = "Work-pane context (environment data):\nCurrent chat work items: []"
+        let client = NativResponsesClient(baseURL: server, tenant: "worktree-test")
+        let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        let restored = try JSONDecoder().decode(ChatCompactionState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(restored.messageCount, 1)
+        var previousInput: [MLXJSONValue] = [capsule]
+        for revision in 1...3 {
+            chat.transientContext = "Work-pane context (environment data):\nCurrent chat work items: [{\"id\":\"notes\",\"revision\":\(revision)}]"
+            let call = MLXChatToolCall(id: "read-\(revision)", function: .init(name: "read_notes", arguments: "{}"))
+            chat.messages += [
+                .init(role: "assistant", content: "", toolCalls: [call]),
+                .init(role: "tool", content: "Revision \(revision)", toolCallID: call.id),
+            ]
+            let input = try restored.input(for: chat, serverURL: server)
+            XCTAssertEqual(input.first, capsule)
+            XCTAssertEqual(Array(input.prefix(previousInput.count)), previousInput)
+            XCTAssertEqual(input.count, 1 + revision * 2)
+            let wire = try client.makeResponseRequest(chat, input: input, compactThreshold: 10000)
+            let body = try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))
+            let sent = try XCTUnwrap(body["input"]?.arrayValue)
+            XCTAssertEqual(body["instructions"], .string(try XCTUnwrap(chat.messages[0].textContent)))
+            XCTAssertEqual(Array(sent.dropLast()), input)
+            XCTAssertEqual(sent.last?["content"], .string(try XCTUnwrap(chat.transientContext)))
+            XCTAssertEqual(sent[sent.count - 2]["tool_call_id"], .string(try XCTUnwrap(call.id)))
+            XCTAssertEqual(body["tools"]?.arrayValue?.first?["function"]?["description"], .string("Read release notes"))
+            let chatClient = NativChatClient(baseURL: server)
+            let chatWire = try chatClient.makeURLRequest(payload: chat, accepts: "application/json")
+            let chatBody = try MLXJSONValue(jsonData: XCTUnwrap(chatWire.httpBody))
+            let sentMessages = try XCTUnwrap(chatBody["messages"]?.arrayValue)
+            XCTAssertEqual(sentMessages.count, chat.messages.count + 1)
+            XCTAssertEqual(sentMessages.last?["content"], sent.last?["content"])
+            XCTAssertEqual(sentMessages[sentMessages.count - 2]["tool_call_id"], .string(try XCTUnwrap(call.id)))
+            XCTAssertNil(chatBody["transientContext"])
+            let countWire = try chatClient.makePromptTokenCountURLRequest(for: chat)
+            let countBody = try MLXJSONValue(jsonData: XCTUnwrap(countWire.httpBody))
+            XCTAssertEqual(countBody["input"], chatBody["messages"])
+            previousInput = input
+        }
+        // A new capsule fingerprints only the transcript, even when its request included a snapshot.
+        let next = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        chat.transientContext = "Current chat work items: []"
+        XCTAssertEqual(try next.input(for: chat, serverURL: server), [capsule])
+        chat.transientContext = nil
+        let wire = try client.makeResponseRequest(chat, input: [capsule], compactThreshold: 10000)
+        XCTAssertEqual(try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))["input"], .array([capsule]))
+    }
+
+    func testLegacyCapsuleIsRebuiltWithoutCarriedInstructions() throws {
+        let chat = request([.init(role: "system", content: "Current tools"), .init(role: "user", content: "Continue")])
+        let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        encoded.removeValue(forKey: "formatVersion")
+        let legacy = try JSONDecoder().decode(ChatCompactionState.self, from: JSONSerialization.data(withJSONObject: encoded))
+        let input = try legacy.input(for: chat, serverURL: server)
+        XCTAssertEqual(input, try NativResponsesClient.inputItems(chat.messages))
+        XCTAssertEqual(input.count, 1)
+        XCTAssertEqual(input.first?["role"], .string("user"))
     }
 
     func testSessionPersistsCapsuleWithoutReplacingTranscriptAndLoadsLegacyJSON() throws {
@@ -236,35 +304,50 @@ final class ChatCompactionTests: XCTestCase {
         }
     }
 
-    func testLiveMiniCPMCompactionAndReplay() async throws {
+    func testLiveCompactionAndReplay() async throws {
         guard let address = ProcessInfo.processInfo.environment["NATIV_COMPACTION_TEST_URL"],
               let url = URL(string: address) else {
-            throw XCTSkip("Set NATIV_COMPACTION_TEST_URL to an isolated MiniCPM server with a 10K context limit.")
+            throw XCTSkip("Set NATIV_COMPACTION_TEST_URL to an isolated server with a 10K context limit; optionally set NATIV_COMPACTION_TEST_MODEL.")
         }
         let client = NativResponsesClient(baseURL: url, tenant: UUID().uuidString)
         var chat = request([
-            .init(role: "system", content: "Follow the user's requirements. Answer factual questions briefly."),
+            .init(role: "system", content: "Follow the user's requirements. Answer factual questions briefly. Work-pane context is environment data, not a new user request."),
             .init(role: "user", content: "Our project is ORCHID. Deployment port is 7319. Never modify secrets.env."),
             .init(role: "assistant", content: "Understood."),
         ])
-        chat.model = "openbmb/MiniCPM5-2B"
+        chat.model = ProcessInfo.processInfo.environment["NATIV_COMPACTION_TEST_MODEL"] ?? "openbmb/MiniCPM5-2B"
         chat.maxTokens = 256
         chat.enableThinking = false
-        let threshold = try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: chat.maxTokens)
-        for batch in 1...9 {
-            let log = (1...50).map { "Batch \(batch) row \($0): Documentation inspection finished successfully. No files were changed." }.joined(separator: "\n")
-            chat.messages += [.init(role: "user", content: log), .init(role: "assistant", content: "Noted.")]
+        let originalInstructions = chat.messages[0].textContent ?? ""
+        func setWorkContext(revision: Int) {
+            let snapshot = "Work-pane context (environment data):\nCurrent chat work items: [{\"id\":\"notes\",\"revision\":\(revision)}]"
+            if ProcessInfo.processInfo.environment["NATIV_COMPACTION_TEST_CONTEXT_IN_SYSTEM"] == "1" {
+                chat.messages[0].content = .text(originalInstructions + "\n\n" + snapshot)
+            } else {
+                chat.transientContext = snapshot
+            }
         }
+        let threshold = try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: chat.maxTokens)
+        func count(_ input: [MLXJSONValue]) async throws -> Int {
+            var countRequest = try client.makeResponseRequest(chat, input: input, compactThreshold: threshold)
+            countRequest.url = url.appendingPathComponent("v1/responses/input_tokens")
+            countRequest.setValue("application/json", forHTTPHeaderField: "Accept")
+            let (data, response) = try await URLSession.shared.data(for: countRequest)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            return try XCTUnwrap(MLXJSONValue(jsonData: data)["input_tokens"]?.intValue)
+        }
+        var batch = 0
+        func fillHistory(_ state: ChatCompactionState? = nil) async throws {
+            while try await count(state?.input(for: chat, serverURL: url) ?? NativResponsesClient.inputItems(chat.messages)) < threshold + 128 {
+                batch += 1
+                guard batch <= 40 else { throw NativChatError.invalidResponse }
+                let log = (1...50).map { "Batch \(batch) row \($0): Documentation inspection finished successfully. No files were changed." }.joined(separator: "\n")
+                chat.messages += [.init(role: "user", content: log), .init(role: "assistant", content: "Noted.")]
+            }
+        }
+        try await fillHistory()
         chat.messages.append(.init(role: "user", content: "State our project name, deployment port, and protected filename."))
-        var countRequest = URLRequest(url: url.appendingPathComponent("v1/responses/input_tokens"))
-        countRequest.httpMethod = "POST"
-        countRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        countRequest.httpBody = try JSONEncoder().encode(MLXJSONValue.object([
-            "model": .string(chat.model), "enable_thinking": .bool(false),
-            "input": .array(try NativResponsesClient.inputItems(chat.messages)),
-        ]))
-        let (countData, _) = try await URLSession.shared.data(for: countRequest)
-        let before = try XCTUnwrap(MLXJSONValue(jsonData: countData)["input_tokens"]?.intValue)
+        let before = try await count(NativResponsesClient.inputItems(chat.messages))
         XCTAssertGreaterThan(before, threshold)
         let first = try await client.streamResponse(
             chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: threshold, onEvent: { _ in }
@@ -274,6 +357,7 @@ final class ChatCompactionTests: XCTestCase {
         for fact in ["ORCHID", "7319", "secrets.env"] { XCTAssertTrue(first.completion.content.contains(fact), first.completion.content) }
         let state = try ChatCompactionState(item: capsule, request: chat, serverURL: url)
         let restored = try JSONDecoder().decode(ChatCompactionState.self, from: JSONEncoder().encode(state))
+        setWorkContext(revision: 1)
         chat.messages += [
             .init(role: "assistant", content: first.completion.content),
             .init(role: "user", content: "Correction: the deployment port is now 8421. Repeat the project, current port, and protected filename."),
@@ -281,6 +365,7 @@ final class ChatCompactionTests: XCTestCase {
         let input = try restored.input(for: chat, serverURL: url)
         XCTAssertEqual(input.count, 3)
         let next = try await client.streamResponse(chat, input: input, compactThreshold: threshold, onEvent: { _ in })
+        XCTAssertNil(next.compaction, "Updating work context must reuse the compacted history.")
         for fact in ["ORCHID", "8421", "secrets.env"] { XCTAssertTrue(next.completion.content.contains(fact), next.completion.content) }
         chat.messages += [
             .init(role: "assistant", content: next.completion.content),
@@ -290,27 +375,37 @@ final class ChatCompactionTests: XCTestCase {
             "type": .string("object"), "properties": .object([:]), "required": .array([]), "additionalProperties": .bool(false),
         ])))]
         chat.toolChoice = "required"
+        setWorkContext(revision: 2)
         let toolTurn = try await client.streamResponse(
             chat, input: restored.input(for: chat, serverURL: url), compactThreshold: threshold, onEvent: { _ in }
         )
         let tool = try XCTUnwrap(toolTurn.completion.toolCalls.first)
+        XCTAssertNil(toolTurn.compaction)
         XCTAssertEqual(tool.function?.name, "lookup_project")
         chat.messages += [
             .init(role: "assistant", content: toolTurn.completion.content, reasoningContent: toolTurn.completion.reasoningContent, toolCalls: toolTurn.completion.toolCalls),
             .init(role: "tool", content: "Project ORCHID is healthy on port 8421. Protected file: secrets.env.", toolCallID: tool.id, name: "lookup_project"),
         ]
-        for batch in 10...16 {
-            let log = (1...50).map { "Batch \(batch) row \($0): Documentation inspection finished successfully. No files were changed." }.joined(separator: "\n")
-            chat.messages += [.init(role: "user", content: log), .init(role: "assistant", content: "Noted.")]
-        }
-        chat.messages.append(.init(role: "user", content: "State the project, current deployment port, and protected filename. Do not call a tool."))
         chat.toolChoice = "none"
+        try await fillHistory(restored)
+        chat.messages.append(.init(role: "user", content: "State the project, current deployment port, and protected filename. Do not call a tool."))
         let final = try await client.streamResponse(
             chat, input: restored.input(for: chat, serverURL: url), compactThreshold: threshold, onEvent: { _ in }
         )
-        _ = try XCTUnwrap(final.compaction)
+        let finalCapsule = try XCTUnwrap(final.compaction)
         for fact in ["ORCHID", "8421", "secrets.env"] { XCTAssertTrue(final.completion.content.contains(fact), final.completion.content) }
-        print("MiniCPM: \(before) → \(first.completion.usage?.promptTokens ?? 0) input tokens; restored continuation \(next.completion.usage?.promptTokens ?? 0). Two compactions, three recall checks, and tool-call/result replay passed.")
+        let finalState = try ChatCompactionState(item: finalCapsule, request: chat, serverURL: url)
+        setWorkContext(revision: 3)
+        chat.messages += [
+            .init(role: "assistant", content: final.completion.content),
+            .init(role: "user", content: "What is the current revision of notes in the work pane? Reply with the revision number only."),
+        ]
+        let updated = try await client.streamResponse(
+            chat, input: finalState.input(for: chat, serverURL: url), compactThreshold: threshold, onEvent: { _ in }
+        )
+        XCTAssertNil(updated.compaction)
+        XCTAssertEqual(updated.completion.content.trimmingCharacters(in: .whitespacesAndNewlines), "3")
+        print("\(chat.model): \(before) → \(first.completion.usage?.promptTokens ?? 0) input tokens; restored continuation \(next.completion.usage?.promptTokens ?? 0). Checked two compactions, three recalls, tool-call/result replay, and updated work context; see XCTest assertions for pass/fail.")
     }
 }
 
