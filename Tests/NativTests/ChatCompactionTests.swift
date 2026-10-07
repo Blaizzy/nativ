@@ -156,17 +156,87 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(old.messages, messages)
     }
 
-    func testThresholdReservesGenerationAndSummaryHeadroom() throws {
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048), 24000)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 64000, maxOutput: 2048), 6928)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 0, maxOutput: 20000), 42976)
-        for (percent, expected) in [(20, 2000), (50, 5000), (90, 8720), (19, 2000)] {
-            XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: 256, percent: percent), expected)
+    func testThresholdReservesOutputBudget() throws {
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: 64000, configuredContext: 32000, maxOutput: 2048).threshold, 24000)
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: 10000, configuredContext: 64000, maxOutput: 2048).threshold, 7500)
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: 64000, configuredContext: 0, maxOutput: 20000).threshold, 44000)
+        for (percent, expected) in [(20, 2000), (50, 5000), (90, 9000), (19, 2000)] {
+            XCTAssertEqual(try ChatCompactionState.budget(modelContext: 10000, configuredContext: 10000, maxOutput: 256, percent: percent).threshold, expected)
         }
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 60), 19200)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 91), 28800)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: nil, configuredContext: 0, maxOutput: 256, percent: 50), 4096)
-        XCTAssertThrowsError(try ChatCompactionState.threshold(modelContext: 4096, configuredContext: 0, maxOutput: 4096))
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 60).threshold, 19200)
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 91).threshold, 28800)
+        XCTAssertEqual(try ChatCompactionState.budget(modelContext: nil, configuredContext: 0, maxOutput: 256, percent: 50).threshold, 4096)
+    }
+
+    func testOversizedOutputLeavesRoomForConversation() throws {
+        let cases: [(Int?, Int, Int, Int, Int)] = [
+            (128000, 0, 2048, 2048, 96000),
+            (128000, 0, 128000, 96000, 32000),
+            (128000, 2048, 2048, 1536, 512),
+            (128000, 4096, 4096, 3072, 1024),
+            (128000, 4096, 3072, 3072, 1024),
+            (128000, 4096, 3071, 3071, 1025),
+            (128000, 4096, 2048, 2048, 2048),
+            (128000, 1024, 4096, 768, 256),
+            (nil, 0, 8192, 6144, 2048),
+        ]
+        for (modelContext, configuredContext, maxOutput, expectedOutput, expectedThreshold) in cases {
+            let budget = try ChatCompactionState.budget(
+                modelContext: modelContext, configuredContext: configuredContext, maxOutput: maxOutput
+            )
+            XCTAssertEqual(budget.maxOutput, expectedOutput)
+            XCTAssertEqual(budget.threshold, expectedThreshold)
+            XCTAssertGreaterThan(budget.threshold, 0)
+            XCTAssertLessThanOrEqual(budget.maxOutput, maxOutput)
+        }
+        for percent in [20, 50, 75, 90] {
+            let budget = try ChatCompactionState.budget(
+                modelContext: 4096, configuredContext: 0, maxOutput: 4096, percent: percent
+            )
+            XCTAssertEqual(budget.maxOutput, 3072)
+            XCTAssertEqual(budget.threshold, percent == 20 ? 819 : 1024)
+            XCTAssertLessThanOrEqual(budget.threshold + budget.maxOutput, 4096)
+            XCTAssertGreaterThan(budget.threshold, 0)
+            XCTAssertGreaterThan(budget.maxOutput, 0)
+            let smallest = try ChatCompactionState.budget(
+                modelContext: 2, configuredContext: 0, maxOutput: 4096, percent: percent
+            )
+            XCTAssertEqual(smallest.maxOutput, 1)
+            XCTAssertEqual(smallest.threshold, 1)
+        }
+    }
+
+    func testOversizedLegacyOutputIsCappedOnWireWithoutChangingSettings() throws {
+        let settings = try JSONDecoder().decode(
+            NativSettings.self, from: Data(#"{"maxTokens":4096,"maxKVSize":4096}"#.utf8)
+        )
+        XCTAssertTrue(settings.compactionEnabled)
+        let client = NativResponsesClient(baseURL: server, tenant: "issue-670")
+        for thinking in [false, true] {
+            var chat = request([.init(role: "user", content: "Are you ready to help me with some coding?")])
+            chat.maxTokens = settings.maxTokens
+            chat.enableThinking = thinking
+            let budget = try ChatCompactionState.budget(
+                modelContext: 128000, configuredContext: settings.maxKVSize,
+                maxOutput: chat.maxTokens, percent: settings.compactionThresholdPercent
+            )
+            chat.maxTokens = budget.maxOutput
+            let wire = try client.makeResponseRequest(
+                chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: budget.threshold
+            )
+            let body = try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))
+            XCTAssertEqual(body["max_output_tokens"], .number(3072))
+            XCTAssertEqual(body["context_management"]?.arrayValue?.first?["compact_threshold"], .number(1024))
+            XCTAssertEqual(body["enable_thinking"], .bool(thinking))
+        }
+        XCTAssertEqual(settings.maxTokens, 4096)
+        XCTAssertEqual(settings.maxKVSize, 4096)
+    }
+
+    func testContextTooSmallForCompactionRequestsLargerWindow() throws {
+        XCTAssertThrowsError(try ChatCompactionState.budget(modelContext: 1, configuredContext: 0, maxOutput: 1)) { error in
+            XCTAssertEqual(error.localizedDescription, "Increase Context window to leave room for conversation compaction.")
+        }
     }
 
     func testCompactionSettingDefaultsAndRoundTrips() throws {
@@ -250,7 +320,9 @@ final class ChatCompactionTests: XCTestCase {
         chat.model = "openbmb/MiniCPM5-2B"
         chat.maxTokens = 256
         chat.enableThinking = false
-        let threshold = try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: chat.maxTokens)
+        let budget = try ChatCompactionState.budget(modelContext: 10000, configuredContext: 10000, maxOutput: chat.maxTokens)
+        chat.maxTokens = budget.maxOutput
+        let threshold = budget.threshold
         for batch in 1...9 {
             let log = (1...50).map { "Batch \(batch) row \($0): Documentation inspection finished successfully. No files were changed." }.joined(separator: "\n")
             chat.messages += [.init(role: "user", content: log), .init(role: "assistant", content: "Noted.")]

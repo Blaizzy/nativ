@@ -32,8 +32,12 @@ under **Model Context** to choose when it triggers; hover the info icon for deta
 Its scale runs from 1–100%, with
 the handle limited to 20–90% (default 75%). Changes apply to
 the next message without restarting the server. With a 10,000-token context window,
-50% triggers at 5,000 input tokens. Compaction can happen earlier when needed to
-reserve the configured output budget and 1,024 tokens of summary headroom.
+50% triggers at 5,000 input tokens unless the output budget requires earlier compaction.
+With Auto compact enabled, each request's output limit is the smaller of
+**Max output** and 75% of the effective context window, leaving at least 25% for
+conversation. The saved setting stays unchanged. The compaction threshold is the
+smaller of the selected percentage of context and the space remaining after the
+output budget. Summary generation has its own server-managed budget.
 If neither server nor local model metadata gives a limit, Nativ uses an
 8,192-token fallback.
 

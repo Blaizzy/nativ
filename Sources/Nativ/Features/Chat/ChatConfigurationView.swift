@@ -339,6 +339,7 @@ struct ModelConfigurationView: View {
                 value: $settings.maxTokens,
                 range: 1...262_144
             )
+            .help("Maximum tokens per response. Auto compact caps output at 75% of the effective context window, leaving at least 25% for conversation. Smaller limits are preserved.")
 
             ConfigurationIntegerField(
                 title: "Context window",
