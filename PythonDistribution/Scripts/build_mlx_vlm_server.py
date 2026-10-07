@@ -530,6 +530,17 @@ def install_requirements(
     if mlx_audio_source:
         log(f"Resolving requirements with local mlx-audio source {mlx_audio_source}")
         command.append(str(mlx_audio_source))
+    if mlx_vlm_source:
+        # An explicit source checkout supersedes the bundled VCS pin. Pip cannot
+        # resolve two direct references to the same project in one invocation.
+        with tempfile.TemporaryDirectory(prefix="nativ-requirements-") as directory:
+            resolved = Path(directory) / requirements.name
+            resolved.write_text(re.sub(
+                r"(?m)^mlx[-_]vlm\s*@[^\n]*", "", requirements.read_text()
+            ))
+            command[command.index("-r") + 1] = str(resolved)
+            run([*command, *extra_pip_args], env=env)
+        return
     run([*command, *extra_pip_args], env=env)
 
 

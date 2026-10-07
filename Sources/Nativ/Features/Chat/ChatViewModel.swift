@@ -2709,38 +2709,13 @@ final class ChatViewModel: ObservableObject {
         while true {
             try Task.checkCancellation()
             let advertisesTools = ChatToolRoundGate.advertisesTools(atRound: toolRounds)
-            var requestSettings = activeSettings
-            let compactionBudget: ChatCompactionState.GenerationBudget?
-            if queuedRequest.settings.compactionEnabled, let modelID = activeSettings.languageModelID {
-                var contextLimit = try await responsesClient.contextLimit(for: modelID)
-                for path in activeSettings.localModelSearchPaths.all {
-                    let metadata = await LocalModelDiscovery.configurationMetadata(
-                        repoID: modelID, path: path
-                    )
-                    if let limit = metadata?.contextSize, limit > 0 {
-                        contextLimit = min(contextLimit ?? limit, limit)
-                        break
-                    }
-                }
-                let budget = try ChatCompactionState.budget(
-                    modelContext: contextLimit,
-                    configuredContext: activeSettings.maxKVSize,
-                    maxOutput: activeSettings.maxTokens,
-                    percent: activeSettings.compactionThresholdPercent
-                )
-                compactionBudget = budget
-                // Document fitting and generation must use the same output budget.
-                requestSettings.maxTokens = budget.maxOutput
-            } else {
-                compactionBudget = nil
-            }
             documentContext = try await fittedDocumentContext(
                 documentContext,
                 messages: documentMessages,
                 for: queuedRequest,
                 before: assistantMessageID,
                 advertisesTools: advertisesTools,
-                settings: requestSettings,
+                settings: activeSettings,
                 effectiveContextLimit: effectiveContextLimit,
                 client: client
             )
@@ -2753,7 +2728,7 @@ final class ChatViewModel: ObservableObject {
                     for: queuedRequest,
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
-                    settings: requestSettings,
+                    settings: activeSettings,
                     documentContexts: documentContext.result.contexts
                 )
             else {
@@ -2773,14 +2748,29 @@ final class ChatViewModel: ObservableObject {
             let eventRelay = ChatStreamEventRelay(delivery: appendEvent)
             let completion: MLXChatCompletion
             do {
-                if let budget = compactionBudget {
+                if queuedRequest.settings.compactionEnabled {
+                    var contextLimit = try await responsesClient.contextLimit(for: request.model)
+                    for path in activeSettings.localModelSearchPaths.all {
+                        let metadata = await LocalModelDiscovery.configurationMetadata(
+                            repoID: request.model, path: path
+                        )
+                        if let limit = metadata?.contextSize, limit > 0 {
+                            contextLimit = min(contextLimit ?? limit, limit)
+                            break
+                        }
+                    }
+                    let threshold = ChatCompactionState.threshold(
+                        modelContext: contextLimit,
+                        configuredContext: activeSettings.maxKVSize,
+                        percent: activeSettings.compactionThresholdPercent
+                    )
                     let saved = currentSessionID == queuedRequest.sessionID
                         ? currentSession?.compaction
                         : storedSessions.first { $0.id == queuedRequest.sessionID }?.compaction
                     let input = try saved?.input(for: request, serverURL: activeSettings.serverBaseURL)
                         ?? NativResponsesClient.inputItems(request.messages)
                     let result = try await responsesClient.streamResponse(
-                        request, input: input, compactThreshold: budget.threshold,
+                        request, input: input, compactThreshold: threshold,
                         onCompaction: { [weak self] _ in
                             await self?.markCompacting(streamingMessageID, in: streamingSessionID)
                         },
@@ -3321,9 +3311,10 @@ final class ChatViewModel: ObservableObject {
                     )
                 else { return prepared }
                 let promptTokens = try await client.countPromptTokens(for: request).inputTokens
-                let promptLimit = max(
-                    0,
-                    effectiveContextLimit - request.maxTokens - ChatDocumentTokenBudget.safetyMargin
+                let promptLimit = ChatDocumentTokenBudget.promptLimit(
+                    contextLimit: effectiveContextLimit,
+                    maximumOutputTokens: request.maxTokens,
+                    compactionEnabled: settings.compactionEnabled
                 )
                 guard promptTokens > promptLimit else { return prepared }
 
@@ -3347,7 +3338,8 @@ final class ChatViewModel: ObservableObject {
                     basePromptTokens: basePromptTokens,
                     documentPromptTokens: promptTokens,
                     contextLimit: effectiveContextLimit,
-                    maximumOutputTokens: request.maxTokens
+                    maximumOutputTokens: request.maxTokens,
+                    compactionEnabled: settings.compactionEnabled
                 )
                 if nextLimit >= prepared.characterLimit {
                     nextLimit = max(0, prepared.characterLimit - 1)

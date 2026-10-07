@@ -32,12 +32,15 @@ under **Model Context** to choose when it triggers; hover the info icon for deta
 Its scale runs from 1–100%, with
 the handle limited to 20–90% (default 75%). Changes apply to
 the next message without restarting the server. With a 10,000-token context window,
-50% triggers at 5,000 input tokens unless the output budget requires earlier compaction.
-With Auto compact enabled, each request's output limit is the smaller of
-**Max output** and 75% of the effective context window, leaving at least 25% for
-conversation. The saved setting stays unchanged. The compaction threshold is the
-smaller of the selected percentage of context and the space remaining after the
-output budget. Summary generation has its own server-managed budget.
+50% triggers at 5,000 input tokens. **Max output** is an upper bound on generated
+tokens; it does not reserve input space or change the compaction threshold.
+The server counts the rendered input, compacts older history when the threshold
+is reached, then limits generation to the smaller of **Max output** and the
+remaining context capacity. The saved setting stays unchanged. Summary generation
+has its own server-managed budget. Compaction runs before each generation request,
+including subsequent tool rounds, rather than during a streaming response.
+If a response reaches the context limit, it stops with a length finish reason;
+the next request can compact the accumulated history.
 If neither server nor local model metadata gives a limit, Nativ uses an
 8,192-token fallback.
 
@@ -52,10 +55,11 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
-Compaction requires a server that supports the Responses compaction API. Unsupported
-servers return an error. To build against the unreleased compaction API in
-[mlx-vlm PR #2408](https://github.com/Blaizzy/mlx-vlm/pull/2408), point the bundle
-build at a checkout of that branch:
+Compaction requires a server that supports the Responses compaction API and
+budgets output from actual input usage. The bundled requirements pin the server
+revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
+External servers need that change too. To test a different checkout containing
+the fix, override the bundled source:
 
 ```sh
 MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
