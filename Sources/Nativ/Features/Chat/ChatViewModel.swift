@@ -2816,6 +2816,7 @@ final class ChatViewModel: ObservableObject {
                 toolCalls: toolCalls,
                 isCancelled: false
             )
+            fillServerResponseMetrics(assistantMessageID, in: queuedRequest.sessionID, completion: completion)
 
             guard advertisesTools, !toolCalls.isEmpty else {
                 return
@@ -3813,6 +3814,7 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.generatedTokens,
                     decodeTokensPerSecond: event.decodeTokensPerSecond
                         ?? message.responseMetrics?.decodeTokensPerSecond,
+                    prefillTokensPerSecond: message.responseMetrics?.prefillTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
                     specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
                 )
@@ -3911,6 +3913,38 @@ final class ChatViewModel: ObservableObject {
     }
 
     @discardableResult
+    /// The server records each request's analytics row after its stream ends, so
+    /// poll briefly and match it by token counts; the row has no chat-visible ID.
+    private func fillServerResponseMetrics(
+        _ messageID: UUID,
+        in sessionID: UUID,
+        completion: MLXChatCompletion
+    ) {
+        guard let promptTokens = completion.usage?.promptTokens,
+            let completionTokens = completion.usage?.completionTokens
+        else { return }
+        let finishedAt = Date()
+        Task { [weak self] in
+            for _ in 0..<12 {
+                let event = await Task.detached(priority: .utility) {
+                    NativAnalyticsStore().fetchRecentRequestEvents(range: .last24Hours, limit: 10).first {
+                        $0.status == "completed"
+                            && $0.promptTokens == promptTokens
+                            && $0.completionTokens == completionTokens
+                            && abs($0.completedAt.timeIntervalSince(finishedAt)) < 30
+                    }
+                }.value
+                if let event {
+                    _ = self?.updateMessage(messageID, in: sessionID) { message in
+                        message.responseMetrics = message.responseMetrics?.filling(from: event)
+                    }
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
     private func updateMessage(
         _ messageID: UUID,
         in sessionID: UUID,

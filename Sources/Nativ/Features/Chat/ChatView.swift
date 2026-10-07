@@ -2540,7 +2540,11 @@ private struct ChatResponseMetricsRow: View {
             value: NativFormatting.integer(metrics.totalTokens)
         )
         ChatResponseMetricPill(
-            label: "Decode tok/s",
+            label: "Prefill",
+            value: NativFormatting.rate(metrics.prefillTokensPerSecond)
+        )
+        ChatResponseMetricPill(
+            label: "Decode",
             value: NativFormatting.rate(metrics.decodeTokensPerSecond)
         )
         if let acceptanceRate = metrics.specAcceptanceRate {

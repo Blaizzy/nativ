@@ -428,6 +428,7 @@ struct ChatResponseMetrics: Equatable, Codable {
     let totalTokens: Int?
     let generatedTokens: Int?
     let decodeTokensPerSecond: Double?
+    let prefillTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specAcceptanceRate: Double?
 
@@ -435,6 +436,7 @@ struct ChatResponseMetrics: Equatable, Codable {
         totalTokens != nil
             || generatedTokens != nil
             || decodeTokensPerSecond != nil
+            || prefillTokensPerSecond != nil
             || peakMemoryGB != nil
             || specAcceptanceRate != nil
     }
@@ -443,12 +445,14 @@ struct ChatResponseMetrics: Equatable, Codable {
         totalTokens: Int? = nil,
         generatedTokens: Int? = nil,
         decodeTokensPerSecond: Double? = nil,
+        prefillTokensPerSecond: Double? = nil,
         peakMemoryGB: Double? = nil,
         specAcceptanceRate: Double? = nil
     ) {
         self.totalTokens = totalTokens
         self.generatedTokens = generatedTokens
         self.decodeTokensPerSecond = decodeTokensPerSecond
+        self.prefillTokensPerSecond = prefillTokensPerSecond
         self.peakMemoryGB = peakMemoryGB
         self.specAcceptanceRate = specAcceptanceRate
     }
@@ -458,8 +462,21 @@ struct ChatResponseMetrics: Equatable, Codable {
             totalTokens: completion.usage?.resolvedTotalTokens,
             generatedTokens: completion.usage?.completionTokens,
             decodeTokensPerSecond: completion.resolvedDecodeTokensPerSecond,
+            prefillTokensPerSecond: completion.usage?.promptTokensPerSecond,
             peakMemoryGB: completion.usage?.peakMemoryGB,
             specAcceptanceRate: completion.usage?.specAcceptanceRate
+        )
+    }
+
+    func filling(from event: NativAnalyticsRequestEvent) -> ChatResponseMetrics {
+        ChatResponseMetrics(
+            totalTokens: totalTokens,
+            generatedTokens: generatedTokens,
+            decodeTokensPerSecond: decodeTokensPerSecond,
+            prefillTokensPerSecond: prefillTokensPerSecond ?? event.prefillTokensPerSecond,
+            peakMemoryGB: peakMemoryGB
+                ?? event.peakMemoryBytes.map { Double($0) / Double(1024 * 1024 * 1024) },
+            specAcceptanceRate: specAcceptanceRate
         )
     }
 }
