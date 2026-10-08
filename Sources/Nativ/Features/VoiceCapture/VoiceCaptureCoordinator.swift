@@ -173,10 +173,7 @@ final class VoiceCaptureCoordinator {
         wakeWordMonitor.configure(
             enabled: isActive && (enabled ?? VoiceShortcutPreferences.shared.isWakeWordEnabled),
             suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
-            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID,
-            confirmationTimeout: DefaultSpeechModel.isPreferred(
-                selectedModelID: transcriptionConfigurationProvider?()?.selectedModelID
-            ) ? 120 : 30
+            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID
         )
     }
 
