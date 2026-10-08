@@ -223,9 +223,7 @@ private actor VoiceWakeWordProcessor {
     private let detector: VoiceWakeWordModel
     private var capture = VoiceWakeWordCapture()
 
-    init(url: URL) throws {
-        detector = try VoiceWakeWordModel(url: url)
-    }
+    init(url: URL) throws { detector = try VoiceWakeWordModel(url: url) }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Output {
         let detected = capture.canDetect ? try detector.consume(chunk) : false
