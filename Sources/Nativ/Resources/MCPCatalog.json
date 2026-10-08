@@ -85,5 +85,21 @@
     "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only"],
     "symbol": "globe",
     "tint": "indigo"
+  },
+  {
+    "id": "screenpipe",
+    "name": "screenpipe",
+    "summary": "Search screen/audio history. Requires Screenpipe and its local API key.",
+    "command": "npx",
+    "args": [
+      "-y",
+      "screenpipe-mcp@0.20.2"
+    ],
+    "requiredEnv": [
+      "SCREENPIPE_LOCAL_API_KEY"
+    ],
+    "symbol": "clock.arrow.circlepath",
+    "tint": "purple",
+    "sourceURL": "https://github.com/screenpipe/screenpipe/tree/main/packages/screenpipe-mcp"
   }
 ]
