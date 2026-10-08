@@ -385,14 +385,7 @@ struct ModelsView: View {
             let searchTaskID = hubSearchTaskID
             guard searchTaskID != lastStartedHubSearchTaskID else { return }
             lastStartedHubSearchTaskID = searchTaskID
-            hubLibrary.search(
-                query: searchQuery,
-                sort: hubSort,
-                direction: hubSortDirection,
-                capabilities: hubCapabilityFilters,
-                predicate: hubVisibilityPredicate,
-                token: modelState.effectiveHuggingFaceToken
-            )
+            searchHub()
         }
         .task(id: readmeSelection?.repoID) {
             guard let readmeSelection else {
@@ -863,6 +856,17 @@ struct ModelsView: View {
         .accessibilityLabel("Refresh installed models")
     }
 
+    private func searchHub() {
+        hubLibrary.search(
+            query: searchQuery,
+            sort: hubSort,
+            direction: hubSortDirection,
+            capabilities: hubCapabilityFilters,
+            predicate: hubVisibilityPredicate,
+            token: modelState.effectiveHuggingFaceToken
+        )
+    }
+
     @ViewBuilder
     private func discoverScroller() -> some View {
         if let error = hubLibrary.error {
@@ -871,7 +875,8 @@ struct ModelsView: View {
                     title: "Hugging Face Hub is unavailable",
                     message: error,
                     systemImage: "wifi.exclamationmark",
-                    color: .orange
+                    color: .orange,
+                    onRetry: searchHub
                 )
                 .modelsListRow()
             }
@@ -3254,6 +3259,7 @@ private struct ModelsNotice: View {
     let message: String
     let systemImage: String
     let color: Color
+    var onRetry: (() -> Void)? = nil
     var onDismiss: (() -> Void)? = nil
 
     var body: some View {
@@ -3267,6 +3273,11 @@ private struct ModelsNotice: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            if let onRetry {
+                Button("Retry", systemImage: "arrow.clockwise", action: onRetry)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
             if let onDismiss {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
