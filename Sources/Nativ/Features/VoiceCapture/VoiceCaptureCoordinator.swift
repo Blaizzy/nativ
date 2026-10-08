@@ -480,8 +480,8 @@ final class VoiceCaptureCoordinator {
                         in: installedModels, selectedModelID: configuration.selectedModelID
                     )
                     guard let selected, configuration.serverIsRunning else {
-                        // macOS 26 retains its system fallback. On macOS 27 the default
-                        // model also covers an unavailable manually selected server model.
+                        // Parakeet can cover an unavailable server model on macOS 27+.
+                        // Earlier systems require a running server and an STT model.
                         await self.transcribeWithOnDeviceModel(
                             recordingURL, target: target, durationSeconds: durationSeconds,
                             overlayTranscriptionID: overlayTranscriptionID,
@@ -569,7 +569,7 @@ final class VoiceCaptureCoordinator {
     }
 
     /// Offline fallback when a manually selected server model is unavailable.
-    /// Uses cached Parakeet on macOS 27 and the system recognizer on macOS 26.
+    /// Uses cached Parakeet on macOS 27; older systems report the server requirement.
     private func transcribeWithOnDeviceModel(
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?,
@@ -578,41 +578,18 @@ final class VoiceCaptureCoordinator {
         unavailableReason: ServerUnavailableReason,
         wakeWord: Bool
     ) async {
-        let available = DefaultSpeechModel.isSupported ? true : await AppleSpeechTranscriber.isAvailable
-        guard available else {
+        guard #available(macOS 27.0, *) else {
             finishOverlayTranscription(overlayTranscriptionID)
             showServerUnavailableAlert(unavailableReason)
             return
         }
 
         let transcript: String
-        let modelID: String
+        let modelID = DefaultSpeechModel.identifier
         do {
-            if #available(macOS 27.0, *) {
-                transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL).text
-                modelID = DefaultSpeechModel.identifier
-            } else {
-                transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
-                modelID = AppleSpeechTranscriber.modelIdentifier
-            }
+            transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL).text
         } catch ParakeetError.tooShort {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
-            return
-        } catch AppleSpeechTranscriber.Failure.empty {
-            handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
-            return
-        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
-            // The one failure worth its own message: macOS has the language but not the
-            // model yet, and is now fetching it. Saying so beats an alert about a server
-            // the user may not have been trying to use.
-            finishOverlayTranscription(overlayTranscriptionID)
-            showTranscriptionError(
-                title: "Preparing on-device dictation",
-                message: """
-                macOS is downloading its \(language) speech model. Your recording is saved \
-                in Audio — dictate again once it has finished.
-                """
-            )
             return
         } catch {
             NSLog(

@@ -314,7 +314,6 @@
 		81B45DC0ADB20928AF004740 /* ChatConversationBranch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5FF4A08C2B33756121EE2C /* ChatConversationBranch.swift */; };
 		81CA2499AF2C4701FC0C817B /* RoutineRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B95090B83C36E4F06C7C5E3 /* RoutineRunner.swift */; };
 		823D9E08D7818B714E75C7D3 /* ControlPanelSidebarModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76F460CC6B734041A8C60AAE /* ControlPanelSidebarModels.swift */; };
-		826AB68248F3DD8952284745 /* AppleSpeechTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */; };
 		828C68B2F6BC8AE5019D2D4D /* MarkdownLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC4975A173CF8A58FC745811 /* MarkdownLayout.swift */; };
 		83E74199C4F9A50350E3E354 /* NativComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */; };
 		85964D86CBE7F3D9965E1E00 /* ChatAnnotationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64368AEE6D3F7CC3AB10D8C5 /* ChatAnnotationActions.swift */; };
@@ -710,7 +709,6 @@
 		1FECA3794E8FFD7F7495DC1F /* ChatLibrarySearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatLibrarySearchTests.swift; sourceTree = "<group>"; };
 		20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativComponents.swift; sourceTree = "<group>"; };
 		2110C8328A3FFDF6E02D3FF8 /* NativWindowRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativWindowRegistryTests.swift; sourceTree = "<group>"; };
-		219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleSpeechTranscriber.swift; sourceTree = "<group>"; };
 		22E7036A82D9F6E366860CB6 /* VoiceWakeWordTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceWakeWordTests.swift; sourceTree = "<group>"; };
 		23155DB5E733D8887D83AFD0 /* VoiceTranscriptInserter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptInserter.swift; sourceTree = "<group>"; };
 		23682FBD5DC3FC2517ABF397 /* ChatProjectStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatProjectStoreTests.swift; sourceTree = "<group>"; };
@@ -1295,7 +1293,6 @@
 		4879D4C4839E304DF0C779DC /* VoiceCapture */ = {
 			isa = PBXGroup;
 			children = (
-				219898F64D1B7C28FA4A1B38 /* AppleSpeechTranscriber.swift */,
 				B7E0BD007DAD141D50E1BAA4 /* AudioAnalyticsStore.swift */,
 				820A7EF6D7E1FA0F171A5A59 /* AudioCaptureLibrary.swift */,
 				1E03F44A59784052F3095DFE /* AudioCaptureSleepMonitor.swift */,
@@ -2151,7 +2148,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				B15353CDE6204176664DB3B2 /* AppDelegate.swift in Sources */,
-				826AB68248F3DD8952284745 /* AppleSpeechTranscriber.swift in Sources */,
 				A9B82EFAD4FD8C57E045721B /* Artifact.swift in Sources */,
 				D6B37FDD3002F281B6BF9DA5 /* ArtifactCatalog.swift in Sources */,
 				B63E4B683EE9CA383DBEFADA /* ArtifactPreview.swift in Sources */,
