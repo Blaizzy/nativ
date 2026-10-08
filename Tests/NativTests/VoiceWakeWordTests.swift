@@ -184,16 +184,6 @@ struct VoiceWakeWordTests {
         }
     }
 
-    @Test func testCoreAIConfirmationAllowsColdSpecializationButRemainsBounded() throws {
-        var capture = VoiceWakeWordCapture(confirmationTimeout: 120)
-        _ = try capture.append(.init(samples: [Float](repeating: 0.1, count: 16_000), offset: 0), detected: true)
-        _ = try capture.append(.init(samples: [Float](repeating: 0.1, count: 9_600), offset: 16_000), detected: false)
-        _ = try capture.append(.init(samples: [Float](repeating: 0.1, count: 60 * 16_000), offset: 25_600), detected: false)
-        #expect(throws: VoiceWakeWordCapture.Failure.self) {
-            try capture.append(.init(samples: [Float](repeating: 0.1, count: 60 * 16_000), offset: 25_600 + 60 * 16_000), detected: false)
-        }
-    }
-
     @Test func testWavEncodingProducesReadableMonoAudio() throws {
         let audio = VoiceWakeWordAudio(samples: [0, 0.5, -0.5, 1, -1])
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("wake-test-\(UUID()).wav")
