@@ -105,6 +105,57 @@ final class DocumentTextExtractionTests: XCTestCase {
         }
     }
 
+    func testODSExpandsRepeatedRowsAndCells() async throws {
+        let data = try openDocumentData(content: """
+            <office:document-content
+                xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+                xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+                xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">
+              <office:body><office:spreadsheet><table:table>
+                <table:table-row table:number-rows-repeated="2">
+                  <table:table-cell table:number-columns-repeated="3"><text:p>test</text:p></table:table-cell>
+                </table:table-row>
+              </table:table></office:spreadsheet></office:body>
+            </office:document-content>
+            """)
+
+        let content = try await DocumentTextExtractionRouter().extract(
+            data: data,
+            filename: "repeated.ods",
+            mimeType: "application/vnd.oasis.opendocument.spreadsheet",
+            format: .openDocument
+        )
+
+        XCTAssertEqual(
+            content.sections.map(\.text).joined(separator: "\n"),
+            "test\ttest\ttest\ntest\ttest\ttest"
+        )
+    }
+
+    func testODSUsesTypedValuesForTextlessCells() async throws {
+        let data = try openDocumentData(content: """
+            <office:document-content
+                xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
+                xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0">
+              <office:body><office:spreadsheet><table:table>
+                <table:table-row>
+                  <table:table-cell office:value-type="float" office:value="42"/>
+                  <table:table-cell office:value-type="date" office:date-value="2026-10-08"/>
+                </table:table-row>
+              </table:table></office:spreadsheet></office:body>
+            </office:document-content>
+            """)
+
+        let content = try await DocumentTextExtractionRouter().extract(
+            data: data,
+            filename: "values.ods",
+            mimeType: "application/vnd.oasis.opendocument.spreadsheet",
+            format: .openDocument
+        )
+
+        XCTAssertEqual(content.sections.map(\.text), ["42\t2026-10-08"])
+    }
+
     func testXLSXRejectsCellReferencesBeyondTheExcelColumnLimit() async throws {
         let data = try spreadsheetData(rows: ["<row><c r=\"ZZZZZZ1\"><v>1</v></c></row>"])
 
@@ -210,6 +261,26 @@ final class DocumentTextExtractionTests: XCTestCase {
                 }
             )
         }
+        return try Data(contentsOf: url)
+    }
+
+    private func openDocumentData(content: String) throws -> Data {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString)
+            .appendingPathExtension("ods")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let archive = try Archive(url: url, accessMode: .create)
+        let data = Data(content.utf8)
+        try archive.addEntry(
+            with: "content.xml",
+            type: .file,
+            uncompressedSize: Int64(data.count),
+            provider: { position, size in
+                let start = Int(position)
+                return data.subdata(in: start..<min(start + size, data.count))
+            }
+        )
         return try Data(contentsOf: url)
     }
 }
