@@ -588,7 +588,7 @@ final class VoiceCaptureCoordinator {
         unavailableReason: ServerUnavailableReason,
         wakeWord: Bool
     ) async {
-        guard #available(macOS 27.0, *) else {
+        guard #available(macOS 27.0, *), DefaultSpeechModel.isSupported else {
             finishOverlayTranscription(overlayTranscriptionID)
             showServerUnavailableAlert(unavailableReason)
             return

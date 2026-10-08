@@ -1,11 +1,15 @@
-import CoreAI
 import Foundation
+#if canImport(CoreAI)
+import CoreAI
+#endif
 
 /// Default model selection is independent of server availability and model-directory scans.
 enum DefaultSpeechModel {
     static let identifier = "parakeet-redux-coreai"
     static var isSupported: Bool {
+        #if canImport(CoreAI)
         if #available(macOS 27.0, *) { return true }
+        #endif
         return false
     }
     static func isPreferred(selectedModelID: String?) -> Bool {
@@ -13,6 +17,7 @@ enum DefaultSpeechModel {
     }
 }
 
+#if canImport(CoreAI)
 @available(macOS 27.0, *)
 actor ParakeetTranscriber {
     static let shared = ParakeetTranscriber()
@@ -222,3 +227,21 @@ actor ParakeetTranscriber {
         }
     }
 }
+#else
+/// Keeps the shared API available to older-SDK builds. Model selection routes
+/// those builds to server STT, including when they run on macOS 27 or later.
+@available(macOS 27.0, *)
+actor ParakeetTranscriber {
+    static let shared = ParakeetTranscriber()
+
+    init(directory: URL? = nil) {}
+
+    func prepare() async throws {
+        throw ParakeetError.runtimeUnavailable
+    }
+
+    func transcribe(contentsOf url: URL) async throws -> ParakeetTranscript {
+        throw ParakeetError.runtimeUnavailable
+    }
+}
+#endif

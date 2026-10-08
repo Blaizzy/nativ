@@ -352,7 +352,9 @@ final class ParakeetTests: XCTestCase {
               let expected = ProcessInfo.processInfo.environment["NATIV_PARAKEET_TEST_TEXT"] else {
             throw XCTSkip("Set NATIV_PARAKEET_TEST_AUDIO and NATIV_PARAKEET_TEST_TEXT to run CoreAI inference.")
         }
-        guard #available(macOS 27.0, *) else { throw XCTSkip("CoreAI requires macOS 27") }
+        guard #available(macOS 27.0, *), DefaultSpeechModel.isSupported else {
+            throw XCTSkip("CoreAI requires the macOS 27 SDK and runtime")
+        }
         let override = ProcessInfo.processInfo.environment["NATIV_PARAKEET_TEST_MODEL_DIRECTORY"].map { URL(fileURLWithPath: $0) }
         let transcriber = ParakeetTranscriber(directory: override)
         try await transcriber.prepare()
@@ -411,6 +413,9 @@ final class ParakeetTests: XCTestCase {
     }
 
     func testAutomaticSelectionHonorsExplicitModels() {
+        #if !canImport(CoreAI)
+        XCTAssertFalse(DefaultSpeechModel.isSupported)
+        #endif
         XCTAssertEqual(DefaultSpeechModel.isPreferred(selectedModelID: nil), DefaultSpeechModel.isSupported)
         XCTAssertFalse(DefaultSpeechModel.isPreferred(selectedModelID: "custom/model"))
         XCTAssertEqual(DefaultSpeechModel.isPreferred(selectedModelID: DefaultSpeechModel.identifier), DefaultSpeechModel.isSupported)

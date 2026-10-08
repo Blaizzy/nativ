@@ -1,3 +1,4 @@
+#if canImport(CoreAI)
 import CoreAI
 import Foundation
 
@@ -23,3 +24,4 @@ enum ParakeetModelLoader {
         return try await AIModel.specialize(contentsOf: url, options: options)
     }
 }
+#endif

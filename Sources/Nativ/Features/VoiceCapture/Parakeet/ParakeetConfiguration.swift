@@ -1,6 +1,7 @@
 import Foundation
 
 enum ParakeetError: LocalizedError {
+    case runtimeUnavailable
     case invalidBundle
     case invalidAudio
     case tooShort
@@ -11,6 +12,7 @@ enum ParakeetError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .runtimeUnavailable: "This build does not support CoreAI. Select a speech-to-text model in the Nativ server."
         case .invalidBundle: "The Parakeet speech model is missing or incompatible. Try downloading it again."
         case .modelDownloadFailed(let status): "The Parakeet model download failed (HTTP \(status)). Try again later."
         case .invalidModelArchive: "The downloaded Parakeet model archive is invalid. Try again."
