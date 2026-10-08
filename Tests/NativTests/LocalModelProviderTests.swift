@@ -714,6 +714,30 @@ final class HuggingFaceDownloadOutputTests: XCTestCase {
         XCTAssertEqual(failure, .gatedRepository)
     }
 
+    func testShowsOnlyTheExceptionMessageForPythonTracebacks() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        __NATIV_STAGE__:preparing
+        Traceback (most recent call last):
+          File "<string>", line 44, in <module>
+        RuntimeError: Could not verify the model's download size. Try again.
+        """)
+
+        XCTAssertEqual(failure, .message("Could not verify the model's download size. Try again."))
+    }
+
+    func testDescribesInsufficientSpaceWithoutInternalOutput() {
+        let alone = HuggingFaceDownloadFailure.insufficientSpace(
+            required: 62_578_686_256, available: 44_260_000_000, reservedByOtherDownloads: 0
+        ).localizedDescription
+        let shared = HuggingFaceDownloadFailure.insufficientSpace(
+            required: 62_578_686_256, available: 44_260_000_000, reservedByOtherDownloads: 5_000_000_000
+        ).localizedDescription
+
+        XCTAssertTrue(alone.hasPrefix("Not enough disk space."))
+        XCTAssertFalse(alone.contains("Downloads in progress"))
+        XCTAssertTrue(shared.contains("Downloads in progress are holding"))
+    }
+
     func testKeepsUsefulLinesForUnknownDownloadFailure() {
         let failure = HuggingFaceDownloadFailure(processOutput: """
         first line
