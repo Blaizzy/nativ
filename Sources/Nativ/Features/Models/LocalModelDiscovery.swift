@@ -1702,23 +1702,8 @@ enum LocalModelDiscovery {
             capabilities.insert(.drafter)
         }
 
-        let textDescriptors = [
-            "causallm", "conditionalgeneration", "language", "llm", "gpt",
-            "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
-        ]
         let generativeArchitectures = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
-        let languageConfigurationKeys: Set<String> = [
-            "language_config", "llm_config", "text_config",
-        ]
-        let tokenGenerationKeys: Set<String> = ["eos_token_id", "vocab_size"]
-        let rootConfigKeys = Set(config.keys)
-        if primaryTask.includesLanguageCapability(
-            fallbackMatch: textDescriptors.contains(where: descriptors.contains)
-                || generativeArchitectures.contains(where: descriptors.contains)
-                || !rootConfigKeys.isDisjoint(with: languageConfigurationKeys)
-                || (rootConfigKeys.contains("vision_config")
-                    && tokenGenerationKeys.isSubset(of: rootConfigKeys))
-        ) {
+        if primaryTask.isLanguageCapable {
             capabilities.insert(.text)
         }
 

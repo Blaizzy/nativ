@@ -139,7 +139,13 @@ final class LocalModelDiscoveryTests: XCTestCase {
             modelType: "NemotronH_Nano_Omni_Reasoning_V3",
             architectures: ["NemotronH_Nano_Omni_Reasoning_V3"],
             sentenceTransformer: false,
-            additionalConfig: ["llm_config": [:], "vision_config": [:]]
+            additionalConfig: [
+                "llm_config": [
+                    "model_type": "nemotron_h",
+                    "architectures": ["NemotronHForCausalLM"],
+                ],
+                "vision_config": [:],
+            ]
         )
 
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
@@ -157,20 +163,80 @@ final class LocalModelDiscoveryTests: XCTestCase {
         )
     }
 
-    func testPreloadEligibilityAcceptsCustomVisionLanguageArchitectures() async throws {
-        let fixtures: [(String, String, String, [String: Any])] = [
-            ("org/internvl", "internvl_chat", "InternVLChatModel", ["llm_config": [:]]),
-            ("org/moondream", "moondream3", "HfMoondream", ["text_config": [:]]),
-            ("org/deepseek-vl", "deepseek_vl_v2", "DeepseekVLV2ForCausalLM", ["text_config": [:]]),
-            ("org/minicpm", "minicpmo", "MiniCPMO", ["eos_token_id": 2, "vocab_size": 32_000]),
+    func testPreloadEligibilityClassifiesModelConfigurations() async throws {
+        let fixtures: [(String, String, [String], [String: Any], Bool)] = [
+            (
+                "org/internvl",
+                "internvl_chat",
+                ["InternVLChatModel"],
+                [
+                    "llm_config": [
+                        "model_type": "qwen3",
+                        "architectures": ["Qwen3ForCausalLM"],
+                    ]
+                ],
+                true
+            ),
+            ("org/moondream", "moondream3", ["HfMoondream"], [:], true),
+            (
+                "org/deepseek-vl",
+                "deepseek_vl_v2",
+                ["DeepseekVLV2Model"],
+                [
+                    "language_config": [
+                        "model_type": "deepseek_v2",
+                        "architectures": ["DeepseekV2ForCausalLM"],
+                    ]
+                ],
+                true
+            ),
+            (
+                "org/minicpm",
+                "minicpmo",
+                ["MiniCPMO"],
+                ["eos_token_id": 2, "vocab_size": 32_000],
+                true
+            ),
+            (
+                "org/clip",
+                "clip",
+                ["CLIPModel"],
+                [
+                    "text_config": ["model_type": "clip_text_model"],
+                    "vision_config": ["model_type": "clip_vision_model"],
+                ],
+                false
+            ),
+            (
+                "org/siglip",
+                "siglip",
+                ["SiglipModel"],
+                [
+                    "text_config": ["model_type": "siglip_text_model"],
+                    "vision_config": ["model_type": "siglip_vision_model"],
+                ],
+                false
+            ),
+            (
+                "org/siglip2",
+                "siglip",
+                [],
+                [
+                    "text_config": ["model_type": "siglip_text_model"],
+                    "vision_config": ["model_type": "siglip_vision_model"],
+                ],
+                false
+            ),
         ]
-        for (repoID, modelType, architecture, languageConfig) in fixtures {
-            var additionalConfig = languageConfig
-            additionalConfig["vision_config"] = [:]
+        for (repoID, modelType, architectures, fixtureConfig, _) in fixtures {
+            var additionalConfig = fixtureConfig
+            if additionalConfig["vision_config"] == nil {
+                additionalConfig["vision_config"] = [:]
+            }
             try makeTextModelSnapshot(
                 repoID: repoID,
                 modelType: modelType,
-                architectures: [architecture],
+                architectures: architectures,
                 sentenceTransformer: false,
                 additionalConfig: additionalConfig
             )
@@ -178,14 +244,14 @@ final class LocalModelDiscoveryTests: XCTestCase {
 
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         XCTAssertEqual(models.count, fixtures.count)
-        for model in models {
-            XCTAssertTrue(model.isEligibleForLanguageModelPicker, model.repoID)
+        for (repoID, _, _, _, expectedEligibility) in fixtures {
+            let model = try XCTUnwrap(models.first { $0.repoID == repoID })
             XCTAssertEqual(
                 LocalModelDiscovery.languageModelPreloadEligibility(
                     repoID: model.repoID,
                     searchRoots: searchPaths.all
                 ),
-                true,
+                expectedEligibility,
                 model.repoID
             )
         }
