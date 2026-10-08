@@ -4,7 +4,7 @@ import ZIPFoundation
 /// Installs the default speech model once, independently of the local model server.
 actor ParakeetModelStore {
     static let shared = ParakeetModelStore()
-    static let archiveURL = URL(string: "https://s3.amazonaws.com/lucasnewman.datasets/coreai/parakeet-redux-coreai.zip")!
+    static let archiveURL = URL(string: "https://huggingface.co/nativ-community/parakeet-redux-coreai-fp16/resolve/main/parakeet-redux-coreai-fp16.zip?download=true")!
     static let cacheDirectory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Nativ/SpeechModels", isDirectory: true)
 
