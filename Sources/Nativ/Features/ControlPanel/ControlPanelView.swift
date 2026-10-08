@@ -318,6 +318,12 @@ struct ControlPanelView: View {
             )
 
             Spacer(minLength: 0)
+                .frame(height: ControlPanelLayout.topControlSize)
+                .contentShape(.rect)
+                .onTapGesture(count: 2) {
+                    NSApp.keyWindow?.performZoom(nil)
+                }
+                .simultaneousGesture(WindowDragGesture())
 
             if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
                 ChatWorkWindowControls(
