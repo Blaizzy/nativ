@@ -78,6 +78,13 @@ struct VoiceWakeWordCapture {
         var confirmation: VoiceWakeWordTranscription?
     }
 
+    private let confirmationTimeoutSamples: Int64
+
+    init(confirmationTimeout: TimeInterval = 30) {
+        // CoreAI may specialize a new input shape during the first confirmation.
+        confirmationTimeoutSamples = Int64(min(120, max(30, confirmationTimeout)) * 16_000)
+    }
+
     private var history = [Float](repeating: 0, count: 80_000)
     private var historyIndex = 0
     private var historyCount = 0
@@ -117,7 +124,7 @@ struct VoiceWakeWordCapture {
                 if current - candidate!.lastSpeech >= 32_000 || current - candidate!.trigger >= 120 * 16_000 {
                     return finish().map(Event.finished)
                 }
-            } else if current - candidate!.trigger >= 30 * 16_000 {
+            } else if current - candidate!.trigger >= confirmationTimeoutSamples {
                 throw Failure.confirmationTimeout
             }
         } else if detected, current >= cooldownUntil {

@@ -35,6 +35,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
         var enabled: Bool
         var suspended: Bool
         var deviceID: String?
+        var confirmationTimeout: TimeInterval = 30
     }
 
     private var configuration = Configuration(enabled: false, suspended: false)
@@ -46,8 +47,8 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private var processor: VoiceWakeWordProcessor?
     private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
-    func configure(enabled: Bool, suspended: Bool, deviceID: String?) {
-        let next = Configuration(enabled: enabled, suspended: suspended, deviceID: deviceID)
+    func configure(enabled: Bool, suspended: Bool, deviceID: String?, confirmationTimeout: TimeInterval = 30) {
+        let next = Configuration(enabled: enabled, suspended: suspended, deviceID: deviceID, confirmationTimeout: confirmationTimeout)
         guard next != configuration else { return }
         configuration = next
         restart()
@@ -90,9 +91,10 @@ final class VoiceWakeWordMonitor: ObservableObject {
                     self?.fail("Could not read microphone audio. Retrying…", id: id)
                 }
             }
+            let confirmationTimeout = configuration.confirmationTimeout
             inferenceTask = Task.detached(priority: .utility) { [weak self] in
                 do {
-                    let processor = try VoiceWakeWordProcessor(url: modelURL)
+                    let processor = try VoiceWakeWordProcessor(url: modelURL, confirmationTimeout: confirmationTimeout)
                     try Task.checkCancellation()
                     guard try await self?.startInput(bridge: bridge, processor: processor, deviceID: deviceID, id: id) == true
                     else { return }
@@ -221,9 +223,12 @@ private actor VoiceWakeWordProcessor {
     }
 
     private let detector: VoiceWakeWordModel
-    private var capture = VoiceWakeWordCapture()
+    private var capture: VoiceWakeWordCapture
 
-    init(url: URL) throws { detector = try VoiceWakeWordModel(url: url) }
+    init(url: URL, confirmationTimeout: TimeInterval) throws {
+        detector = try VoiceWakeWordModel(url: url)
+        capture = VoiceWakeWordCapture(confirmationTimeout: confirmationTimeout)
+    }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Output {
         let detected = capture.canDetect ? try detector.consume(chunk) : false

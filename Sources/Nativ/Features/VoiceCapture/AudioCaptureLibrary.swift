@@ -854,6 +854,13 @@ final class AudioCaptureLibrary: ObservableObject {
         guard let configuration = transcriptionConfigurationProvider?() else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
+        if #available(macOS 27.0, *),
+           DefaultSpeechModel.isPreferred(selectedModelID: configuration.selectedModelID) {
+            let result = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL)
+            try Task.checkCancellation()
+            guard !result.text.isEmpty else { throw AudioCaptureLibraryError.emptyTranscript }
+            return (result.text, DefaultSpeechModel.identifier)
+        }
         guard configuration.serverIsRunning else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
