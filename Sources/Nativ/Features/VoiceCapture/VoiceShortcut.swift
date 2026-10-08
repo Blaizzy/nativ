@@ -159,6 +159,9 @@ final class VoiceShortcutPreferences: ObservableObject {
     @Published var isWakeWordEnabled: Bool {
         didSet { persistCurrent() }
     }
+    @Published var wakeWordListeningMode: VoiceWakeWordListeningMode {
+        didSet { persistCurrent() }
+    }
     // Spoken command edits do not require re-registering global keyboard shortcuts.
     @Published var isReturnCommandEnabled: Bool {
         didSet { persistCurrent() }
@@ -177,6 +180,7 @@ final class VoiceShortcutPreferences: ObservableObject {
         let retryShortcut: VoiceShortcut
         let isHandsFreeEnabled: Bool?
         let isWakeWordEnabled: Bool?
+        let wakeWordListeningMode: String?
         let isReturnCommandEnabled: Bool?
         let returnCommandTrigger: String?
     }
@@ -199,6 +203,8 @@ final class VoiceShortcutPreferences: ObservableObject {
             retryShortcut = payload.retryShortcut
             isHandsFreeEnabled = payload.isHandsFreeEnabled ?? true
             isWakeWordEnabled = payload.isWakeWordEnabled ?? false
+            wakeWordListeningMode = payload.wakeWordListeningMode
+                .flatMap(VoiceWakeWordListeningMode.init(rawValue:)) ?? .automatic
             isReturnCommandEnabled = payload.isReturnCommandEnabled ?? true
             returnCommandTrigger = payload.returnCommandTrigger
                 ?? VoiceDictationTranscript.defaultReturnCommandTrigger
@@ -207,6 +213,7 @@ final class VoiceShortcutPreferences: ObservableObject {
             retryShortcut = .retryDefault
             isHandsFreeEnabled = true
             isWakeWordEnabled = false
+            wakeWordListeningMode = .automatic
             isReturnCommandEnabled = true
             returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
         }
@@ -226,6 +233,7 @@ final class VoiceShortcutPreferences: ObservableObject {
             retryShortcut: retryShortcut,
             isHandsFreeEnabled: isHandsFreeEnabled,
             isWakeWordEnabled: isWakeWordEnabled,
+            wakeWordListeningMode: wakeWordListeningMode.rawValue,
             isReturnCommandEnabled: isReturnCommandEnabled,
             returnCommandTrigger: returnCommandTrigger
         )

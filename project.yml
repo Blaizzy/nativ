@@ -229,6 +229,7 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordModel.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordFeatures.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordPowerPolicy.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioCaptureSleepMonitor.swift

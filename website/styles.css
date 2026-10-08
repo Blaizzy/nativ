@@ -168,6 +168,9 @@ footer > p { max-width: 350px; margin: 0; color: var(--muted); font-size: 12px; 
 @keyframes marquee { to { transform: translateX(-50%); } }
 
 @media (max-width: 1100px) {
+  .site-header { column-gap: 20px; }
+  .desktop-nav { gap: 18px; }
+  .github-link { display: none; }
   .feature-grid { grid-template-columns: repeat(2, 1fr); }
   .app-body { grid-template-columns: 60px 1fr 280px; }.telemetry { padding: 18px; }
 }

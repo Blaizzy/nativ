@@ -65,7 +65,7 @@ struct VoiceWakeWordEnergyGate {
 struct VoiceWakeWordWindow {
     private var samples = [Float](repeating: 0, count: 32_000)
     private var index = 0
-    private var sampleCount: Int64 = 0
+    private(set) var sampleCount: Int64 = 0
     private var frameEnergy = 0.0
     private var gate = VoiceWakeWordEnergyGate()
 
@@ -81,7 +81,19 @@ struct VoiceWakeWordWindow {
     }
 
     func snapshot() -> [Float] {
-        Array(samples[index...]) + Array(samples[..<index])
+        var result = [Float](repeating: 0, count: samples.count)
+        copySamples(into: &result)
+        return result
+    }
+
+    func copySamples(into output: inout [Float]) {
+        precondition(output.count == samples.count)
+        samples.withUnsafeBufferPointer { source in
+            output.withUnsafeMutableBufferPointer { destination in
+                destination.baseAddress!.update(from: source.baseAddress! + index, count: samples.count - index)
+                (destination.baseAddress! + samples.count - index).update(from: source.baseAddress!, count: index)
+            }
+        }
     }
 }
 
@@ -94,11 +106,12 @@ final class VoiceWakeWordModel {
     private let input: MLMultiArray
     private let provider: MLDictionaryFeatureProvider
     private var window = VoiceWakeWordWindow()
+    private var audio = [Float](repeating: 0, count: VoiceWakeWordFeatures.windowSamples)
     private var expectedOffset: Int64 = 0
 
-    init(url: URL) throws {
+    init(url: URL, computeUnits: MLComputeUnits = .cpuAndNeuralEngine) throws {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndNeuralEngine
+        configuration.computeUnits = computeUnits
         model = try MLModel(contentsOf: url, configuration: configuration)
         threshold = try Self.detectionThreshold(
             metadata: model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
@@ -115,14 +128,18 @@ final class VoiceWakeWordModel {
     }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Bool {
-        if chunk.offset != expectedOffset { window = VoiceWakeWordWindow() }
+        if chunk.offset != expectedOffset {
+            window = VoiceWakeWordWindow()
+            features.reset()
+        }
         expectedOffset = chunk.offset + Int64(chunk.samples.count)
         var detected = false
         for sample in chunk.samples {
             let shouldScore = window.append(sample)
             guard shouldScore, !detected else { continue }
             try Task.checkCancellation()
-            if try probability(audio: window.snapshot()) >= threshold { detected = true }
+            window.copySamples(into: &audio)
+            if try probability(audio: audio, windowEnd: window.sampleCount) >= threshold { detected = true }
         }
         return detected
     }
@@ -136,16 +153,12 @@ final class VoiceWakeWordModel {
         return threshold
     }
 
-    func probability(audio: [Float]) throws -> Float {
-        let mels = try features.compute(audio)
-        let pointer = input.dataPointer.bindMemory(to: Float.self, capacity: mels.count)
-        let melStride = input.strides[1].intValue
-        let frameStride = input.strides[2].intValue
-        for mel in 0..<128 {
-            for frame in 0..<200 {
-                pointer[mel * melStride + frame * frameStride] = mels[mel * 200 + frame]
-            }
-        }
+    func probability(audio: [Float], windowEnd: Int64? = nil) throws -> Float {
+        try features.compute(
+            audio, windowEnd: windowEnd,
+            into: input.dataPointer.assumingMemoryBound(to: Float.self),
+            melStride: input.strides[1].intValue, frameStride: input.strides[2].intValue
+        )
         let result = try model.prediction(from: provider)
         guard let score = result.featureValue(for: "probability")?.multiArrayValue?[0].floatValue,
               score.isFinite, (0...1).contains(score)
