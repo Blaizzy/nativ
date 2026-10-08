@@ -2808,12 +2808,35 @@ private struct HubModelRow: View, @MainActor Equatable {
                         .font(.caption.weight(.semibold))
                 }
             }
+        case let .insufficientSpace(required, available, reservedByOtherDownloads):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Not enough disk space", systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text(
+                    "Needs \(Self.bytes(required)) · \(Self.bytes(available)) available"
+                        + (reservedByOtherDownloads > 0
+                            ? " · \(Self.bytes(reservedByOtherDownloads)) held by downloads in progress"
+                            : "")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                Link(destination: URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) {
+                    Label("Open Storage Settings", systemImage: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
+            }
         case .message:
             Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .textSelection(.enabled)
         }
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 
     private var modelHubURL: URL {

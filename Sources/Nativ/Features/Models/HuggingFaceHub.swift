@@ -413,6 +413,7 @@ enum HuggingFaceHubError: LocalizedError {
 
 enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
     case gatedRepository
+    case insufficientSpace(required: Int64, available: Int64, reservedByOtherDownloads: Int64)
     case message(String)
 
     init(processOutput: String) {
@@ -424,10 +425,15 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
             return
         }
 
-        let usefulMessage = processOutput
+        let lines = processOutput
             .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-            .suffix(4)
-            .joined(separator: "\n")
+            .filter { !$0.hasPrefix("__NATIV_") }
+        let usefulMessage = if processOutput.contains("Traceback (most recent call last):"),
+            let exception = lines.last {
+            String(exception).replacing(#/^[A-Za-z_][\w.]*(Error|Exception): /#, with: "")
+        } else {
+            lines.suffix(4).joined(separator: "\n")
+        }
         self = .message(
             usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
         )
@@ -437,9 +443,18 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
         switch self {
         case .gatedRepository:
             "This gated model requires access approval from its publisher."
+        case let .insufficientSpace(required, available, reservedByOtherDownloads):
+            "Not enough disk space. This model needs \(Self.bytes(required)), but only \(Self.bytes(available)) is available."
+                + (reservedByOtherDownloads > 0
+                    ? " Downloads in progress are holding \(Self.bytes(reservedByOtherDownloads))."
+                    : "")
         case .message(let message):
             message
         }
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 }
 
@@ -1922,6 +1937,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private var process: Process?
     private var wasCancelled = false
     private var isPaused = false
+    private var admissionFailure: HuggingFaceDownloadFailure?
 
     convenience init(
         repoID: String,
@@ -2106,6 +2122,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         // Retries release the old attempt and reserve again after a fresh dry run.
         defer { capacity.release(reservationID) }
         activity.beginAttempt()
+        lock.withLock { admissionFailure = nil }
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
@@ -2154,6 +2171,17 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
                             try capacity.reserve(reservationID, bytes: bytes, atPath: cachePath)
                             response = ["approved": true]
                         } catch {
+                            if case let HuggingFaceDownloadCapacity.Failure.insufficientSpace(
+                                required, available, reservedByOtherDownloads
+                            ) = error {
+                                lock.withLock {
+                                    admissionFailure = .insufficientSpace(
+                                        required: required,
+                                        available: available,
+                                        reservedByOtherDownloads: reservedByOtherDownloads
+                                    )
+                                }
+                            }
                             response = ["error": error.localizedDescription]
                         }
                         do {
@@ -2239,6 +2267,9 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceDownloadAttemptError.stalled
         }
         guard process.terminationStatus == 0 else {
+            if let admissionFailure = lock.withLock({ admissionFailure }) {
+                throw admissionFailure
+            }
             let message = String(decoding: output.snapshot(), as: UTF8.self)
             throw HuggingFaceDownloadFailure(processOutput: message)
         }
