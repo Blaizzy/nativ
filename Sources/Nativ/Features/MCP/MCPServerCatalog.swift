@@ -33,12 +33,15 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
     let requiredEnvironment: [String]
     let excludedEnvironment: [String]
     let legacyLaunchConfigurations: [LegacyLaunchConfiguration]
+    /// The server takes its allowed root folder as a trailing argument that Nativ
+    /// supplies per call, so the root is never stored in `arguments`.
+    let requiresFolder: Bool
     let sourceURL: String?
 
     var logoAssetName: String { "MCPLogo-\(name)" }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, summary, command, symbol, sourceURL
+        case id, name, summary, command, symbol, sourceURL, requiresFolder
         case arguments = "args"
         case tintName = "tint"
         case requiredEnvironment = "requiredEnv"
@@ -57,6 +60,7 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         requiredEnvironment: [String] = [],
         excludedEnvironment: [String] = [],
         legacyLaunchConfigurations: [LegacyLaunchConfiguration] = [],
+        requiresFolder: Bool = false,
         sourceURL: String? = nil
     ) {
         self.id = id
@@ -69,6 +73,7 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
         self.requiredEnvironment = requiredEnvironment
         self.excludedEnvironment = excludedEnvironment
         self.legacyLaunchConfigurations = legacyLaunchConfigurations
+        self.requiresFolder = requiresFolder
         self.sourceURL = sourceURL
     }
 
@@ -93,6 +98,7 @@ struct MCPCatalogEntry: Decodable, Equatable, Identifiable, Sendable {
             [LegacyLaunchConfiguration].self,
             forKey: .legacyLaunchConfigurations
         ) ?? []
+        requiresFolder = try container.decodeIfPresent(Bool.self, forKey: .requiresFolder) ?? false
         sourceURL = try container.decodeIfPresent(String.self, forKey: .sourceURL)
     }
 

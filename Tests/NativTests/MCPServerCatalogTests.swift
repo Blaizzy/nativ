@@ -11,6 +11,31 @@ final class MCPServerCatalogTests: XCTestCase {
         XCTAssertEqual(github.excludedEnvironment, ["GITHUB_PERSONAL_ACCESS_TOKEN"])
     }
 
+    func testBundledFilesystemServerTakesItsFolderFromNativ() throws {
+        let filesystem = try XCTUnwrap(MCPServerCatalog.bundled.entry(id: "filesystem"))
+
+        XCTAssertTrue(filesystem.requiresFolder)
+        XCTAssertEqual(
+            filesystem.arguments, ["-y", "@modelcontextprotocol/server-filesystem"]
+        )
+    }
+
+    func testMigrationDropsTheLegacyFilesystemWorkingDirectoryArgument() throws {
+        var servers = [
+            MCPServerConfig(
+                name: "filesystem",
+                command: "npx",
+                arguments: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+            )
+        ]
+
+        XCTAssertTrue(MCPServerCatalog.bundled.migrateConfigurations(in: &servers))
+        XCTAssertEqual(servers[0].catalogID, "filesystem")
+        XCTAssertEqual(
+            servers[0].arguments, ["-y", "@modelcontextprotocol/server-filesystem"]
+        )
+    }
+
     func testMigrationReplacesLegacyGitHubServerAndRemovesPAT() throws {
         let entry = githubEntry()
         let catalog = try MCPServerCatalog(entries: [entry])
