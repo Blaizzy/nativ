@@ -893,3 +893,61 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         )
     }
 }
+
+final class HuggingFaceXetDownloadTests: XCTestCase {
+    func testForwardsWrittenBytesWithoutDoubleCounting() throws {
+        let result = try run(helper: "print(20)\nprint(80)\nprint(100)")
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("written=[20, 60, 20]"))
+        XCTAssertTrue(result.output.contains("speed=[20, 60, 20]"))
+    }
+
+    func testRejectsFailedIncompleteAndInvalidDownloads() throws {
+        for helper in ["print(20)\nexit(1)", "print(20)", "print(101)", "print(20)\nprint(10)"] {
+            let result = try run(helper: helper)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertFalse(result.output.contains("written="))
+        }
+    }
+
+    private func run(helper: String) throws -> (status: Int32, output: String) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("helper")
+        try "#!/usr/bin/python3\n\(helper)\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let script = """
+        import os, sys, types
+        written, speed = [], []
+        class Bar:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def update(self, count): written.append(count)
+            def update_transfer(self, count): speed.append(count)
+        hub = types.ModuleType('huggingface_hub')
+        download = types.ModuleType('huggingface_hub.file_download')
+        download._get_progress_bar_context = lambda **kwargs: Bar()
+        hub.file_download = download
+        sys.modules['huggingface_hub'] = hub
+        sys.modules['huggingface_hub.file_download'] = download
+        \(HuggingFaceXetDownload.script)
+        download.xet_get(
+            incomplete_path='unused', expected_size=100, headers={},
+            xet_file_data=types.SimpleNamespace(file_hash='hash', refresh_route='url'),
+        )
+        print('written=' + str(written))
+        print('speed=' + str(speed))
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-c", script, "", "", "", "", executable.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self))
+    }
+}

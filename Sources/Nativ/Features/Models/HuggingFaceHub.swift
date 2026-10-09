@@ -2,6 +2,7 @@ import Combine
 import Darwin
 import Foundation
 import NativServerKit
+import Xet
 
 enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendable {
     case downloads
@@ -1860,6 +1861,80 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
+enum HuggingFaceXetDownload {
+    static let script = """
+    import subprocess
+    from huggingface_hub import file_download
+
+    def native_xet_get(*, incomplete_path, xet_file_data, headers, expected_size=None,
+                       displayed_filename=None, tqdm_class=None, _tqdm_bar=None):
+        if expected_size is None or expected_size < 0:
+            raise ValueError("Missing Xet file size")
+        environment = os.environ.copy()
+        authorization = next((v for k, v in headers.items() if k.lower() == "authorization"), "")
+        if authorization.lower().startswith("bearer "):
+            environment["HF_TOKEN"] = authorization[7:]
+        with file_download._get_progress_bar_context(
+            desc=displayed_filename or str(incomplete_path), total=expected_size,
+            log_level=20, name="huggingface_hub.xet_get",
+            tqdm_class=tqdm_class, _tqdm_bar=_tqdm_bar,
+        ) as progress:
+            completed = 0
+            with subprocess.Popen(
+                [sys.argv[5], "--xet-download", xet_file_data.file_hash, xet_file_data.refresh_route,
+                 str(incomplete_path), str(expected_size)],
+                env=environment, stdout=subprocess.PIPE, text=True,
+            ) as helper:
+                try:
+                    for line in helper.stdout:
+                        written = int(line.strip())
+                        if not completed <= written <= expected_size:
+                            raise ValueError("Invalid Xet progress")
+                        delta = written - completed
+                        progress.update(delta)
+                        if callable(update_transfer := getattr(progress, "update_transfer", None)):
+                            update_transfer(delta)
+                        completed = written
+                    if helper.wait() != 0 or completed != expected_size:
+                        raise RuntimeError("Xet download did not complete")
+                finally:
+                    if helper.poll() is None:
+                        helper.kill()
+                        helper.wait()
+
+    file_download.xet_get = native_xet_get
+    """
+
+    static func run() async -> Never {
+        do {
+            let arguments = Array(CommandLine.arguments.dropFirst(2))
+            guard arguments.count == 4,
+                  let refreshURL = URL(string: arguments[1]),
+                  let expectedSize = Int64(arguments[3]), expectedSize >= 0 else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let written = try await Xet.withDownloader(
+                refreshURL: refreshURL,
+                hubToken: ProcessInfo.processInfo.environment["HF_TOKEN"]
+            ) { downloader in
+                try await downloader.download(
+                    arguments[0], to: URL(fileURLWithPath: arguments[2])
+                ) { completed, _ in
+                    print(completed)
+                    fflush(stdout)
+                }
+            }
+            guard written == expectedSize else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+}
+
 final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let monitorInterval: TimeInterval = 0.5
     private static let maximumAttempts = 3
@@ -1896,22 +1971,31 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceHubError.pythonUnavailable
         }
 
+        guard let helperURL = Bundle.main.executableURL else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
         let script = """
         import os
+        import signal
         import sys
         import threading
         import time
         from huggingface_hub import snapshot_download
         from huggingface_hub.utils import tqdm
 
+        if os.getpgrp() != os.getpid():
+            os.setsid()
         parent_pid = int(sys.argv[3])
 
         def exit_if_parent_terminates():
             while os.getppid() == parent_pid:
                 time.sleep(0.25)
-            os._exit(0)
+            os.killpg(os.getpgrp(), signal.SIGTERM)
 
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
+
+        \(HuggingFaceXetDownload.script)
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
         \(HuggingFaceDownloadPreflight.script)
@@ -1996,9 +2080,6 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         environment["PYTHONUNBUFFERED"] = "1"
         environment["HF_HUB_CACHE"] = cachePath
         environment["HF_HUB_DISABLE_TELEMETRY"] = "1"
-        environment["HF_XET_RECONSTRUCTION_MIN_RECONSTRUCTION_FETCH_SIZE"] = "1mb"
-        environment["HF_XET_RECONSTRUCTION_MAX_RECONSTRUCTION_FETCH_SIZE"] = "1mb"
-        environment["HF_XET_RECONSTRUCTION_MIN_PREFETCH_BUFFER"] = "64mb"
         if let token = HuggingFaceAuthentication.normalizedToken(token) {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
@@ -2009,7 +2090,8 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             repoID,
             cachePath,
             String(ProcessInfo.processInfo.processIdentifier),
-            revision ?? "main"
+            revision ?? "main",
+            helperURL.path
         ]
         self.init(executableURL: pythonURL, arguments: arguments, environment: environment,
                   cachePath: cachePath, capacity: .shared,
@@ -2170,7 +2252,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         if flagsAfterLaunch.cancelled {
             stopProcess(process)
         } else if flagsAfterLaunch.paused {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
 
         var stalled = false
@@ -2219,9 +2301,9 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         if let process, process.isRunning {
             if wasPaused {
-                Darwin.kill(process.processIdentifier, SIGCONT)
+                signalProcess(process, SIGCONT)
             }
-            process.terminate()
+            signalProcess(process, SIGTERM)
         }
     }
 
@@ -2233,7 +2315,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         guard let process = currentProcess, process.isRunning else { return }
-        Darwin.kill(process.processIdentifier, SIGKILL)
+        signalProcess(process, SIGKILL)
 
         let forcedExitDeadline = clock.now.advanced(by: .seconds(1))
         while process.isRunning, clock.now < forcedExitDeadline {
@@ -2247,7 +2329,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         let process = self.process
         lock.unlock()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
     }
 
@@ -2258,7 +2340,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         activity.resume()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGCONT)
+            signalProcess(process, SIGCONT)
         }
     }
 
@@ -2288,15 +2370,21 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
     }
 
+    private func signalProcess(_ process: Process, _ signal: Int32) {
+        if Darwin.kill(-process.processIdentifier, signal) != 0 {
+            Darwin.kill(process.processIdentifier, signal)
+        }
+    }
+
     private func stopProcess(_ process: Process) {
         guard process.isRunning else { return }
-        process.terminate()
+        signalProcess(process, SIGTERM)
         let deadline = Date().addingTimeInterval(2)
         while process.isRunning, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
         if process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGKILL)
+            signalProcess(process, SIGKILL)
         }
     }
 
