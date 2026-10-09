@@ -784,47 +784,32 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinishingState() throws {
-        let start = Date(timeIntervalSinceReferenceDate: 3_000)
-        var state = HuggingFaceDownloadProgressState(now: start)
-        let progress = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 950, totalBytes: 1_000)
-        )
-
-        _ = state.recordProgress(progress, at: start)
-
-        XCTAssertTrue(state.isFinishing)
-    }
-
-    func testTransferEstimateCeilingUsesFinishingState() throws {
+    func testTransferredBytesDoNotAdvanceProgress() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_500)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 0, totalBytes: 1_001)
+            ModelDownloadProgress(completedBytes: 200, totalBytes: 1_000)
         )
 
         _ = state.recordProgress(initial, at: start)
-        let capped = try XCTUnwrap(
-            state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
-        )
+        state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
 
-        XCTAssertEqual(capped.completedBytes, 951)
-        XCTAssertLessThan(capped.fractionCompleted, 1)
-        XCTAssertTrue(state.isFinishing)
+        XCTAssertEqual(state.progress, initial)
+        XCTAssertEqual(state.bytesPerSecond, 2_000)
     }
 
     func testTransferredBytesProduceSmoothedTransferSpeed() {
         let start = Date(timeIntervalSinceReferenceDate: 4_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
+        state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
         XCTAssertEqual(state.bytesPerSecond, 1_000)
 
-        _ = state.recordTransferredBytes(3_000, at: start.addingTimeInterval(2))
+        state.recordTransferredBytes(3_000, at: start.addingTimeInterval(2))
         XCTAssertEqual(state.bytesPerSecond, 1_350)
     }
 
-    func testTransferBytesAdvanceProgressBetweenReconstructionUpdates() throws {
+    func testReconstructionUpdatesRemainExactAfterTransfers() throws {
         let start = Date(timeIntervalSinceReferenceDate: 5_000)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
@@ -835,22 +820,29 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
 
         _ = state.recordProgress(initial, at: start)
-        XCTAssertEqual(
-            state.recordTransferredBytes(100, at: start.addingTimeInterval(0.1))?.completedBytes,
-            100
-        )
-        _ = state.recordProgress(reconstructed, at: start.addingTimeInterval(0.2))
-        XCTAssertEqual(
-            state.recordTransferredBytes(200, at: start.addingTimeInterval(0.3))?.completedBytes,
-            350
-        )
+        state.recordTransferredBytes(600, at: start.addingTimeInterval(1))
+        XCTAssertEqual(state.progress, initial)
+        XCTAssertEqual(state.recordProgress(reconstructed), reconstructed)
+        state.recordTransferredBytes(900, at: start.addingTimeInterval(2))
+        XCTAssertEqual(state.progress, reconstructed)
+    }
+
+    func testRetryUsesTheNewConfirmedByteCount() throws {
+        var state = HuggingFaceDownloadProgressState()
+        _ = state.recordProgress(try XCTUnwrap(ModelDownloadProgress(completedBytes: 600, totalBytes: 1_000)))
+
+        state.beginAttempt()
+        let cached = try XCTUnwrap(ModelDownloadProgress(completedBytes: 100, totalBytes: 1_000))
+
+        XCTAssertEqual(state.recordProgress(cached), cached)
+        XCTAssertEqual(state.progress, cached)
     }
 
     func testTransferSpeedBecomesUnknownWhenStale() {
         let start = Date(timeIntervalSinceReferenceDate: 6_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
+        state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
         XCTAssertEqual(state.transferSpeed(at: start.addingTimeInterval(2)), 1_000)
         XCTAssertNil(state.transferSpeed(at: start.addingTimeInterval(3)))
     }
@@ -863,12 +855,6 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0), 0)
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0.994), 99)
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
-    }
-
-    func testNearCompleteDownloadUsesFinishingState() {
-        XCTAssertFalse(ModelDownloadProgressPresentation.isFinishing(0.949))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(0.95))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(1))
     }
 
     func testActiveProgressRingDoesNotBecomeComplete() {
@@ -905,5 +891,63 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
             ),
             "3.4 GB / 8 GB"
         )
+    }
+}
+
+final class HuggingFaceXetDownloadTests: XCTestCase {
+    func testForwardsWrittenBytesWithoutDoubleCounting() throws {
+        let result = try run(helper: "print(20)\nprint(80)\nprint(100)")
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("written=[20, 60, 20]"))
+        XCTAssertTrue(result.output.contains("speed=[20, 60, 20]"))
+    }
+
+    func testRejectsFailedIncompleteAndInvalidDownloads() throws {
+        for helper in ["print(20)\nexit(1)", "print(20)", "print(101)", "print(20)\nprint(10)"] {
+            let result = try run(helper: helper)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertFalse(result.output.contains("written="))
+        }
+    }
+
+    private func run(helper: String) throws -> (status: Int32, output: String) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("helper")
+        try "#!/usr/bin/python3\n\(helper)\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let script = """
+        import os, sys, types
+        written, speed = [], []
+        class Bar:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def update(self, count): written.append(count)
+            def update_transfer(self, count): speed.append(count)
+        hub = types.ModuleType('huggingface_hub')
+        download = types.ModuleType('huggingface_hub.file_download')
+        download._get_progress_bar_context = lambda **kwargs: Bar()
+        hub.file_download = download
+        sys.modules['huggingface_hub'] = hub
+        sys.modules['huggingface_hub.file_download'] = download
+        \(HuggingFaceXetDownload.script)
+        download.xet_get(
+            incomplete_path='unused', expected_size=100, headers={},
+            xet_file_data=types.SimpleNamespace(file_hash='hash', refresh_route='url'),
+        )
+        print('written=' + str(written))
+        print('speed=' + str(speed))
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-c", script, "", "", "", "", executable.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self))
     }
 }

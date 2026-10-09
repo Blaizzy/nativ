@@ -2474,22 +2474,15 @@ private struct ActiveDownloadBannerRow: View {
                         .font(.headline)
                         .lineLimit(1)
 
-                    Group {
-                        if isFinishing {
-                            Text("Finishing…")
-                                .bold()
-                        } else {
-                            HStack(spacing: 4) {
-                                Text(statusText)
-                                    .foregroundStyle(.secondary)
-                                Text("·")
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityHidden(true)
-                                Text("\(percentage)%")
-                                    .bold()
-                                    .monospacedDigit()
-                            }
-                        }
+                    HStack(spacing: 4) {
+                        Text(statusText)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("\(percentage)%")
+                            .bold()
+                            .monospacedDigit()
                     }
                     .font(.subheadline)
                 }
@@ -2523,33 +2516,21 @@ private struct ActiveDownloadBannerRow: View {
                 .controlSize(.large)
             }
 
-            Group {
-                if isFinishing {
-                    ProgressView()
-                        .accessibilityLabel("Finishing download")
-                        .accessibilityValue("Assembling downloaded model files")
-                } else {
-                    ProgressView(value: displayedProgress)
-                        .animation(
-                            reduceMotion ? nil : .linear(duration: 0.25),
-                            value: displayedProgress
-                        )
-                        .accessibilityLabel("Download progress")
-                        .accessibilityValue("\(percentage) percent")
-                }
-            }
-            .progressViewStyle(.linear)
-            .tint(download.state == .paused ? .secondary : .accentColor)
+            ProgressView(value: displayedProgress)
+                .animation(
+                    reduceMotion ? nil : .linear(duration: 0.25),
+                    value: displayedProgress
+                )
+                .accessibilityLabel("Download progress")
+                .accessibilityValue("\(percentage) percent")
+                .progressViewStyle(.linear)
+                .tint(download.state == .paused ? .secondary : .accentColor)
 
             HStack(spacing: 6) {
-                if isFinishing {
-                    Text("Assembling downloaded model files…")
-                } else {
-                    Text(byteProgress ?? "Calculating download size…")
-                        .monospacedDigit()
-                }
+                Text(byteProgress ?? "Calculating download size…")
+                    .monospacedDigit()
 
-                if !isFinishing, let speed {
+                if let speed {
                     Text("·")
                         .accessibilityHidden(true)
                     Text(speed)
@@ -2579,12 +2560,6 @@ private struct ActiveDownloadBannerRow: View {
         min(max(download.progress, 0), 0.99)
     }
 
-    private var isFinishing: Bool {
-        download.state == .downloading
-            && (download.phase == .finalizing
-                || ModelDownloadProgressPresentation.isFinishing(download.progress))
-    }
-
     private var pauseResumeTitle: String {
         download.state == .paused ? "Resume download" : "Pause download"
     }
@@ -2609,7 +2584,6 @@ private struct ActiveDownloadBannerRow: View {
         switch download.phase {
         case .preparing: return "Preparing"
         case .downloading: return "Downloading"
-        case .finalizing: return "Finishing"
         case .retrying: return "Retrying"
         }
     }
@@ -3162,9 +3136,6 @@ struct ModelDownloadProgressControl: View {
     private var progressDescription: String {
         if isPaused {
             return "Download paused"
-        }
-        if ModelDownloadProgressPresentation.isFinishing(progress) {
-            return "Finishing download"
         }
         return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
     }
