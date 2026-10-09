@@ -126,8 +126,26 @@ enum ChatToolRegistry {
 
     static let alwaysOnToolNames: Set<String> = [ChatWorkToolRegistry.toolName]
 
+    static func disableWarning(for toolName: String) -> String? {
+        switch toolName {
+        case ChatToolSearchToolRegistry.toolName:
+            "Custom and server tools set to Discoverable will no longer be reachable by the model."
+        case ChatTerminalToolRegistry.toolName:
+            "The model will no longer be able to run shell commands on this Mac."
+        default:
+            nil
+        }
+    }
+
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
-        var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
+        var tools = [
+            ChatNativeToolDescriptor(
+                definition: ChatToolSearchToolRegistry.definition,
+                displayDescription: "Find and use enabled tools without loading every schema into the prompt.",
+                configuration: nil
+            )
+        ]
+        tools += ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
             ChatNativeToolDescriptor(
                 definition: $0,
                 displayDescription: $0.function.name == ChatImageToolRegistry.editToolName
