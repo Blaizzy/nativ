@@ -353,6 +353,14 @@ final class VoiceCaptureCoordinator {
     }
 
     private func confirmWakeWord(_ audio: Data) async throws -> VoiceWakeWordTranscription {
+        if #available(macOS 27.0, *),
+           DefaultSpeechModel.isPreferred(selectedModelID: transcriptionConfigurationProvider?()?.selectedModelID) {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nativ-wake-\(UUID().uuidString).wav")
+            try audio.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let result = try await ParakeetTranscriber.shared.transcribe(contentsOf: url)
+            return VoiceWakeWordTranscription(text: result.text, modelID: DefaultSpeechModel.identifier)
+        }
         guard let configuration = transcriptionConfigurationProvider?(), configuration.serverIsRunning else {
             throw VoiceWakeWordModelError.invalidModel("Start the Nativ server to confirm wake words.")
         }
@@ -444,15 +452,6 @@ final class VoiceCaptureCoordinator {
         confirmation: VoiceWakeWordTranscription? = nil,
         wakeWordModelID: String? = nil
     ) {
-        let audioData: Data
-        do {
-            audioData = try Data(contentsOf: recordingURL)
-        } catch {
-            finishOverlayTranscription(overlayTranscriptionID)
-            showRecentRecordingUnavailable()
-            return
-        }
-
         let taskID = UUID()
         let task = Task { [weak self] in
             guard let self else {
@@ -467,63 +466,42 @@ final class VoiceCaptureCoordinator {
                 return
             }
 
-            let installedModels: [LocalModel]
             do {
-                installedModels = try await LocalModelDiscovery.scan(
-                    searchPaths: LocalModelSearchPaths(
-                        primary: configuration.modelSearchPath,
-                        additional: configuration.additionalModelSearchPaths
-                    )
-                )
-            } catch {
-                guard !Task.isCancelled else {
-                    return
-                }
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showMissingSpeechModelAlert()
-                return
-            }
-
-            guard !Task.isCancelled else {
-                return
-            }
-            guard let requestConfiguration = self.transcriptionConfigurationProvider?() else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                return
-            }
-            // Both of these are dead ends for the server path. Rather than discarding the
-            // recording, hand it to the on-device system recognizer when that is possible;
-            // the alert is only shown when there is genuinely nothing that can transcribe.
-            let modelID = wakeWordModelID ?? LocalModelDiscovery.speechToTextModelID(
-                in: installedModels,
-                selectedModelID: requestConfiguration.selectedModelID
-            )
-            guard let modelID, requestConfiguration.serverIsRunning || confirmation != nil else {
-                await self.transcribeWithSystemRecognizer(
-                    recordingURL,
-                    target: target,
-                    durationSeconds: durationSeconds,
-                    overlayTranscriptionID: overlayTranscriptionID,
-                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped,
-                    wakeWord: wakeWord
-                )
-                return
-            }
-
-            do {
-                let client = NativAudioClient(
-                    baseURL: requestConfiguration.serverBaseURL,
-                    apiKey: requestConfiguration.serverAPIKey
-                )
+                let modelID: String
                 let result: NativAudioTranscription
                 if let confirmation {
+                    modelID = confirmation.modelID
                     result = NativAudioTranscription(text: confirmation.text)
+                } else if #available(macOS 27.0, *),
+                          DefaultSpeechModel.isPreferred(selectedModelID: wakeWordModelID ?? configuration.selectedModelID) {
+                    modelID = DefaultSpeechModel.identifier
+                    let transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL)
+                    result = NativAudioTranscription(text: transcript.text)
                 } else {
-                    result = try await client.transcribe(
-                        audioData: audioData,
-                        fileName: recordingURL.lastPathComponent,
-                        model: modelID
+                    let installedModels = try await LocalModelDiscovery.scan(
+                        searchPaths: LocalModelSearchPaths(
+                            primary: configuration.modelSearchPath,
+                            additional: configuration.additionalModelSearchPaths
+                        )
                     )
+                    try Task.checkCancellation()
+                    let selected = wakeWordModelID ?? LocalModelDiscovery.speechToTextModelID(
+                        in: installedModels, selectedModelID: configuration.selectedModelID
+                    )
+                    guard let selected, configuration.serverIsRunning else {
+                        // Parakeet can cover an unavailable server model on macOS 27+.
+                        // Earlier systems require a running server and an STT model.
+                        await self.transcribeWithOnDeviceModel(
+                            recordingURL, target: target, durationSeconds: durationSeconds,
+                            overlayTranscriptionID: overlayTranscriptionID,
+                            unavailableReason: selected == nil ? .noSpeechModel : .serverStopped,
+                            wakeWord: wakeWord
+                        )
+                        return
+                    }
+                    modelID = selected
+                    let client = NativAudioClient(baseURL: configuration.serverBaseURL, apiKey: configuration.serverAPIKey)
+                    result = try await client.transcribe(fileURL: recordingURL, model: modelID)
                 }
                 guard !Task.isCancelled else {
                     return
@@ -600,13 +578,9 @@ final class VoiceCaptureCoordinator {
         case serverStopped
     }
 
-    /// Last-resort transcription through macOS's on-device recognizer.
-    ///
-    /// Mirrors the server path exactly — same transcript file, same analytics row, same
-    /// cursor insertion — so a fallback transcript behaves like any other. If the system
-    /// recognizer cannot help either, the original alert is shown, leaving the previous
-    /// behaviour intact for anyone it does not cover.
-    private func transcribeWithSystemRecognizer(
+    /// Offline fallback when a manually selected server model is unavailable.
+    /// Uses cached Parakeet on macOS 27; older systems report the server requirement.
+    private func transcribeWithOnDeviceModel(
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?,
         durationSeconds: TimeInterval?,
@@ -614,30 +588,18 @@ final class VoiceCaptureCoordinator {
         unavailableReason: ServerUnavailableReason,
         wakeWord: Bool
     ) async {
-        guard await AppleSpeechTranscriber.isAvailable else {
+        guard #available(macOS 27.0, *), DefaultSpeechModel.isSupported else {
             finishOverlayTranscription(overlayTranscriptionID)
             showServerUnavailableAlert(unavailableReason)
             return
         }
 
         let transcript: String
+        let modelID = DefaultSpeechModel.identifier
         do {
-            transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
-        } catch AppleSpeechTranscriber.Failure.empty {
+            transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL).text
+        } catch ParakeetError.tooShort {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
-            return
-        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
-            // The one failure worth its own message: macOS has the language but not the
-            // model yet, and is now fetching it. Saying so beats an alert about a server
-            // the user may not have been trying to use.
-            finishOverlayTranscription(overlayTranscriptionID)
-            showTranscriptionError(
-                title: "Preparing on-device dictation",
-                message: """
-                macOS is downloading its \(language) speech model. Your recording is saved \
-                in Audio — dictate again once it has finished.
-                """
-            )
             return
         } catch {
             NSLog(
@@ -645,8 +607,9 @@ final class VoiceCaptureCoordinator {
                 recordingURL.lastPathComponent,
                 error.localizedDescription
             )
+            guard !Task.isCancelled else { return }
             finishOverlayTranscription(overlayTranscriptionID)
-            showServerUnavailableAlert(unavailableReason)
+            showTranscriptionError(title: "Transcription failed", message: error.localizedDescription)
             return
         }
 
@@ -671,7 +634,7 @@ final class VoiceCaptureCoordinator {
             recordingURL: recordingURL,
             transcript: dictation.text,
             durationSeconds: durationSeconds,
-            modelID: AppleSpeechTranscriber.modelIdentifier,
+            modelID: modelID,
             applicationName: target?.applicationName
         )
 
@@ -684,8 +647,8 @@ final class VoiceCaptureCoordinator {
             return
         }
         NSLog(
-            "Nativ saved voice transcript to %@ using the on-device system recognizer",
-            transcriptURL.path
+            "Nativ saved voice transcript to %@ using %@",
+            transcriptURL.path, modelID
         )
         finishOverlayTranscription(overlayTranscriptionID)
         if !insertedAtCursor {
@@ -736,6 +699,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private static func isEmptyTranscriptionError(_ error: Error) -> Bool {
+        if case ParakeetError.tooShort = error { return true }
         if case NativAudioTranscriptionError.emptyTranscript = error {
             return true
         }

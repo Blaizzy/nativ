@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
             self?.performWindowIntent(intent)
         }
     )
+    private var speechPreparationTask: Task<Void, Never>?
     private var downloadShutdownTask: Task<Void, Never>?
     private var didFinishDownloadShutdown = false
 
@@ -52,6 +53,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
             self?.updateStatusItemButton()
         }
         runtime.start()
+        if #available(macOS 27.0, *),
+           DefaultSpeechModel.isPreferred(selectedModelID: model.settings.normalized().speechToTextModelID) {
+            speechPreparationTask = Task(priority: .utility) {
+                do {
+                    try await ParakeetTranscriber.shared.prepare()
+                    NSLog("Nativ prepared the default speech model")
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    // A real transcription retries preparation if preflight failed.
+                    NSLog("Nativ could not prepare the default speech model: %@", error.localizedDescription)
+                }
+            }
+        }
         setUpRoutines()
         model.onMenuStateChanged = { [weak self] in
             self?.statusMenuController.modelStateDidChange()
@@ -125,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        speechPreparationTask?.cancel()
         statusMenuController.stop()
         extensionManager.shutdown()
         runtime.onUpdate = nil

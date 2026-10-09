@@ -419,8 +419,8 @@ struct AudioView: View {
             }
         case .model:
             AudioPage(
-                title: "Speech-to-Text Model",
-                subtitle: "Choose which installed model handles voice transcription"
+                title: "Transcription Model",
+                subtitle: "Choose which installed model handles voice dictation"
             ) {
                 modelConfigurationPanel
                     .frame(maxWidth: 760)
@@ -1684,36 +1684,14 @@ struct AudioView: View {
 
     private var modelConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "waveform.badge.mic")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Color.accentColor.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Transcription Model")
-                        .font(.headline)
-                    Text("This model handles voice dictation everywhere you use Nativ.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Divider()
-                .padding(.vertical, 18)
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("Model selection")
                     .font(.subheadline.weight(.semibold))
-                Text("Choose a specific installed model, or let Nativ pick the first compatible one.")
+                Text("Choose an installed model, or use Automatic for built-in transcription on macOS 27 and later.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if localLibrary.isScanning && speechModels.isEmpty {
+                if localLibrary.isScanning && speechModels.isEmpty && !DefaultSpeechModel.isSupported {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
                         Text("Scanning installed models…")
@@ -1771,10 +1749,6 @@ struct AudioView: View {
                 if model.modelSwitchInProgress {
                     ProgressView()
                         .controlSize(.small)
-                } else {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 4)
@@ -1788,7 +1762,17 @@ struct AudioView: View {
 
     @ViewBuilder
     private var speechModelStatus: some View {
-        if speechModels.isEmpty && !localLibrary.isScanning {
+        if DefaultSpeechModel.isPreferred(selectedModelID: selectedModelID) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Parakeet Redux", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                Text("Built into Nativ and transcribes in the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if speechModels.isEmpty && !localLibrary.isScanning {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -2581,7 +2565,7 @@ struct AudioView: View {
             Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Uses your selected microphone and local speech model. The Nativ server must be running.")
+            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if shortcuts.isWakeWordEnabled {
@@ -3433,7 +3417,8 @@ private struct AudioTranscriptRow: View {
 }
 
 private func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
-    modelID.split(separator: "/").last.map(String.init) ?? modelID
+    if modelID == DefaultSpeechModel.identifier { return "Parakeet Redux" }
+    return modelID.split(separator: "/").last.map(String.init) ?? modelID
 }
 
 private struct AudioTranscriptionModelProviderBadge: View {
