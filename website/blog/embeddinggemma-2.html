@@ -81,6 +81,7 @@
               <li><a href="#shared-space">One space for every modality</a></li>
               <li><a href="#dimensions">Choose your embedding size</a></li>
               <li><a href="#architecture">Inside the architecture</a></li>
+              <li><a href="#model-comparison">How it compares</a></li>
               <li><a href="#performance">Performance on the M5 Max</a></li>
               <li><a href="#quantization">Quantization and fidelity</a></li>
               <li><a href="#validation">Validation and methodology</a></li>
@@ -109,6 +110,40 @@
             <p>Each layer also receives a learned projection of the original input representations through the model’s per-layer input mechanism. After the encoder, a linear projection maps token states to 768 dimensions. Mean pooling combines the non-padding token representations, and float32 L2 normalization produces the final vector. Prompt and media tokens participate in pooling.</p>
             <p>The complete model contains approximately <strong>744 million parameters</strong>. Disabling the audio tower reduces this to approximately 439 million; disabling both media towers leaves a text-only model of approximately 271 million parameters. This allows deployments to load only the modalities they need.</p>
             <p>Visual processing is configurable as well. Supported soft-token budgets range from 70 to 1,120 per image or frame. Video processing exposes sampling rate, frame limits, overflow handling, and optional timestamps. These controls affect how much visual information enters the encoder and therefore the computation required.</p>
+            <h2 id="model-comparison">How it compares</h2>
+            <p>Google DeepMind’s launch comparison places EmbeddingGemma 2 alongside five other compact embedding models. The table covers all nine text, vision, and audio benchmarks. These are <strong>published model-quality scores</strong>; our MLX-VLM measurements on Apple silicon follow in the next section.</p>
+            <div class="benchmark-comparison-block">
+              <p class="benchmark-heading"><span id="comparison-title">Published benchmark scores · Higher is better · 6 October 2026</span><span class="benchmark-scroll-hint">Scroll horizontally to compare all models →</span></p>
+              <div class="article-table-wrap" role="region" aria-label="Embedding model benchmark comparison; scroll horizontally to compare all six models" tabindex="0">
+              <table class="embedding-comparison" aria-labelledby="comparison-title" aria-describedby="comparison-notes comparison-sources">
+                <thead>
+                  <tr>
+                    <th scope="col">Benchmark</th>
+                    <th scope="col">EmbeddingGemma 2<small>740M</small></th>
+                    <th scope="col">EmbeddingGemma<small>308M</small></th>
+                    <th scope="col">Jina v5 Omni-Nano<small>986M</small></th>
+                    <th scope="col">Qwen3-Embedding-0.6B<small>600M</small></th>
+                    <th scope="col">SigLIP-SO400M<small>878M</small></th>
+                    <th scope="col">larger-clap-general<small>194M</small></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><th scope="row"><span class="benchmark-category">Text</span>MTEB (Multilingual, v2)</th><td>61.4</td><td>61.2</td><td><strong>65.5</strong></td><td>64.3</td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr><th scope="row">MTEB (English, v2)</th><td>68.5</td><td>69.7</td><td><strong>71.1</strong></td><td>70.7</td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr><th scope="row">MTEB (Code, v1)</th><td><strong>78.7</strong></td><td>68.8</td><td aria-label="Score unavailable">—</td><td>75.4</td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr class="benchmark-group-start"><th scope="row"><span class="benchmark-category">Vision</span>MIEB (lite)</th><td><strong>64.6</strong></td><td aria-label="Modality not supported">*</td><td>49.4</td><td aria-label="Modality not supported">*</td><td>53.5</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr><th scope="row">MMEB (v2) — Image</th><td><strong>57.3</strong></td><td aria-label="Modality not supported">*</td><td>31.6<sup>†</sup></td><td aria-label="Modality not supported">*</td><td aria-label="Score unavailable">—</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr><th scope="row">MMEB (v2) — VisDoc</th><td>67.8</td><td aria-label="Modality not supported">*</td><td><strong>71.4</strong><sup>†</sup></td><td aria-label="Modality not supported">*</td><td aria-label="Score unavailable">—</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr><th scope="row">MMEB (v2) — Video</th><td><strong>50.7</strong></td><td aria-label="Modality not supported">*</td><td>31.2<sup>†</sup></td><td aria-label="Modality not supported">*</td><td aria-label="Score unavailable">—</td><td aria-label="Modality not supported">*</td></tr>
+                  <tr class="benchmark-group-start"><th scope="row"><span class="benchmark-category">Audio</span>MSEB (Retrieval)</th><td>69.5</td><td aria-label="Modality not supported">*</td><td aria-label="Score unavailable">—</td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td><td aria-label="Score unavailable">—</td></tr>
+                  <tr><th scope="row">MAEB</th><td>49.4</td><td aria-label="Modality not supported">*</td><td><strong>50.1</strong></td><td aria-label="Modality not supported">*</td><td aria-label="Modality not supported">*</td><td>35.0</td></tr>
+                </tbody>
+              </table>
+              </div>
+            </div>
+            <p class="benchmark-notes" id="comparison-notes"><strong>Bold</strong> marks the highest reported score in rows with multiple results. * Modality not supported. — Score unavailable in the source comparison. † Google marks these results as not self-reported by the model’s authors. Scores are rounded to one decimal; model sizes use the source’s approximate counts.</p>
+            <p class="benchmark-notes" id="comparison-sources">Sources: <a href="https://deepmind.google/models/gemma/embeddinggemma/#performance">Google DeepMind’s launch comparison</a> and the <a href="https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2#benchmark-results">EmbeddingGemma 2 model card</a>. EmbeddingGemma 2 uses the full-precision checkpoint at 768 dimensions. MIEB averages by task type; the other rows average by task. Compare scores within each row, since the benchmarks use different metrics.</p>
+            <p>Among the models shown, EmbeddingGemma 2 leads on code, MIEB, and MMEB image and video tasks. Jina v5 Omni-Nano scores higher on multilingual text, English text, visual documents, and MAEB. MSEB has no comparison score in this table, so it does not establish a relative ranking.</p>
             <h2 id="performance">Performance on the M5 Max</h2>
             <p>Our performance measurements used an <strong>Apple M5 Max with 128 GiB of unified memory</strong>. The batch sweep covered sizes 1, 2, 4, 8, 16, and 32 across BF16 and three quantized formats.</p>
             <p>The following table shows BF16 throughput and peak active memory:</p>
@@ -127,10 +162,10 @@
             <p>A batch of 32 short texts completed in approximately <strong>0.039 seconds</strong>. Longer text reached its best measured BF16 throughput at a smaller batch size: 512-token inputs peaked at approximately <strong>190 texts per second with batch 8</strong>.</p>
             <p>Audio also benefited from batching, reaching its best measured BF16 throughput at batch 16. Image and video workloads behaved differently. Their throughput stayed roughly flat or declined, while memory consumption increased. For video, peak active memory grew from approximately 3.10 GB at batch 1 to 33.66 GB at batch 32. <a href="https://github.com/Blaizzy/mlx-vlm/blob/main/mlx_vlm/models/embedding_gemma2/BATCHED_BENCHMARKS.md">Detailed batch results</a></p>
             <figure class="article-figure">
-            <a href="../assets/blog/embeddinggemma-2-throughput.png" aria-label="Open the full-size EmbeddingGemma 2 throughput chart">
-            <img src="../assets/blog/embeddinggemma-2-throughput.png" alt="Batched throughput for text, image, audio, and video across BF16, 8-bit, 6-bit, and 4-bit precision on an Apple M5 Max. Text and audio throughput rise with batch size, while image and video throughput remain roughly flat." width="2914" height="2288" loading="lazy" />
+            <a href="../assets/blog/embeddinggemma-2-throughput.png?v=2" aria-label="Open the full-size EmbeddingGemma 2 throughput chart">
+            <img src="../assets/blog/embeddinggemma-2-throughput.png?v=2" alt="Batched throughput for text, image, audio, and video across BF16, 8-bit, 6-bit, and 4-bit precision on an Apple M5 Max. Text and audio throughput rise with batch size, while image and video throughput remain roughly flat." width="2914" height="2288" loading="lazy" />
             </a>
-            <figcaption>EmbeddingGemma 2 batched throughput on MLX-VLM. <a href="../assets/blog/embeddinggemma-2-throughput.png">View full-size chart <span aria-hidden="true">↗</span></a></figcaption>
+            <figcaption>EmbeddingGemma 2 batched throughput on MLX-VLM. <a href="../assets/blog/embeddinggemma-2-throughput.png?v=2">View full-size chart <span aria-hidden="true">↗</span></a></figcaption>
             </figure>
             <h2 id="quantization">Quantization and fidelity</h2>
             <p>Quantization primarily reduced weight storage in these tests. The standard conversion policy quantized the text encoder and audio projection while retaining the vision encoder, audio encoder, and vision projection in BF16. Consequently, whole-model savings were smaller than the savings within the text encoder.</p>
