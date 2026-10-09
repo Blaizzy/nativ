@@ -2,6 +2,50 @@ import XCTest
 @testable import NativServerKit
 
 final class MCPServerCatalogTests: XCTestCase {
+    func testMigrationUpdatesPythonServersWithAndWithoutCatalogIDs() throws {
+        let catalog = MCPServerCatalog.bundled
+        for name in ["git", "fetch", "sqlite"] {
+            let entry = try XCTUnwrap(catalog.entry(id: name))
+            let suffix = name == "sqlite" ? ["--db-path", "database.db"] : []
+            let expectedArguments = ["--with", "mcp==1.30.0", "mcp-server-\(name)"] + suffix
+            XCTAssertEqual(entry.arguments, expectedArguments)
+
+            for catalogID in [nil, Optional(name)] {
+                let original = MCPServerConfig(
+                    catalogID: catalogID,
+                    name: name,
+                    command: "uvx",
+                    arguments: ["--with", "mcp==1.12.0", "mcp-server-\(name)"] + suffix,
+                    environment: ["KEEP_ME": "value"],
+                    isEnabled: false
+                )
+                var servers = [original]
+
+                XCTAssertTrue(catalog.migrateConfigurations(in: &servers))
+                XCTAssertEqual(servers.count, 1)
+                XCTAssertEqual(servers[0].id, original.id)
+                XCTAssertEqual(servers[0].catalogID, name)
+                XCTAssertEqual(servers[0].command, "uvx")
+                XCTAssertEqual(servers[0].arguments, expectedArguments)
+                XCTAssertEqual(servers[0].environment, original.environment)
+                XCTAssertFalse(servers[0].isEnabled)
+                XCTAssertFalse(catalog.migrateConfigurations(in: &servers))
+            }
+        }
+    }
+
+    func testMigrationPreservesCustomPythonServerCommand() {
+        let original = MCPServerConfig(
+            name: "sqlite",
+            command: "uvx",
+            arguments: ["--with", "mcp==1.12.0", "mcp-server-sqlite", "--db-path", "custom.db"]
+        )
+        var servers = [original]
+
+        XCTAssertFalse(MCPServerCatalog.bundled.migrateConfigurations(in: &servers))
+        XCTAssertEqual(servers, [original])
+    }
+
     func testBundledGitHubServerUsesOAuthWithoutPATSetup() throws {
         let github = try XCTUnwrap(MCPServerCatalog.bundled.entry(id: "github"))
 
