@@ -99,6 +99,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     private var previewGeneration = UUID()
     private var isStartingPreview = false
     private var pendingNavigation: WKNavigation?
+    private var navigationFailure: ChatWorkNavigationFailure?
     private var observations: [NSKeyValueObservation] = []
     fileprivate(set) var elementLabels: [String: String] = [:]
 
@@ -156,6 +157,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             loadedContent = item.content
             modelURL = nil
             errorMessage = nil
+            navigationFailure = nil
             runtimeErrors = []
             elementLabels = [:]
             previewLoad?.cancel()
@@ -218,6 +220,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         annotator.cancel()
         loadedURL = url.absoluteString
         errorMessage = nil
+        navigationFailure = nil
         elementLabels = [:]
         pendingNavigation = webView.load(URLRequest(url: url, timeoutInterval: 30))
     }
@@ -258,9 +261,35 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        if navigation === pendingNavigation { pendingNavigation = nil }
-        if (error as NSError).code != NSURLErrorCancelled { errorMessage = error.localizedDescription }
+        recordNavigationFailure(navigation, error: error)
+    }
+
+    private func recordNavigationFailure(_ navigation: WKNavigation?, error: Error) {
+        // A cancelled or superseded load must not poison the next page's result.
+        guard navigation === pendingNavigation else { return }
+        pendingNavigation = nil
+        let failure = error as NSError
+        if failure.domain != NSURLErrorDomain || failure.code != NSURLErrorCancelled {
+            let url = (failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL)?.absoluteString
+                ?? failure.userInfo[NSURLErrorFailingURLStringErrorKey] as? String ?? loadedURL
+            navigationFailure = ChatWorkNavigationFailure(url: url, message: error.localizedDescription)
+            errorMessage = error.localizedDescription
+            elementLabels = [:]
+        }
         refreshNavigation()
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        // Authentication/challenge pages (401/403) may still need browser interaction.
+        if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse,
+           response.statusCode == 404 || response.statusCode == 410 || response.statusCode >= 500 {
+            let message = "The website returned HTTP \(response.statusCode) (\(HTTPURLResponse.localizedString(forStatusCode: response.statusCode)))."
+            navigationFailure = ChatWorkNavigationFailure(url: response.url?.absoluteString,
+                                                          message: message, httpStatus: response.statusCode)
+            errorMessage = message
+            elementLabels = [:]
+        }
+        return .allow
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -268,13 +297,15 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         pendingNavigation = navigation
         runtimeErrors = []
         errorMessage = nil
+        navigationFailure = nil
         elementLabels = [:]
         refreshNavigation()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if navigation === pendingNavigation { pendingNavigation = nil }
-        errorMessage = nil
+        guard navigation === pendingNavigation else { return }
+        pendingNavigation = nil
+        if navigationFailure == nil { errorMessage = nil }
         refreshNavigation()
     }
 
@@ -283,9 +314,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        if navigation === pendingNavigation { pendingNavigation = nil }
-        if (error as NSError).code != NSURLErrorCancelled { errorMessage = error.localizedDescription }
-        refreshNavigation()
+        recordNavigationFailure(navigation, error: error)
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -295,10 +324,10 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     private func refreshNavigation() {
-        address = webView.url?.absoluteString ?? loadedURL ?? ""
+        address = navigationFailure?.url ?? webView.url?.absoluteString ?? loadedURL ?? ""
         // isLoading changes before WebKit replaces its old URL. Publishing that old URL
         // would save it back to the item and make SwiftUI load the previous page again.
-        if pendingNavigation == nil && !webView.isLoading { publishCommittedAddress() }
+        if pendingNavigation == nil && !webView.isLoading && navigationFailure == nil { publishCommittedAddress() }
         isLoading = isStartingPreview || webView.isLoading
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
@@ -320,9 +349,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             throw ChatWorkError.invalid("Website data is being cleared. Try again in a moment.")
         }
         switch request.action {
-        case .navigate:
-            guard let url = request.url else { throw ChatWorkError.invalid("navigate requires url.") }
-            try navigate(url)
+        case .navigate, .search:
+            guard let url = try request.navigationURL else { throw ChatWorkError.invalid("navigate requires url.") }
+            try navigate(url.absoluteString)
         case .back:
             guard webView.canGoBack else { throw ChatWorkError.invalid("This tab has no previous page.") }
             pendingNavigation = webView.goBack()
@@ -376,6 +405,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             }
             try await Task.sleep(for: .milliseconds(100))
         }
+        if let navigationFailure { throw navigationFailure }
         if let errorMessage { throw ChatWorkError.invalid(errorMessage) }
     }
 

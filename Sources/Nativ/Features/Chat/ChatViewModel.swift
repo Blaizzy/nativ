@@ -990,6 +990,8 @@ final class ChatViewModel: ObservableObject {
             description = "Create \(request.title ?? "work")\(request.url.map { " at \($0)" } ?? "") in this chat’s work pane."
         case .navigate:
             description = "Navigate \(target) to \(request.url ?? "the requested URL")."
+        case .search:
+            description = "Search Google for \(request.query ?? "the requested subject") in \(target)."
         case .open where request.url != nil:
             description = "Open \(request.url!) in this chat’s work pane."
         default:
@@ -1077,7 +1079,13 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func executeBrowserAction(_ request: ChatWorkRequest, item: ChatWorkItem, sessionID: UUID) async throws -> String {
-        var result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
+        var result: [String: Any]
+        do {
+            result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
+        } catch var failure as ChatWorkNavigationFailure {
+            failure.itemID = item.id
+            throw failure
+        }
         result["revision"] = item.revision
         result["editable"] = item.canEdit
         result["file_path"] = workFiles(in: sessionID).fileURL(for: item, sessionID: sessionID)?.path

@@ -171,9 +171,13 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         if !text.contains(where: { $0.isWhitespace }), isLocal || host.contains(".") {
             return try webURL("\(isLocal ? "http" : "https")://\(text)")
         }
+        return searchURL(text)
+    }
+
+    static func searchURL(_ query: String) -> URL {
         var search = URLComponents(string: "https://www.google.com/search")!
-        search.queryItems = [URLQueryItem(name: "q", value: text)]
-        return try webURL(search.url!.absoluteString)
+        search.queryItems = [URLQueryItem(name: "q", value: query)]
+        return search.url!
     }
 
     private static func validateContent(_ content: String) throws {
