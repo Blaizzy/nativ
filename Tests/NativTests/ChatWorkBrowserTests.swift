@@ -245,6 +245,66 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(browser.webView.url?.absoluteString, next)
     }
 
+    func testFailedNavigationDoesNotReturnOrPublishThePreviousPageAndCanRecover() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let browser = makeBrowser()
+        defer { browser.stop() }
+        browser.load(ChatWorkItem(title: "Fixture", kind: .website, content: "", url: base.absoluteString))
+        let first = try await inspect(browser)
+        let control = try element("Search", in: first)
+        var published: [String] = []
+        browser.onNavigate = { published.append($0) }
+        let unavailable = "http://127.0.0.1:1/unavailable"
+        try browser.navigate(unavailable)
+        for request in [ChatWorkRequest(action: .inspect), ChatWorkRequest(action: .click, elementID: control)] {
+            do {
+                _ = try await browser.execute(request)
+                XCTFail("An old page must not be inspected or operated as the failed destination")
+            } catch let failure as ChatWorkNavigationFailure {
+                XCTAssertEqual(failure.url, unavailable)
+            }
+        }
+        XCTAssertTrue(published.isEmpty)
+        XCTAssertEqual(browser.address, unavailable)
+        XCTAssertTrue(browser.elementLabels.isEmpty)
+        let next = base.appendingPathComponent("next").absoluteString
+        let recovered = try await browser.execute(ChatWorkRequest(action: .navigate, url: next))
+        XCTAssertEqual(recovered["url"] as? String, next)
+        XCTAssertNil(browser.errorMessage)
+        XCTAssertEqual(published, [next])
+    }
+
+    func testHTTPErrorIsNotReportedAsASuccessfulPageAndClearsAfterRecovery() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let browser = makeBrowser()
+        defer { browser.stop() }
+        for status in [404, 410, 503] {
+            let url = base.appendingPathComponent("status/\(status)").absoluteString
+            do {
+                _ = try await browser.execute(ChatWorkRequest(action: .navigate, url: url))
+                XCTFail("HTTP \(status) must remain a navigation failure after didFinish")
+            } catch let failure as ChatWorkNavigationFailure {
+                XCTAssertEqual(failure.url, url)
+                XCTAssertEqual(failure.httpStatus, status)
+                XCTAssertNotNil(browser.errorMessage)
+            }
+        }
+        let result = try await browser.execute(ChatWorkRequest(action: .navigate, url: base.absoluteString))
+        XCTAssertEqual(result["title"] as? String, "Browser fixture")
+        XCTAssertNil(browser.errorMessage)
+        // Sign-in and challenge pages must remain inspectable and interactive.
+        for status in [401, 403] {
+            let page = try await browser.execute(ChatWorkRequest(action: .navigate,
+                url: base.appendingPathComponent("status/\(status)").absoluteString))
+            XCTAssertEqual(page["title"] as? String, "Browser fixture")
+            XCTAssertNotNil(page["elements"])
+        }
+    }
+
     func testTargetBlankLinkOpensInTheSharedBrowser() async throws {
         let server = try ChatWorkHTTPFixture()
         let base = try await server.start()
@@ -553,7 +613,8 @@ final class ChatWorkHTTPFixture {
                     """
             }
             let body = Data("<!doctype html><html><body>\(html)</body></html>".utf8)
-            let response = Data("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body
+            let status = path.hasPrefix("/status/") ? (Int(path.split(separator: "/").last ?? "") ?? 200) : 200
+            let response = Data("HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status))\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8) + body
             connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
         }
     }
