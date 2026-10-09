@@ -3,6 +3,57 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testSearchEncodesTheSubjectAndReusesTheFailedTab() throws {
+        let subject = "Example organization & founders + funding #2026?"
+        let arguments = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "action": "search", "query": subject
+        ]), as: UTF8.self)
+        let request = try ChatWorkRequest.decode(MLXChatToolCall(id: "search", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments)))
+        let url = try XCTUnwrap(request.navigationURL)
+        XCTAssertEqual(url.host, "www.google.com")
+        XCTAssertEqual(url.path, "/search")
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                       [URLQueryItem(name: "q", value: subject)])
+        XCTAssertTrue(request.action.isBrowserAction)
+
+        var state = ChatWorkState()
+        let failed = try state.browserItem(for: ChatWorkRequest(action: .open, url: "https://missing.invalid"))
+        XCTAssertEqual(try state.browserItem(for: request).id, failed.id)
+        let document = try state.create(title: "Notes", kind: .document, content: "Keep this")
+        XCTAssertEqual(try state.browserItem(for: ChatWorkRequest(action: .search, id: failed.id, query: subject)).id, failed.id)
+        XCTAssertEqual(state.items.count, 2)
+        state.open(document.id)
+        let search = try state.browserItem(for: request)
+        XCTAssertEqual(search.url, url.absoluteString)
+        XCTAssertNotEqual(search.id, document.id)
+        XCTAssertEqual(state.items.first { $0.id == document.id }?.content, "Keep this")
+        let before = state
+        for query in [nil, "", " \n ", String(repeating: "x", count: 301)] as [String?] {
+            XCTAssertThrowsError(try state.browserItem(for: ChatWorkRequest(action: .search, query: query)))
+        }
+        XCTAssertThrowsError(try state.browserItem(for: ChatWorkRequest(action: .search, id: document.id, query: subject)))
+        XCTAssertEqual(state, before)
+    }
+
+    func testNavigationFailurePayloadProvidesRecoveryWithoutChangingOtherErrors() throws {
+        let id = UUID()
+        let failure = ChatWorkNavigationFailure(url: "https://missing.invalid", message: "Host not found", itemID: id)
+        let result = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: failure))
+        XCTAssertEqual(result["ok"] as? Bool, false)
+        XCTAssertEqual(result["loaded"] as? Bool, false)
+        XCTAssertEqual(result["id"] as? String, id.uuidString)
+        XCTAssertEqual(result["url"] as? String, failure.url)
+        XCTAssertEqual(result["error_code"] as? String, "navigation_failed")
+        XCTAssertNotNil(result["recovery_hint"])
+        XCTAssertNil(result["text"])
+        XCTAssertNil(result["elements"])
+
+        let invalid = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: ChatWorkError.conflict))
+        XCTAssertEqual(invalid["error"] as? String, ChatWorkError.conflict.localizedDescription)
+        XCTAssertNil(invalid["recovery_hint"], "Invalid arguments and edit conflicts must not trigger web searches")
+    }
+
     func testBrowserRequestsResolveURLsAndSelectedTabsWithoutGuessing() throws {
         var state = ChatWorkState()
         let url = "https://example.com/"
@@ -821,6 +872,38 @@ final class ChatWorkSessionTests: XCTestCase {
         let reopened = try await run(["action": "open", "url": nextURL])
         XCTAssertEqual(reopened["id"] as? String, id)
         XCTAssertEqual(chat.workState.items.count, 1)
+    }
+
+    func testAgentCanRecoverFromAnUnavailableWebsiteInTheSameTab() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let run = dispatcher(chat, sessionID: session.id, baseURL: base)
+        let unavailable = "http://127.0.0.1:1/unavailable"
+        var failedID: String?
+        // Opening the same failed URL must retain the recovery context and reuse its tab.
+        for _ in 0..<2 {
+            do {
+                _ = try await run(["action": "open", "url": unavailable])
+                XCTFail("An unavailable website must not be reported as loaded")
+            } catch {
+                let payload = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+                let id = try XCTUnwrap(payload["id"] as? String)
+                if let failedID { XCTAssertEqual(id, failedID) }
+                failedID = id
+                XCTAssertEqual(payload["url"] as? String, unavailable)
+                XCTAssertEqual(payload["loaded"] as? Bool, false)
+                XCTAssertNotNil(payload["recovery_hint"])
+            }
+        }
+        let recovered = try await run(["action": "navigate", "id": XCTUnwrap(failedID), "url": base.absoluteString])
+        XCTAssertEqual(recovered["title"] as? String, "Browser fixture")
+        XCTAssertEqual(recovered["id"] as? String, failedID)
+        XCTAssertEqual(chat.workState.items.count, 1)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem?.url, base.absoluteString)
     }
 
     private func dispatcher(_ chat: ChatViewModel, sessionID: UUID, baseURL: URL)
