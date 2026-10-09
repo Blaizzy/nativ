@@ -85,5 +85,14 @@
     "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only"],
     "symbol": "globe",
     "tint": "indigo"
+  },
+  {
+    "id": "fxmacrodata",
+    "name": "fxmacrodata",
+    "summary": "Central-bank and economic data for FX: rates, CPI, jobs, release calendars.",
+    "command": "npx",
+    "args": ["-y", "mcp-remote@0.1.38", "https://mcp.fxmacrodata.com", "--transport", "http-only"],
+    "symbol": "chart.line.uptrend.xyaxis",
+    "tint": "green"
   }
 ]
