@@ -2785,10 +2785,9 @@ final class ChatViewModel: ObservableObject {
                             break
                         }
                     }
-                    let threshold = try ChatCompactionState.threshold(
+                    let threshold = ChatCompactionState.threshold(
                         modelContext: contextLimit,
                         configuredContext: activeSettings.maxKVSize,
-                        maxOutput: request.maxTokens,
                         percent: activeSettings.compactionThresholdPercent
                     )
                     let saved = currentSessionID == queuedRequest.sessionID
@@ -3338,9 +3337,10 @@ final class ChatViewModel: ObservableObject {
                     )
                 else { return prepared }
                 let promptTokens = try await client.countPromptTokens(for: request).inputTokens
-                let promptLimit = max(
-                    0,
-                    effectiveContextLimit - request.maxTokens - ChatDocumentTokenBudget.safetyMargin
+                let promptLimit = ChatDocumentTokenBudget.promptLimit(
+                    contextLimit: effectiveContextLimit,
+                    maximumOutputTokens: request.maxTokens,
+                    compactionEnabled: settings.compactionEnabled
                 )
                 guard promptTokens > promptLimit else { return prepared }
 
@@ -3364,7 +3364,8 @@ final class ChatViewModel: ObservableObject {
                     basePromptTokens: basePromptTokens,
                     documentPromptTokens: promptTokens,
                     contextLimit: effectiveContextLimit,
-                    maximumOutputTokens: request.maxTokens
+                    maximumOutputTokens: request.maxTokens,
+                    compactionEnabled: settings.compactionEnabled
                 )
                 if nextLimit >= prepared.characterLimit {
                     nextLimit = max(0, prepared.characterLimit - 1)

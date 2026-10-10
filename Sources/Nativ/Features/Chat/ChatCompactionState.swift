@@ -31,14 +31,12 @@ struct ChatCompactionState: Codable, Equatable {
         return [item] + (try NativResponsesClient.inputItems(Array(request.messages.dropFirst(messageCount))))
     }
 
-    static func threshold(modelContext: Int?, configuredContext: Int, maxOutput: Int, percent: Int = 75) throws -> Int {
+    static func threshold(modelContext: Int?, configuredContext: Int, percent: Int = 75) -> Int {
         let context = [modelContext, configuredContext].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
         let percent = min(max(percent, 20), 90)
-        let threshold = min(context * percent / 100, context - maxOutput - 1024)
-        guard threshold > 0 else {
-            throw NativChatError.serverError("Lower Max output to leave room for conversation compaction.")
-        }
-        return threshold
+        // The server counts actual input and bounds generation by the remaining
+        // context. Unused Max output tokens do not advance compaction.
+        return max(1, context * percent / 100)
     }
 
     private static func digest(_ messages: [MLXChatMessage]) throws -> String {

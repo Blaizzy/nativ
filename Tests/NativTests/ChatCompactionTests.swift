@@ -93,6 +93,15 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertThrowsError(try unfinished.result(elapsed: 1))
     }
 
+    func testContextLimitedResponsePreservesPartialAnswerAndReportsLength() throws {
+        var stream = MLXResponseStream()
+        _ = try stream.consume(#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"1 2 3"}]}],"usage":{"input_tokens":4064,"output_tokens":32,"total_tokens":4096}}}"#)
+        let result = try stream.result(elapsed: 1)
+        XCTAssertEqual(result.completion.content, "1 2 3")
+        XCTAssertEqual(result.completion.finishReason, "length")
+        XCTAssertEqual(result.completion.usage?.totalTokens, 4096)
+    }
+
     func testReplayReplacesCoveredPrefixAndPreservesNewToolResult() throws {
         let call = MLXChatToolCall(id: "c1", function: .init(name: "read", arguments: "{}"))
         let original = request([.init(role: "user", content: "Read the file")])
@@ -156,17 +165,46 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(old.messages, messages)
     }
 
-    func testThresholdReservesGenerationAndSummaryHeadroom() throws {
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048), 24000)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 64000, maxOutput: 2048), 6928)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 0, maxOutput: 20000), 42976)
-        for (percent, expected) in [(20, 2000), (50, 5000), (90, 8720), (19, 2000)] {
-            XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: 256, percent: percent), expected)
+    func testThresholdUsesEffectiveContextAndSelectedPercentage() {
+        for (model, configured, expected) in [
+            (64000, 32000, 24000), (10000, 64000, 7500),
+            (64000, 0, 48000), (128000, 2048, 1536), (1, 0, 1),
+        ] {
+            XCTAssertEqual(ChatCompactionState.threshold(modelContext: model, configuredContext: configured), expected)
         }
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 60), 19200)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: 64000, configuredContext: 32000, maxOutput: 2048, percent: 91), 28800)
-        XCTAssertEqual(try ChatCompactionState.threshold(modelContext: nil, configuredContext: 0, maxOutput: 256, percent: 50), 4096)
-        XCTAssertThrowsError(try ChatCompactionState.threshold(modelContext: 4096, configuredContext: 0, maxOutput: 4096))
+        for (percent, expected) in [(19, 2000), (20, 2000), (50, 5000), (75, 7500), (90, 9000), (91, 9000)] {
+            XCTAssertEqual(ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, percent: percent), expected)
+        }
+        XCTAssertEqual(ChatCompactionState.threshold(modelContext: nil, configuredContext: 0), 6144)
+    }
+
+    func testLegacyMaxOutputIsPreservedAndDoesNotAdvanceCompaction() throws {
+        let client = NativResponsesClient(baseURL: server, tenant: "issue-670")
+        for context in [2048, 4096, 8192, 128000] {
+            for output in [2048, context, context * 2] {
+                let legacyJSON = "{\"maxTokens\":\(output),\"maxKVSize\":\(context)}"
+                let settings = try JSONDecoder().decode(NativSettings.self, from: Data(legacyJSON.utf8))
+                XCTAssertTrue(settings.compactionEnabled)
+                for thinking in [false, true] {
+                    var chat = request([.init(role: "user", content: "Are you ready to help me with some coding?")])
+                    chat.maxTokens = settings.maxTokens
+                    chat.enableThinking = thinking
+                    let threshold = ChatCompactionState.threshold(
+                        modelContext: 128000, configuredContext: settings.maxKVSize,
+                        percent: settings.compactionThresholdPercent
+                    )
+                    let wire = try client.makeResponseRequest(
+                        chat, input: NativResponsesClient.inputItems(chat.messages), compactThreshold: threshold
+                    )
+                    let body = try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))
+                    XCTAssertEqual(body["max_output_tokens"], .number(Double(output)))
+                    XCTAssertEqual(body["context_management"]?.arrayValue?.first?["compact_threshold"], .number(Double(context * 3 / 4)))
+                    XCTAssertEqual(body["enable_thinking"], .bool(thinking))
+                }
+                XCTAssertEqual(settings.maxTokens, output)
+                XCTAssertEqual(settings.maxKVSize, context)
+            }
+        }
     }
 
     func testCompactionSettingDefaultsAndRoundTrips() throws {
@@ -250,7 +288,7 @@ final class ChatCompactionTests: XCTestCase {
         chat.model = "openbmb/MiniCPM5-2B"
         chat.maxTokens = 256
         chat.enableThinking = false
-        let threshold = try ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000, maxOutput: chat.maxTokens)
+        let threshold = ChatCompactionState.threshold(modelContext: 10000, configuredContext: 10000)
         for batch in 1...9 {
             let log = (1...50).map { "Batch \(batch) row \($0): Documentation inspection finished successfully. No files were changed." }.joined(separator: "\n")
             chat.messages += [.init(role: "user", content: log), .init(role: "assistant", content: "Noted.")]
