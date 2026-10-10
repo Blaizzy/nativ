@@ -15,19 +15,6 @@ enum ModelPrimaryTask: Equatable, Sendable {
             false
         }
     }
-
-    var isExclusiveSpeech: Bool {
-        switch self {
-        case .textToSpeech, .speechToText:
-            true
-        case .language, .audioLanguage, .unknown:
-            false
-        }
-    }
-
-    func includesLanguageCapability(fallbackMatch: Bool) -> Bool {
-        isLanguageCapable || (!isExclusiveSpeech && fallbackMatch)
-    }
 }
 
 enum ModelPrimaryTaskResolver {
@@ -56,14 +43,39 @@ enum ModelPrimaryTaskResolver {
         if audioLanguageModelTypes.contains(modelType) {
             return .audioLanguage
         }
+        if isGenerativeLanguageConfiguration(config) {
+            return .language
+        }
+        return .unknown
+    }
+
+    private static func isGenerativeLanguageConfiguration(
+        _ config: [String: Any]
+    ) -> Bool {
+        let modelType = normalized(config["model_type"] as? String)
         if languageModelTypes.contains(modelType)
+            || languageWrapperModelTypes.contains(modelType)
             || languageFamilyPrefixes.contains(where: {
                 modelType.hasPrefix("\($0)_")
             })
         {
-            return .language
+            return true
         }
-        return .unknown
+
+        let architectures = (config["architectures"] as? [String] ?? [])
+            .map(normalized)
+        if architectures.contains(where: { architecture in
+            generativeArchitectureMarkers.contains(where: architecture.contains)
+        }) {
+            return true
+        }
+
+        return languageConfigurationKeys.contains { key in
+            guard let nestedConfig = config[key] as? [String: Any] else {
+                return false
+            }
+            return isGenerativeLanguageConfiguration(nestedConfig)
+        }
     }
 
     private static func isTextToSpeech(
@@ -201,6 +213,15 @@ enum ModelPrimaryTaskResolver {
         "smollm3",
     ]
 
+    private static let languageWrapperModelTypes: Set<String> = [
+        "minicpmo",
+        "minicpmv",
+        "moondream",
+        "moondream1",
+        "moondream2",
+        "moondream3",
+    ]
+
     private static let languageFamilyPrefixes = [
         "cohere",
         "deepseek",
@@ -209,5 +230,17 @@ enum ModelPrimaryTaskResolver {
         "llama",
         "mistral",
         "qwen",
+    ]
+
+    private static let generativeArchitectureMarkers = [
+        "forcausallm",
+        "forconditionalgeneration",
+        "lmheadmodel",
+    ]
+
+    private static let languageConfigurationKeys = [
+        "language_config",
+        "llm_config",
+        "text_config",
     ]
 }
