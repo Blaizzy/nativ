@@ -1269,7 +1269,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
-                .fixedSize(horizontal: true, vertical: false)
             } else {
                 ChatMessageText(
                     messageID: message.id,
