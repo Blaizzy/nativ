@@ -233,6 +233,7 @@ struct ChatComposer<ContextHeader: View>: View {
     @State private var editorContentHeight: CGFloat = 0
     @State private var didApplyInitialReasoningDefault = false
     @State private var showsKits = false
+    @State private var showsAudioSessions = false
     @State private var showsCapabilities = false
     @State private var showsAddPanel = false
     @State private var isWebSearchAvailable = false
@@ -492,6 +493,11 @@ struct ChatComposer<ContextHeader: View>: View {
         .sheet(isPresented: $showsCapabilities) {
             ChatCapabilitiesSheet(model: model)
         }
+        .sheet(isPresented: $showsAudioSessions) {
+            ChatAudioSessionPicker(analytics: .shared) { records in
+                viewModel.attachAudioSessions(records)
+            }
+        }
     }
 
     private var minimumControlsWidth: CGFloat {
@@ -517,9 +523,11 @@ struct ChatComposer<ContextHeader: View>: View {
             ),
             isWebReadAvailable: isWebReadAvailable,
             webReadProviderLabel: webReadProviderLabel,
+            hasAudioSessions: !AudioAnalyticsStore.shared.captureRecords.isEmpty,
             onAttachImages: { dismissAddPanelAndPerform(viewModel.chooseAttachments) },
             onPasteImage: { dismissAddPanelAndPerform(viewModel.pasteImageFromClipboard) },
             onCaptureScreenshot: { dismissAddPanelAndPerform(viewModel.captureScreenshot) },
+            onAddAudioSession: { dismissAddPanelAndPerform { showsAudioSessions = true } },
             onToggleWebSearch: {
                 toggleGlobalBrowsingTool(
                     ChatWebSearchToolRegistry.toolName,
@@ -2208,9 +2216,11 @@ struct ChatComposerActionPanel: View {
     var isWebReadEnabled = false
     var isWebReadAvailable = false
     var webReadProviderLabel: String?
+    var hasAudioSessions = false
     let onAttachImages: () -> Void
     let onPasteImage: () -> Void
     let onCaptureScreenshot: () -> Void
+    var onAddAudioSession: () -> Void = {}
     var onToggleWebSearch: () -> Void = {}
     var onToggleWebRead: () -> Void = {}
     var onOpenKits: (() -> Void)? = nil
@@ -2242,6 +2252,15 @@ struct ChatComposerActionPanel: View {
                         systemName: "camera.viewfinder",
                         action: onCaptureScreenshot
                     )
+
+                    if hasAudioSessions {
+                        ChatComposerActionRow(
+                            title: "Add a Recording",
+                            detail: "Talk about a saved recording or meeting",
+                            systemName: "waveform",
+                            action: onAddAudioSession
+                        )
+                    }
                 }
 
                 if showsGlobalTools {
