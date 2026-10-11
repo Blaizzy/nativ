@@ -6,7 +6,7 @@ import Foundation
 @MainActor
 final class VoiceWakeWordMonitor: ObservableObject {
     enum State: Equatable {
-        case off, paused, pausedForInactivity, preparing, listening, confirming, capturing
+        case off, paused, pausedForInactivity, pausedForMicrophone, preparing, listening, confirming, capturing
         case unavailable(String)
 
         var description: String {
@@ -14,6 +14,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
             case .off: "Wake word is off."
             case .paused: "Wake word is paused while audio is busy."
             case .pausedForInactivity: "Paused to save power. Move the mouse or press a key to resume."
+            case .pausedForMicrophone: "No allowed microphone for passive listening. Connect one or update microphone exclusions."
             case .preparing: "Preparing on-device wake word…"
             case .listening: "Listening for “hey nativ”."
             case .confirming: "Confirming “hey nativ”…"
@@ -35,12 +36,13 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private struct Configuration: Equatable {
         var enabled: Bool
         var suspended: Bool
+        var inputUnavailable = false
         var powerSavingPaused = false
         var deviceID: String?
     }
 
     private var configuration = Configuration(enabled: false, suspended: false)
-    private let inputSession = AudioInputCaptureSession()
+    private let inputSession = AudioInputCaptureSession(passive: true)
     private var sessionID = UUID()
     private var task: Task<Void, Never>?
     private var inferenceTask: Task<Void, Never>?
@@ -48,11 +50,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private var processor: VoiceWakeWordProcessor?
     private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
-    func configure(enabled: Bool, suspended: Bool, deviceID: String?, powerSavingPaused: Bool = false) {
-        let next = Configuration(enabled: enabled, suspended: suspended, powerSavingPaused: powerSavingPaused, deviceID: deviceID)
+    func configure(enabled: Bool, suspended: Bool, deviceID: String?, powerSavingPaused: Bool = false, inputUnavailable: Bool = false) {
+        let next = Configuration(enabled: enabled, suspended: suspended, inputUnavailable: inputUnavailable, powerSavingPaused: powerSavingPaused, deviceID: deviceID)
         guard next != configuration else { return }
         let needsRestart = next.enabled != configuration.enabled
             || next.suspended != configuration.suspended || next.deviceID != configuration.deviceID
+            || next.inputUnavailable != configuration.inputUnavailable
         configuration = next
         if needsRestart { restart() } else { applyPowerSavingPause() }
     }
@@ -61,6 +64,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
         stopSession()
         guard configuration.enabled else { state = .off; return }
         guard !configuration.suspended else { state = .paused; return }
+        guard !configuration.inputUnavailable else { state = .pausedForMicrophone; return }
         guard !configuration.powerSavingPaused else { state = .pausedForInactivity; return }
         state = .preparing
         let id = sessionID

@@ -351,6 +351,21 @@ struct VoiceWakeWordPreferencesTests {
         #expect(!preferences.isHandsFreeEnabled)
     }
 
+    @Test func testUnavailableMicrophonePausesUntilAnAllowedInputReturns() async throws {
+        let monitor = VoiceWakeWordMonitor()
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.restart()
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: true, suspended: false, deviceID: "allowed-input")
+        #expect(monitor.state == .preparing)
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: false, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .off)
+    }
+
     @Test func testDisablingOrSuspendingCancelsPendingListenerStartup() async throws {
         let monitor = VoiceWakeWordMonitor()
         monitor.configure(enabled: true, suspended: false, deviceID: nil)

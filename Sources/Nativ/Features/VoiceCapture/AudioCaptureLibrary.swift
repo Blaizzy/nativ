@@ -379,6 +379,12 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         clearLastError()
+        guard (try? AudioInputDeviceResolver.captureDeviceID(
+            preferredID: AudioInputDevicePreferences.shared.selectedDeviceID
+        )) != nil else {
+            fail(VoiceAudioRecorderError.noAllowedMicrophone)
+            return
+        }
         activeKind = kind
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
@@ -1012,6 +1018,12 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        if case VoiceAudioRecorderError.noAllowedMicrophone = error {
+            clearLastError()
+            resetCaptureState()
+            recordingOverlay.showMicrophoneUnavailable()
+            return
+        }
         lastErrorMessage = error.localizedDescription
         permissionRequiringSettings = nil
         if let captureError = error as? AudioCaptureLibraryError {
