@@ -4,6 +4,7 @@ import Foundation
 enum VoiceAudioRecorderError: LocalizedError {
     case couldNotStart
     case inputDeviceUnavailable
+    case noAllowedMicrophone
     case couldNotConvert
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum VoiceAudioRecorderError: LocalizedError {
             "Nativ could not start audio recording."
         case .inputDeviceUnavailable:
             "The selected microphone is no longer available. Choose another input device or use System Default."
+        case .noAllowedMicrophone:
+            "No allowed microphone is available. Connect a microphone or update exclusions in Audio settings."
         case .couldNotConvert:
             "Nativ could not convert audio from the microphone’s current format."
         }
