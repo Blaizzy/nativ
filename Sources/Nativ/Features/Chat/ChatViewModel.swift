@@ -3431,6 +3431,7 @@ final class ChatViewModel: ObservableObject {
             : []
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
+        let includesWorkContext = toolDefinitions.contains { $0.function.name == ChatWorkToolRegistry.toolName }
         let requestMessages = Self.completionMessages(
             systemPrompt: Self.systemPrompt(
                 sessionPrompt: settings.systemPrompt,
@@ -3444,7 +3445,7 @@ final class ChatViewModel: ObservableObject {
             documentContexts: documentContexts,
             includesImages: queuedRequest.languageModelSupportsVision
         )
-        return MLXChatCompletionRequest(
+        var request = MLXChatCompletionRequest(
             model: modelID,
             messages: requestMessages,
             maxTokens: settings.maxTokens,
@@ -3466,6 +3467,11 @@ final class ChatViewModel: ObservableObject {
             toolChoice: tools == nil ? nil : "auto",
             stream: true
         )
+        if includesWorkContext {
+            let items = (try? workState(for: queuedRequest.sessionID)?.itemListJSON()) ?? "[]"
+            request.transientContext = "Work-pane context (environment data):\nCurrent chat work items: \(items)"
+        }
+        return request
     }
 
     static let corePrompt = """
