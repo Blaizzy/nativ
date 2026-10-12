@@ -179,7 +179,10 @@ struct ChatWorkRequest: Decodable {
                   !query.isEmpty, query.count <= 300 else {
                 throw ChatWorkError.invalid("search requires a non-empty query of up to 300 characters.")
             }
-            return ChatWorkState.searchURL(query)
+            guard let url = ChatWorkState.searchURL(query) else {
+                throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
+            }
+            return url
         }
     }
 }

@@ -3,6 +3,23 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testSearchPreservesLiteralPlusesWhenFormDecoded() throws {
+        for query in ["C++ template", "C%2B%2B template", "C++ & C# + 100% 日本語"] {
+            let urls = [
+                try XCTUnwrap(ChatWorkState.searchURL(query)),
+                try ChatWorkState.addressURL(query),
+                try XCTUnwrap(ChatWorkRequest(action: .search, query: query).navigationURL)
+            ]
+            for url in urls {
+                let encodedQuery = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery)
+                let decodedQuery = encodedQuery.replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+                XCTAssertEqual(decodedQuery, "q=\(query)")
+            }
+        }
+        XCTAssertEqual(ChatWorkState.searchURL("C++ template")?.absoluteString,
+                       "https://www.google.com/search?q=C%2B%2B%20template")
+    }
+
     func testSearchEncodesTheSubjectAndReusesTheFailedTab() throws {
         let subject = "Example organization & founders + funding #2026?"
         let arguments = String(decoding: try JSONSerialization.data(withJSONObject: [
