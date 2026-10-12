@@ -24,12 +24,14 @@ final class VoiceCaptureCoordinator {
     private let overlay = VoiceCaptureOverlayController()
     private let analytics = AudioAnalyticsStore.shared
     private let wakeWordMonitor = VoiceWakeWordMonitor.shared
+    private let wakeWordPowerMonitor = VoiceWakeWordPowerMonitor()
     private var isWakeWordCapture = false
     private var wakeWordInsertionTarget: VoiceTranscriptInsertionTarget?
     private var observations = Set<AnyCancellable>()
     private var isActive = false
     private var isOtherAudioBusy = false
     private var isSystemSleeping = false
+    private var isDisplaySleeping = false
     private var isSessionInactive = false
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
@@ -44,6 +46,7 @@ final class VoiceCaptureCoordinator {
     private var hasShownInsertionPermissionAlert = false
 
     init() {
+        wakeWordPowerMonitor.onChange = { [weak self] in self?.updateWakeWordListening() }
         shortcutMonitor.onChange = { [weak self] isHeld in
             self?.handleShortcutChange(isHeld)
         }
@@ -93,11 +96,11 @@ final class VoiceCaptureCoordinator {
             }
         }
         VoiceShortcutPreferences.shared.$isWakeWordEnabled
-            .removeDuplicates()
-            .sink { [weak self] enabled in
-                // @Published emits before the stored preference changes.
-                self?.updateWakeWordListening(enabled: enabled)
-            }
+            .combineLatest(VoiceShortcutPreferences.shared.$wakeWordListeningMode)
+            .removeDuplicates { $0 == $1 }
+            // Read both stored values after @Published has delivered its change.
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
         AudioInputDevicePreferences.shared.$selectedDeviceID
             .combineLatest(AudioInputDevicePreferences.shared.$devices)
@@ -107,6 +110,8 @@ final class VoiceCaptureCoordinator {
         let sessionEvents: [(Notification.Name, ReferenceWritableKeyPath<VoiceCaptureCoordinator, Bool>, Bool)] = [
             (NSWorkspace.willSleepNotification, \.isSystemSleeping, true),
             (NSWorkspace.didWakeNotification, \.isSystemSleeping, false),
+            (NSWorkspace.screensDidSleepNotification, \.isDisplaySleeping, true),
+            (NSWorkspace.screensDidWakeNotification, \.isDisplaySleeping, false),
             (NSWorkspace.sessionDidResignActiveNotification, \.isSessionInactive, true),
             (NSWorkspace.sessionDidBecomeActiveNotification, \.isSessionInactive, false),
         ]
@@ -162,18 +167,24 @@ final class VoiceCaptureCoordinator {
     }
 
     private var canUseWakeWordAudio: Bool {
-        isActive && !isSystemSleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
+        isActive && !isSystemSleeping && !isDisplaySleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
     }
 
     private var canListenForWakeWord: Bool {
         canUseWakeWordAudio && !isShortcutHeld && !recorder.isRecording && transcriptionTasks.isEmpty
     }
 
-    private func updateWakeWordListening(enabled: Bool? = nil) {
+    private func updateWakeWordListening() {
+        let enabled = isActive && VoiceShortcutPreferences.shared.isWakeWordEnabled
+        wakeWordPowerMonitor.configure(
+            enabled: enabled && !isSystemSleeping && !isDisplaySleeping && !isSessionInactive,
+            mode: VoiceShortcutPreferences.shared.wakeWordListeningMode
+        )
         wakeWordMonitor.configure(
-            enabled: isActive && (enabled ?? VoiceShortcutPreferences.shared.isWakeWordEnabled),
+            enabled: enabled,
             suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
-            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID
+            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID,
+            powerSavingPaused: wakeWordPowerMonitor.isPaused
         )
     }
 
@@ -216,6 +227,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func beginCapture() {
+        wakeWordPowerMonitor.recordActivity()
         updateWakeWordListening()
         permissionTask?.cancel()
         activeOverlayTranscriptionID = nil
@@ -530,6 +542,7 @@ final class VoiceCaptureCoordinator {
                     return
                 }
                 let transcript = dictation.text
+                self.wakeWordPowerMonitor.recordSuccessfulDictation()
                 let transcriptURL = recordingURL
                     .deletingPathExtension()
                     .appendingPathExtension("txt")
@@ -649,6 +662,7 @@ final class VoiceCaptureCoordinator {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
             return
         }
+        wakeWordPowerMonitor.recordSuccessfulDictation()
         let transcriptURL = recordingURL
             .deletingPathExtension()
             .appendingPathExtension("txt")

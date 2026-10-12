@@ -108,6 +108,7 @@ struct ChatCapabilitiesSheet: View {
         var seenConfigurations = Set<ChatNativeToolConfiguration>()
         return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
             let toolName = descriptor.definition.function.name
+            guard !ChatToolRegistry.alwaysOnToolNames.contains(toolName) else { return nil }
             let configuration = descriptor.configuration
             if let configuration,
                 configuration.toolNames.count > 1,

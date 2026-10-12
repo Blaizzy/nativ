@@ -124,6 +124,8 @@ enum ChatToolRegistry {
         descriptors(canEditImage: canEditImage).map(\.definition)
     }
 
+    static let alwaysOnToolNames: Set<String> = [ChatWorkToolRegistry.toolName]
+
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
             ChatNativeToolDescriptor(
@@ -276,6 +278,9 @@ enum ChatToolDispatcher {
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
+        ChatWorkToolRegistry.toolName: { _, error in
+            ChatWorkToolRegistry.failurePayload(error: error)
+        },
         ChatImageToolRegistry.generateToolName: { name, error in
             failurePayloadForImageTool(name: name, error: error)
         },

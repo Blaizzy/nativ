@@ -321,7 +321,7 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
             promptTokens: promptTokens,
             completionTokens: completionTokens,
             totalTokens: totalTokens,
-            promptTokensPerSecond: promptTokensPerSecond,
+            promptTokensPerSecond: timings?.promptTokensPerSecond ?? promptTokensPerSecond,
             decodeTokensPerSecond: timings?.resolvedDecodeTokensPerSecond
                 ?? decodeTokensPerSecond,
             peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB,
@@ -1053,6 +1053,7 @@ struct MLXChatToolCallAccumulator {
 }
 
 private struct MLXChatTimings: Decodable {
+    let promptTokensPerSecond: Double?
     let predictedTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specDraftKind: String?
@@ -1080,6 +1081,7 @@ private struct MLXChatTimings: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case promptTokensPerSecond = "prompt_per_second"
         case predictedTokensPerSecond = "predicted_per_second"
         case peakMemoryGB = "peak_memory"
         case specDraftKind = "draft_kind"

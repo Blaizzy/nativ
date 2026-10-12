@@ -1269,7 +1269,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
-                .fixedSize(horizontal: true, vertical: false)
             } else {
                 ChatMessageText(
                     messageID: message.id,
@@ -2540,7 +2539,11 @@ private struct ChatResponseMetricsRow: View {
             value: NativFormatting.integer(metrics.totalTokens)
         )
         ChatResponseMetricPill(
-            label: "Decode tok/s",
+            label: "Prefill",
+            value: NativFormatting.rate(metrics.prefillTokensPerSecond)
+        )
+        ChatResponseMetricPill(
+            label: "Decode",
             value: NativFormatting.rate(metrics.decodeTokensPerSecond)
         )
         if let acceptanceRate = metrics.specAcceptanceRate {

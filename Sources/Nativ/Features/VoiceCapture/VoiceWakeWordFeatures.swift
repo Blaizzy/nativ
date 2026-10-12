@@ -17,6 +17,10 @@ final class VoiceWakeWordFeatures {
     private var outputImaginary = [Float](repeating: 0, count: 512)
     private var power = [Float](repeating: 0, count: 257)
     private var melFrame = [Float](repeating: 0, count: 128)
+    // Unnormalized mel frames in a ring. Normalization still covers each full window.
+    private var cachedMels = [Float](repeating: 0, count: 128 * 200)
+    private var cacheStart = 0
+    private var previousWindowEnd: Int64?
 
     init() throws {
         guard let setup = vDSP_DFT_zop_CreateSetup(nil, 512, .FORWARD) else {
@@ -31,11 +35,40 @@ final class VoiceWakeWordFeatures {
     deinit { vDSP_DFT_DestroySetup(setup) }
 
     func compute(_ audio: [Float]) throws -> [Float] {
+        var result = [Float](repeating: 0, count: Self.melCount * Self.frameCount)
+        try result.withUnsafeMutableBufferPointer {
+            try compute(audio, windowEnd: nil, into: $0.baseAddress!)
+        }
+        return result
+    }
+
+    func reset() {
+        previousWindowEnd = nil
+    }
+
+    /// `windowEnd` is the exclusive sample offset in a continuous audio stream.
+    /// Pass nil for unrelated windows; reset after any dropped or replaced audio.
+    func compute(
+        _ audio: [Float], windowEnd: Int64?, into output: UnsafeMutablePointer<Float>,
+        melStride: Int = 200, frameStride: Int = 1
+    ) throws {
         guard audio.count == Self.windowSamples, audio.allSatisfy(\.isFinite) else {
+            reset()
             throw VoiceWakeWordModelError.invalidModel("Expected 32,000 finite mono samples at 16 kHz.")
         }
-        var result = [Float](repeating: 0, count: Self.melCount * Self.frameCount)
+        var shift = Self.frameCount
+        if let windowEnd, let previousWindowEnd, windowEnd > previousWindowEnd {
+            let advance = windowEnd - previousWindowEnd
+            if advance < Int64(Self.windowSamples), advance % 160 == 0 {
+                shift = Int(advance / 160)
+            }
+        }
+        cacheStart = (cacheStart + shift) % Self.frameCount
+        previousWindowEnd = windowEnd
         for frame in 0..<Self.frameCount {
+            // Frames 0 and 1 depend on left-edge zero padding. Old frame 199
+            // contains right-edge padding, so it cannot be reused in the interior.
+            if frame >= 2, frame + shift < Self.frameCount - 1 { continue }
             // torch.stft centers the 400-sample window in a 512-sample FFT,
             // and zero-pads the waveform by 256. Only frames 0..<200 are kept.
             for j in 0..<400 {
@@ -50,28 +83,36 @@ final class VoiceWakeWordFeatures {
             }
             vDSP_mmul(filters, 1, power, 1, &melFrame, 1, 128, 1, 257)
             for mel in 0..<Self.melCount {
-                result[mel * Self.frameCount + frame] = logf(max(melFrame[mel], 1e-10))
+                cachedMels[mel * Self.frameCount + (cacheStart + frame) % Self.frameCount] = logf(max(melFrame[mel], 1e-10))
             }
         }
-        result.withUnsafeMutableBufferPointer { output in
+        cachedMels.withUnsafeBufferPointer { cached in
             for mel in 0..<Self.melCount {
-                let row = output.baseAddress!.advanced(by: mel * Self.frameCount)
+                let row = output.advanced(by: mel * melStride)
+                let source = cached.baseAddress!.advanced(by: mel * Self.frameCount)
+                if frameStride == 1 {
+                    row.update(from: source + cacheStart, count: Self.frameCount - cacheStart)
+                    (row + Self.frameCount - cacheStart).update(from: source, count: cacheStart)
+                } else {
+                    for frame in 0..<Self.frameCount {
+                        row[frame * frameStride] = source[(cacheStart + frame) % Self.frameCount]
+                    }
+                }
                 // Avoid reduction roundoff creating a nonzero silent feature.
-                if (1..<Self.frameCount).allSatisfy({ row[$0] == row[0] }) {
-                    row.update(repeating: 0, count: Self.frameCount)
+                if (1..<Self.frameCount).allSatisfy({ row[$0 * frameStride] == row[0] }) {
+                    for frame in 0..<Self.frameCount { row[frame * frameStride] = 0 }
                     continue
                 }
                 var mean: Float = 0
-                vDSP_meanv(row, 1, &mean, 200)
+                vDSP_meanv(row, vDSP_Stride(frameStride), &mean, 200)
                 var negativeMean = -mean
-                vDSP_vsadd(row, 1, &negativeMean, row, 1, 200)
+                vDSP_vsadd(row, vDSP_Stride(frameStride), &negativeMean, row, vDSP_Stride(frameStride), 200)
                 var variance: Float = 0
-                vDSP_measqv(row, 1, &variance, 200)
+                vDSP_measqv(row, vDSP_Stride(frameStride), &variance, 200)
                 var inverseStd = 1 / (sqrtf(max(variance, 0)) + 1e-5)
-                vDSP_vsmul(row, 1, &inverseStd, row, 1, 200)
+                vDSP_vsmul(row, vDSP_Stride(frameStride), &inverseStd, row, vDSP_Stride(frameStride), 200)
             }
         }
-        return result // mel-major: [1,128,200], time is the contiguous dimension.
     }
 
     private static func makeSlaneyFilters() -> [Float] {

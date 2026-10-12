@@ -224,6 +224,9 @@ struct ToolsSectionView: View {
     private var nativeTools: [ToolItem] {
         var seenConfigurations = Set<ChatNativeToolConfiguration>()
         return ChatToolRegistry.descriptors(canEditImage: false).compactMap { descriptor in
+            guard !ChatToolRegistry.alwaysOnToolNames.contains(descriptor.definition.function.name) else {
+                return nil
+            }
             let configuration = descriptor.configuration
             if let configuration,
                 configuration.toolNames.count > 1,
