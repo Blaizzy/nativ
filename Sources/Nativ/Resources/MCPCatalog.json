@@ -100,7 +100,7 @@
     "name": "Parallel Search",
     "summary": "Search the live web and fetch clean content from URLs.",
     "command": "npx",
-    "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only"],
+    "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only", "--header", "User-Agent: Nativ"],
     "symbol": "globe",
     "tint": "indigo"
   }
