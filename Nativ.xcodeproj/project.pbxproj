@@ -371,6 +371,7 @@
 		A1695BB51B153E19F4F73DE0 /* ToolsSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E902D6BB4117C3F240832FA3 /* ToolsSectionView.swift */; };
 		A236DC57A71965B0E0666C60 /* PDFDocumentTextExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCB2C50E190D5DBA2E237FB2 /* PDFDocumentTextExtractor.swift */; };
 		A2606518E424E92625661281 /* ChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D97F637262DB138A253DEA6F /* ChatComposer.swift */; };
+		A26B18B8AFF2DED3C98512E7 /* Xet in Frameworks */ = {isa = PBXBuildFile; productRef = 53E2D58F2D83522E29BC2F60 /* Xet */; };
 		A2BAB58B6858D60E142947C6 /* ChatTerminalTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44E1CF05FF502F41036F9958 /* ChatTerminalTool.swift */; };
 		A2DF29E907CC0CEF6EF86FBD /* HuggingFaceCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9D1F1A2CDDD531089F289C9 /* HuggingFaceCache.swift */; };
 		A453FB139D170E222646C4D7 /* SystemMonitorIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 609E32A9BD64E4A951E4075B /* SystemMonitorIdentityTests.swift */; };
@@ -541,6 +542,7 @@
 		EED0FA36452769271F0CB8BB /* MarkdownRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B89C8AB8FCF1292D303C7EB2 /* MarkdownRenderer.swift */; };
 		EF3678F684519D8ADC625B20 /* MLXImageModelResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4B9C2F4C7B7765BC3CA6CF /* MLXImageModelResolverTests.swift */; };
 		EFF78F78C328BE749FB29F9A /* ChatGitHubPullRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E03D8A56F9599760BFA6E2 /* ChatGitHubPullRequest.swift */; };
+		F00B080047674A6719C3F89E /* Xet in Frameworks */ = {isa = PBXBuildFile; productRef = EF49B89104DD30468240655A /* Xet */; };
 		F110515E63D4C200A8930120 /* Perplexity.png in Resources */ = {isa = PBXBuildFile; fileRef = F84C7B764CE1B6F63746E3BB /* Perplexity.png */; };
 		F118E505C0B99F19BFAEC8C2 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = F16FD8B24B12F6B12FCC606D /* SwiftTerm */; };
 		F14A3E893E8DE4DE035C3925 /* ChatConversationBranchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B059AF48F10F1B0502DC5E6F /* ChatConversationBranchTests.swift */; };
@@ -1057,6 +1059,7 @@
 				F945C21FDDC8AE619860D222 /* cmark-gfm-extensions in Frameworks */,
 				F419F46D380D8BB63BEE29EC /* Highlightr in Frameworks */,
 				5188B55363796046F67285DC /* SwaTexRender in Frameworks */,
+				F00B080047674A6719C3F89E /* Xet in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1073,6 +1076,7 @@
 				308D702D90DECE44C62375CD /* SwaTexRender in Frameworks */,
 				B8025D46E56B130B785F7EBE /* ZIPFoundation in Frameworks */,
 				F118E505C0B99F19BFAEC8C2 /* SwiftTerm in Frameworks */,
+				A26B18B8AFF2DED3C98512E7 /* Xet in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1879,6 +1883,7 @@
 				7C44F2BDEB36AE1669F3B4C5 /* SwaTexRender */,
 				66E307AA0AD0D089ED4F2AB5 /* ZIPFoundation */,
 				F16FD8B24B12F6B12FCC606D /* SwiftTerm */,
+				53E2D58F2D83522E29BC2F60 /* Xet */,
 			);
 			productName = Nativ;
 			productReference = DE575DB2DCD07A1864311714 /* Nativ.app */;
@@ -1908,6 +1913,7 @@
 				73083760B397D149449368BB /* cmark-gfm-extensions */,
 				B47FB8D68E53A933ACF71A58 /* Highlightr */,
 				CB3602F4C9B417450A9FAA0B /* SwaTexRender */,
+				EF49B89104DD30468240655A /* Xet */,
 			);
 			productName = NativTests;
 			productReference = 879B4B75CA9BE0A82C259451 /* NativTests.xctest */;
@@ -1994,17 +2000,18 @@
 				0DCA3A7257026C34244A0BBB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				5409D05039F3337AF74DB4F3 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				4AEDB4F2A39BE67B1DF710AE /* XCRemoteSwiftPackageReference "swift-sdk" */,
+				5A8521AECEA931B665F12279 /* XCRemoteSwiftPackageReference "swift-xet" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = ACC7624E3BE7F661C3D130D0 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				ED4CB78AB93E015D0BE21F7B /* NativExtensionSDK */,
 				1622B274F4DF5A85C2FDB081 /* NativServerKit */,
-				51AD42FA29E71F2450386688 /* NativTests */,
+				465C23BB3ADA415A5004AAD9 /* Nativ */,
 				7082E254E8272A5E8D13E6F0 /* VoiceDictationExtensionRuntime */,
+				51AD42FA29E71F2450386688 /* NativTests */,
 			);
 		};
 /* End PBXProject section */
@@ -3148,6 +3155,14 @@
 				version = 0.8.0;
 			};
 		};
+		5A8521AECEA931B665F12279 /* XCRemoteSwiftPackageReference "swift-xet" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-xet";
+			requirement = {
+				kind = exactVersion;
+				version = 1.1.0;
+			};
+		};
 		F0DF26FE39829DA66FD81C62 /* XCRemoteSwiftPackageReference "SwaTex" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/PhraseHQ/SwaTex.git";
@@ -3168,6 +3183,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0FB7E2D2B22FC46D3462C47A /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		53E2D58F2D83522E29BC2F60 /* Xet */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A8521AECEA931B665F12279 /* XCRemoteSwiftPackageReference "swift-xet" */;
+			productName = Xet;
 		};
 		66E307AA0AD0D089ED4F2AB5 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -3223,6 +3243,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5415DFEB5C121F7044B3D436 /* XCRemoteSwiftPackageReference "swift-cmark" */;
 			productName = "cmark-gfm";
+		};
+		EF49B89104DD30468240655A /* Xet */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A8521AECEA931B665F12279 /* XCRemoteSwiftPackageReference "swift-xet" */;
+			productName = Xet;
 		};
 		F16FD8B24B12F6B12FCC606D /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;

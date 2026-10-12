@@ -12,6 +12,9 @@ settings:
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
 packages:
+  swift-xet:
+    url: https://github.com/huggingface/swift-xet
+    exactVersion: 1.1.0
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: 1.18.0
@@ -137,6 +140,8 @@ targets:
         product: ZIPFoundation
       - package: SwiftTerm
         product: SwiftTerm
+      - package: swift-xet
+        product: Xet
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -362,6 +367,8 @@ targets:
         product: Highlightr
       - package: SwaTex
         product: SwaTexRender
+      - package: swift-xet
+        product: Xet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests
