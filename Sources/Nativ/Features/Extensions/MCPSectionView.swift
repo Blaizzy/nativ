@@ -142,7 +142,9 @@ struct MCPSectionView: View {
 
     private func toggle(_ server: MCPServerConfig) {
         guard let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) else { return }
-        model.settings.mcpServers[i].isEnabled.toggle()
+        var servers = model.settings.mcpServers
+        servers[i].isEnabled.toggle()
+        model.settings.mcpServers = servers
     }
 
     private func delete(_ server: MCPServerConfig) {
@@ -150,11 +152,13 @@ struct MCPSectionView: View {
     }
 
     private func save(_ server: MCPServerConfig) {
-        if let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
-            model.settings.mcpServers[i] = server
+        var servers = model.settings.mcpServers
+        if let i = servers.firstIndex(where: { $0.id == server.id }) {
+            servers[i] = server
         } else {
-            model.settings.mcpServers.append(server)
+            servers.append(server)
         }
+        model.settings.mcpServers = servers
     }
 }
 
