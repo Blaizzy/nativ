@@ -223,9 +223,6 @@ struct MCPServerCatalog: Sendable {
         }
     }
 
-    /// Refreshes built-in settings to their current catalog launch configuration.
-    /// This lets catalog entries move to a new server without changing their
-    /// durable identity or the user's enabled state.
     @discardableResult
     func migrateConfigurations(in servers: inout [MCPServerConfig]) -> Bool {
         var changed = false
@@ -277,7 +274,10 @@ struct MCPServerCatalog: Sendable {
         in servers: inout [MCPServerConfig]
     ) {
         servers[index].catalogID = entry.id
-        servers[index].name = entry.name
+        let launch = LaunchConfiguration(server: servers[index])
+        guard launch == LaunchConfiguration(entry: entry)
+            || entry.legacyLaunchConfigurations.contains(where: { LaunchConfiguration($0) == launch })
+        else { return }
         servers[index].command = entry.command
         servers[index].arguments = entry.arguments
         for name in entry.excludedEnvironment {

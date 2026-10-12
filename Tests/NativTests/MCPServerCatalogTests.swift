@@ -78,7 +78,7 @@ final class MCPServerCatalogTests: XCTestCase {
         XCTAssertEqual(servers.count, 1)
         XCTAssertEqual(servers[0].id, id)
         XCTAssertEqual(servers[0].catalogID, "github")
-        XCTAssertEqual(servers[0].name, "github")
+        XCTAssertEqual(servers[0].name, "GitHub override")
         XCTAssertEqual(servers[0].command, "@bundled/github-mcp-server")
         XCTAssertEqual(servers[0].arguments, ["stdio"])
         XCTAssertEqual(servers[0].environment, ["KEEP_ME": "value"])
@@ -99,6 +99,38 @@ final class MCPServerCatalogTests: XCTestCase {
         XCTAssertEqual(servers[0].catalogID, "github")
         XCTAssertEqual(servers[0].command, "@bundled/github-mcp-server")
         XCTAssertEqual(servers[0].arguments, ["stdio"])
+    }
+
+    func testMigrationAndTogglePreserveEditedCatalogConfiguration() throws {
+        let entry = githubEntry()
+        let catalog = try MCPServerCatalog(entries: [entry])
+        for command in [entry.command, "/custom/mcp-server"] {
+            let edited = MCPServerConfig(
+                catalogID: entry.id, name: "My GitHub", command: command,
+                arguments: ["stdio", "--custom-option"],
+                environment: ["KEEP_ME": "custom value"], isEnabled: false
+            )
+            // Match the persisted representation seen at application restart.
+            let data = try PropertyListEncoder().encode([edited])
+            var servers = try PropertyListDecoder().decode([MCPServerConfig].self, from: data)
+            XCTAssertFalse(catalog.migrateConfigurations(in: &servers))
+            XCTAssertEqual(servers, [edited])
+            catalog.setEnabled(true, for: entry, in: &servers)
+            var enabled = edited
+            enabled.isEnabled = true
+            XCTAssertEqual(servers, [enabled])
+            XCTAssertFalse(catalog.migrateConfigurations(in: &servers))
+        }
+    }
+
+    func testMigrationPreservesCustomNameWithDefaultLaunchConfiguration() throws {
+        let entry = githubEntry()
+        let catalog = try MCPServerCatalog(entries: [entry])
+        var edited = entry.makeConfiguration()
+        edited.name = "My GitHub"
+        var servers = [edited]
+        XCTAssertFalse(catalog.migrateConfigurations(in: &servers))
+        XCTAssertEqual(servers, [edited])
     }
 
     private func githubEntry() -> MCPCatalogEntry {
