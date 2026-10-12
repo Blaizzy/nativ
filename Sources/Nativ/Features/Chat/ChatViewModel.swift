@@ -279,6 +279,7 @@ final class ChatViewModel: ObservableObject {
     private let sessionStore: ChatSessionStore
     let workBrowsers = ChatWorkBrowserPool()
     let workTerminals = ChatWorkTerminalPool()
+    private var activeAgentTerminalIDs: Set<UUID> = []
     /// Read receipts are ephemeral and scoped to this window and chat, never restored from disk.
     private var lastWorkReads: [UUID: ChatWorkItem] = [:]
     private let windowID: UUID
@@ -773,11 +774,15 @@ final class ChatViewModel: ObservableObject {
     }
 
     /// Called only by the terminal executor, after its existing approval and preflight checks.
-    func runWorkTerminalCommand(_ request: TerminalProcessRequest, in sessionID: UUID) async throws -> TerminalProcessResult {
+    func runWorkTerminalCommand(_ request: TerminalProcessRequest, in sessionID: UUID,
+                                yieldAfter: TimeInterval = 2) async throws -> TerminalProcessResult {
         try Task.checkCancellation()
         guard var state = workState(for: sessionID) else { throw ChatWorkError.unavailable }
         let id: UUID
-        if let item = state.items.first(where: { $0.kind == .terminal && $0.terminalCommand != nil }) {
+        if let item = state.items.first(where: {
+            $0.kind == .terminal && $0.terminalCommand != nil
+                && !activeAgentTerminalIDs.contains($0.id)
+        }) {
             id = item.id
         } else {
             id = try state.create(title: "Agent terminal", kind: .terminal, author: "Agent", activate: false).id
@@ -793,23 +798,41 @@ final class ChatViewModel: ObservableObject {
         let outputTask = Task { @MainActor in
             for await data in stream { terminal.appendOutput(data) }
         }
-        let commandTask = Task {
-            try await TerminalProcessRunner().run(request, onOutput: { continuation.yield($0) })
+        let start = Date()
+        activeAgentTerminalIDs.insert(id)
+        let commandTask = Task { [weak self] in
+            defer {
+                self?.saveTerminalOutput(terminal, itemID: id, sessionID: sessionID)
+                self?.activeAgentTerminalIDs.remove(id)
+            }
+            do {
+                let result = try await TerminalProcessRunner().run(request, onOutput: { continuation.yield($0) })
+                continuation.finish()
+                await outputTask.value
+                terminal.finish(result)
+                return result
+            } catch {
+                continuation.finish()
+                await outputTask.value
+                terminal.finish(error: error)
+                throw error
+            }
         }
         terminal.onStop = { commandTask.cancel() }
-        defer { saveTerminalOutput(terminal, itemID: id, sessionID: sessionID) }
         do {
-            let result = try await withTaskCancellationHandler {
-                try await commandTask.value
-            } onCancel: { commandTask.cancel() }
-            continuation.finish()
-            await outputTask.value
-            terminal.finish(result)
-            return result
+            // Once yielded, the terminal owns the command. Finishing a model turn must not stop a server.
+            while terminal.isRunning, Date().timeIntervalSince(start) < yieldAfter {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try Task.checkCancellation()
+            if !terminal.isRunning { return try await commandTask.value }
+            saveTerminalOutput(terminal, itemID: id, sessionID: sessionID)
+            return TerminalProcessResult(stdout: terminal.currentCommandOutput, stderr: "", exitCode: nil,
+                terminationSignal: nil, timedOut: false, durationMilliseconds: Int(Date().timeIntervalSince(start) * 1_000),
+                outputTruncated: terminal.currentCommandOutputTruncated, terminalID: id)
         } catch {
-            continuation.finish()
-            await outputTask.value
-            terminal.finish(error: error)
+            commandTask.cancel()
+            _ = await commandTask.result
             throw error
         }
     }

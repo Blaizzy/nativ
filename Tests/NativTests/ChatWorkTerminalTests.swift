@@ -77,6 +77,69 @@ final class ChatWorkTerminalTests: XCTestCase {
         XCTAssertFalse(first.savedText.contains("supersecretvalue"))
     }
 
+    func testQuitStopsAgentChildrenAndInteractiveJobsAcrossPools() async throws {
+        let center = NotificationCenter()
+        let firstPool = ChatWorkTerminalPool(notificationCenter: center)
+        let secondPool = ChatWorkTerminalPool(notificationCenter: center)
+        let directory = FileManager.default.temporaryDirectory
+        let pidFile = directory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+        var item = ChatWorkItem(title: "Agent terminal", kind: .terminal, content: "")
+        item.terminalCommand = "sleep 60"
+        let agent = firstPool.session(for: item, sessionID: UUID(), directory: directory.path)
+        agent.beginCommand(item.terminalCommand!, directory: directory.path)
+        let command = Task {
+            try await TerminalProcessRunner().run(.init(
+                command: "sleep 60 & child=$!; printf '%s' $child > '\(pidFile.path)'; wait $child",
+                currentDirectoryURL: directory, timeout: 1, environment: ["PATH": "/usr/bin:/bin"], background: true))
+        }
+        agent.onStop = { command.cancel() }
+        defer { agent.stop() }
+        try await waitUntil("Agent child started") { FileManager.default.fileExists(atPath: pidFile.path) }
+        let child = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+
+        let shell = secondPool.session(for: .init(title: "Terminal", kind: .terminal, content: ""),
+                                       sessionID: UUID(), directory: directory.path)
+        defer { shell.stop() }
+        shell.startIfNeeded(arguments: ["-f"])
+        let view = try XCTUnwrap(shell.view as? LocalProcessTerminalView)
+        let shellPID = view.process.shellPid
+        // This job ignores polite shutdown signals, exercising the Quit escalation.
+        view.send(txt: "trap '' HUP TERM; sleep 60\n")
+        try await waitUntil("Interactive job started") {
+            let foreground = tcgetpgrp(view.process.childfd)
+            return foreground > 0 && foreground != shellPID
+        }
+        let foreground = tcgetpgrp(view.process.childfd)
+        let start = Date()
+        center.post(name: NSApplication.willTerminateNotification, object: nil)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertNil(agent.onStop, "The quit notification must run cleanup synchronously")
+        XCTAssertEqual(kill(shellPID, 0), -1, "Quit must reap the interactive shell before returning")
+        do { _ = try await command.value; XCTFail("Quit must cancel the managed command") }
+        catch is CancellationError {}
+        try await waitUntil("All child processes exited") { kill(child, 0) == -1 && kill(foreground, 0) == -1 }
+    }
+
+    func testQuitCancelsAQueuedCommandBeforeItCanLaunch() async throws {
+        let center = NotificationCenter()
+        let pool = ChatWorkTerminalPool(notificationCenter: center)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        var item = ChatWorkItem(title: "Agent terminal", kind: .terminal, content: "")
+        item.terminalCommand = "touch"
+        let terminal = pool.session(for: item, sessionID: UUID(), directory: file.deletingLastPathComponent().path)
+        let command = Task {
+            try await TerminalProcessRunner().run(.init(command: "touch '\(file.path)'",
+                currentDirectoryURL: file.deletingLastPathComponent(), timeout: 5, environment: ["PATH": "/usr/bin:/bin"]))
+        }
+        terminal.onStop = { command.cancel() }
+        center.post(name: NSApplication.willTerminateNotification, object: nil)
+        do { _ = try await command.value; XCTFail("A queued command must not launch during Quit") }
+        catch is CancellationError {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
     private func waitUntil(_ label: String, _ condition: () -> Bool) async throws {
         for _ in 0..<500 {
             if condition() { return }
