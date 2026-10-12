@@ -171,9 +171,18 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         if !text.contains(where: { $0.isWhitespace }), isLocal || host.contains(".") {
             return try webURL("\(isLocal ? "http" : "https")://\(text)")
         }
-        var search = URLComponents(string: "https://www.google.com/search")!
-        search.queryItems = [URLQueryItem(name: "q", value: text)]
-        return try webURL(search.url!.absoluteString)
+        guard let url = searchURL(text) else {
+            throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
+        }
+        return url
+    }
+
+    static func searchURL(_ query: String) -> URL? {
+        guard var search = URLComponents(string: "https://www.google.com/search") else { return nil }
+        search.queryItems = [URLQueryItem(name: "q", value: query)]
+        // Search engines decode a literal + as a space in form-encoded queries.
+        search.percentEncodedQuery = search.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return search.url
     }
 
     private static func validateContent(_ content: String) throws {

@@ -278,6 +278,9 @@ enum ChatToolDispatcher {
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
+        ChatWorkToolRegistry.toolName: { _, error in
+            ChatWorkToolRegistry.failurePayload(error: error)
+        },
         ChatImageToolRegistry.generateToolName: { name, error in
             failurePayloadForImageTool(name: name, error: error)
         },

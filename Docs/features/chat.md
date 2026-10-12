@@ -199,7 +199,12 @@ the work pane share the right side of chat.
   tabs are not source files.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have
-  back, forward, reload, and address controls. Cookies and website storage use a
+  back, forward, reload, and address controls. Agents can search Google in the same
+  tab with `chat_work` (`action: search`, `query: ...`) without a search API key.
+  Search requests start with results instead of guessed domains. Connection failures
+  and HTTP errors such as 404 include the failed URL, tab ID, and guidance to search
+  the original subject; the previous page is never returned as the failed destination.
+  Cookies and website storage use a
   persistent profile shared across tabs, chats, and windows, so website sign-ins
   survive closing tabs and restarting the app, until the website expires them.
   This profile is separate from the user's regular browser; Nativ Preview also
