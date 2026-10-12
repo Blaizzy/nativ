@@ -410,7 +410,7 @@ final class AudioCaptureLibrary: ObservableObject {
                 for: kind,
                 includeSystemAudio: activeIncludesSystemAudio
             )
-            let microphoneDeviceID = AudioInputDevicePreferences.shared.effectiveDeviceID
+            let microphoneDeviceID = AudioInputDevicePreferences.shared.selectedDeviceID
             switch kind {
             case .voiceNote:
                 try await voiceRecorder.start(

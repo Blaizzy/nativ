@@ -38,11 +38,15 @@ final class VoiceWakeWordMonitor: ObservableObject {
         var suspended: Bool
         var inputUnavailable = false
         var powerSavingPaused = false
+        // Requested selection, not the resolved hardware ID. Empty/nil follows System Default.
         var deviceID: String?
     }
 
     private var configuration = Configuration(enabled: false, suspended: false)
-    private let inputSession = AudioInputCaptureSession(passive: true)
+    private let inputSession: AudioInputCaptureSession
+    private let requestMicrophone: () async -> Bool
+    private let makeProcessor: @Sendable () throws -> VoiceWakeWordProcessor
+    private var isFinishingCapture = false
     private var sessionID = UUID()
     private var task: Task<Void, Never>?
     private var inferenceTask: Task<Void, Never>?
@@ -50,13 +54,30 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private var processor: VoiceWakeWordProcessor?
     private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
+    init(
+        inputSession: AudioInputCaptureSession = AudioInputCaptureSession(passive: true),
+        requestMicrophone: @escaping () async -> Bool = { await NativSystemPermissionController.requestMicrophone() },
+        makeProcessor: @escaping @Sendable () throws -> VoiceWakeWordProcessor = {
+            guard let url = Bundle.main.url(forResource: "HeyNativ", withExtension: "mlmodelc")
+            else { throw VoiceWakeWordModelError.missingModel }
+            return try VoiceWakeWordProcessor(url: url)
+        }
+    ) {
+        self.inputSession = inputSession
+        self.requestMicrophone = requestMicrophone
+        self.makeProcessor = makeProcessor
+    }
+
     func configure(enabled: Bool, suspended: Bool, deviceID: String?, powerSavingPaused: Bool = false, inputUnavailable: Bool = false) {
         let next = Configuration(enabled: enabled, suspended: suspended, inputUnavailable: inputUnavailable, powerSavingPaused: powerSavingPaused, deviceID: deviceID)
         guard next != configuration else { return }
         let needsRestart = next.enabled != configuration.enabled
             || next.suspended != configuration.suspended || next.deviceID != configuration.deviceID
             || next.inputUnavailable != configuration.inputUnavailable
+        let inputChanged = next.deviceID != configuration.deviceID
+            || next.inputUnavailable != configuration.inputUnavailable
         configuration = next
+        if inputChanged, next.enabled, !next.suspended, finishCaptureBeforeRestart() { return }
         if needsRestart { restart() } else { applyPowerSavingPause() }
     }
 
@@ -93,14 +114,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
 
     private func listen(id: UUID, deviceID: String?) async {
         do {
-            let granted = await NativSystemPermissionController.requestMicrophone()
+            let granted = await requestMicrophone()
             guard isCurrent(id) else { return }
             guard granted else {
                 fail("Allow microphone access in System Settings, then try again.", id: id, retry: false)
                 return
             }
-            guard let modelURL = Bundle.main.url(forResource: "HeyNativ", withExtension: "mlmodelc")
-            else { throw VoiceWakeWordModelError.missingModel }
             guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
             else { throw VoiceAudioRecorderError.couldNotConvert }
             let (stream, continuation) = AsyncStream<VoiceWakeWordAudioChunk>.makeStream(
@@ -113,9 +132,10 @@ final class VoiceWakeWordMonitor: ObservableObject {
                     self?.fail("Could not read microphone audio. Retrying…", id: id)
                 }
             }
+            let makeProcessor = makeProcessor
             inferenceTask = Task.detached(priority: .utility) { [weak self] in
                 do {
-                    let processor = try VoiceWakeWordProcessor(url: modelURL)
+                    let processor = try makeProcessor()
                     try Task.checkCancellation()
                     guard try await self?.startInput(bridge: bridge, processor: processor, deviceID: deviceID, id: id) == true
                     else { return }
@@ -198,6 +218,30 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
+    /// Stop delivery and drain queued audio before a routing change tears down the processor.
+    /// Keep the session ID valid until the result has reached the coordinator.
+    private func finishCaptureBeforeRestart() -> Bool {
+        guard state == .capturing, let processor else { return false }
+        guard !isFinishingCapture else { return true }
+        isFinishingCapture = true
+        inputSession.stop()
+        continuation?.finish()
+        let id = sessionID
+        let inferenceTask = inferenceTask
+        Task { [weak self] in
+            await inferenceTask?.value
+            guard let self, self.isCurrent(id) else { return }
+            let result = await processor.finish()
+            guard self.isCurrent(id) else { return }
+            if let result {
+                self.complete(result, id: id)
+            } else {
+                self.restart()
+            }
+        }
+        return true
+    }
+
     private func complete(_ result: VoiceWakeWordCapture.Result, id: UUID) {
         guard isCurrent(id) else { return }
         stopSession(notify: false)
@@ -210,7 +254,8 @@ final class VoiceWakeWordMonitor: ObservableObject {
     }
 
     private func fail(_ message: String, id: UUID, retry: Bool = true) {
-        guard isCurrent(id) else { return }
+        guard isCurrent(id), !isFinishingCapture else { return }
+        if finishCaptureBeforeRestart() { return }
         stopSession()
         state = .unavailable(message)
         if configuration.enabled, !configuration.suspended, configuration.powerSavingPaused {
@@ -229,6 +274,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
 
     private func stopSession(notify: Bool = true) {
         sessionID = UUID()
+        isFinishingCapture = false
         inputSession.stop()
         continuation?.finish()
         continuation = nil
@@ -244,7 +290,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
 }
 
 /// Serializes audio and confirmation results without blocking capture on network ASR.
-private actor VoiceWakeWordProcessor {
+actor VoiceWakeWordProcessor {
     struct Output: Sendable {
         let event: VoiceWakeWordCapture.Event?
         let isConfirmed: Bool
@@ -252,13 +298,20 @@ private actor VoiceWakeWordProcessor {
         let elapsed: TimeInterval
     }
 
-    private let detector: VoiceWakeWordModel
+    private let detect: (VoiceWakeWordAudioChunk) throws -> Bool
     private var capture = VoiceWakeWordCapture()
 
-    init(url: URL) throws { detector = try VoiceWakeWordModel(url: url) }
+    init(url: URL) throws {
+        let detector = try VoiceWakeWordModel(url: url)
+        detect = { try detector.consume($0) }
+    }
+
+    init(detect: @escaping @Sendable (VoiceWakeWordAudioChunk) throws -> Bool) {
+        self.detect = detect
+    }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Output {
-        let detected = capture.canDetect ? try detector.consume(chunk) : false
+        let detected = capture.canDetect ? try detect(chunk) : false
         let event = try capture.append(chunk, detected: detected)
         return Output(event: event, isConfirmed: capture.isConfirmed, level: capture.level, elapsed: capture.elapsed)
     }

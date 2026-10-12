@@ -3084,13 +3084,13 @@ struct AudioView: View {
         guard destination == .record, captureLibrary.phase == .idle else {
             return
         }
-        guard let deviceID = inputDevices.passiveDeviceID else {
+        guard inputDevices.passiveDeviceID != nil else {
             inputLevelMonitor.stop()
             return
         }
         Task {
             await inputLevelMonitor.start(
-                deviceUniqueID: deviceID
+                deviceUniqueID: inputDevices.selectedDeviceID
             )
         }
     }

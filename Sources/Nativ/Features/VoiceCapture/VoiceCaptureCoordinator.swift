@@ -193,7 +193,7 @@ final class VoiceCaptureCoordinator {
         wakeWordMonitor.configure(
             enabled: enabled,
             suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
-            deviceID: AudioInputDevicePreferences.shared.passiveDeviceID,
+            deviceID: AudioInputDevicePreferences.shared.selectedDeviceID,
             powerSavingPaused: wakeWordPowerMonitor.isPaused,
             inputUnavailable: AudioInputDevicePreferences.shared.passiveDeviceID == nil
         )
@@ -270,7 +270,7 @@ final class VoiceCaptureCoordinator {
 
             do {
                 try await self.recorder.start(
-                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
+                    deviceUniqueID: AudioInputDevicePreferences.shared.selectedDeviceID
                 )
                 guard !Task.isCancelled, self.isShortcutHeld else { return }
                 self.overlay.didStartRecording()
