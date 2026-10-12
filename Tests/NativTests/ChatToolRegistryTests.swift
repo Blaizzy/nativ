@@ -79,6 +79,7 @@ final class ChatToolRegistryTests: XCTestCase {
             .map(\.function.name)
 
         XCTAssertEqual(names, [
+            ChatToolSearchToolRegistry.toolName,
             ChatImageToolRegistry.generateToolName,
             ChatModelLibraryToolRegistry.toolName,
             ChatSwitchModelToolRegistry.toolName,
@@ -97,7 +98,9 @@ final class ChatToolRegistryTests: XCTestCase {
 
     func testImageToolHasSeparateUserAndModelDescriptions() throws {
         let descriptor = try XCTUnwrap(
-            ChatToolRegistry.descriptors(canEditImage: false).first
+            ChatToolRegistry.descriptors(canEditImage: false).first {
+                $0.definition.function.name == ChatImageToolRegistry.generateToolName
+            }
         )
 
         XCTAssertEqual(descriptor.displayDescription, "Create an image from a written description.")

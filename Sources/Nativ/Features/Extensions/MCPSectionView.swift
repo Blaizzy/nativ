@@ -54,7 +54,12 @@ struct MCPSectionView: View {
             }
         }
         .sheet(item: $editing) { server in
-            MCPServerEditor(server: server) { saved in
+            MCPServerEditor(
+                server: server,
+                takenToolNamePrefixes: Set(
+                    model.settings.mcpServers.filter { $0.id != server.id }.map(MCPHostManager.toolNamePrefix)
+                )
+            ) { saved in
                 save(saved)
                 editing = nil
             } onCancel: {
@@ -112,7 +117,10 @@ struct MCPSectionView: View {
         return MCPServerRow(
             server: presentation,
             state: configured.flatMap { host.states[$0.id] } ?? .disabled,
-            onToggle: { toggle(entry) },
+            exposureMode: Binding(
+                get: { configured.map(model.settings.mcpServerExposureMode) ?? .off },
+                set: { setExposureMode($0, for: entry) }
+            ),
             onReconnect: configured.map { server in { host.reconnect(server.id) } },
             onEdit: { editing = presentation },
             onDelete: configured.map { server in { pendingDelete = server } }
@@ -123,35 +131,40 @@ struct MCPSectionView: View {
         MCPServerRow(
             server: server,
             state: host.states[server.id],
-            onToggle: { toggle(server) },
+            exposureMode: Binding(
+                get: { model.settings.mcpServerExposureMode(for: server) },
+                set: { model.settings.setMCPServerExposureMode($0, serverID: server.id) }
+            ),
             onReconnect: { host.reconnect(server.id) },
             onEdit: { editing = server },
             onDelete: { pendingDelete = server }
         )
     }
 
-    private func toggle(_ entry: MCPCatalogEntry) {
-        var servers = model.settings.mcpServers
-        catalog.setEnabled(
-            !catalog.isEnabled(entry, in: servers),
-            for: entry,
-            in: &servers
-        )
-        model.settings.mcpServers = servers
-    }
-
-    private func toggle(_ server: MCPServerConfig) {
-        guard let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) else { return }
-        model.settings.mcpServers[i].isEnabled.toggle()
+    private func setExposureMode(_ mode: ToolExposureMode, for entry: MCPCatalogEntry) {
+        var settings = model.settings
+        catalog.setEnabled(mode != .off, for: entry, in: &settings.mcpServers)
+        if let server = catalog.configuredServer(for: entry, in: settings.mcpServers) {
+            settings.setMCPServerExposureMode(mode, serverID: server.id)
+        }
+        model.settings = settings
     }
 
     private func delete(_ server: MCPServerConfig) {
         model.settings.mcpServers.removeAll { $0.id == server.id }
+        model.settings.mcpServerExposureModes[server.id.uuidString] = nil
     }
 
     private func save(_ server: MCPServerConfig) {
         if let i = model.settings.mcpServers.firstIndex(where: { $0.id == server.id }) {
+            let previousPrefix = MCPHostManager.toolNamePrefix(for: model.settings.mcpServers[i])
+            let prefix = MCPHostManager.toolNamePrefix(for: server)
             model.settings.mcpServers[i] = server
+            if previousPrefix != prefix {
+                model.settings.renameToolKeys {
+                    $0.hasPrefix(previousPrefix) ? prefix + $0.dropFirst(previousPrefix.count) : nil
+                }
+            }
         } else {
             model.settings.mcpServers.append(server)
         }
@@ -163,7 +176,7 @@ struct MCPSectionView: View {
 private struct MCPServerRow: View {
     let server: MCPServerConfig
     let state: MCPServerConnectionState?
-    let onToggle: () -> Void
+    @Binding var exposureMode: ToolExposureMode
     let onReconnect: (() -> Void)?
     let onEdit: () -> Void
     let onDelete: (() -> Void)?
@@ -208,10 +221,10 @@ private struct MCPServerRow: View {
                     .menuIndicator(.hidden)
                     .frame(width: 22)
                 }
-                Toggle("", isOn: Binding(get: { server.isEnabled }, set: { _ in onToggle() }))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
+                ToolExposureModeControl(
+                    mode: $exposureMode,
+                    title: server.name.isEmpty ? "Untitled server" : server.name
+                )
             }
 
             if case .authorizingGitHub(let code, let verificationURL) = state {
@@ -458,6 +471,7 @@ private let mcpJSONScaffold = """
 """
 
 private struct MCPServerEditor: View {
+    let takenToolNamePrefixes: Set<String>
     let onSave: (MCPServerConfig) -> Void
     let onCancel: () -> Void
 
@@ -467,8 +481,15 @@ private struct MCPServerEditor: View {
     @State private var editingJSON = false
     @State private var jsonText = ""
     @State private var jsonError: String?
+    @State private var nameError: String?
 
-    init(server: MCPServerConfig, onSave: @escaping (MCPServerConfig) -> Void, onCancel: @escaping () -> Void) {
+    init(
+        server: MCPServerConfig,
+        takenToolNamePrefixes: Set<String>,
+        onSave: @escaping (MCPServerConfig) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.takenToolNamePrefixes = takenToolNamePrefixes
         _server = State(initialValue: server)
         _launchCommandText = State(
             initialValue: server.command.isEmpty
@@ -546,6 +567,11 @@ private struct MCPServerEditor: View {
             }
 
             HStack {
+                if let nameError {
+                    Text(nameError)
+                        .legacyTextStyle(.supporting)
+                        .foregroundStyle(.red)
+                }
                 Spacer()
                 Button("Cancel", action: onCancel)
                 Button("Save") {
@@ -553,6 +579,10 @@ private struct MCPServerEditor: View {
                         guard applyJSON() else { return }
                     } else {
                         guard applyLaunchCommand() else { return }
+                    }
+                    guard !takenToolNamePrefixes.contains(MCPHostManager.toolNamePrefix(for: server)) else {
+                        nameError = "An MCP server with that name already exists."
+                        return
                     }
                     onSave(server)
                 }

@@ -274,6 +274,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatSearchFilesTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatFileWriteTools.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatTerminalTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatToolSearchTool.swift
       - path: Sources/Nativ/Features/Files/FileReadAccessPolicy.swift
       - path: Sources/Nativ/Features/Files/SafeLocalFileReader.swift
       - path: Sources/Nativ/Features/Files/FileSearchEngine.swift

@@ -24,7 +24,19 @@ struct ToolsSectionView: View {
             .buttonStyle(.borderedProminent)
         } content: {
             VStack(alignment: .leading, spacing: 22) {
-                toolGroup(title: "Built-in", tools: nativeTools)
+                if let toolSearch = nativeTools.first(where: { $0.name == ChatToolSearchToolRegistry.toolName }) {
+                    let isNeeded = ChatViewModel.toolSearchIsNeeded(settings: model.settings, mcpHost: host)
+                    ToolSearchCard(
+                        isNeeded: isNeeded,
+                        exposureMode: isNeeded ? exposureModeBinding(for: toolSearch) : .constant(.off),
+                        onInspect: { inspect(toolSearch) }
+                    )
+                }
+
+                toolGroup(
+                    title: "Built-in",
+                    tools: nativeTools.filter { $0.name != ChatToolSearchToolRegistry.toolName }
+                )
 
                 if !customTools.isEmpty {
                     toolGroup(title: "Custom", tools: customTools)
@@ -86,7 +98,13 @@ struct ToolsSectionView: View {
                     }
                 )
             case nil:
-                ToolInspectorView(tool: tool, host: host)
+                ToolInspectorView(
+                    tool: tool,
+                    host: host,
+                    note: tool.name == ChatToolSearchToolRegistry.toolName
+                        ? "Discoverable tools are only reachable through Tool Search."
+                        : nil
+                )
             }
         }
         .sheet(isPresented: $showsAddTool) {
@@ -152,35 +170,33 @@ struct ToolsSectionView: View {
                     onInspect: { inspect(tool) },
                     onEdit: editAction(for: tool),
                     onRemove: removeAction(for: tool),
-                    isEnabled: enabledBinding(for: tool)
+                    exposureMode: exposureModeBinding(for: tool)
                 )
             }
         }
     }
 
-    private func enabledBinding(for tool: ToolItem) -> Binding<Bool>? {
-        guard tool.isBuiltIn else { return nil }
+    private func exposureModeBinding(for tool: ToolItem) -> Binding<ToolExposureMode>? {
+        guard let toolName = tool.toolNames.first else { return nil }
         return Binding(
             get: {
-                tool.toolNames.allSatisfy(model.settings.isToolEnabled)
-                    && (tool.configuration?.isConfigured ?? true)
+                guard tool.configuration?.isConfigured ?? true else { return .off }
+                return model.settings.toolExposureMode(for: toolName, mcpServerID: tool.mcpServerID)
             },
-            set: { enabled in
-                guard enabled else {
+            set: { mode in
+                guard mode != .off else {
                     setEnabled(false, for: tool)
                     return
                 }
-                guard let configuration = tool.configuration else {
-                    setEnabled(true, for: tool)
-                    return
-                }
-                guard configuration.isConfigured else {
+                if let configuration = tool.configuration, !configuration.isConfigured {
                     setEnabled(false, for: tool)
                     configurationPendingEnablement = tool.name
                     inspecting = tool
                     return
                 }
-                setEnabled(true, for: tool)
+                for toolName in tool.toolNames {
+                    model.settings.setToolExposureMode(mode, toolName: toolName, mcpServerID: tool.mcpServerID)
+                }
             }
         )
     }
@@ -264,6 +280,7 @@ struct ToolsSectionView: View {
         model.settings.customTools.map {
             ToolItem(
                 name: $0.toolName,
+                toolNames: [$0.toolName],
                 title: $0.name,
                 detail: $0.displaySummary,
                 parameters: try? $0.definition().function.parameters,
@@ -295,6 +312,7 @@ struct ToolsSectionView: View {
             }
             model.settings.customTools.removeAll { $0.id == tool.id }
             model.settings.disabledToolNames.removeAll { $0 == tool.toolName }
+            model.settings.toolExposureModes[tool.toolName] = nil
             toolPendingRemoval = nil
         } catch {
             toolPendingRemoval = nil
@@ -308,10 +326,12 @@ struct ToolsSectionView: View {
             let def = defs.first { $0.function.name == pair.name }
             return ToolItem(
                 name: pair.name,
+                toolNames: [pair.name],
                 title: pair.displayName,
                 detail: def?.function.description ?? "",
                 parameters: def?.function.parameters,
-                isRunnable: true
+                isRunnable: true,
+                mcpServerID: server.id
             )
         }
     }
@@ -329,6 +349,48 @@ struct ToolItem: Identifiable {
     var customToolID: UUID?
     var executionHint: String?
     var configuration: ChatNativeToolConfiguration? = nil
+    var mcpServerID: UUID?
+}
+
+private struct ToolSearchCard: View {
+    let isNeeded: Bool
+    let exposureMode: Binding<ToolExposureMode>?
+    let onInspect: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "sparkle.magnifyingglass")
+                .font(.system(size: 20))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tool Search")
+                    .legacyTextStyle(.rowTitleEmphasized)
+                Text(isNeeded
+                    ? "Finds Discoverable tools only when a model needs them."
+                    : "Off while no tools are Discoverable.")
+                    .legacyTextStyle(.supporting)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+            .onTapGesture(perform: onInspect)
+            if let exposureMode {
+                ToolExposureModeControl(
+                    mode: exposureMode,
+                    title: "Tool Search",
+                    turnOffWarning: ChatToolRegistry.disableWarning(for: ChatToolSearchToolRegistry.toolName),
+                    options: ToolExposureMode.options(forTool: ChatToolSearchToolRegistry.toolName)
+                )
+                .disabled(!isNeeded)
+            }
+        }
+        .padding(.vertical, 12)
+        .padding(.horizontal, 14)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, -14)
+    }
 }
 
 private struct ToolRow: View {
@@ -336,7 +398,7 @@ private struct ToolRow: View {
     let onInspect: () -> Void
     var onEdit: (() -> Void)?
     var onRemove: (() -> Void)?
-    var isEnabled: Binding<Bool>?
+    var exposureMode: Binding<ToolExposureMode>?
     @State private var hovering = false
 
     var body: some View {
@@ -361,13 +423,13 @@ private struct ToolRow: View {
             .buttonStyle(.plain)
             .opacity(hovering ? 1 : 0.35)
             .help(tool.configuration == nil ? "Inspect / try" : "Configure")
-            if let isEnabled {
-                Toggle("", isOn: isEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help(isEnabled.wrappedValue ? "Disable \(tool.title)" : "Enable \(tool.title)")
-                    .accessibilityLabel("Enable \(tool.title)")
+            if let exposureMode {
+                ToolExposureModeControl(
+                    mode: exposureMode,
+                    title: tool.title,
+                    turnOffWarning: ChatToolRegistry.disableWarning(for: tool.name),
+                    options: ToolExposureMode.options(forTool: tool.name)
+                )
             }
             if let onEdit, let onRemove {
                 Menu {
@@ -434,6 +496,7 @@ private struct BrowsingToolConfigurationView: View {
 private struct ToolInspectorView: View {
     let tool: ToolItem
     @ObservedObject var host: MCPHostManager
+    var note: String?
     @Environment(\.dismiss) private var dismiss
 
     @State private var argumentsJSON = "{}"
@@ -460,6 +523,13 @@ private struct ToolInspectorView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+            }
+
+            if let note {
+                Text(note)
+                    .legacyTextStyle(.supporting)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             section("Input schema") {
@@ -868,7 +938,11 @@ private struct CustomToolEditorSheet: View {
             try CustomToolKeychain().save(
                 savedTool.kind == .endpoint ? headerValue : nil, for: savedTool.id)
             if let index = model.settings.customTools.firstIndex(where: { $0.id == savedTool.id }) {
+                let previousName = model.settings.customTools[index].toolName
                 model.settings.customTools[index] = savedTool
+                if previousName != savedTool.toolName {
+                    model.settings.renameToolKeys { $0 == previousName ? savedTool.toolName : nil }
+                }
             } else {
                 model.settings.customTools.append(savedTool)
             }
