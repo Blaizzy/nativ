@@ -496,6 +496,50 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertNil(chat.workTerminals.existing(itemID: item.id, sessionID: original.id))
     }
 
+    func testAgentCommandsYieldKeepSeparateTerminalsAndStopOnClose() async throws {
+        let (root, store, original) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let environment = ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin")
+        let background = TerminalProcessRequest(command: "printf ready; sleep 60", currentDirectoryURL: root,
+                                                timeout: 0.1, environment: environment, background: true)
+        let result = try await chat.runWorkTerminalCommand(background, in: original.id, yieldAfter: 0.3)
+        let id = try XCTUnwrap(result.terminalID)
+        let terminal = try XCTUnwrap(chat.workTerminals.existing(itemID: id, sessionID: original.id))
+        defer { terminal.stop() }
+        XCTAssertTrue(result.isRunning)
+        XCTAssertTrue(result.stdout.contains("ready"))
+        XCTAssertFalse(chat.workState.isVisible)
+        let next = try await chat.runWorkTerminalCommand(.init(command: "printf next", currentDirectoryURL: root,
+                                                              timeout: 5, environment: environment), in: original.id)
+        XCTAssertEqual(next.exitCode, 0)
+        XCTAssertEqual(next.stdout, "next")
+        XCTAssertTrue(terminal.isRunning, "A later tool call must not replace the server or its stop handler")
+        XCTAssertEqual(chat.workState.items.filter { $0.terminalCommand != nil }.count, 2)
+        let snapshot = try json(await chat.executeWorkAction(.init(action: .read, id: id), in: original.id))
+        XCTAssertEqual(snapshot["running"] as? Bool, true)
+        // After yielding, closing the tab still owns cancellation and persists final output.
+        chat.closeWorkItem(id)
+        for _ in 0..<200 {
+            if !terminal.isRunning { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(terminal.isRunning)
+        XCTAssertFalse(chat.workState.openIDs.contains(id))
+        XCTAssertTrue(store.loadSession(id: original.id)?.workState?.items.first { $0.id == id }?.content.contains("Stopped") == true)
+        let foreground = try await chat.runWorkTerminalCommand(.init(command: "sleep 5", currentDirectoryURL: root,
+            timeout: 0.3, environment: environment), in: original.id, yieldAfter: 0.1)
+        let foregroundID = try XCTUnwrap(foreground.terminalID)
+        let foregroundTerminal = try XCTUnwrap(chat.workTerminals.existing(itemID: foregroundID, sessionID: original.id))
+        defer { foregroundTerminal.stop() }
+        for _ in 0..<200 {
+            if !foregroundTerminal.isRunning { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(foregroundTerminal.isRunning)
+        XCTAssertEqual(foregroundTerminal.status, "Timed out", "Yielding must preserve foreground execution limits")
+    }
+
     func testAgentTerminalStreamsAndPersistsInItsOriginatingChat() async throws {
         let (root, store, original) = try fixture()
         let chat = subject(root)
