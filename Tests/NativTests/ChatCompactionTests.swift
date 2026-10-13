@@ -50,6 +50,31 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(body["tools"]?.arrayValue?.first?["function"]?["name"], .string("read"))
     }
 
+    func testToolArgumentsStreamBeforeCompletionWithoutDuplicatingDone() throws {
+        var stream = MLXResponseStream()
+        var calls = MLXChatToolCallAccumulator()
+        let events = [
+            #"{"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"write_file"}}"#,
+            #"{"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"content\":\""}"#,
+            #"{"type":"response.function_call_arguments.delta","output_index":2,"delta":"x"}"#,
+            #"{"type":"response.function_call_arguments.delta","output_index":2,"delta":"x"}"#,
+        ]
+        for event in events {
+            calls.merge(try XCTUnwrap(stream.consume(event)?.toolCalls))
+        }
+        XCTAssertEqual(calls.toolCalls.first?.function?.arguments, #"{"content":"xx"#)
+        XCTAssertNil(stream.response)
+        XCTAssertThrowsError(try stream.result(elapsed: 1))
+        let done = #"{"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","call_id":"call_1","name":"write_file","arguments":"{\"content\":\"xx\"}"}}"#
+        calls.merge(try XCTUnwrap(stream.consume(done)?.toolCalls))
+        XCTAssertEqual(calls.toolCalls.count, 1)
+        XCTAssertEqual(calls.toolCalls[0].index, 2)
+        XCTAssertEqual(calls.toolCalls[0].function?.name, "write_file")
+        XCTAssertEqual(calls.toolCalls[0].function?.arguments, #"{"content":"xx"}"#)
+        calls.merge(try XCTUnwrap(stream.consume(done)?.toolCalls))
+        XCTAssertEqual(calls.toolCalls[0].function?.arguments, #"{"content":"xx"}"#)
+    }
+
     func testStreamUsesCompletedOutputAndCarriesCapsule() throws {
         var stream = MLXResponseStream()
         let delta = try stream.consume(#"{"type":"response.output_text.delta","delta":"Hello","timings":{"predicted_per_second":42}}"#)

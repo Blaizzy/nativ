@@ -1163,10 +1163,14 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 if displaysThinkingBubble {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
-                        isThinking: message.isStreaming && message.content.isEmpty,
+                        isThinking: message.isStreaming && message.content.isEmpty && message.streamingToolCalls.isEmpty,
                         isStreaming: message.isStreaming,
                         thinkingDuration: message.thinkingDuration
                     )
+                }
+
+                if message.role == .assistant, message.isStreaming {
+                    ChatStreamingToolCalls(calls: message.streamingToolCalls)
                 }
 
                 if !message.annotationPresentation.annotations.isEmpty {
@@ -1353,7 +1357,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             return false
         }
         return !message.reasoningContent.isEmpty
-            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty)
+            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty && message.streamingToolCalls.isEmpty)
     }
 
     private var rendersMarkdown: Bool {
@@ -1436,6 +1440,32 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             withAnimation(.easeInOut(duration: 0.15)) {
                 didCopyMessage = false
             }
+        }
+    }
+}
+
+private struct ChatStreamingToolCalls: View {
+    let calls: [MLXChatToolCall]
+
+    var body: some View {
+        ForEach(Array(calls.enumerated()), id: \.offset) { _, call in
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text("Preparing \(call.function?.name ?? "tool")…")
+                        .font(.callout.weight(.medium))
+                }
+                if let arguments = call.function?.arguments, !arguments.isEmpty {
+                    Text(String(arguments.suffix(2000)))
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(8)
+                        .truncationMode(.head)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(10)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 }
@@ -1621,6 +1651,7 @@ private struct ChatAgentTurnRow: View {
 
     private func shouldRender(_ message: ChatTranscriptMessage) -> Bool {
         message.isCompacting || message.compactionMetrics != nil
+            || !message.streamingToolCalls.isEmpty
             || !message.content.isEmpty
             || !message.imageAttachments.isEmpty
             || message.responseMetrics != nil

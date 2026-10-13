@@ -1004,14 +1004,18 @@ private struct ChatStreamChunk: Decodable {
     }
 }
 
-struct MLXChatToolCallAccumulator {
+public struct MLXChatToolCallAccumulator {
     private var callsByIndex: [Int: MLXChatToolCall] = [:]
 
-    var toolCalls: [MLXChatToolCall] {
+    public init(toolCalls: [MLXChatToolCall] = []) {
+        merge(toolCalls)
+    }
+
+    public var toolCalls: [MLXChatToolCall] {
         callsByIndex.keys.sorted().compactMap { callsByIndex[$0] }
     }
 
-    mutating func merge(_ deltas: [MLXChatToolCall]) {
+    public mutating func merge(_ deltas: [MLXChatToolCall]) {
         for (position, delta) in deltas.enumerated() {
             let index = delta.index
                 ?? callsByIndex.first(where: { $0.value.id == delta.id && delta.id != nil })?.key
@@ -1028,10 +1032,9 @@ struct MLXChatToolCallAccumulator {
             if let functionDelta = delta.function {
                 var function = call.function ?? MLXChatFunctionCall(name: nil, arguments: nil)
                 function.name = mergedFragment(current: function.name, incoming: functionDelta.name)
-                function.arguments = mergedFragment(
-                    current: function.arguments,
-                    incoming: functionDelta.arguments
-                )
+                if let fragment = functionDelta.arguments {
+                    function.arguments = (function.arguments ?? "") + fragment
+                }
                 call.function = function
             }
             callsByIndex[index] = call

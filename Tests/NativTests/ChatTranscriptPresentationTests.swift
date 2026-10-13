@@ -84,6 +84,18 @@ final class ChatTranscriptPresentationTests: XCTestCase {
         )
     }
 
+    func testStreamingToolPreviewIsVisibleButNeverPersistedOrReplayed() throws {
+        var message = ChatTranscriptMessage(role: .assistant, content: "", isStreaming: true, isThinkingEnabled: true)
+        message.streamingToolCalls = [.init(index: 0, id: "pending", function: .init(name: "write_file", arguments: #"{"content":"partial"#))]
+        let turn = ChatAgentTurnPresentation(messages: [message])
+        XCTAssertEqual(turn.finalAssistantMessage?.id, message.id)
+        XCTAssertFalse(turn.isThinking)
+        XCTAssertTrue(message.toolCalls.isEmpty)
+        let restored = try JSONDecoder().decode(ChatTranscriptMessage.self, from: JSONEncoder().encode(message))
+        XCTAssertTrue(restored.streamingToolCalls.isEmpty)
+        XCTAssertTrue(restored.toolCalls.isEmpty)
+    }
+
     func testResponseWithoutToolsKeepsIndividualMessageRows() {
         let user = ChatTranscriptMessage(role: .user, content: "Hello")
         let assistant = ChatTranscriptMessage(role: .assistant, content: "Hi")
