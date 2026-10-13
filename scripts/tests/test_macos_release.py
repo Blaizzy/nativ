@@ -1,6 +1,7 @@
 import base64
 import copy
 import importlib.util
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -254,6 +255,97 @@ class ReleaseTests(unittest.TestCase):
                 mismatch = subprocess.run(command, env=environment, capture_output=True, text=True)
                 self.assertNotEqual(mismatch.returncode, 0)
                 self.assertIn("does not match the signed app", mismatch.stderr)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "Uses macOS codesign and the release shell script")
+class ReleaseSigningTests(unittest.TestCase):
+    def test_signs_nested_code_before_bundle_executables(self):
+        # Use real ad-hoc signatures, substituting only certificate lookup and
+        # identity selection so no developer key or network access is needed.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tools = root / "tools"
+            tools.mkdir()
+            log = root / "signatures.jsonl"
+            source = root / "main.c"
+            source.write_text("int main(void) { return 0; }\n")
+            executable = root / "executable"
+            library = root / "library.dylib"
+            for target, flags in [(executable, []), (library, ["-dynamiclib"])]:
+                subprocess.run(["xcrun", "clang", *flags, str(source), "-o", str(target)],
+                               check=True, capture_output=True)
+                subprocess.run(["/usr/bin/codesign", "--remove-signature", str(target)],
+                               check=True, capture_output=True)
+
+            def bundle(path, name, *, framework=False):
+                contents = path / "Versions/A" if framework else path / "Contents"
+                binary = contents / name if framework else contents / "MacOS" / name
+                info = contents / "Resources/Info.plist" if framework else contents / "Info.plist"
+                binary.parent.mkdir(parents=True, exist_ok=True)
+                info.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(library if framework else executable, binary)
+                info.write_bytes(plistlib.dumps({
+                    "CFBundleExecutable": name,
+                    "CFBundleIdentifier": "com.example." + name,
+                    "CFBundlePackageType": "FMWK" if framework else "APPL",
+                    "CFBundleVersion": "1",
+                }))
+                if framework:
+                    (path / "Versions/Current").symlink_to("A")
+                    (path / name).symlink_to("Versions/Current/" + name)
+                    (path / "Resources").symlink_to("Versions/Current/Resources")
+                return binary
+
+            # Create containing executables first, reproducing the release's
+            # traversal order. Names deliberately differ from bundle names.
+            app = root / "Test App.app"
+            app_binary = bundle(app, "MainExecutable")
+            helper = app / "Contents/Helpers/Helper.app"
+            helper_binary = bundle(helper, "HelperExecutable")
+            framework = helper / "Contents/Frameworks/SystemPackage.framework"
+            framework_binary = bundle(framework, "SystemLibrary", framework=True)
+            standalone = app / "Contents/MacOS/standalone-tool"
+            shutil.copy2(executable, standalone)
+            extension = helper / "Contents/Resources/python/native.so"
+            extension.parent.mkdir(parents=True)
+            shutil.copy2(library, extension)
+
+            stubs = {
+                "security": '#!/bin/sh\nprintf \'  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Apple Development: Test (TESTTEAM01)"\\n\'\n',
+                "openssl": '#!/bin/sh\nprintf \'subject=OU=TESTTEAM01\\n\'\n',
+                "codesign": textwrap.dedent('''\
+                    #!/usr/bin/env python3
+                    import json, os, sys
+                    args = sys.argv[1:]
+                    if "--sign" in args:
+                        with open(os.environ["SIGNING_TEST_LOG"], "a") as log:
+                            log.write(json.dumps(args) + "\\n")
+                        args[args.index("--sign") + 1] = "-"
+                    os.execv("/usr/bin/codesign", ["codesign", *args])
+                '''),
+            }
+            for name, content in stubs.items():
+                tool = tools / name
+                tool.write_text(content)
+                tool.chmod(0o755)
+            environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                               SIGNING_TEST_LOG=str(log), NATIV_TEAM_ID="", NATIV_PROVISIONING_PROFILE="")
+            script = Path(__file__).parents[1] / "sign_macos_release.sh"
+            result = subprocess.run([
+                "bash", str(script), "--identity", "A" * 40, "--no-timestamp", str(app),
+            ], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            commands = [json.loads(line) for line in log.read_text().splitlines()]
+            signed = [Path(command[-1]) for command in commands]
+            self.assertCountEqual(signed, [standalone, extension, framework, helper, app])
+            for binary in [app_binary, helper_binary, framework_binary]:
+                self.assertNotIn(binary, signed)
+            self.assertLess(signed.index(extension), signed.index(helper))
+            self.assertLess(signed.index(framework), signed.index(helper))
+            self.assertEqual(signed[-1], app)
+            self.assertIn("--entitlements", commands[-1])
+            subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)],
+                           check=True, capture_output=True)
 
 
 class FakePreviewGitHub(FakeGitHub):
