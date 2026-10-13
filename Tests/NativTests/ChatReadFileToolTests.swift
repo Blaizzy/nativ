@@ -189,7 +189,7 @@ final class ChatReadFileToolTests: XCTestCase {
         try Data("%PDF-stub".utf8).write(to: pdfURL)
         let dependencies = ChatReadFileToolDependencies(
             read: { url in try await SafeLocalFileReader().read(url: url) },
-            extractPDF: { _, filename in
+            extractDocument: { _, filename, _ in
                 ExtractedDocumentContent(
                     filename: filename,
                     mimeType: "application/pdf",

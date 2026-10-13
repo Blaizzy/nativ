@@ -385,14 +385,7 @@ struct ModelsView: View {
             let searchTaskID = hubSearchTaskID
             guard searchTaskID != lastStartedHubSearchTaskID else { return }
             lastStartedHubSearchTaskID = searchTaskID
-            hubLibrary.search(
-                query: searchQuery,
-                sort: hubSort,
-                direction: hubSortDirection,
-                capabilities: hubCapabilityFilters,
-                predicate: hubVisibilityPredicate,
-                token: modelState.effectiveHuggingFaceToken
-            )
+            searchHub()
         }
         .task(id: readmeSelection?.repoID) {
             guard let readmeSelection else {
@@ -863,6 +856,17 @@ struct ModelsView: View {
         .accessibilityLabel("Refresh installed models")
     }
 
+    private func searchHub() {
+        hubLibrary.search(
+            query: searchQuery,
+            sort: hubSort,
+            direction: hubSortDirection,
+            capabilities: hubCapabilityFilters,
+            predicate: hubVisibilityPredicate,
+            token: modelState.effectiveHuggingFaceToken
+        )
+    }
+
     @ViewBuilder
     private func discoverScroller() -> some View {
         if let error = hubLibrary.error {
@@ -871,7 +875,8 @@ struct ModelsView: View {
                     title: "Hugging Face Hub is unavailable",
                     message: error,
                     systemImage: "wifi.exclamationmark",
-                    color: .orange
+                    color: .orange,
+                    onRetry: searchHub
                 )
                 .modelsListRow()
             }
@@ -2469,22 +2474,15 @@ private struct ActiveDownloadBannerRow: View {
                         .font(.headline)
                         .lineLimit(1)
 
-                    Group {
-                        if isFinishing {
-                            Text("Finishing…")
-                                .bold()
-                        } else {
-                            HStack(spacing: 4) {
-                                Text(statusText)
-                                    .foregroundStyle(.secondary)
-                                Text("·")
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityHidden(true)
-                                Text("\(percentage)%")
-                                    .bold()
-                                    .monospacedDigit()
-                            }
-                        }
+                    HStack(spacing: 4) {
+                        Text(statusText)
+                            .foregroundStyle(.secondary)
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("\(percentage)%")
+                            .bold()
+                            .monospacedDigit()
                     }
                     .font(.subheadline)
                 }
@@ -2518,33 +2516,21 @@ private struct ActiveDownloadBannerRow: View {
                 .controlSize(.large)
             }
 
-            Group {
-                if isFinishing {
-                    ProgressView()
-                        .accessibilityLabel("Finishing download")
-                        .accessibilityValue("Assembling downloaded model files")
-                } else {
-                    ProgressView(value: displayedProgress)
-                        .animation(
-                            reduceMotion ? nil : .linear(duration: 0.25),
-                            value: displayedProgress
-                        )
-                        .accessibilityLabel("Download progress")
-                        .accessibilityValue("\(percentage) percent")
-                }
-            }
-            .progressViewStyle(.linear)
-            .tint(download.state == .paused ? .secondary : .accentColor)
+            ProgressView(value: displayedProgress)
+                .animation(
+                    reduceMotion ? nil : .linear(duration: 0.25),
+                    value: displayedProgress
+                )
+                .accessibilityLabel("Download progress")
+                .accessibilityValue("\(percentage) percent")
+                .progressViewStyle(.linear)
+                .tint(download.state == .paused ? .secondary : .accentColor)
 
             HStack(spacing: 6) {
-                if isFinishing {
-                    Text("Assembling downloaded model files…")
-                } else {
-                    Text(byteProgress ?? "Calculating download size…")
-                        .monospacedDigit()
-                }
+                Text(byteProgress ?? "Calculating download size…")
+                    .monospacedDigit()
 
-                if !isFinishing, let speed {
+                if let speed {
                     Text("·")
                         .accessibilityHidden(true)
                     Text(speed)
@@ -2574,12 +2560,6 @@ private struct ActiveDownloadBannerRow: View {
         min(max(download.progress, 0), 0.99)
     }
 
-    private var isFinishing: Bool {
-        download.state == .downloading
-            && (download.phase == .finalizing
-                || ModelDownloadProgressPresentation.isFinishing(download.progress))
-    }
-
     private var pauseResumeTitle: String {
         download.state == .paused ? "Resume download" : "Pause download"
     }
@@ -2604,7 +2584,6 @@ private struct ActiveDownloadBannerRow: View {
         switch download.phase {
         case .preparing: return "Preparing"
         case .downloading: return "Downloading"
-        case .finalizing: return "Finishing"
         case .retrying: return "Retrying"
         }
     }
@@ -2803,12 +2782,35 @@ private struct HubModelRow: View, @MainActor Equatable {
                         .font(.caption.weight(.semibold))
                 }
             }
+        case let .insufficientSpace(required, available, reservedByOtherDownloads):
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Not enough disk space", systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Text(
+                    "Needs \(Self.bytes(required)) · \(Self.bytes(available)) available"
+                        + (reservedByOtherDownloads > 0
+                            ? " · \(Self.bytes(reservedByOtherDownloads)) held by downloads in progress"
+                            : "")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                Link(destination: URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) {
+                    Label("Open Storage Settings", systemImage: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                }
+            }
         case .message:
             Label(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
                 .font(.caption)
                 .foregroundStyle(.orange)
                 .textSelection(.enabled)
         }
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 
     private var modelHubURL: URL {
@@ -3135,9 +3137,6 @@ struct ModelDownloadProgressControl: View {
         if isPaused {
             return "Download paused"
         }
-        if ModelDownloadProgressPresentation.isFinishing(progress) {
-            return "Finishing download"
-        }
         return "Downloading \(ModelDownloadProgressPresentation.activePercentage(progress)) percent"
     }
 }
@@ -3254,6 +3253,7 @@ private struct ModelsNotice: View {
     let message: String
     let systemImage: String
     let color: Color
+    var onRetry: (() -> Void)? = nil
     var onDismiss: (() -> Void)? = nil
 
     var body: some View {
@@ -3267,6 +3267,11 @@ private struct ModelsNotice: View {
                     .textSelection(.enabled)
             }
             Spacer()
+            if let onRetry {
+                Button("Retry", systemImage: "arrow.clockwise", action: onRetry)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
             if let onDismiss {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")

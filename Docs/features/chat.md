@@ -207,7 +207,12 @@ the work pane share the right side of chat.
   tabs are not source files.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have
-  back, forward, reload, and address controls. Cookies and website storage use a
+  back, forward, reload, and address controls. Agents can search Google in the same
+  tab with `chat_work` (`action: search`, `query: ...`) without a search API key.
+  Search requests start with results instead of guessed domains. Connection failures
+  and HTTP errors such as 404 include the failed URL, tab ID, and guidance to search
+  the original subject; the previous page is never returned as the failed destination.
+  Cookies and website storage use a
   persistent profile shared across tabs, chats, and windows, so website sign-ins
   survive closing tabs and restarting the app, until the website expires them.
   This profile is separate from the user's regular browser; Nativ Preview also
@@ -223,6 +228,15 @@ the work pane share the right side of chat.
   into a separate, output-only **Agent terminal** tab without changing the selected
   tab or opening a hidden work pane. Each native `terminal` command
   still runs in its own process and uses the existing command approval flow.
+  After two seconds, a command that is still running returns `running: true` and
+  a `terminal_id`, allowing the agent to continue. It can read output with
+  `chat_work.read` or stop the command with `chat_work.interrupt`. Servers and
+  watchers should use `terminal` with `background: true`; they stay alive until
+  stopped or the terminal closes. Other commands retain their execution timeout
+  (180 seconds by default). Running does not guarantee that a server is ready.
+  New commands use another agent terminal while an existing command is running.
+  Quitting Nativ stops managed commands, interactive shells, and their foreground
+  child processes before the app exits. Closing a window does not quit Nativ.
   Agents can also run commands in an existing interactive tab with `chat_work.run`,
   including in standalone chats. Each command shows its target and arguments for
   approval and passes the terminal command safety checks. Shell input or process

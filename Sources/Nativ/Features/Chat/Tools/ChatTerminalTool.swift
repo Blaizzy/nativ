@@ -11,7 +11,7 @@ enum ChatTerminalToolRegistry {
         function: MLXChatFunctionDefinition(
             name: toolName,
             description:
-                "Run a non-interactive local zsh command on the user's Mac. Every call requires explicit user approval. Commands and live output appear in an agent terminal tab beside chat. Each command is a separate process; pass cwd when needed. Prefer read_file, search_files, write_file, and patch for file operations.",
+                "Run a non-interactive local zsh command on the user's Mac. Every call requires explicit user approval. Commands and live output appear in an agent terminal tab beside chat. Each command is a separate process; pass cwd when needed. For servers and watchers, set background:true so they keep running until stopped. Long commands return running:true and terminal_id while output continues streaming; use chat_work read with that id to check output, or interrupt to stop. Running does not mean a server is ready: check its output and URL before opening the browser. Prefer read_file, search_files, write_file, and patch for file operations.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
@@ -31,11 +31,15 @@ enum ChatTerminalToolRegistry {
                     "timeout": .object([
                         "type": .string("integer"),
                         "description": .string(
-                            "Maximum execution time in seconds. Defaults to 180 and may not exceed 600."
+                            "Maximum execution time for foreground commands in seconds. Defaults to 180 and may not exceed 600. Background commands run until interrupted or their terminal is closed."
                         ),
                         "minimum": .number(1),
                         "maximum": .number(Double(maximumTimeoutSeconds)),
                         "default": .number(Double(defaultTimeoutSeconds)),
+                    ]),
+                    "background": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Use true for a server or watcher that must keep running while you continue with other tools. Defaults to false."),
                     ]),
                 ]),
                 "required": .array([.string("command")]),
@@ -47,6 +51,7 @@ struct ChatTerminalToolRequest: Equatable, Sendable {
     let command: String
     let cwd: String?
     let timeoutSeconds: Int
+    let background: Bool
 
     init(call: MLXChatToolCall) throws {
         guard call.function?.name == ChatTerminalToolRegistry.toolName else {
@@ -65,7 +70,7 @@ struct ChatTerminalToolRequest: Equatable, Sendable {
             )
         }
 
-        let allowedKeys: Set<String> = ["command", "cwd", "timeout"]
+        let allowedKeys: Set<String> = ["command", "cwd", "timeout", "background"]
         let unknownKeys = Set(arguments.keys).subtracting(allowedKeys)
         guard unknownKeys.isEmpty else {
             throw ChatTerminalToolError.invalidArguments(
@@ -127,6 +132,14 @@ struct ChatTerminalToolRequest: Equatable, Sendable {
         self.command = command
         self.cwd = cwd
         self.timeoutSeconds = timeoutSeconds
+        if let value = arguments["background"] {
+            guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+                throw ChatTerminalToolError.invalidArguments("background must be a boolean.")
+            }
+            self.background = number.boolValue
+        } else {
+            self.background = false
+        }
     }
 }
 
@@ -387,6 +400,7 @@ struct TerminalProcessRequest: Sendable {
     let currentDirectoryURL: URL
     let timeout: TimeInterval
     let environment: [String: String]
+    var background = false
 }
 
 struct TerminalProcessResult: Equatable, Sendable {
@@ -397,6 +411,9 @@ struct TerminalProcessResult: Equatable, Sendable {
     let timedOut: Bool
     let durationMilliseconds: Int
     let outputTruncated: Bool
+    var terminalID: UUID? = nil
+
+    var isRunning: Bool { terminalID != nil && exitCode == nil && terminationSignal == nil && !timedOut }
 }
 
 struct ChatTerminalToolDependencies: Sendable {
@@ -465,7 +482,8 @@ struct ChatTerminalToolExecutor: Sendable {
             command: request.command,
             currentDirectoryURL: workingDirectoryURL,
             timeout: TimeInterval(request.timeoutSeconds),
-            environment: Self.scrubbedEnvironment()
+            environment: Self.scrubbedEnvironment(),
+            background: request.background
         )
 
         let rawResult: TerminalProcessResult
@@ -489,7 +507,8 @@ struct ChatTerminalToolExecutor: Sendable {
             terminationSignal: rawResult.terminationSignal,
             timedOut: rawResult.timedOut,
             durationMilliseconds: rawResult.durationMilliseconds,
-            outputTruncated: rawResult.outputTruncated
+            outputTruncated: rawResult.outputTruncated,
+            terminalID: rawResult.terminalID
         )
 
         if result.timedOut {
@@ -499,7 +518,7 @@ struct ChatTerminalToolExecutor: Sendable {
                 redacted: didRedact
             )
         }
-        if result.exitCode != 0 || result.terminationSignal != nil {
+        if !result.isRunning && (result.exitCode != 0 || result.terminationSignal != nil) {
             throw ChatTerminalToolError.commandFailed(
                 result,
                 warnings: assessment.warnings,
@@ -667,6 +686,13 @@ struct ChatTerminalToolExecutor: Sendable {
             "redacted": redacted,
         ]
         if let cwd { payload["cwd"] = cwd }
+        if let terminalID = result.terminalID {
+            payload["terminal_id"] = terminalID.uuidString
+            payload["running"] = result.isRunning
+            if result.isRunning {
+                payload["detail"] = "The command is still running. Use chat_work read with this terminal_id for output or interrupt to stop it. Check server readiness before opening its URL."
+            }
+        }
         if let error { payload["error"] = error }
         if let exitCode = result.exitCode { payload["exit_code"] = Int(exitCode) }
         if let signal = result.terminationSignal {
@@ -701,9 +727,12 @@ struct TerminalProcessRunner: Sendable {
              onOutput: (@Sendable (Data) -> Void)? = nil) async throws -> TerminalProcessResult {
         let controller = TerminalProcessController(request: request, onOutput: onOutput)
         return try await withTaskCancellationHandler {
-            try await Task.detached(priority: .userInitiated) {
-                try controller.run()
-            }.value
+            // A server can live for hours; do not occupy Swift's cooperative executor while waiting.
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result { try controller.run() })
+                }
+            }
         } onCancel: {
             controller.cancel()
         }
@@ -751,19 +780,28 @@ private final class TerminalProcessController: @unchecked Sendable {
         process.standardOutput = standardOutput
         process.standardError = standardError
 
-        standardOutput.fileHandleForReading.readabilityHandler = { handle in
-            outputBuffer.append(handle.availableData)
+        for handle in [standardOutput.fileHandleForReading, standardError.fileHandleForReading] {
+            let descriptor = handle.fileDescriptor
+            let flags = fcntl(descriptor, F_GETFL)
+            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw ChatTerminalToolError.launchFailed("Could not configure command output.")
+            }
         }
-        standardError.fileHandleForReading.readabilityHandler = { handle in
-            errorBuffer.append(handle.availableData)
+        defer {
+            try? standardOutput.fileHandleForReading.close()
+            try? standardError.fileHandleForReading.close()
         }
 
-        lock.withLock { self.process = process }
         let start = Date()
         do {
-            try process.run()
+            try lock.withLock {
+                // Serialize launch with cancellation, including application termination.
+                // Otherwise Quit could cancel an unstarted Process that launches afterward.
+                if cancelled { throw CancellationError() }
+                try process.run()
+                self.process = process
+            }
         } catch {
-            stopReading(standardOutput: standardOutput, standardError: standardError)
             lock.withLock { self.process = nil }
             throw error
         }
@@ -771,11 +809,13 @@ private final class TerminalProcessController: @unchecked Sendable {
         var timedOut = false
         let deadline = start.addingTimeInterval(request.timeout)
         while process.isRunning {
+            drain(standardOutput.fileHandleForReading, into: outputBuffer)
+            drain(standardError.fileHandleForReading, into: errorBuffer)
             if lock.withLock({ cancelled }) {
                 terminate(process)
                 break
             }
-            if Date() >= deadline {
+            if !request.background && Date() >= deadline {
                 timedOut = true
                 terminate(process)
                 break
@@ -784,9 +824,8 @@ private final class TerminalProcessController: @unchecked Sendable {
         }
         process.waitUntilExit()
         lock.withLock { self.process = nil }
-        stopReading(standardOutput: standardOutput, standardError: standardError)
-        outputBuffer.append(standardOutput.fileHandleForReading.readDataToEndOfFile())
-        errorBuffer.append(standardError.fileHandleForReading.readDataToEndOfFile())
+        drain(standardOutput.fileHandleForReading, into: outputBuffer)
+        drain(standardError.fileHandleForReading, into: errorBuffer)
 
         if lock.withLock({ cancelled }) { throw CancellationError() }
 
@@ -805,19 +844,29 @@ private final class TerminalProcessController: @unchecked Sendable {
 
     private func terminate(_ process: Process?) {
         guard let process, process.isRunning else { return }
-        process.terminate()
+        let pid = process.processIdentifier
+        // Foundation launches a new process group. Stop shell children (npm/node, etc.) too.
+        let target = getpgid(pid) == pid ? -pid : pid
+        Darwin.kill(target, SIGTERM)
         let graceDeadline = Date().addingTimeInterval(0.25)
         while process.isRunning && Date() < graceDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
-        if process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGKILL)
-        }
+        if process.isRunning || target < 0 { Darwin.kill(target, SIGKILL) }
+        process.waitUntilExit()
     }
 
-    private func stopReading(standardOutput: Pipe, standardError: Pipe) {
-        standardOutput.fileHandleForReading.readabilityHandler = nil
-        standardError.fileHandleForReading.readabilityHandler = nil
+    private func drain(_ handle: FileHandle, into buffer: TerminalOutputBuffer) {
+        // A detached child may still hold the write end. Never wait for it to close the pipe.
+        let descriptor = handle.fileDescriptor
+        var bytes = [UInt8](repeating: 0, count: 8_192)
+        // Bound each drain so a noisy process cannot delay cancellation or the timeout.
+        for _ in 0..<32 {
+            let count = Darwin.read(descriptor, &bytes, bytes.count)
+            if count > 0 { buffer.append(Data(bytes.prefix(count))) }
+            else if count < 0 && errno == EINTR { continue }
+            else { break }
+        }
     }
 }
 

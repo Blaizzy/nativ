@@ -13,7 +13,7 @@ final class HuggingFaceDownloadCapacity: @unchecked Sendable {
     enum Failure: LocalizedError {
         case unavailable
         case invalidReservation
-        case insufficientSpace(required: Int64, available: Int64)
+        case insufficientSpace(required: Int64, available: Int64, reservedByOtherDownloads: Int64)
 
         var errorDescription: String? {
             switch self {
@@ -21,10 +21,12 @@ final class HuggingFaceDownloadCapacity: @unchecked Sendable {
                 return "Could not verify available disk space. Try again."
             case .invalidReservation:
                 return "Could not verify the model's disk reservation. Try again."
-            case let .insufficientSpace(required, available):
-                let needed = ByteCountFormatter.string(fromByteCount: required, countStyle: .file)
-                let free = ByteCountFormatter.string(fromByteCount: available, countStyle: .file)
-                return "Model needs \(needed) of additional space, but only \(free) is available after reserving other downloads."
+            case let .insufficientSpace(required, available, reservedByOtherDownloads):
+                return HuggingFaceDownloadFailure.insufficientSpace(
+                    required: required,
+                    available: available,
+                    reservedByOtherDownloads: reservedByOtherDownloads
+                ).errorDescription
             }
         }
     }
@@ -51,11 +53,16 @@ final class HuggingFaceDownloadCapacity: @unchecked Sendable {
             // do not use a snapshot taken before another request was admitted.
             let snapshot = try readCapacity(path)
             guard snapshot.freeBytes >= 0 else { throw Failure.unavailable }
-            let available = reservations.values.reduce(snapshot.freeBytes) { free, reservation in
-                reservation.volume == snapshot.volume ? max(free - reservation.bytes, 0) : free
-            }
+            let reserved = reservations.values
+                .filter { $0.volume == snapshot.volume }
+                .reduce(Int64(0)) { $0 + $1.bytes }
+            let available = max(snapshot.freeBytes - reserved, 0)
             guard bytes <= available else {
-                throw Failure.insufficientSpace(required: bytes, available: available)
+                throw Failure.insufficientSpace(
+                    required: bytes,
+                    available: available,
+                    reservedByOtherDownloads: reserved
+                )
             }
             reservations[id] = Reservation(volume: snapshot.volume, bytes: bytes)
         }

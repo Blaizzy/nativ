@@ -2,6 +2,7 @@ import Combine
 import Darwin
 import Foundation
 import NativServerKit
+import Xet
 
 enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendable {
     case downloads
@@ -413,6 +414,7 @@ enum HuggingFaceHubError: LocalizedError {
 
 enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
     case gatedRepository
+    case insufficientSpace(required: Int64, available: Int64, reservedByOtherDownloads: Int64)
     case message(String)
 
     init(processOutput: String) {
@@ -424,10 +426,15 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
             return
         }
 
-        let usefulMessage = processOutput
+        let lines = processOutput
             .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-            .suffix(4)
-            .joined(separator: "\n")
+            .filter { !$0.hasPrefix("__NATIV_") }
+        let usefulMessage = if processOutput.contains("Traceback (most recent call last):"),
+            let exception = lines.last {
+            String(exception).replacing(#/^[A-Za-z_][\w.]*(Error|Exception): /#, with: "")
+        } else {
+            lines.suffix(4).joined(separator: "\n")
+        }
         self = .message(
             usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
         )
@@ -437,9 +444,18 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
         switch self {
         case .gatedRepository:
             "This gated model requires access approval from its publisher."
+        case let .insufficientSpace(required, available, reservedByOtherDownloads):
+            "Not enough disk space. This model needs \(Self.bytes(required)), but only \(Self.bytes(available)) is available."
+                + (reservedByOtherDownloads > 0
+                    ? " Downloads in progress are holding \(Self.bytes(reservedByOtherDownloads))."
+                    : "")
         case .message(let message):
             message
         }
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 }
 
@@ -1056,7 +1072,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     enum DownloadPhase: Equatable {
         case preparing
         case downloading
-        case finalizing
         case retrying
     }
 
@@ -1502,6 +1517,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
             return
         }
         downloads[index].phase = phase
+        if phase == .retrying {
+            progressFlushTasks.removeValue(forKey: modelID)?.cancel()
+            progressLimiters.removeValue(forKey: modelID)
+            downloads[index].metrics = ModelDownloadProgress(totalBytes: downloads[index].metrics.totalBytes)
+        }
         if phase != .downloading {
             downloads[index].bytesPerSecond = nil
         }
@@ -1616,10 +1636,6 @@ struct HuggingFaceDownloadProgressState: Equatable {
     private var speedSampleBytes: Int64 = 0
     private var speedSampleTime: Date
     private var lastTransferTime: Date?
-    private var checkpointReconstructedBytes: Int64 = 0
-    private var checkpointTransferredBytes: Int64 = 0
-    private var checkpointDisplayedBytes: Int64 = 0
-    private var logicalBytesPerTransferByte = 1.0
 
     init(now: Date = .now) {
         self.lastActivity = now
@@ -1628,15 +1644,14 @@ struct HuggingFaceDownloadProgressState: Equatable {
     }
 
     mutating func beginAttempt(at now: Date = .now) {
+        progress = nil
+        reconstructedBytes = 0
         lastActivity = now
         bytesPerSecond = nil
         transferredBytes = 0
         speedSampleBytes = 0
         speedSampleTime = now
         lastTransferTime = nil
-        checkpointReconstructedBytes = reconstructedBytes
-        checkpointTransferredBytes = 0
-        checkpointDisplayedBytes = progress?.completedBytes ?? 0
     }
 
     mutating func resume(at now: Date = .now) {
@@ -1655,31 +1670,16 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let hasNewTotal = update.totalBytes != progress?.totalBytes
         guard hasNewBytes || hasNewTotal else { return nil }
 
-        let nextReconstructedBytes = max(reconstructedBytes, update.completedBytes)
-        let logicalDelta = nextReconstructedBytes - checkpointReconstructedBytes
-        let transferDelta = transferredBytes - checkpointTransferredBytes
-        if logicalDelta > 0, transferDelta > 0 {
-            // Xet reconstructs in buffered bursts. Re-anchor to each exact
-            // update, then advance smoothly using network bytes between them.
-            let observedRatio = Double(logicalDelta) / Double(transferDelta)
-            let boundedRatio = min(max(observedRatio, 0.25), 4)
-            logicalBytesPerTransferByte = (logicalBytesPerTransferByte + boundedRatio) / 2
-        }
-
-        reconstructedBytes = nextReconstructedBytes
-        let displayedBytes = max(progress?.completedBytes ?? 0, reconstructedBytes)
+        reconstructedBytes = max(reconstructedBytes, update.completedBytes)
         guard let totalBytes = update.totalBytes,
               let nextProgress = ModelDownloadProgress(
-                  completedBytes: displayedBytes,
+                  completedBytes: reconstructedBytes,
                   totalBytes: totalBytes
               )
         else {
             return nil
         }
 
-        checkpointReconstructedBytes = reconstructedBytes
-        checkpointTransferredBytes = transferredBytes
-        checkpointDisplayedBytes = nextProgress.completedBytes
         lastActivity = now
         guard nextProgress != progress else { return nil }
         progress = nextProgress
@@ -1689,9 +1689,9 @@ struct HuggingFaceDownloadProgressState: Equatable {
     mutating func recordTransferredBytes(
         _ bytes: Int64,
         at now: Date = .now
-    ) -> ModelDownloadProgress? {
+    ) {
         let bytes = max(bytes, 0)
-        guard bytes > transferredBytes else { return nil }
+        guard bytes > transferredBytes else { return }
 
         transferredBytes = bytes
         lastActivity = now
@@ -1706,29 +1706,6 @@ struct HuggingFaceDownloadProgressState: Equatable {
             speedSampleBytes = bytes
             speedSampleTime = now
         }
-
-        guard let totalBytes = progress?.totalBytes else { return nil }
-        let transferDelta = bytes - checkpointTransferredBytes
-        let estimatedBytes = checkpointDisplayedBytes
-            + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
-        // Transfer bytes are only an estimate of reconstructed bytes. Cap the
-        // estimate at the first finishing byte so it cannot show 100%, but can
-        // still switch the UI and stall watchdog into their finishing state.
-        let activeLimit = min(
-            Int64(
-                (Double(totalBytes) * ModelDownloadProgressPresentation.finishingThreshold)
-                    .rounded(.up)
-            ),
-            totalBytes
-        )
-        guard let estimate = ModelDownloadProgress(
-            completedBytes: min(estimatedBytes, activeLimit),
-            totalBytes: totalBytes
-        ), var progress, progress.merge(estimate) else {
-            return nil
-        }
-        self.progress = progress
-        return progress
     }
 
     func transferSpeed(at now: Date = .now) -> Double? {
@@ -1747,22 +1724,9 @@ struct HuggingFaceDownloadProgressState: Equatable {
     ) -> Bool {
         !isPaused && now.timeIntervalSince(lastActivity) >= timeout
     }
-
-    var isFinishing: Bool {
-        ModelDownloadProgressPresentation.isFinishing(progress?.fractionCompleted ?? 0)
-    }
 }
 
 enum ModelDownloadProgressPresentation {
-    /// Xet can continue reconstructing model files after the measurable
-    /// transfer estimate reaches its safe limit. Present that interval as a
-    /// distinct finishing state instead of leaving a percentage visibly stuck.
-    static let finishingThreshold = 0.95
-
-    static func isFinishing(_ progress: Double) -> Bool {
-        progress >= finishingThreshold
-    }
-
     static func activePercentage(_ progress: Double) -> Int {
         let clampedProgress = min(max(progress, 0), 1)
         return min(Int((clampedProgress * 100).rounded(.down)), 99)
@@ -1815,7 +1779,7 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
         lock.withLock { state.recordProgress(progress) }
     }
 
-    func recordTransferredBytes(_ bytes: Int64) -> ModelDownloadProgress? {
+    func recordTransferredBytes(_ bytes: Int64) {
         lock.withLock { state.recordTransferredBytes(bytes) }
     }
 
@@ -1825,10 +1789,6 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
 
     func isStalled(timeout: TimeInterval, isPaused: Bool) -> Bool {
         lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
-    }
-
-    var isFinishing: Bool {
-        lock.withLock { state.isFinishing }
     }
 }
 
@@ -1858,7 +1818,6 @@ enum HuggingFaceDownloadOutput: Equatable {
             switch payload {
             case "preparing": self = .phase(.preparing)
             case "downloading": self = .phase(.downloading)
-            case "finalizing": self = .phase(.finalizing)
             default: return nil
             }
         } else {
@@ -1902,8 +1861,81 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
+enum HuggingFaceXetDownload {
+    static let script = """
+    import subprocess
+    from huggingface_hub import file_download
+
+    def native_xet_get(*, incomplete_path, xet_file_data, headers, expected_size=None,
+                       displayed_filename=None, tqdm_class=None, _tqdm_bar=None):
+        if expected_size is None or expected_size < 0:
+            raise ValueError("Missing Xet file size")
+        environment = os.environ.copy()
+        authorization = next((v for k, v in headers.items() if k.lower() == "authorization"), "")
+        if authorization.lower().startswith("bearer "):
+            environment["HF_TOKEN"] = authorization[7:]
+        with file_download._get_progress_bar_context(
+            desc=displayed_filename or str(incomplete_path), total=expected_size,
+            log_level=20, name="huggingface_hub.xet_get",
+            tqdm_class=tqdm_class, _tqdm_bar=_tqdm_bar,
+        ) as progress:
+            completed = 0
+            with subprocess.Popen(
+                [sys.argv[5], "--xet-download", xet_file_data.file_hash, xet_file_data.refresh_route,
+                 str(incomplete_path), str(expected_size)],
+                env=environment, stdout=subprocess.PIPE, text=True,
+            ) as helper:
+                try:
+                    for line in helper.stdout:
+                        written = int(line.strip())
+                        if not completed <= written <= expected_size:
+                            raise ValueError("Invalid Xet progress")
+                        delta = written - completed
+                        progress.update(delta)
+                        if callable(update_transfer := getattr(progress, "update_transfer", None)):
+                            update_transfer(delta)
+                        completed = written
+                    if helper.wait() != 0 or completed != expected_size:
+                        raise RuntimeError("Xet download did not complete")
+                finally:
+                    if helper.poll() is None:
+                        helper.kill()
+                        helper.wait()
+
+    file_download.xet_get = native_xet_get
+    """
+
+    static func run() async -> Never {
+        do {
+            let arguments = Array(CommandLine.arguments.dropFirst(2))
+            guard arguments.count == 4,
+                  let refreshURL = URL(string: arguments[1]),
+                  let expectedSize = Int64(arguments[3]), expectedSize >= 0 else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let written = try await Xet.withDownloader(
+                refreshURL: refreshURL,
+                hubToken: ProcessInfo.processInfo.environment["HF_TOKEN"]
+            ) { downloader in
+                try await downloader.download(
+                    arguments[0], to: URL(fileURLWithPath: arguments[2])
+                ) { completed, _ in
+                    print(completed)
+                    fflush(stdout)
+                }
+            }
+            guard written == expectedSize else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+}
+
 final class HuggingFaceDownloadOperation: @unchecked Sendable {
-    private static let finalizationStallTimeout: TimeInterval = 10 * 60
     private static let monitorInterval: TimeInterval = 0.5
     private static let maximumAttempts = 3
     private static let maximumCapturedOutputBytes = 256 * 1024
@@ -1922,6 +1954,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private var process: Process?
     private var wasCancelled = false
     private var isPaused = false
+    private var admissionFailure: HuggingFaceDownloadFailure?
 
     convenience init(
         repoID: String,
@@ -1938,22 +1971,31 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceHubError.pythonUnavailable
         }
 
+        guard let helperURL = Bundle.main.executableURL else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
         let script = """
         import os
+        import signal
         import sys
         import threading
         import time
         from huggingface_hub import snapshot_download
         from huggingface_hub.utils import tqdm
 
+        if os.getpgrp() != os.getpid():
+            os.setsid()
         parent_pid = int(sys.argv[3])
 
         def exit_if_parent_terminates():
             while os.getppid() == parent_pid:
                 time.sleep(0.25)
-            os._exit(0)
+            os.killpg(os.getpgrp(), signal.SIGTERM)
 
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
+
+        \(HuggingFaceXetDownload.script)
 
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
         \(HuggingFaceDownloadPreflight.script)
@@ -2030,7 +2072,6 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         )
         final_bytes = NativProgress._total_bytes
         print(f"__NATIV_PROGRESS__:{final_bytes}:{final_bytes}", flush=True)
-        print("__NATIV_STAGE__:finalizing", flush=True)
         """
 
         var environment = ProcessInfo.processInfo.environment
@@ -2049,7 +2090,8 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             repoID,
             cachePath,
             String(ProcessInfo.processInfo.processIdentifier),
-            revision ?? "main"
+            revision ?? "main",
+            helperURL.path
         ]
         self.init(executableURL: pythonURL, arguments: arguments, environment: environment,
                   cachePath: cachePath, capacity: .shared,
@@ -2100,12 +2142,9 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
     private func runAttempt() throws {
         let reservationID = UUID()
-        // Keep the full uncached-byte reservation until the subprocess and its
-        // output reader exit, including while paused or being cancelled. UI
-        // progress can be interpolated and is not proof that bytes are on disk.
-        // Retries release the old attempt and reserve again after a fresh dry run.
         defer { capacity.release(reservationID) }
         activity.beginAttempt()
+        lock.withLock { admissionFailure = nil }
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
@@ -2154,6 +2193,17 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
                             try capacity.reserve(reservationID, bytes: bytes, atPath: cachePath)
                             response = ["approved": true]
                         } catch {
+                            if case let HuggingFaceDownloadCapacity.Failure.insufficientSpace(
+                                required, available, reservedByOtherDownloads
+                            ) = error {
+                                lock.withLock {
+                                    admissionFailure = .insufficientSpace(
+                                        required: required,
+                                        available: available,
+                                        reservedByOtherDownloads: reservedByOtherDownloads
+                                    )
+                                }
+                            }
                             response = ["error": error.localizedDescription]
                         }
                         do {
@@ -2169,9 +2219,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
                             progress(updatedProgress)
                         }
                     case .transferredBytes(let bytes):
-                        if let updatedProgress = activity.recordTransferredBytes(bytes) {
-                            progress(updatedProgress)
-                        }
+                        activity.recordTransferredBytes(bytes)
                     case .phase(let downloadPhase):
                         phase(downloadPhase)
                     }
@@ -2204,7 +2252,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         if flagsAfterLaunch.cancelled {
             stopProcess(process)
         } else if flagsAfterLaunch.paused {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
 
         var stalled = false
@@ -2216,10 +2264,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if !flags.paused {
                 transferSpeed(activity.bytesPerSecond)
-                let timeout = activity.isFinishing
-                    ? Self.finalizationStallTimeout
-                    : stallTimeout
-                if activity.isStalled(timeout: timeout, isPaused: false) {
+                if activity.isStalled(timeout: stallTimeout, isPaused: false) {
                     stalled = true
                     stopProcess(process)
                     break
@@ -2239,6 +2284,9 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceDownloadAttemptError.stalled
         }
         guard process.terminationStatus == 0 else {
+            if let admissionFailure = lock.withLock({ admissionFailure }) {
+                throw admissionFailure
+            }
             let message = String(decoding: output.snapshot(), as: UTF8.self)
             throw HuggingFaceDownloadFailure(processOutput: message)
         }
@@ -2253,9 +2301,9 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         if let process, process.isRunning {
             if wasPaused {
-                Darwin.kill(process.processIdentifier, SIGCONT)
+                signalProcess(process, SIGCONT)
             }
-            process.terminate()
+            signalProcess(process, SIGTERM)
         }
     }
 
@@ -2267,7 +2315,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         guard let process = currentProcess, process.isRunning else { return }
-        Darwin.kill(process.processIdentifier, SIGKILL)
+        signalProcess(process, SIGKILL)
 
         let forcedExitDeadline = clock.now.advanced(by: .seconds(1))
         while process.isRunning, clock.now < forcedExitDeadline {
@@ -2281,7 +2329,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         let process = self.process
         lock.unlock()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
     }
 
@@ -2292,7 +2340,7 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         activity.resume()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGCONT)
+            signalProcess(process, SIGCONT)
         }
     }
 
@@ -2322,15 +2370,21 @@ final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
     }
 
+    private func signalProcess(_ process: Process, _ signal: Int32) {
+        if Darwin.kill(-process.processIdentifier, signal) != 0 {
+            Darwin.kill(process.processIdentifier, signal)
+        }
+    }
+
     private func stopProcess(_ process: Process) {
         guard process.isRunning else { return }
-        process.terminate()
+        signalProcess(process, SIGTERM)
         let deadline = Date().addingTimeInterval(2)
         while process.isRunning, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
         if process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGKILL)
+            signalProcess(process, SIGKILL)
         }
     }
 

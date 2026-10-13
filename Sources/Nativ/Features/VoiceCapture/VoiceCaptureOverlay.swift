@@ -54,6 +54,7 @@ final class VoiceCaptureOverlayModel: ObservableObject {
         case transcribing
         case finishing
         case failed
+        case microphoneUnavailable
         case noSpeech
     }
 
@@ -187,7 +188,8 @@ final class VoiceCaptureOverlayController {
 
     private func show(
         at cursorPosition: NSPoint,
-        presentation: VoiceCaptureOverlayModel.Presentation
+        presentation: VoiceCaptureOverlayModel.Presentation,
+        state: VoiceCaptureOverlayModel.State = .preparing
     ) {
         dismissalTask?.cancel()
         dismissalTask = nil
@@ -196,11 +198,14 @@ final class VoiceCaptureOverlayController {
         activationID = UUID()
         didPlayStartCue = false
         model.beginActivation(presentation: presentation)
+        model.transition(to: state)
         model.level = 0
         model.closingLevel = 0
         model.elapsed = 0
         model.showsNoSpeechFeedback = false
-        if presentation.audioCaptureKind != nil {
+        if state == .microphoneUnavailable {
+            activeStyle = .gradientIsland
+        } else if presentation.audioCaptureKind != nil {
             let recordingStyle = animationPreferences.recordingStyle
             activeStyle = VoiceAnimationPreferences.recordingStyles.contains(
                 recordingStyle
@@ -274,6 +279,18 @@ final class VoiceCaptureOverlayController {
     func showFailure() {
         model.transition(to: .failed)
         model.level = 0
+    }
+
+    func showMicrophoneUnavailable() {
+        show(at: NSEvent.mouseLocation, presentation: .dictation, state: .microphoneUnavailable)
+        dismissalTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(4)) }
+            catch { return }
+            guard let self else { return }
+            self.islandPanel.orderOut(nil)
+            self.model.visibleSurface = nil
+            self.dismissalTask = nil
+        }
     }
 
     func waitForTranscription() {
@@ -427,6 +444,16 @@ final class VoiceCaptureOverlayController {
     }
 
     private func positionIslandPanel(on screen: NSScreen) {
+        if model.state == .microphoneUnavailable {
+            model.islandUsesCameraCutout = false
+            setIslandPanelFrame(NSRect(
+                x: screen.frame.midX - 160,
+                y: screen.visibleFrame.maxY - 73,
+                width: 320,
+                height: 68
+            ))
+            return
+        }
         if let leftArea = screen.auxiliaryTopLeftArea,
            let rightArea = screen.auxiliaryTopRightArea,
            rightArea.minX - leftArea.maxX > 20 {
@@ -1293,7 +1320,7 @@ private struct VoiceCaptureOverlayView: View {
                 "Saving and transcribing \(kind.title.lowercased())"
             case .finishing:
                 "Finished recording \(kind.title.lowercased())"
-            case .failed:
+            case .failed, .microphoneUnavailable:
                 "Could not record \(kind.title.lowercased())"
             case .noSpeech:
                 "No speech detected"
@@ -1311,7 +1338,7 @@ private struct VoiceCaptureOverlayView: View {
             "Transcribing audio"
         case .finishing:
             "Finished recording audio"
-        case .failed:
+        case .failed, .microphoneUnavailable:
             "Microphone unavailable"
         case .noSpeech:
             "No speech detected"
@@ -1418,7 +1445,26 @@ private struct VoiceCaptureIslandView: View {
     @ViewBuilder
     var body: some View {
         if model.visibleSurface == .island {
-            islandContent
+            if model.state == .microphoneUnavailable {
+                HStack(spacing: 12) {
+                    Image(systemName: "mic.slash.fill")
+                        .font(.title2)
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("No microphone available")
+                            .font(.callout.weight(.semibold))
+                        Text("Connect one or update exclusions.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                }
+                .foregroundStyle(.white)
+                .frame(width: 312, height: 60)
+                .background(.black.opacity(0.96), in: Capsule())
+                .accessibilityElement(children: .combine)
+            } else {
+                islandContent
+            }
         }
     }
 
@@ -1514,7 +1560,7 @@ private struct VoiceCaptureIslandView: View {
 
     private var feedbackText: String {
         return switch model.state {
-        case .failed:
+        case .failed, .microphoneUnavailable:
             "Mic"
         case .preparing, .recording, .transcribing, .finishing, .noSpeech:
             formattedElapsed
@@ -1532,7 +1578,7 @@ private struct VoiceCaptureIslandView: View {
                 "Saving and transcribing \(kind.title.lowercased())"
             case .finishing:
                 "Finished recording \(kind.title.lowercased())"
-            case .failed:
+            case .failed, .microphoneUnavailable:
                 "Could not record \(kind.title.lowercased())"
             case .noSpeech:
                 "No speech detected"
@@ -1550,7 +1596,7 @@ private struct VoiceCaptureIslandView: View {
             "Transcribing audio in Dynamic Island"
         case .finishing:
             "Finished recording audio in Dynamic Island"
-        case .failed:
+        case .failed, .microphoneUnavailable:
             "Microphone unavailable"
         case .noSpeech:
             "No speech detected"
@@ -2092,7 +2138,7 @@ struct VoiceGradientOrb: View {
             phase = .listening
         case .transcribing, .noSpeech:
             phase = .transcribing
-        case .finishing, .failed:
+        case .finishing, .failed, .microphoneUnavailable:
             phase = .finishing
         }
     }
