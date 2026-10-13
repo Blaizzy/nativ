@@ -1170,7 +1170,9 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 }
 
                 if message.role == .assistant, message.isStreaming {
-                    ChatStreamingToolCalls(calls: message.streamingToolCalls)
+                    ForEach(Array(message.streamingToolCalls.enumerated()), id: \.offset) { _, call in
+                        ChatAgentStepCell(streamingCall: call)
+                    }
                 }
 
                 if !message.annotationPresentation.annotations.isEmpty {
@@ -1440,32 +1442,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             withAnimation(.easeInOut(duration: 0.15)) {
                 didCopyMessage = false
             }
-        }
-    }
-}
-
-private struct ChatStreamingToolCalls: View {
-    let calls: [MLXChatToolCall]
-
-    var body: some View {
-        ForEach(Array(calls.enumerated()), id: \.offset) { _, call in
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small)
-                    Text("Preparing \(call.function?.name ?? "tool")…")
-                        .font(.callout.weight(.medium))
-                }
-                if let arguments = call.function?.arguments, !arguments.isEmpty {
-                    Text(String(arguments.suffix(2000)))
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(8)
-                        .truncationMode(.head)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(10)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         }
     }
 }
@@ -1817,7 +1793,12 @@ private struct ChatAgentStepCell: View {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
-    @State private var isExpanded = false
+    var isReceivingArguments = false
+    @State private var isExpanded: Bool?
+
+    private var showsDetails: Bool {
+        isExpanded ?? isReceivingArguments
+    }
 
     private var isAwaitingConsent: Bool {
         message.toolStatus == .awaitingConsent
@@ -1832,13 +1813,13 @@ private struct ChatAgentStepCell: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
-                    isExpanded.toggle()
+                    isExpanded = !showsDetails
                 }
             } label: {
                 header
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Hide call details" : "Show call details")
+            .help(showsDetails ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
             if isAwaitingImageModelSelection {
@@ -1849,7 +1830,7 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
-            } else if isExpanded {
+            } else if showsDetails {
                 Divider()
                     .padding(.top, 7)
                 details
@@ -1891,7 +1872,7 @@ private struct ChatAgentStepCell: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .rotationEffect(.degrees(showsDetails ? 90 : 0))
                 }
             }
             if message.toolStatus == .failed, let toolErrorMessage {
@@ -1906,18 +1887,22 @@ private struct ChatAgentStepCell: View {
 
     @ViewBuilder
     private var statusBadge: some View {
-        switch message.toolStatus {
-        case .succeeded:
-            NativStatusBadge(text: "Done", tone: .success)
-        case .failed:
-            NativStatusBadge(text: "Failed", tone: .danger)
-        case .cancelled:
-            NativStatusBadge(text: "Canceled", tone: .neutral)
-        case .declined:
-            NativStatusBadge(text: "Declined", tone: .neutral)
-        case .preparing, .running, .awaitingConsent,
-            .awaitingImageModelSelection, nil:
-            EmptyView()
+        if isReceivingArguments {
+            NativStatusBadge(text: "In progress", tone: .active)
+        } else {
+            switch message.toolStatus {
+            case .succeeded:
+                NativStatusBadge(text: "Done", tone: .success)
+            case .failed:
+                NativStatusBadge(text: "Failed", tone: .danger)
+            case .cancelled:
+                NativStatusBadge(text: "Canceled", tone: .neutral)
+            case .declined:
+                NativStatusBadge(text: "Declined", tone: .neutral)
+            case .preparing, .running, .awaitingConsent,
+                .awaitingImageModelSelection, nil:
+                EmptyView()
+            }
         }
     }
 
@@ -2105,7 +2090,15 @@ private struct ChatAgentStepCell: View {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                NativCodeBlock(raw: formattedArguments)
+                if isReceivingArguments {
+                    ScrollView {
+                        NativCodeBlock(raw: formattedArguments)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .frame(maxHeight: 240)
+                } else {
+                    NativCodeBlock(raw: formattedArguments)
+                }
             }
             if !message.content.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -2130,11 +2123,13 @@ private struct ChatAgentStepCell: View {
     private var title: String {
         // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
         let name = mcpToolParts?.tool ?? message.toolName
-        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
+        return ChatToolPresentation.title(
+            toolName: name, status: isReceivingArguments ? nil : message.toolStatus)
     }
 
     private var symbolName: String {
-        ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
+        ChatToolPresentation.symbolName(
+            toolName: message.toolName, status: isReceivingArguments ? nil : message.toolStatus)
     }
 
     private var statusTone: NativStatusTone {
@@ -2166,7 +2161,8 @@ private struct ChatAgentStepCell: View {
     private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
-        switch message.toolStatus {
+        if isReceivingArguments { return "in progress" }
+        return switch message.toolStatus {
         case .preparing:
             "preparing"
         case .running:
@@ -2195,6 +2191,28 @@ private struct ChatAgentStepCell: View {
             return nil
         }
         return object["error"] as? String
+    }
+}
+
+private extension ChatAgentStepCell {
+    init(streamingCall: MLXChatToolCall) {
+        self.init(
+            message: ChatTranscriptMessage(
+                role: .tool,
+                content: "",
+                toolCallID: streamingCall.id,
+                toolName: streamingCall.function?.name,
+                toolStatus: .preparing,
+                toolArguments: streamingCall.function?.arguments
+            ),
+            imageModelSelectionRequest: nil,
+            onConfirm: { _ in },
+            onDeny: { _ in },
+            onSelectImageModel: { _, _ in },
+            onCancelImageModelSelection: { _ in },
+            onExploreImageModels: { _ in },
+            isReceivingArguments: true
+        )
     }
 }
 
