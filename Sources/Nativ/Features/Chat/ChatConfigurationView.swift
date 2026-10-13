@@ -339,6 +339,7 @@ struct ModelConfigurationView: View {
                 value: $settings.maxTokens,
                 range: 1...262_144
             )
+            .help("Maximum tokens per response. With Auto compact, generation is also limited by the space remaining in the context window.")
 
             ConfigurationIntegerField(
                 title: "Context window",
@@ -353,7 +354,7 @@ struct ModelConfigurationView: View {
                         .fixedSize()
                     Image(systemName: "info.circle")
                         .foregroundStyle(.secondary)
-                        .help("Summarize older context while keeping your full chat history visible. Set 20–90% on a 1–100% scale. Compaction may happen earlier to leave room for output. Requires a server with compaction support.")
+                        .help("Summarize older context before generation when actual context usage reaches the selected percentage. Your full chat history stays visible. Set 20–90% on a 1–100% scale. Requires a server with compaction support.")
                         .accessibilityLabel("About auto compaction")
                     Spacer()
                     Text("\(settings.compactionThresholdPercent)%")

@@ -489,6 +489,23 @@ final class ChatDocumentContextBuilderTests: XCTestCase {
         XCTAssertEqual(limit, 28_492)
     }
 
+    func testAutoCompactionDoesNotDropDocumentsToReserveUnusedOutput() {
+        for output in [2048, 4096, 128000] {
+            XCTAssertEqual(ChatDocumentTokenBudget.characterLimit(
+                currentLimit: 8000, basePromptTokens: 500, documentPromptTokens: 2500,
+                contextLimit: 4096, maximumOutputTokens: output, compactionEnabled: true
+            ), 8000)
+            XCTAssertEqual(ChatDocumentTokenBudget.characterLimit(
+                currentLimit: 8000, basePromptTokens: 500, documentPromptTokens: 4500,
+                contextLimit: 4096, maximumOutputTokens: output, compactionEnabled: true
+            ), 6678)
+        }
+        XCTAssertEqual(ChatDocumentTokenBudget.characterLimit(
+            currentLimit: 8000, basePromptTokens: 500, documentPromptTokens: 2500,
+            contextLimit: 4096, maximumOutputTokens: 4096, compactionEnabled: false
+        ), 0)
+    }
+
     func testTokenBudgetDropsDocumentsWhenBasePromptUsesAvailableContext() {
         let limit = ChatDocumentTokenBudget.characterLimit(
             currentLimit: 48_000,
