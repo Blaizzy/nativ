@@ -61,6 +61,20 @@ final class ChatStreamEventRelayTests: XCTestCase {
         XCTAssertLessThan(ChatStreamingRenderPolicy.flushInterval, slowestInterTokenPeriod)
     }
 
+    func testToolOnlyChunksSurviveCoalescingAndCancellation() {
+        var deliveries: [MLXChatStreamDelta] = []
+        let relay = ChatStreamEventRelay(deliveryInterval: .seconds(60)) { deliveries.append($0) }
+        let first = MLXChatToolCall(index: 0, id: "call", function: .init(name: "write_file", arguments: "{"))
+        let second = MLXChatToolCall(index: 0, id: nil, type: nil, function: .init(name: nil, arguments: "}"))
+        relay.submit(.init(toolCalls: [first]))
+        relay.submit(.init(toolCalls: [second]))
+        relay.finish()
+        XCTAssertEqual(deliveries.map(\.toolCalls), [[first, second]])
+        relay.submit(.init(toolCalls: [first]))
+        relay.finish()
+        XCTAssertEqual(deliveries.count, 1)
+    }
+
     func testCancelDropsPendingOutput() async {
         var deliveries: [MLXChatStreamDelta] = []
         let relay = ChatStreamEventRelay(

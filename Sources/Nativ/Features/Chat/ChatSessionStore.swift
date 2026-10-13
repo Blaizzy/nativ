@@ -242,6 +242,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var compactionMetrics: ChatCompactionMetrics?
     var isCompacting = false
     var toolCalls: [MLXChatToolCall]
+    // Preview only: unfinished calls must not be persisted or replayed.
+    var streamingToolCalls: [MLXChatToolCall] = []
     var toolCallID: String?
     var toolName: String?
     var toolStatus: ToolStatus?

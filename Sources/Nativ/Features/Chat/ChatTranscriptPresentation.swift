@@ -99,6 +99,7 @@ struct ChatAgentTurnPresentation: Identifiable, Equatable {
         assistantMessages.contains { message in
             message.isStreaming
                 && message.content.isEmpty
+                && message.streamingToolCalls.isEmpty
                 && (message.isThinkingEnabled || !message.reasoningContent.isEmpty)
         }
     }

@@ -152,6 +152,7 @@ public final class NativResponsesClient: @unchecked Sendable {
 struct MLXResponseStream {
     private(set) var response: MLXJSONValue?
     private var decodeRate: Double?
+    private var toolCalls = MLXChatToolCallAccumulator()
 
     mutating func consume(_ data: String) throws -> MLXChatStreamDelta? {
         if data == "[DONE]" { return nil }
@@ -170,10 +171,28 @@ struct MLXResponseStream {
             return MLXChatStreamDelta(content: event["delta"]?.stringValue, decodeTokensPerSecond: decodeRate)
         case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
             return MLXChatStreamDelta(reasoningContent: event["delta"]?.stringValue, decodeTokensPerSecond: decodeRate)
-        case "response.output_item.done":
-            if let item = event["item"], let call = Self.toolCall(item) {
-                return MLXChatStreamDelta(toolCalls: [call])
+        case "response.output_item.added", "response.output_item.done":
+            if let item = event["item"], var call = Self.toolCall(item) {
+                call.index = event["output_index"]?.intValue
+                if type == "response.output_item.added", item["arguments"] == nil {
+                    call.function?.arguments = ""
+                }
+                if let previous = toolCalls.toolCalls.first(where: { $0.id == call.id }) {
+                    let arguments = call.function?.arguments ?? ""
+                    let sent = previous.function?.arguments ?? ""
+                    guard arguments.utf8.starts(with: sent.utf8) else { return nil }
+                    call.function?.name = nil
+                    call.function?.arguments = String(decoding: arguments.utf8.dropFirst(sent.utf8.count), as: UTF8.self)
+                }
+                return toolDelta(call)
             }
+        case "response.function_call_arguments.delta":
+            guard let index = event["output_index"]?.intValue,
+                  let arguments = event["delta"]?.stringValue else { return nil }
+            return toolDelta(MLXChatToolCall(
+                index: index, id: nil, type: nil,
+                function: MLXChatFunctionCall(name: nil, arguments: arguments)
+            ))
         case "response.completed", "response.incomplete":
             response = event["response"]
             guard response != nil else { throw NativChatError.invalidResponse }
@@ -181,6 +200,11 @@ struct MLXResponseStream {
             break
         }
         return nil
+    }
+
+    private mutating func toolDelta(_ call: MLXChatToolCall) -> MLXChatStreamDelta {
+        toolCalls.merge([call])
+        return MLXChatStreamDelta(toolCalls: [call], decodeTokensPerSecond: decodeRate)
     }
 
     func result(elapsed: TimeInterval, inputTokensBeforeCompaction: Int? = nil) throws -> MLXResponseCompletion {
