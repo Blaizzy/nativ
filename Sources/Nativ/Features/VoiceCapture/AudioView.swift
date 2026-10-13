@@ -214,12 +214,10 @@ struct AudioView: View {
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            Task {
-                await inputLevelMonitor.start(
-                    deviceUniqueID: inputDevices.effectiveDeviceID
-                )
-            }
+            startInputMonitoringIfNeeded()
         }
+        .onChange(of: inputDevices.exclusions) { startInputMonitoringIfNeeded() }
+        .onChange(of: inputDevices.devices) { startInputMonitoringIfNeeded() }
         .onChange(of: captureLibrary.phase) { _, phase in
             if phase == .idle {
                 startInputMonitoringIfNeeded()
@@ -440,6 +438,8 @@ struct AudioView: View {
                 shortcutConfigurationPanel
                     .frame(maxWidth: 760)
                 wakeWordConfigurationPanel
+                    .frame(maxWidth: 760)
+                excludedMicrophonesPanel
                     .frame(maxWidth: 760)
                 spokenReturnConfigurationPanel
                     .frame(maxWidth: 760)
@@ -1118,10 +1118,16 @@ struct AudioView: View {
                     }
 
                     ForEach(inputDevices.devices) { device in
+                        let exclusion = inputDevices.exclusions.first { $0.id == device.id }
+                        let exclusionDescription = exclusion.map {
+                            $0.allUses ? "Excluded from all microphone use" : "Excluded from passive listening"
+                        } ?? ""
                         Button {
                             inputDevices.selectedDeviceID = device.id
                         } label: {
-                            if inputDevices.selectedDeviceID == device.id {
+                            if exclusion != nil {
+                                Label(device.isSystemDefault ? "\(device.name) (Default)" : device.name, systemImage: "mic.slash")
+                            } else if inputDevices.selectedDeviceID == device.id {
                                 Label(device.name, systemImage: "checkmark")
                             } else if device.isSystemDefault {
                                 Text("\(device.name) (Default)")
@@ -1129,6 +1135,9 @@ struct AudioView: View {
                                 Text(device.name)
                             }
                         }
+                        .disabled(exclusion?.allUses == true)
+                        .help(exclusionDescription)
+                        .accessibilityHint(exclusionDescription)
                     }
                 } label: {
                     HStack(spacing: 8) {
@@ -1211,7 +1220,7 @@ struct AudioView: View {
                     Spacer(minLength: 0)
                 }
 
-                if let errorMessage = inputLevelMonitor.errorMessage {
+                if let errorMessage = audioInputErrorMessage {
                     Text(errorMessage)
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -1576,8 +1585,10 @@ struct AudioView: View {
         case .processing:
             "Processing"
         case .idle:
-            if inputLevelMonitor.errorMessage != nil {
+            if audioInputErrorMessage != nil {
                 "Unavailable"
+            } else if inputDevices.passiveDeviceID == nil {
+                "Preview off"
             } else if inputLevelMonitor.isMonitoring {
                 "Input active"
             } else {
@@ -1586,11 +1597,18 @@ struct AudioView: View {
         }
     }
 
+    private var audioInputErrorMessage: String? {
+        guard inputDevices.effectiveDeviceID != nil else {
+            return VoiceAudioRecorderError.noAllowedMicrophone.localizedDescription
+        }
+        return inputDevices.passiveDeviceID == nil ? nil : inputLevelMonitor.errorMessage
+    }
+
     private var audioInputStatusColor: Color {
         if captureLibrary.phase == .recording {
             return .red
         }
-        if inputLevelMonitor.errorMessage != nil {
+        if audioInputErrorMessage != nil {
             return .orange
         }
         return inputLevelMonitor.isMonitoring ? .green : .secondary
@@ -2614,6 +2632,59 @@ struct AudioView: View {
         .audioPanelStyle()
     }
 
+    private var excludedMicrophonesPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Excluded Microphones", systemImage: "mic.slash")
+                    .font(.headline)
+                Spacer()
+                Menu("Add Microphone") {
+                    ForEach(excludableDevices) { device in
+                        Button(device.name) { inputDevices.exclude(device) }
+                    }
+                }
+                .fixedSize()
+                .disabled(excludableDevices.isEmpty)
+            }
+            Text("These microphones are skipped for Hey Nativ and input previews. Nativ uses another available microphone, or pauses passive listening if none are allowed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(inputDevices.exclusions) { exclusion in
+                let device = inputDevices.devices.first { $0.id == exclusion.id }
+                Divider()
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(device?.name ?? exclusion.name)
+                            .font(.callout.weight(.medium))
+                        if device == nil {
+                            Text("Disconnected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Toggle("Exclude from all microphone use", isOn: Binding(
+                            get: { exclusion.allUses },
+                            set: { inputDevices.setExcludedFromAllUses($0, id: exclusion.id) }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                    Spacer()
+                    Button("Remove") { inputDevices.removeExclusion(id: exclusion.id) }
+                        .accessibilityLabel("Remove exclusion for \(device?.name ?? exclusion.name)")
+                }
+            }
+            Text("Exclusions are remembered when a microphone reconnects and only apply within Nativ.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(captureLibrary.isBusy)
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var excludableDevices: [NativAudioInputDevice] {
+        inputDevices.devices.filter { device in !inputDevices.exclusions.contains { $0.id == device.id } }
+    }
+
     private var spokenReturnConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
@@ -3013,9 +3084,13 @@ struct AudioView: View {
         guard destination == .record, captureLibrary.phase == .idle else {
             return
         }
+        guard inputDevices.passiveDeviceID != nil else {
+            inputLevelMonitor.stop()
+            return
+        }
         Task {
             await inputLevelMonitor.start(
-                deviceUniqueID: inputDevices.effectiveDeviceID
+                deviceUniqueID: inputDevices.selectedDeviceID
             )
         }
     }
