@@ -36,7 +36,6 @@ final class VoiceCaptureCoordinator {
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
-    private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
     private var isHandsFreeMode = false
@@ -62,9 +61,6 @@ final class VoiceCaptureCoordinator {
 
         recorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.recordingInterrupted(error, savedURL: savedURL)
-        }
-        wakeWordMonitor.onCandidate = { [weak self] in
-            self?.wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
         }
         wakeWordMonitor.confirm = { [weak self] audio in
             guard let self else { throw CancellationError() }
@@ -165,7 +161,6 @@ final class VoiceCaptureCoordinator {
         }
         overlay.hide()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
     }
@@ -250,7 +245,6 @@ final class VoiceCaptureCoordinator {
             updateWakeWordListening()
             return
         }
-        insertionTarget = VoiceTranscriptInserter.captureTarget()
         overlay.show(at: NSEvent.mouseLocation)
         permissionTask = Task { [weak self] in
             guard let self else {
@@ -294,7 +288,6 @@ final class VoiceCaptureCoordinator {
         isWakeWordCapture = false
         isShortcutHeld = false
         isHandsFreeMode = false
-        insertionTarget = nil
         activeOverlayTranscriptionID = nil
     }
 
@@ -308,14 +301,17 @@ final class VoiceCaptureCoordinator {
 
     private func endCapture() {
         if isWakeWordCapture {
+            // Freeze the destination before asynchronous wake-word finalization.
+            if wakeWordInsertionTarget == nil {
+                wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
+            }
             wakeWordMonitor.finishCapture()
             return
         }
         defer { updateWakeWordListening() }
         permissionTask?.cancel()
         permissionTask = nil
-        let target = insertionTarget
-        insertionTarget = nil
+        let target = VoiceTranscriptInserter.captureTarget()
         let savedURL = recorder.stop()
         if let error = recorder.lastRecordingError {
             recordingInterrupted(error, savedURL: savedURL)
@@ -347,7 +343,6 @@ final class VoiceCaptureCoordinator {
         permissionTask = nil
         recorder.discard()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
         overlay.hide()
@@ -400,7 +395,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func finishWakeWordCapture(_ result: VoiceWakeWordCapture.Result) {
-        let target = wakeWordInsertionTarget
+        let target = wakeWordInsertionTarget ?? VoiceTranscriptInserter.captureTarget()
         wakeWordInsertionTarget = nil
         isWakeWordCapture = false
         isShortcutHeld = false
