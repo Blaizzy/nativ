@@ -682,3 +682,106 @@ private final class AudioInputCaptureProbe: AudioInputCaptureDriving {
         delivery?.submit(buffer, at: AVAudioTime(hostTime: 0))
     }
 }
+
+@MainActor
+final class AudioInputDeviceExclusionTests: XCTestCase {
+    private let airPods = NativAudioInputDevice(id: "airpods-id", name: "Microphone", isSystemDefault: true)
+    private let builtIn = NativAudioInputDevice(id: "builtin-id", name: "Microphone", isSystemDefault: false)
+
+    func testPassiveExclusionUsesIDAndStillAllowsRecording() {
+        let exclusions = [AudioInputDeviceExclusion(id: airPods.id, name: "Old name", allUses: false)]
+        let devices = [airPods, builtIn]
+        XCTAssertEqual(resolve(airPods.id, devices, exclusions, passive: true), builtIn.id)
+        XCTAssertEqual(resolve(nil, devices, exclusions, passive: true), builtIn.id)
+        XCTAssertEqual(resolve(airPods.id, devices, exclusions, passive: false), airPods.id)
+        XCTAssertEqual(resolve(nil, devices, exclusions, passive: false), airPods.id)
+    }
+
+    func testAllPassiveInputsExcludedStillAllowsRecording() {
+        let devices = [airPods, builtIn]
+        let exclusions = devices.map { AudioInputDeviceExclusion(id: $0.id, name: $0.name, allUses: false) }
+        XCTAssertNil(resolve(nil, devices, exclusions, passive: true))
+        XCTAssertNil(resolve(builtIn.id, devices, exclusions, passive: true))
+        XCTAssertEqual(resolve(nil, devices, exclusions, passive: false), airPods.id)
+        XCTAssertEqual(resolve(builtIn.id, devices, exclusions, passive: false), builtIn.id)
+    }
+
+    func testGlobalExclusionBlocksExplicitAndDefaultSelection() {
+        let exclusions = [AudioInputDeviceExclusion(id: airPods.id, name: airPods.name, allUses: true)]
+        for passive in [false, true] {
+            XCTAssertEqual(resolve(airPods.id, [airPods, builtIn], exclusions, passive: passive), builtIn.id)
+            XCTAssertEqual(resolve(nil, [airPods, builtIn], exclusions, passive: passive), builtIn.id)
+            XCTAssertNil(resolve(nil, [airPods], exclusions, passive: passive))
+            XCTAssertNil(resolve(airPods.id, [airPods], exclusions, passive: passive))
+            XCTAssertNil(resolve(nil, [], exclusions, passive: passive))
+        }
+    }
+
+    func testMixedExclusionScopesKeepManualRecordingAvailable() {
+        let devices = [airPods, builtIn]
+        var exclusions = [
+            AudioInputDeviceExclusion(id: airPods.id, name: airPods.name, allUses: true),
+            AudioInputDeviceExclusion(id: builtIn.id, name: builtIn.name, allUses: false),
+        ]
+        for preferredID in [nil, airPods.id, builtIn.id] {
+            XCTAssertNil(resolve(preferredID, devices, exclusions, passive: true))
+            XCTAssertEqual(resolve(preferredID, devices, exclusions, passive: false), builtIn.id)
+        }
+        exclusions[1].allUses = true
+        XCTAssertNil(resolve(nil, devices, exclusions, passive: false))
+        exclusions[0].allUses = false
+        XCTAssertEqual(resolve(nil, devices, exclusions, passive: false), airPods.id)
+    }
+
+    func testReconnectedMicrophoneRemainsExcludedAndDefaultChangesAreRespected() {
+        let exclusions = [AudioInputDeviceExclusion(id: airPods.id, name: airPods.name, allUses: false)]
+        XCTAssertEqual(resolve(nil, [builtIn], exclusions, passive: true), builtIn.id)
+        XCTAssertEqual(resolve(nil, [airPods, builtIn], exclusions, passive: true), builtIn.id)
+        let external = NativAudioInputDevice(id: "usb-id", name: "USB", isSystemDefault: true)
+        XCTAssertEqual(resolve(nil, [builtIn, external], exclusions, passive: true), external.id)
+        XCTAssertEqual(resolve(builtIn.id, [builtIn, external], exclusions, passive: true), builtIn.id)
+        XCTAssertEqual(resolve("disconnected", [builtIn, external], exclusions, passive: true), external.id)
+    }
+
+    func testExclusionsPersistScopeAndRemovalWithoutDuplicates() throws {
+        let suite = "AudioInputDeviceExclusionTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AudioInputDevicePreferences(defaults: defaults)
+        XCTAssertTrue(preferences.exclusions.isEmpty)
+        preferences.exclude(airPods)
+        preferences.exclude(airPods)
+        XCTAssertEqual(preferences.exclusions.count, 1)
+        XCTAssertFalse(try XCTUnwrap(preferences.exclusions.first).allUses)
+        preferences.setExcludedFromAllUses(true, id: airPods.id)
+        let restored = AudioInputDevicePreferences(defaults: defaults)
+        XCTAssertEqual(restored.exclusions, [.init(id: airPods.id, name: airPods.name, allUses: true)])
+        restored.setExcludedFromAllUses(false, id: airPods.id)
+        XCTAssertFalse(try XCTUnwrap(AudioInputDeviceExclusion.load(from: defaults).first).allUses)
+        restored.removeExclusion(id: airPods.id)
+        XCTAssertTrue(AudioInputDeviceExclusion.load(from: defaults).isEmpty)
+    }
+
+    func testVirtualInputRequiresExplicitSelection() {
+        let virtual = NativAudioInputDevice(
+            id: "virtual-id", name: "Virtual", isSystemDefault: true, isVirtual: true
+        )
+        let exclusions = [AudioInputDeviceExclusion(id: builtIn.id, name: builtIn.name, allUses: true)]
+        for passive in [false, true] {
+            XCTAssertEqual(resolve(nil, [virtual, builtIn], [], passive: passive), builtIn.id)
+            XCTAssertNil(resolve(nil, [virtual, builtIn], exclusions, passive: passive))
+            XCTAssertNil(resolve("disconnected", [virtual], [], passive: passive))
+            XCTAssertEqual(resolve(virtual.id, [virtual, builtIn], [], passive: passive), virtual.id)
+            XCTAssertNil(resolve(virtual.id, [virtual], [.init(id: virtual.id, name: virtual.name, allUses: true)], passive: passive))
+        }
+    }
+
+    private func resolve(
+        _ preferredID: String?, _ devices: [NativAudioInputDevice],
+        _ exclusions: [AudioInputDeviceExclusion], passive: Bool
+    ) -> String? {
+        AudioInputDeviceResolver.resolve(
+            preferredID: preferredID, devices: devices, exclusions: exclusions, passive: passive
+        )
+    }
+}

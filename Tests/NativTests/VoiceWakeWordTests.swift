@@ -351,6 +351,21 @@ struct VoiceWakeWordPreferencesTests {
         #expect(!preferences.isHandsFreeEnabled)
     }
 
+    @Test func testUnavailableMicrophonePausesUntilAnAllowedInputReturns() async throws {
+        let monitor = VoiceWakeWordMonitor()
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.restart()
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: true, suspended: false, deviceID: "allowed-input")
+        #expect(monitor.state == .preparing)
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: false, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .off)
+    }
+
     @Test func testDisablingOrSuspendingCancelsPendingListenerStartup() async throws {
         let monitor = VoiceWakeWordMonitor()
         monitor.configure(enabled: true, suspended: false, deviceID: nil)
@@ -360,5 +375,132 @@ struct VoiceWakeWordPreferencesTests {
         monitor.configure(enabled: false, suspended: false, deviceID: nil)
         try await Task.sleep(for: .milliseconds(800))
         #expect(monitor.state == .off)
+    }
+}
+
+@MainActor
+struct VoiceWakeWordMicrophoneRoutingTests {
+    @Test func testDefaultInputChangeKeepsDictationAndAcceptsNewAudioFormat() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        monitor.onFinished = { results.append($0) }
+
+        // The system default resolves to a different device, but the user's policy stays empty.
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        #expect(monitor.state == .capturing)
+        #expect(capture.starts == 1)
+        #expect(capture.deviceUniqueID == "")
+        try capture.deliver(sampleRate: 48_000, value: 0.5)
+        try await Task.sleep(for: .milliseconds(50))
+        monitor.finishCapture()
+        try await waitUntil { results.count == 1 }
+        #expect(results[0].audio.samples.contains { abs($0 - 0.25) < 0.01 })
+        #expect(results[0].audio.samples.contains { abs($0 - 0.5) < 0.01 })
+    }
+
+    @Test func testNoAllowedInputDrainsSpeechAndFinishesOnceBeforePausing() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        var cancelledBeforeResult = false
+        monitor.onFinished = { results.append($0) }
+        monitor.onCancelled = { if results.isEmpty { cancelledBeforeResult = true } }
+
+        // Queue speech immediately before losing the input; finalization must drain it.
+        try capture.deliver(value: 0.5)
+        monitor.configure(enabled: true, suspended: false, deviceID: "", inputUnavailable: true)
+        capture.fail()
+        capture.fail()
+        try await waitUntil { results.count == 1 }
+        #expect(!cancelledBeforeResult)
+        #expect(results[0].audio.samples.contains { abs($0 - 0.5) < 0.01 })
+        #expect(monitor.state == .paused)
+        monitor.restart()
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        #expect(monitor.state == .preparing)
+        #expect(results.count == 1)
+    }
+
+    @Test func testCaptureFailurePreservesConfirmedSpeech() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        monitor.onFinished = { results.append($0) }
+        capture.fail()
+        capture.fail()
+        try await waitUntil { results.count == 1 }
+        #expect(!results[0].audio.samples.isEmpty)
+        #expect(monitor.state == .paused)
+    }
+
+    @Test func testExplicitCancellationWhileFinishingDoesNotSubmitDictation() async throws {
+        let (monitor, _) = try await capturingMonitor()
+        var finishes = 0
+        monitor.onFinished = { _ in finishes += 1 }
+        monitor.configure(enabled: true, suspended: false, deviceID: "", inputUnavailable: true)
+        monitor.configure(enabled: false, suspended: false, deviceID: "", inputUnavailable: true)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(monitor.state == .off)
+        #expect(finishes == 0)
+    }
+
+    private func capturingMonitor() async throws -> (VoiceWakeWordMonitor, WakeWordInputProbe) {
+        let capture = WakeWordInputProbe()
+        let monitor = VoiceWakeWordMonitor(
+            inputSession: AudioInputCaptureSession { capture },
+            requestMicrophone: { true },
+            makeProcessor: { VoiceWakeWordProcessor(detect: { _ in true }) }
+        )
+        monitor.confirm = { _ in VoiceWakeWordTranscription(text: "Hey Nativ keep this speech", modelID: "test") }
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        try await waitUntil { monitor.state == .listening }
+        for _ in 0..<8 {
+            try capture.deliver()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await waitUntil { monitor.state == .capturing }
+        return (monitor, capture)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition())
+    }
+}
+
+@MainActor
+private final class WakeWordInputProbe: AudioInputCaptureDriving {
+    private var delivery: AudioInputCaptureDelivery?
+    private var onFailure: (@Sendable (Error) -> Void)?
+    private(set) var deviceUniqueID: String?
+    private(set) var starts = 0
+
+    func start(
+        deviceUniqueID: String?, delivery: AudioInputCaptureDelivery,
+        onFailure: @escaping @Sendable (Error) -> Void
+    ) async throws {
+        self.deviceUniqueID = deviceUniqueID
+        self.delivery = delivery
+        self.onFailure = onFailure
+        starts += 1
+    }
+
+    func select(deviceUniqueID: String?) async throws { self.deviceUniqueID = deviceUniqueID }
+    func stop() async { delivery = nil }
+    func fail() { onFailure?(VoiceAudioRecorderError.noAllowedMicrophone) }
+
+    func deliver(sampleRate: Double = 16_000, value: Float = 0.25) throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
+        let count = AVAudioFrameCount(sampleRate / 10)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count))
+        buffer.frameLength = count
+        let channel = try #require(buffer.floatChannelData?[0])
+        for frame in 0..<Int(count) { channel[frame] = value }
+        delivery?.submit(buffer, at: AVAudioTime(hostTime: 0))
     }
 }

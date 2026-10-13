@@ -13,6 +13,20 @@ struct ChatWorkTerminalReceipt: Equatable {
 @MainActor
 final class ChatWorkTerminalPool {
     private var sessions: [UUID: [UUID: ChatWorkTerminalSession]] = [:]
+    private let notificationCenter: NotificationCenter
+    private var terminationObserver: NSObjectProtocol?
+
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
+        terminationObserver = notificationCenter.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            // Quit does not guarantee deinit or another run-loop turn. Stop synchronously.
+            MainActor.assumeIsolated {
+                self?.sessions.values.flatMap { $0.values }.forEach { $0.stop(terminatingApplication: true) }
+            }
+        }
+    }
 
     func session(for item: ChatWorkItem, sessionID: UUID, directory: String, startupError: String? = nil) -> ChatWorkTerminalSession {
         if let session = sessions[sessionID]?[item.id] { return session }
@@ -38,6 +52,7 @@ final class ChatWorkTerminalPool {
     }
 
     isolated deinit {
+        if let terminationObserver { notificationCenter.removeObserver(terminationObserver) }
         for session in sessions.values.flatMap({ $0.values }) { session.stop() }
     }
 }
@@ -62,6 +77,10 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
     private var inputIsClean = true
     private var commandStarted = false
     private var commandPending = false
+    private var agentOutput = Data()
+
+    var currentCommandOutput: String { String(decoding: agentOutput, as: UTF8.self) }
+    var currentCommandOutputTruncated: Bool { agentOutput.count >= 96 * 1_024 }
 
     var receipt: ChatWorkTerminalReceipt { .init(instanceID: instanceID, inputVersion: inputVersion) }
     var commandIsRunning: Bool { isInteractive ? isRunning && (!atPrompt || commandPending) : isRunning }
@@ -181,6 +200,7 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
             "id": itemID.uuidString, "kind": "terminal", "content": savedText,
             "cwd": directory, "running": commandIsRunning,
             "shell_running": isRunning, "ready": atPrompt && inputIsClean && !commandPending,
+            "status": status,
             "exit_code": lastExitCode as Any? ?? NSNull(),
             "actions": isInteractive ? ["run", "read", "inspect", "interrupt"] : ["read", "inspect", "interrupt"]
         ]
@@ -219,6 +239,8 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
 
     func beginCommand(_ command: String, directory: String) {
         self.directory = directory
+        agentOutput.removeAll(keepingCapacity: true)
+        lastExitCode = nil
         append("$ \(command)\n")
         isRunning = true
         status = "Running"
@@ -231,6 +253,7 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
     }
 
     func appendOutput(_ data: Data) {
+        agentOutput.append(data.prefix(max(0, 96 * 1_024 - agentOutput.count)))
         var bytes: [UInt8] = []
         for byte in data {
             if byte == 10, !previousOutputWasCR { bytes.append(13) }
@@ -242,6 +265,7 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
 
     func finish(_ result: TerminalProcessResult) {
         isRunning = false
+        lastExitCode = result.exitCode.map(Int.init)
         onStop = nil
         status = result.timedOut ? "Timed out" : result.terminationSignal.map { "Signal \($0)" }
             ?? "Exit \(result.exitCode ?? -1)"
@@ -275,7 +299,7 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
         else { onStop?() }
     }
 
-    func stop() {
+    func stop(terminatingApplication: Bool = false) {
         onStop?()
         onStop = nil
         guard let terminal = view as? LocalProcessTerminalView, terminal.process.running else { return }
@@ -283,8 +307,21 @@ final class ChatWorkTerminalSession: NSObject, ObservableObject, @preconcurrency
         let foreground = tcgetpgrp(terminal.process.childfd)
         if foreground > 0, foreground != getpgrp() { kill(-foreground, SIGHUP) }
         let pid = terminal.process.shellPid
-        if pid > 0, getpgid(pid) == pid, pid != foreground { kill(-pid, SIGHUP) }
+        let shellGroup = pid > 0 && getpgid(pid) == pid ? pid : 0
+        if shellGroup > 0, shellGroup != foreground { kill(-shellGroup, SIGHUP) }
         terminal.terminate()
+        if terminatingApplication {
+            // The asynchronous reaper below cannot outlive the app. Include foreground jobs
+            // and shells that ignore HUP/TERM, then reap the shell before returning to Quit.
+            if foreground > 0, foreground != getpgrp() { kill(-foreground, SIGKILL) }
+            if shellGroup > 0, shellGroup != foreground { kill(-shellGroup, SIGKILL) }
+            if pid > 0 {
+                kill(pid, SIGKILL)
+                var status: Int32 = 0
+                while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+            }
+            return
+        }
         // SwiftTerm's explicit terminate cancels its exit monitor. Reap the child
         // ourselves so closing a tab never leaves a zombie (or an ignoring shell).
         if pid > 0 {
