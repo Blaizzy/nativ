@@ -332,6 +332,77 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testOriginalAttachmentsRemainDiscoverableAfterReloadAndUploadOnlyFromTheirSession() async throws {
+        let (root, store, original) = try fixture()
+        let bytes = Data("%PDF-1.7\nFull original document, beyond any excerpt.\n".utf8) + Data([0, 255, 128])
+        let id = UUID()
+        let asset = try MediaAssetStore.shared.store(bytes, id: id, mimeType: "application/pdf", filename: "Original.pdf")
+        defer {
+            if let url = MediaAssetStore.shared.fileURL(for: asset) { try? FileManager.default.removeItem(at: url) }
+        }
+        let attachment = ChatImageAttachment(id: id, filename: "Original.pdf", mimeType: "application/pdf", asset: asset)
+        var session = original
+        session.messages = [ChatTranscriptMessage(role: .user, content: "Attach this original", imageAttachments: [attachment])]
+        XCTAssertTrue(store.saveSession(session))
+        let chat = subject(root)
+        try await loaded(chat)
+        chat.selectSession(session.id)
+        let listed = try await chat.executeWorkAction(ChatWorkRequest(action: .attachments), in: session.id)
+        let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(listed.utf8)) as? [[String: String]])
+        XCTAssertEqual(entries, [["attachment_id": id.uuidString, "filename": "Original.pdf", "mime_type": "application/pdf"]])
+        XCTAssertFalse(listed.contains(bytes.base64EncodedString()))
+        XCTAssertFalse(listed.contains(asset.relativePath))
+
+        let opened = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Upload fixture",
+            kind: .website, content: "<input type='file' aria-label='Attach' style='display:none'>"), in: session.id))
+        let controls = try XCTUnwrap(opened["elements"] as? [[String: Any]])
+        let element = try XCTUnwrap(controls.first?["id"] as? String)
+        let request = ChatWorkRequest(action: .upload, elementID: element, attachmentIDs: [id])
+        let approved = try chat.resolvedWorkRequest(request, in: session.id)
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        XCTAssertEqual(approved.id, item.id)
+        let browser = chat.workBrowser(for: item, sessionID: session.id)
+        chat.createSession()
+        let otherID = try XCTUnwrap(chat.currentSessionID)
+        let otherFiles = try await chat.executeWorkAction(ChatWorkRequest(action: .attachments), in: otherID)
+        XCTAssertEqual(otherFiles, "[]")
+        XCTAssertThrowsError(try chat.resolvedWorkRequest(approved, in: otherID))
+        let result = try json(await chat.executeWorkAction(approved, in: session.id))
+        XCTAssertEqual((result["selected_files"] as? [[String: Any]])?.first?["attachment_id"] as? String, id.uuidString)
+        let uploaded = try await browser.webView.callAsyncJavaScript("""
+            return [...new Uint8Array(await document.querySelector('input').files[0].arrayBuffer())];
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Int]
+        XCTAssertEqual(uploaded, bytes.map(Int.init))
+        chat.selectSession(session.id)
+        XCTAssertTrue(chat.removeAttachment(sessionID: session.id, messageID: session.messages[0].id, attachmentID: id))
+        XCTAssertThrowsError(try chat.resolvedWorkRequest(approved, in: session.id))
+        browser.stop()
+    }
+
+    func testUploadIDsRejectMissingDuplicateUnsupportedAndUnreadableFiles() async throws {
+        let attachment = ChatImageAttachment(filename: "Original.txt", mimeType: "text/plain", base64Data: "b3JpZ2luYWw=")
+        let unsupported = ChatImageAttachment(filename: "Program.exe", mimeType: "application/octet-stream", base64Data: "AA==")
+        let messages = [ChatTranscriptMessage(role: .user, content: "Files", imageAttachments: [attachment, unsupported])]
+        for ids: [UUID]? in [nil, [], [UUID()], [attachment.id, attachment.id], [unsupported.id], (0..<21).map { _ in UUID() }] {
+            XCTAssertThrowsError(try ChatWorkAttachments.resolve(ids, in: messages))
+        }
+        let missing = ChatImageAttachment(id: UUID(), filename: "Missing.pdf", mimeType: "application/pdf",
+            asset: MediaAssetReference(relativePath: "Objects/\(UUID()).pdf", byteCount: 100))
+        do {
+            _ = try await ChatWorkAttachments.load([missing])
+            XCTFail("Missing original files must fail, never upload an excerpt or empty substitute")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("could not be read")) }
+        let arguments = """
+            {"action":"upload","element_id":"snapshot:0","attachment_ids":["\(attachment.id.uuidString)"]}
+            """
+        let decoded = try ChatWorkRequest.decode(MLXChatToolCall(id: "upload", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments)))
+        XCTAssertTrue(decoded.action.isBrowserAction)
+        XCTAssertEqual(decoded.attachmentIDs, [attachment.id])
+        XCTAssertThrowsError(try ChatWorkRequest.decode(MLXChatToolCall(id: "upload", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments.replacingOccurrences(of: attachment.id.uuidString, with: "/etc/passwd")))))
+    }
+
     func testTabReorderingPreservesSelectionContentsAndSavedOrder() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
