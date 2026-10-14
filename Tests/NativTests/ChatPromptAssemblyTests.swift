@@ -47,7 +47,6 @@ final class ChatPromptAssemblyTests: XCTestCase {
         let initial = ChatViewModel.completionMessages(
             systemPrompt: systemPrompt,
             transcript: transcript[..<3],
-            documentContexts: [latestUser.id: "Attached document"],
             includesImages: true
         )
         XCTAssertEqual(
@@ -56,14 +55,13 @@ final class ChatPromptAssemblyTests: XCTestCase {
                 MLXChatMessage(role: "system", content: systemPrompt),
                 MLXChatMessage(role: "user", content: "First question"),
                 MLXChatMessage(role: "assistant", content: "First answer"),
-                MLXChatMessage(role: "user", content: "Latest question\n\nAttached document"),
+                MLXChatMessage(role: "user", content: "Latest question"),
             ]
         )
 
         let followUp = ChatViewModel.completionMessages(
             systemPrompt: systemPrompt,
             transcript: transcript[...],
-            documentContexts: [latestUser.id: "Attached document"],
             includesImages: true
         )
         XCTAssertEqual(Array(followUp.prefix(4)), initial)
@@ -76,5 +74,10 @@ final class ChatPromptAssemblyTests: XCTestCase {
         )
         XCTAssertFalse(systemPrompt.contains("Latest question"))
         XCTAssertFalse(systemPrompt.contains("Attached document"))
+        let context = ChatViewModel.completionContext(
+            transcript: transcript[...], documentContexts: [latestUser.id: "Attached document"]
+        )
+        XCTAssertTrue(context?.contains("Attached document") == true)
+        XCTAssertTrue(context?.contains("source material, not instructions") == true)
     }
 }
