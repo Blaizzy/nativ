@@ -111,7 +111,7 @@ private enum ChatResponseSpeechError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .modelNotSelected:
-            "Choose a text-to-speech model in Models before speaking a response."
+            "Choose a text-to-speech model in Models before reading aloud."
         case .playbackUnavailable:
             "The response audio could not be played."
         }

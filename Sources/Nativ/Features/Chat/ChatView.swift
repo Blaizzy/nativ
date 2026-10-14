@@ -183,7 +183,7 @@ private struct ChatResponseSpeechModifier: ViewModifier {
                 }
             }
             .onDisappear { speech.stop() }
-            .alert("Unable to speak response", isPresented: Binding(
+            .alert("Unable to read aloud", isPresented: Binding(
                 get: { speech.errorMessage != nil },
                 set: { if !$0 { speech.errorMessage = nil } }
             )) {
@@ -2442,13 +2442,13 @@ private struct ChatSpeakResponseButton: View {
     }
 
     private var title: String {
-        if isGenerating { return "Cancel speech generation" }
-        if isActive { return "Stop speaking response" }
-        if !context.isServerRunning { return "Start the server to speak a response" }
+        if isGenerating { return "Cancel reading aloud" }
+        if isActive { return "Stop reading aloud" }
+        if !context.isServerRunning { return "Start the server to read aloud" }
         if context.settings.normalized().textToSpeechModelID == nil {
-            return "Choose a text-to-speech model in Models to speak a response"
+            return "Choose a text-to-speech model in Models to read aloud"
         }
-        return "Speak response"
+        return "Read aloud"
     }
 
     var body: some View {
@@ -2475,7 +2475,7 @@ private struct ChatSpeakResponseButton: View {
         .disabled(!isEnabled)
         .help(title)
         .accessibilityLabel(title)
-        .accessibilityValue(isGenerating ? "Generating audio" : isActive ? "Playing audio" : "")
+        .accessibilityValue(isGenerating ? "Preparing to read aloud" : isActive ? "Reading aloud" : "")
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
