@@ -938,6 +938,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resolvedWorkRequest(_ request: ChatWorkRequest, in sessionID: UUID) throws -> ChatWorkRequest {
+        if request.action == .upload {
+            _ = try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
+        }
         if request.action.isTerminalMutation {
             guard let state = workState(for: sessionID),
                   let item = state.items.first(where: { $0.id == (request.id ?? state.selectedID) }),
@@ -977,7 +980,7 @@ final class ChatViewModel: ObservableObject {
                 throw ChatWorkError.invalid("update requires id and expected_revision from read. Read the intended item, then copy its id and revision into update. An omitted id can only target the last item read with the same revision and title.")
             }
             resolved.id = read.id
-        } else if request.action == .click || request.action == .type {
+        } else if request.action == .click || request.action == .type || request.action == .upload {
             guard let elementID = request.elementID,
                   let id = workBrowsers.itemID(for: elementID, sessionID: sessionID) else {
                 throw ChatWorkError.invalid("The control is no longer in a current page snapshot. Inspect the intended tab, then use its id and the returned element_id.")
@@ -1002,13 +1005,19 @@ final class ChatViewModel: ObservableObject {
                 + (warnings.isEmpty ? "" : "\n" + warnings.joined(separator: "\n"))
         case .interrupt:
             description = "Interrupt the foreground command in \(target)."
-        case .click, .type:
+        case .click, .type, .upload:
             let label = (item?.id).flatMap { id in
                 request.elementID.flatMap { workBrowsers.elementLabel($0, itemID: id, sessionID: sessionID) }
             } ?? "the specified control"
-            description = request.action == .click
-                ? "Click \(label) in \(target)."
-                : "Enter the text shown below into \(label) in \(target)."
+            if request.action == .upload {
+                let files = try? ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
+                let names = files?.map { "“\($0.filename)”" }.joined(separator: ", ") ?? "the specified files"
+                description = "Upload the original files \(names) to \(label) in \(target). The website will receive their full contents."
+            } else {
+                description = request.action == .click
+                    ? "Click \(label) in \(target)."
+                    : "Enter the text shown below into \(label) in \(target)."
+            }
         case .create:
             description = "Create \(request.title ?? "work")\(request.url.map { " at \($0)" } ?? "") in this chat’s work pane."
         case .navigate:
@@ -1025,6 +1034,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func executeWorkAction(_ request: ChatWorkRequest, in sessionID: UUID, terminalApprovalGranted: Bool = false) async throws -> String {
+        if request.action == .attachments {
+            guard let messages = sessionMessages(for: sessionID) else { throw ChatWorkError.unavailable }
+            return try ChatWorkAttachments.listJSON(in: messages)
+        }
         if request.action.isTerminalMutation, !terminalApprovalGranted {
             throw ChatTerminalToolError.approvalRequired
         }
@@ -1104,7 +1117,9 @@ final class ChatViewModel: ObservableObject {
     private func executeBrowserAction(_ request: ChatWorkRequest, item: ChatWorkItem, sessionID: UUID) async throws -> String {
         var result: [String: Any]
         do {
-            result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
+            let attachments = request.action == .upload
+                ? try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? []) : []
+            result = try await workBrowser(for: item, sessionID: sessionID).execute(request, attachments: attachments)
         } catch var failure as ChatWorkNavigationFailure {
             failure.itemID = item.id
             throw failure
