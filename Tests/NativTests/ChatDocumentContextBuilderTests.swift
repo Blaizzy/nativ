@@ -1,8 +1,68 @@
 import Foundation
-import NativServerKit
+@testable import NativServerKit
 import XCTest
 
 final class ChatDocumentContextBuilderTests: XCTestCase {
+    @MainActor
+    func testChangedPDFExcerptsAndFittingPreserveSavedCompaction() async throws {
+        let original = userMessage(content: "Explain page 1.", attachments: [attachment(filename: "report.pdf")])
+        let builder = builder(contents: [
+            "report.pdf": content(filename: "report.pdf", pages: (1...6).map {
+                "Section \($0): " + String(repeating: "supporting details ", count: 20)
+            })
+        ], maximumCharactersPerDocument: 180, maximumCharactersPerRequest: 180)
+        let firstContext = try await builder.contexts(for: [original])
+        func request(_ transcript: [ChatTranscriptMessage], contexts: [UUID: String]) -> MLXChatCompletionRequest {
+            var request = MLXChatCompletionRequest(
+                model: "test-model", messages: ChatViewModel.completionMessages(
+                    systemPrompt: "Follow the user.", transcript: transcript[...], includesImages: true
+                ), maxTokens: 1024, temperature: 0, topK: 0, topP: 1, minP: 0
+            )
+            request.transientContext = ChatViewModel.completionContext(
+                transcript: transcript[...], documentContexts: contexts
+            )
+            return request
+        }
+        let first = request([original], contexts: firstContext.contexts)
+        let capsule: MLXJSONValue = .object(["type": .string("compaction"), "encrypted_content": .string("saved-summary")])
+        let server = URL(string: "http://127.0.0.1:8080")!
+        let saved = try ChatCompactionState(item: capsule, request: first, serverURL: server)
+        let restored = try JSONDecoder().decode(ChatCompactionState.self, from: JSONEncoder().encode(saved))
+        let followUp = [original, ChatTranscriptMessage(role: .assistant, content: "First answer."),
+                        userMessage(content: "Explain page 6.")]
+        let changed = try await builder.contexts(for: followUp)
+        let fitted = try await builder.contexts(for: followUp, maximumCharactersPerRequest: 30)
+        XCTAssertNotEqual(firstContext[original.id], changed[original.id])
+        XCTAssertNotEqual(changed[original.id], fitted[original.id])
+
+        for contexts in [changed.contexts, fitted.contexts, [:]] {
+            let next = request(followUp, contexts: contexts)
+            XCTAssertEqual(Array(next.messages.prefix(first.messages.count)), first.messages)
+            let input = try restored.input(for: next, serverURL: server)
+            XCTAssertEqual(input.first, capsule)
+            XCTAssertEqual(input.count, 3, "Replay only the summary and uncovered assistant/user tail")
+            let wire = try NativResponsesClient(baseURL: server, tenant: "test").makeResponseRequest(
+                next, input: input, compactThreshold: 96000
+            )
+            let sent = try XCTUnwrap(MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))["input"]?.arrayValue)
+            XCTAssertEqual(Array(sent.prefix(input.count)), input)
+            if let context = next.transientContext {
+                XCTAssertEqual(sent.last?["content"], .string(context), "Send the fresh excerpts with the saved summary")
+            } else {
+                XCTAssertEqual(sent, input)
+            }
+        }
+        var edited = followUp
+        edited[0].content = "A different request."
+        var replaced = followUp
+        replaced[0].imageAttachments = [attachment(filename: "replacement.pdf")]
+        for transcript in [edited, replaced] {
+            let next = request(transcript, contexts: changed.contexts)
+            XCTAssertNotEqual(try restored.input(for: next, serverURL: server).first, capsule,
+                              "Actual prompt or attachment edits still invalidate the summary")
+        }
+    }
+
     func testBuildsPageLabeledContextForPDFAttachment() async throws {
         let message = userMessage(
             content: "Summarize this report.",

@@ -14,6 +14,20 @@ final class ChatCompactionTests: XCTestCase {
         )
     }
 
+    func testDocumentBudgetCountsSummaryAndFreshContextInsteadOfFullHistory() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [CompactedBudgetURLProtocol.self]
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let client = NativResponsesClient(baseURL: server, tenant: "budget-test", session: session)
+        var chat = request([.init(role: "user", content: String(repeating: "old browser snapshot ", count: 10000))])
+        let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        chat.messages.append(.init(role: "user", content: "Continue"))
+        chat.transientContext = "Fresh PDF excerpts"
+        let count = try await client.countInputTokens(for: chat, input: state.input(for: chat, serverURL: server))
+        XCTAssertEqual(count, 200)
+    }
+
     func testWireRequestPreservesImagesReasoningToolPairsAndSampling() throws {
         let call = MLXChatToolCall(id: "call-1", function: .init(name: "read", arguments: "{}"))
         let messages = [
@@ -521,5 +535,37 @@ private final class CompactionURLProtocol: URLProtocol {
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class CompactedBudgetURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        do {
+            XCTAssertEqual(request.url?.path, "/v1/responses/input_tokens")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-APC-Tenant"), "budget-test")
+            var data = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    guard count > 0 else { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let input = try XCTUnwrap(MLXJSONValue(jsonData: data)["input"]?.arrayValue)
+            XCTAssertEqual(input.count, 3)
+            XCTAssertEqual(input.first?["type"], .string("compaction"))
+            XCTAssertEqual(input[1]["content"], .string("Continue"))
+            XCTAssertEqual(input.last?["content"], .string("Fresh PDF excerpts"))
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(#"{"input_tokens":200}"#.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
     }
 }
