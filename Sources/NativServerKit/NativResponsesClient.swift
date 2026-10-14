@@ -27,6 +27,13 @@ public final class NativResponsesClient: @unchecked Sendable {
         return health["effective_context_limit"]?.intValue
     }
 
+    /// Count the same capsule, conversation tail, and current context used for generation.
+    public func countInputTokens(
+        for request: MLXChatCompletionRequest, input: [MLXJSONValue]
+    ) async throws -> Int? {
+        try await countInputTokens(makeResponseRequest(request, input: input, compactThreshold: 1))
+    }
+
     public static func inputItems(_ messages: [MLXChatMessage]) throws -> [MLXJSONValue] {
         try conversationMessages(messages).map { message in
             // Preserve the server's chat-message extensions for reasoning and grouped tool calls.
@@ -88,12 +95,8 @@ public final class NativResponsesClient: @unchecked Sendable {
         let urlRequest = try makeResponseRequest(request, input: input, compactThreshold: compactThreshold)
         var inputTokens: Int?
         if let onCompaction {
-            var countRequest = urlRequest
-            countRequest.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
-            countRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-            countRequest.timeoutInterval = 10
             // Token counts are presentation data; an unavailable count must not block generation.
-            inputTokens = try? await countInputTokens(countRequest)
+            inputTokens = try? await countInputTokens(urlRequest)
             try Task.checkCancellation()
             if let inputTokens, inputTokens >= compactThreshold {
                 await onCompaction(inputTokens)
@@ -127,6 +130,10 @@ public final class NativResponsesClient: @unchecked Sendable {
     }
 
     private func countInputTokens(_ request: URLRequest) async throws -> Int? {
+        var request = request
+        request.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
         let (data, response) = try await session.data(for: request)
         try validate(response, body: String(decoding: data, as: UTF8.self))
         return try MLXJSONValue(jsonData: data)["input_tokens"]?.intValue
