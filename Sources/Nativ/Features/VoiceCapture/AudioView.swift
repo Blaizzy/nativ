@@ -3593,6 +3593,10 @@ private struct AudioCaptureRecordRow: View {
     @State private var selectedDetail: DetailSection?
     @State private var copiedDetail: DetailSection?
     @State private var hoveredDetail: DetailSection?
+    @State private var isExporting = false
+    @State private var exportedFormat: AudioRecordExportFormat?
+    @State private var exportError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DetailSection: Hashable {
         case summary
@@ -3699,7 +3703,19 @@ private struct AudioCaptureRecordRow: View {
                         .disabled(!audioIsAvailable)
                 }
 
+                exportStatus
+
                 Menu {
+                    Menu {
+                        ForEach(AudioRecordExportFormat.allCases, id: \.self) { format in
+                            Button(format.title) { export(as: format) }
+                        }
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExporting || !AudioRecordExport(record: record).isAvailable)
+                    .help("Export the summary and transcript together")
+                    Divider()
                     if !record.transcript.isEmpty {
                         Menu {
                             Button(action: onTranscribe) {
@@ -3774,6 +3790,48 @@ private struct AudioCaptureRecordRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
+        .alert("Export Failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "The document could not be saved.")
+        }
+        .task(id: exportedFormat) {
+            guard exportedFormat != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        }
+    }
+
+    @ViewBuilder
+    private var exportStatus: some View {
+        if isExporting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Exporting…")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .transition(.opacity)
+        } else if let exportedFormat {
+            Label("\(exportedFormat.title) exported", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.green.opacity(0.1), in: Capsule())
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+        }
+    }
+
+    private var exportFeedbackAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.7)
     }
 
     private var processingLabel: String {
@@ -3955,6 +4013,36 @@ private struct AudioCaptureRecordRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
+        }
+    }
+
+    private func export(as format: AudioRecordExportFormat) {
+        let document = AudioRecordExport(record: record)
+        guard document.isAvailable, !isExporting else { return }
+        withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        let panel = NSSavePanel()
+        panel.title = "Export Summary and Transcript"
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = document.filename(for: format)
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            withAnimation(exportFeedbackAnimation) { isExporting = true }
+            Task { @MainActor in
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try document.write(to: url, format: format)
+                    }.value
+                    withAnimation(exportFeedbackAnimation) {
+                        isExporting = false
+                        exportedFormat = format
+                    }
+                } catch {
+                    withAnimation(exportFeedbackAnimation) { isExporting = false }
+                    exportError = error.localizedDescription
+                }
+            }
         }
     }
 
