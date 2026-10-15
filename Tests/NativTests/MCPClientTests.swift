@@ -74,7 +74,8 @@ final class MCPProjectFilesystemTests: XCTestCase {
         try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
         let entry = MCPCatalogEntry(
             id: "filesystem", name: "filesystem", summary: "Test filesystem",
-            command: "/usr/bin/python3", arguments: ["-u", "-c", Self.serverScript, "."]
+            command: "/usr/bin/python3", arguments: ["-u", "-c", Self.serverScript],
+            requiresFolder: true
         )
         config = entry.makeConfiguration()
         config.environment["TEST_CALL_LOG"] = temporaryRoot.appendingPathComponent("calls").path
@@ -197,10 +198,10 @@ final class MCPProjectFilesystemTests: XCTestCase {
         let other = try scope("Other")
         let root = URL(fileURLWithPath: original.rootPath!)
         try FileManager.default.removeItem(at: root)
-        XCTAssertThrowsError(try MCPHostManager.projectDirectory(expected: original, current: original))
+        XCTAssertThrowsError(try MCPHostManager.scopedDirectory(expected: original, current: original))
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
         try FileManager.default.createSymbolicLink(at: root, withDestinationURL: URL(fileURLWithPath: other.rootPath!))
-        XCTAssertThrowsError(try MCPHostManager.projectDirectory(expected: original, current: original))
+        XCTAssertThrowsError(try MCPHostManager.scopedDirectory(expected: original, current: original))
     }
 
     func testStandaloneAndCustomServersKeepTheirConfiguredDirectories() async throws {
@@ -211,7 +212,7 @@ final class MCPProjectFilesystemTests: XCTestCase {
         let customRoot = try scope("Custom")
         var custom = config!
         custom.catalogID = nil
-        custom.arguments[custom.arguments.count - 1] = customRoot.rootPath!
+        custom.arguments.append(customRoot.rootPath!)
         await host.prepare(servers: [custom])
         let arguments = String(decoding: try JSONSerialization.data(
             withJSONObject: ["path": customRoot.rootPath!]
@@ -272,6 +273,55 @@ final class MCPProjectFilesystemTests: XCTestCase {
         } catch { }
         try await assertProcessExited(pid)
         XCTAssertTrue(host.toolDefinitions().isEmpty)
+    }
+
+    func testStandaloneChatUsesTheFileReadFolder() async throws {
+        let directory = temporaryRoot.appendingPathComponent("Standalone")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var settings = NativSettings()
+        settings.fileReadRootPath = directory.path
+        let standalone = ChatToolScope.standalone(settings: settings)
+
+        let result = try await host.callTool(
+            named: toolName, argumentsJSON: nil, projectScope: standalone
+        )
+        XCTAssertEqual(try info(result)["root"] as? String, directory.path)
+    }
+
+    func testStandaloneChatWithoutAFolderHidesAndDeniesTheTools() async throws {
+        let standalone = ChatToolScope.standalone(settings: NativSettings())
+
+        XCTAssertTrue(host.toolDefinitions(projectScope: standalone).isEmpty)
+        do {
+            _ = try await host.callTool(
+                named: toolName, argumentsJSON: nil, projectScope: standalone
+            )
+            XCTFail("Expected a chat with no File Read folder to be denied")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: callLog.path))
+    }
+
+    func testProtectedPathsInsideTheFolderAreDeniedBeforeDispatch() async throws {
+        let project = try scope("Secrets")
+        let root = URL(fileURLWithPath: try XCTUnwrap(project.rootPath))
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent(".ssh"), withIntermediateDirectories: true
+        )
+        for path in [".ssh/id_ed25519", ".env", "service-account.pem"] {
+            let arguments = String(
+                decoding: try JSONSerialization.data(withJSONObject: ["path": path]),
+                as: UTF8.self
+            )
+            do {
+                _ = try await host.callTool(
+                    named: toolName, argumentsJSON: arguments, projectScope: project
+                )
+                XCTFail("Expected \(path) to be denied")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("Access denied"))
+            }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: callLog.path))
     }
 
     private var toolName: String { "mcp__filesystem__probe" }

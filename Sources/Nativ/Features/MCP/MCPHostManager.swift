@@ -40,9 +40,8 @@ final class MCPHostManager: ObservableObject {
 
     func toolDefinitions(projectScope: ChatToolScope? = nil) -> [MLXChatToolDefinition] {
         connections.values.flatMap { connection -> [MLXChatToolDefinition] in
-            if let projectScope, projectScope.isProject,
-                !projectScope.projectToolsAreAvailable,
-                isProjectFilesystem(connection.config) {
+            if let projectScope, !projectScope.fileToolsAreAvailable,
+                requiresFolder(connection.config) {
                 return []
             }
             return Self.toolDefinitions(for: connection)
@@ -74,19 +73,19 @@ final class MCPHostManager: ObservableObject {
         guard let route = route(for: name) else {
             throw MCPClientError.notConnected
         }
-        guard isProjectFilesystem(route.connection.config),
-            let projectScope, projectScope.isProject else {
+        guard requiresFolder(route.connection.config), let projectScope else {
             return try await route.connection.client.callTool(
                 name: route.toolName, argumentsJSON: argumentsJSON
             )
         }
 
-        let directory = try Self.projectDirectory(
+        let directory = try Self.scopedDirectory(
             expected: projectScope, current: currentProjectScope?() ?? projectScope
         )
+        try Self.validatePathArguments(argumentsJSON, root: directory)
         let config = route.connection.config
         let client = await route.connection.client.scopedToDirectory(
-            directory, arguments: Array(config.arguments.dropLast()) + [directory.path]
+            directory, arguments: config.arguments + [directory.path]
         )
         try Task.checkCancellation()
         guard connections[config.id] != nil, isEnabled(config) else {
@@ -102,7 +101,7 @@ final class MCPHostManager: ObservableObject {
                 guard projectCalls[callID] != nil, isEnabled(config) else {
                     throw MCPClientError.notConnected
                 }
-                _ = try Self.projectDirectory(
+                _ = try Self.scopedDirectory(
                     expected: projectScope, current: currentProjectScope?() ?? projectScope
                 )
                 let result = try await client.callTool(
@@ -125,20 +124,21 @@ final class MCPHostManager: ObservableObject {
         }
     }
 
-    private func isProjectFilesystem(_ config: MCPServerConfig) -> Bool {
-        guard let entry = catalog.entry(matching: config), entry.id == "filesystem" else {
+    /// A catalog server whose root Nativ supplies. Editing its launch arguments
+    /// opts out, leaving the server exactly as the user configured it.
+    private func requiresFolder(_ config: MCPServerConfig) -> Bool {
+        guard let entry = catalog.entry(matching: config), entry.requiresFolder else {
             return false
         }
         return config.command == entry.command && config.arguments == entry.arguments
-            && config.arguments.last == "."
     }
 
-    static func projectDirectory(expected: ChatToolScope, current: ChatToolScope) throws -> URL {
-        guard expected.projectToolsAreAvailable, current.projectToolsAreAvailable,
+    static func scopedDirectory(expected: ChatToolScope, current: ChatToolScope) throws -> URL {
+        guard expected.fileToolsAreAvailable, current.fileToolsAreAvailable,
             expected.projectID == current.projectID, expected.rootPath == current.rootPath,
             let path = expected.rootPath, path.hasPrefix("/") else {
             throw MCPClientError.toolFailed(
-                "Project file access is disabled or the project folder has changed or is unavailable."
+                "File access is disabled or the folder has changed or is unavailable."
             )
         }
         let directory = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
@@ -147,9 +147,33 @@ final class MCPHostManager: ObservableObject {
             FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
             isDirectory.boolValue,
             FileWriteAccessPolicy.isConfigured(rootPath: directory.path) else {
-            throw MCPClientError.toolFailed("The project folder is no longer available.")
+            throw MCPClientError.toolFailed("The folder is no longer available.")
         }
         return directory
+    }
+
+    private static let pathArgumentKeys = ["path", "paths", "source", "destination"]
+
+    /// Holds a folder-scoped server to the blocklist the native file tools use,
+    /// rather than trusting it to police its own sandbox.
+    static func validatePathArguments(_ argumentsJSON: String?, root: URL) throws {
+        guard let argumentsJSON,
+            let arguments = try? JSONSerialization.jsonObject(with: Data(argumentsJSON.utf8))
+                as? [String: Any]
+        else { return }
+        let policy = try FileReadAccessPolicy(rootPath: root.path)
+        let paths = pathArgumentKeys.flatMap { key -> [String] in
+            switch arguments[key] {
+            case let path as String: [path]
+            case let paths as [String]: paths
+            default: []
+            }
+        }
+        for path in paths where (try? policy.resolve(path: path)) == nil {
+            throw MCPClientError.toolFailed(
+                "Access denied - \(path) is outside allowed directories or is a protected path."
+            )
+        }
     }
 
     func reload(servers: [MCPServerConfig]) {
@@ -255,15 +279,18 @@ final class MCPHostManager: ObservableObject {
                 githubPending.append((config, executable))
                 continue
             }
+            let workingDirectory = Self.workingDirectory(for: config.id.uuidString)
             let client = MCPClient(
                 executableURL: executable,
-                arguments: config.arguments,
+                arguments: Self.launchArguments(
+                    config, entry: catalogEntry, in: workingDirectory
+                ),
                 environment: Self.childEnvironment(
                     searchPath: searchPath,
                     overrides: config.environment,
                     excluding: catalogEntry?.excludedEnvironment ?? []
                 ),
-                workingDirectory: Self.workingDirectory(for: config.id.uuidString)
+                workingDirectory: workingDirectory
             )
             pending.append((config, client))
         }
@@ -528,6 +555,19 @@ final class MCPHostManager: ObservableObject {
             environment[name] = nil
         }
         return environment
+    }
+
+    /// A folder-scoped server needs a root to start at all. The shared connection
+    /// only lists tools, so it gets the managed directory; calls are re-rooted.
+    private static func launchArguments(
+        _ config: MCPServerConfig,
+        entry: MCPCatalogEntry?,
+        in workingDirectory: URL?
+    ) -> [String] {
+        guard entry?.requiresFolder == true, let workingDirectory else {
+            return config.arguments
+        }
+        return config.arguments + [workingDirectory.path]
     }
 
     private static func workingDirectory(for id: String) -> URL? {
