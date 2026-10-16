@@ -395,6 +395,20 @@ final class NativModel: ChatModelSwitchingSurface {
         return settingsAppliedAtServerStart.serverBaseURL
     }
 
+    func predictDecision(modelID: String, state: MLXJSONValue,
+                         question: NativDecisionQuestion) async throws -> NativDecisionResponse {
+        guard isRunning, !isModelLoading, !inferenceActivityInProgress else {
+            throw NativDecisionError.httpStatus(409, "Start the server and wait for active inference or model loading to finish.")
+        }
+        let operationID = UUID()
+        guard inferenceActivity?.begin(resource: .decision, windowID: operationID, operationID: operationID) != false else {
+            throw NativDecisionError.httpStatus(409, "Another decision request is already running.")
+        }
+        defer { inferenceActivity?.end(resource: .decision, operationID: operationID) }
+        return try await NativDecisionClient(baseURL: settings.serverBaseURL, apiKey: settings.serverAPIKey, timeout: 120)
+            .predict(model: modelID, state: state, questions: ["answer": question])
+    }
+
     func startServer() {
         var shouldStartMetrics = false
         clearModelLoadFailure()
