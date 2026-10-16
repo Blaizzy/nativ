@@ -140,6 +140,60 @@ private enum ChatTranscriptLayout {
     static let scrollIndicatorClearance: CGFloat = 17
 }
 
+private struct ChatResponseSpeechContext {
+    let speech: ChatResponseSpeech
+    let settings: NativSettings
+    let isServerRunning: Bool
+}
+
+private struct ChatResponseSpeechContextKey: EnvironmentKey {
+    static let defaultValue: ChatResponseSpeechContext? = nil
+}
+
+private extension EnvironmentValues {
+    var chatResponseSpeech: ChatResponseSpeechContext? {
+        get { self[ChatResponseSpeechContextKey.self] }
+        set { self[ChatResponseSpeechContextKey.self] = newValue }
+    }
+}
+
+private struct ChatResponseSpeechModifier: ViewModifier {
+    var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    let speech: ChatResponseSpeech
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.chatResponseSpeech, ChatResponseSpeechContext(
+                speech: speech, settings: model.settings, isServerRunning: model.isRunning
+            ))
+            .onChange(of: chat.currentSessionID, initial: true) { _, _ in
+                speech.stop()
+                speech.errorMessage = nil
+            }
+            .onChange(of: model.isRunning) { _, isRunning in
+                if !isRunning { speech.stop() }
+            }
+            .onChange(of: model.settings.serverBaseURL) { _, _ in speech.stop() }
+            .onChange(of: model.settings.textToSpeechModelID) { _, _ in speech.stop() }
+            .onChange(of: chat.transcriptRevision.value) { _, _ in
+                if let messageID = speech.messageID,
+                   !chat.messages.contains(where: { $0.id == messageID }) {
+                    speech.stop()
+                }
+            }
+            .onDisappear { speech.stop() }
+            .alert("Unable to read aloud", isPresented: Binding(
+                get: { speech.errorMessage != nil },
+                set: { if !$0 { speech.errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { speech.errorMessage = nil }
+            } message: {
+                Text(speech.errorMessage ?? "")
+            }
+    }
+}
+
 private struct ChatWorktreeSetupView: View {
     let progress: ChatWorktreeSetupProgress
     let dismiss: () -> Void
@@ -728,6 +782,7 @@ private struct ChatTranscriptView: View {
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
     @State private var search: ChatSearchState
+    @State private var responseSpeech = ChatResponseSpeech()
     @Environment(\.chatLibrarySearch) private var librarySearch
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -776,6 +831,7 @@ private struct ChatTranscriptView: View {
         .environment(\.chatAnnotationActions, chat.annotationActions)
         .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
         .environment(\.chatSearchState, search)
+        .modifier(ChatResponseSpeechModifier(model: model, chat: chat, speech: responseSpeech))
         .focusedSceneValue(\.chatSearch, search)
         .onChange(of: chat.currentSessionID, initial: true) { _, id in
             search.reset(sessionID: id)
@@ -1109,6 +1165,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     var prefillProgress = NativPrefillProgressState()
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
+    @Environment(\.chatResponseSpeech) private var responseSpeech
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.message == rhs.message
@@ -1202,6 +1259,16 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                             )
                         }
 
+                        if message.role == .assistant, canCopyMessage,
+                           !displayContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                           let responseSpeech {
+                            ChatSpeakResponseButton(
+                                messageID: message.id,
+                                text: displayContent,
+                                context: responseSpeech
+                            )
+                        }
+
                         if showsEditUserMessage {
                             ChatMessageActionButton(
                                 icon: .system("square.and.pencil"),
@@ -1232,8 +1299,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 }
                 // Align the visible icons with the response text, keeping their full hit areas.
                 .padding(.leading, message.role == .assistant ? -10 : 0)
-                .opacity(isHoveringMessage || didCopyMessage || isEditingUserMessage ? 1 : 0)
-                .accessibilityHidden(!isHoveringMessage && !didCopyMessage && !isEditingUserMessage)
+                .opacity(showsActiveMessageActions ? 1 : 0)
+                .accessibilityHidden(!showsActiveMessageActions)
             }
         }
         .frame(maxWidth: .infinity, alignment: rowAlignment)
@@ -1416,6 +1483,11 @@ private struct ChatMessageRow: View, @MainActor Equatable {
 
     private var showsMessageActions: Bool {
         message.role == .user || canCopyMessage || canForkAssistantResponse
+    }
+
+    private var showsActiveMessageActions: Bool {
+        isHoveringMessage || didCopyMessage || isEditingUserMessage
+            || responseSpeech?.speech.messageID == message.id
     }
 
     private var editActionTitle: String {
@@ -2354,6 +2426,58 @@ private struct ChatCopyMessageButton: View {
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
         .animation(.easeInOut(duration: 0.15), value: didCopy)
+    }
+}
+
+private struct ChatSpeakResponseButton: View {
+    let messageID: UUID
+    let text: String
+    let context: ChatResponseSpeechContext
+    @State private var isHovering = false
+
+    private var isActive: Bool { context.speech.messageID == messageID }
+    private var isGenerating: Bool { isActive && context.speech.phase == .generating }
+    private var isEnabled: Bool {
+        isActive || (context.isServerRunning && context.settings.normalized().textToSpeechModelID != nil)
+    }
+
+    private var title: String {
+        if isGenerating { return "Cancel reading aloud" }
+        if isActive { return "Stop reading aloud" }
+        if !context.isServerRunning { return "Start the server to read aloud" }
+        if context.settings.normalized().textToSpeechModelID == nil {
+            return "Choose a text-to-speech model in Models to read aloud"
+        }
+        return "Read aloud"
+    }
+
+    var body: some View {
+        Button {
+            context.speech.toggle(messageID: messageID, text: text, settings: context.settings)
+        } label: {
+            Group {
+                if isGenerating {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .overlay {
+                            Image(systemName: "stop.fill").font(.system(size: 5))
+                        }
+                } else {
+                    Image(systemName: isActive ? "stop.fill" : "speaker.wave.2")
+                        .font(.system(size: 13, weight: .medium))
+                }
+            }
+            .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
+            .frame(width: 30, height: 28)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(isGenerating ? "Preparing to read aloud" : isActive ? "Reading aloud" : "")
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
 }
 

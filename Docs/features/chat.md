@@ -11,6 +11,11 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
   it renders in a collapsible panel separate from the final answer.
 - Per-response metrics (time to first token, decode speed, token counts) are recorded and
   surfaced from the analytics store.
+- Hover over a completed response and select **Read aloud** beside **Copy** to send
+  its text to the server's `/v1/audio/speech` endpoint and play the returned audio on
+  your Mac. Choose a text-to-speech model in **Models** first. The control shows
+  generation progress and becomes **Stop reading aloud** during playback;
+  selecting another response or leaving the chat stops the current audio.
 - During prefill, a “Reading prompt” status pill with a circular progress ring and
   percentage appears next to the model's name above the active assistant response,
   including responses that use tools. Hover over the pill for processed/total tokens.
