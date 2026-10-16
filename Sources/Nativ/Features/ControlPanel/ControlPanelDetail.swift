@@ -243,6 +243,7 @@ extension ControlPanelView {
 }
 
 struct ChatWorkspaceView: View {
+    @StateObject private var decisionRequest = DecisionRequestComposer()
     let mode: ChatWorkspaceMode
     let onSelectMode: (ChatWorkspaceMode) -> Void
     let model: NativModel
@@ -271,6 +272,8 @@ struct ChatWorkspaceView: View {
                     onExploreImageModels: onExploreImageModels,
                     onFindDraftModels: onFindDraftModels
                 )
+            case .decisions:
+                DecisionComposerView(model: model, request: decisionRequest, onSelectWorkspaceMode: onSelectMode)
             case .images:
                 ImageGenerationView(
                     model: model,

@@ -396,3 +396,19 @@ grouping by chat. Rendered files are cached under Application Support.
 **Smart search** ranks artifacts semantically using an on-device embedding model. It activates
 only after that model is installed; until then, search falls back to plain text matching over
 artifact metadata.
+
+## Decision requests
+
+Choose Decisions beside Chat and Images to run a standalone decision request. Download a supported
+model from Models, then choose it in the Decisions model picker. Decision models load on demand and
+are kept separate from chat models; selecting one does not replace the language model.
+
+Enter context and a question. Single choice uses distinct choices, one per line. Yes / No needs no
+choices. Ordered scale uses at least two descriptions, ordered from lowest to highest; its numerical
+result ranges from zero to the last choice index. Results show the answering model and available
+probabilities. The request goes directly to the decision endpoint without a language-model pass.
+
+The composer validates required fields, shows server and request errors, and supports cancellation.
+The current draft remains when switching between workspace tabs; the selected model is remembered
+across launches. Requests and results are not saved as chat history. This release adds no browser
+automation, permission review, or automatic tool execution.

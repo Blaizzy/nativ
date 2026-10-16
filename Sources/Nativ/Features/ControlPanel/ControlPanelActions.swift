@@ -395,6 +395,10 @@ extension ControlPanelView {
         switch mode {
         case .chat:
             showChatWorkspace()
+        case .decisions:
+            chatWorkspaceMode = .decisions
+            selectedTab = .chat
+            sidebarSelection = .tab(.chat)
         case .images:
             imageGeneration.beginNewDraft(preservingUncommittedDraft: true)
             showImageWorkspace()
