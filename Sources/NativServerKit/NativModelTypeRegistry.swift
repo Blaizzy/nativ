@@ -9,6 +9,7 @@ public enum NativModelCapability: String, CaseIterable, Codable, Sendable {
     case textToSpeech = "text_to_speech"
     case embeddings
     case reranking
+    case decision
 }
 
 public enum NativModelTypeRegistryError: Error, Equatable, Sendable {
@@ -148,6 +149,13 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
             return normalized
         }
         return entry.aliases[normalized]
+    }
+
+    public func decisionLoader(for modelType: String?, autoModel: String? = nil) -> String? {
+        guard let modelType = modelType.flatMap(Self.normalized) else { return nil }
+        let resolved = modelType == "lfm2_vl" && autoModel?.hasSuffix("D1Model") == true
+            ? "d1" : modelType
+        return loader(for: resolved, capability: .decision)
     }
 
     public func capabilities(for modelType: String) -> Set<NativModelCapability> {

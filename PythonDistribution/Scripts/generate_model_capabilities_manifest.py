@@ -21,6 +21,7 @@ CAPABILITY_NAMES = (
     "text_to_speech",
     "embeddings",
     "reranking",
+    "decision",
 )
 PACKAGE_NAMES = ("mlx-vlm", "mlx-audio")
 
@@ -126,7 +127,7 @@ def _loader_packages(root: Path, *, requires_config_type: bool = True) -> set[st
 
 def _runtime_loader_mapping(
     site_packages: Path, candidate_model_types: set[str]
-) -> dict[str, str]:
+) -> tuple[dict[str, str], set[str]]:
     python = site_packages.parents[2] / "bin" / "python3"
     if not python.exists():
         raise FileNotFoundError(f"Missing bundled Python interpreter: {python}")
@@ -139,6 +140,7 @@ from mlx_vlm.utils import get_model_and_args
 
 candidates = json.load(sys.stdin)
 resolved = {}
+decisions = set()
 for candidate in candidates:
     module, loader = get_model_and_args({"model_type": candidate})
     if not hasattr(module, "Model") or not hasattr(module, "ModelConfig"):
@@ -147,7 +149,9 @@ for candidate in candidates:
             "Model and ModelConfig"
         )
     resolved[candidate] = loader
-json.dump(resolved, sys.stdout, sort_keys=True)
+    if getattr(module.Model, "decision_types", ()):
+        decisions.add(loader)
+json.dump({"loaders": resolved, "decisions": sorted(decisions)}, sys.stdout, sort_keys=True)
 """
     result = subprocess.run(
         [str(python), "-c", resolver],
@@ -164,7 +168,8 @@ json.dump(resolved, sys.stdout, sort_keys=True)
         )
 
     try:
-        mapping = json.loads(result.stdout)
+        payload = json.loads(result.stdout)
+        mapping = payload["loaders"]
     except json.JSONDecodeError as error:
         raise RuntimeError("Bundled MLX resolver returned invalid JSON") from error
     if (
@@ -179,7 +184,10 @@ json.dump(resolved, sys.stdout, sort_keys=True)
         )
     ):
         raise RuntimeError("Bundled MLX resolver returned an invalid loader mapping")
-    return mapping
+    decisions = set(payload["decisions"])
+    if not decisions or not decisions.issubset(set(mapping.values())):
+        raise RuntimeError("Bundled MLX runtime has no valid decision loaders")
+    return mapping, decisions
 
 
 def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
@@ -321,7 +329,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     vlm_alias_mapping = _string_mapping(mlx_vlm_root / "utils.py", "MODEL_REMAPPING")
     all_loaders = language_loaders | drafter_loaders
     _validate_mapping_targets(vlm_alias_mapping, all_loaders)
-    resolved_model_types = _runtime_loader_mapping(
+    resolved_model_types, decision_types = _runtime_loader_mapping(
         site_packages,
         all_loaders | set(vlm_alias_mapping),
     )
@@ -335,7 +343,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
             details.append("unexpected loaders: " + ", ".join(sorted(unexpected)))
         raise RuntimeError("Bundled MLX loader mapping is incomplete: " + "; ".join(details))
 
-    language_types = _apply_alias_precedence(language_loaders, resolved_model_types)
+    language_types = _apply_alias_precedence(language_loaders, resolved_model_types) - decision_types
     drafter_types = _apply_alias_precedence(drafter_loaders, resolved_model_types)
     language_aliases = _aliases_for(resolved_model_types, language_types)
     drafter_aliases = _aliases_for(resolved_model_types, drafter_types)
@@ -389,6 +397,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     _validate_mapping_targets(reranking_alias_mapping, reranking_types)
 
     capabilities = {
+        "decision": _entry(decision_types, _aliases_for(resolved_model_types, decision_types)),
         "language": _entry(
             language_types,
             language_aliases,

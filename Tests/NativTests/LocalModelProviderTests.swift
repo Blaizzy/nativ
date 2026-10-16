@@ -186,6 +186,20 @@ final class LocalModelProviderTests: XCTestCase {
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
+    func testDecisionHubMetadataDoesNotClassifyGenericTextClassifiers() throws {
+        let decision = try decodeModel(pipelineTag: "text-generation", config: ["model_type": "decider2"])
+        XCTAssertTrue(decision.capabilities.contains(.decision))
+        XCTAssertFalse(decision.capabilities.contains(.text))
+        let generic = try decodeModel(pipelineTag: "text-classification", config: ["model_type": "bert"])
+        XCTAssertFalse(generic.capabilities.contains(.decision))
+        let d1 = try decodeModel(pipelineTag: "image-text-to-text", config: [
+            "model_type": "lfm2_vl", "auto_map": ["AutoModel": "modeling_d1.D1Model", "AutoTokenizer": ["CustomTokenizer", NSNull()]],
+        ])
+        XCTAssertTrue(d1.capabilities.contains(.decision))
+        XCTAssertFalse(d1.capabilities.contains(.text))
+    }
+
+
     func testEmptyCapabilitySelectionUsesOneUnfilteredQuery() {
         XCTAssertEqual(
             HuggingFaceCapabilityFilter.queryVariants(for: []),

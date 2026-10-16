@@ -1944,12 +1944,12 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     color: .orange
                                 )
                             }
-                            if localModel.capabilities.contains(.imageEditing)
-                                && !localModel.capabilities.contains(.imageGeneration)
+                            if localModel.capabilities.contains(.decision) || (localModel.capabilities.contains(.imageEditing)
+                                && !localModel.capabilities.contains(.imageGeneration))
                             {
                                 ModelPill(
                                     title: "Loads on demand",
-                                    systemImage: "photo.on.rectangle.angled",
+                                    systemImage: localModel.capabilities.contains(.decision) ? "bolt" : "photo.on.rectangle.angled",
                                     color: .accentColor
                                 )
                             } else if preloadSlots.isEmpty {
@@ -2041,12 +2041,15 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 action: onTogglePin
             )
         }
-        .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
+        .alert(localModel.capabilities.contains(.decision) ? "Decision model" : "Model isn’t supported",
+               isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {
             Text(
-                "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
+                localModel.capabilities.contains(.decision)
+                    ? "Select this model in Chat → Decisions. It loads when you run a decision request."
+                    : "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
@@ -2151,7 +2154,8 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             Button {
                 showsUnsupportedModelInformation = true
             } label: {
-                Label("Unavailable", systemImage: "exclamationmark.triangle")
+                Label(localModel.capabilities.contains(.decision) ? "On demand" : "Unavailable",
+                      systemImage: localModel.capabilities.contains(.decision) ? "info.circle" : "exclamationmark.triangle")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -2175,6 +2179,9 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         }
         if let preferredPreloadSlot {
             return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
+        }
+        if localModel.capabilities.contains(.decision) {
+            return "Select in Chat → Decisions. Loads when a decision request runs."
         }
         return "\(localModel.repoID) has no supported preload role"
     }
@@ -3414,6 +3421,7 @@ extension LocalModelCapability {
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"
         case .reranking: "arrow.up.arrow.down.circle"
+        case .decision: "arrow.triangle.branch"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
         case .drafter: "hare"

@@ -9,6 +9,7 @@ enum HuggingFaceModelSupport: Equatable, Sendable {
 
 struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
     let modelType: String?
+    let autoModel: String?
     let speculatorsModelType: String?
     let architectures: [String]
     let hasMalformedMetadata: Bool
@@ -53,6 +54,12 @@ struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
         hasAudioConfig = try container.hasNonNullValue(forKey: .audioConfig)
         hasDFlashConfig = try container.hasNonNullValue(forKey: .dFlashConfig)
         let modelFile = try? container.decode(String.self, forKey: .modelFile)
+        let autoMap = try? container.decode([String: MLXJSONValue].self, forKey: .autoMap)
+        if case .string(let value) = autoMap?["AutoModel"] {
+            autoModel = value
+        } else {
+            autoModel = nil
+        }
         let hasAutoMap = try container.hasNonNullValue(forKey: .autoMap)
         usesCustomCode = modelFile?.isEmpty == false || hasAutoMap
     }
@@ -78,6 +85,10 @@ struct HuggingFaceModelSupportClassifier: Sendable {
         if architectures.contains("boundaryextractor")
             || architectures.contains("dflash2draftmodel")
         {
+            return .supported
+        }
+
+        if registry.decisionLoader(for: configuration.modelType, autoModel: configuration.autoModel) != nil {
             return .supported
         }
 
