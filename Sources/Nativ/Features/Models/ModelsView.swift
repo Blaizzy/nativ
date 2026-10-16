@@ -3414,6 +3414,7 @@ extension LocalModelCapability {
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"
         case .reranking: "arrow.up.arrow.down.circle"
+        case .decision: "arrow.triangle.branch"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
         case .drafter: "hare"
