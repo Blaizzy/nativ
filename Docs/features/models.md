@@ -47,13 +47,21 @@ Each model carries a set of capabilities (`LocalModelCapability`):
 | `imageGeneration`, `imageEditing` | Produce / edit images. |
 | `speechToText`, `textToSpeech` | Transcription / synthesis. |
 | `embeddings` | Vector embeddings. |
+| `decision` | Structured choice, boolean, and score predictions. |
 | `reasoning` | Emits reasoning output. |
 | `tools` | Supports tool calling. |
 | `drafter` | Usable as a speculative-decoding draft model. |
 
 Capability determines where a model is offered: only `text` (and non-image `vision`) models
 appear in the conversation model picker; image, speech, and embedding models are selected in
-their own slots.
+their own slots. Decision models use a Decisions preload slot with the same manual load and unload
+controls as other model types.
+
+The bundled runtime generates the model-type registry, including loader aliases and configuration
+aliases for checkpoints that share a backbone but use a different loader. Local discovery and Hub
+support checks resolve those aliases through the same registry. Capability tags describe what a
+model does; they are not architecture names. Image-editing-only models retain the installed list's
+on-demand presentation, separate from unsupported models.
 
 ## Downloading
 
@@ -108,3 +116,16 @@ A draft model can accelerate a larger target model. Enable `speculativeDecodingE
 `draftModelID`; the draft must be capability-compatible with the target. Draft kind and block
 size are configurable (`draftKind`, `draftBlockSize`). Only `drafter`-eligible models are offered
 as drafts, and a mismatched hidden size is flagged as an incompatible target.
+
+## Trying a decision model
+
+In Installed models, choose Try model on a decision-model card to open its standalone request page.
+The page preserves the context, question, answer formats, and results from the decision composer.
+Use Back to Models to return to the model list. Decision requests are separate from Chat.
+
+Load the chosen model before running a request. Loading progress, memory checks, load failures,
+request errors, and cancellation use the existing model lifecycle. Single choice needs at least
+two distinct choices, one per line; Yes / No needs no choices. Ordered scale uses at least two
+levels ordered from lowest to highest, returning a score from zero to the final level index.
+Results show the answering model and available probabilities. Requests go directly to the decision
+endpoint without a language-model pass and are not saved as chat history.
