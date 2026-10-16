@@ -7,6 +7,7 @@ final class InferenceActivityCoordinator {
     enum Resource: Hashable {
         case chat(UUID)
         case imageGeneration(UUID)
+        case decision
     }
 
     private struct Activity {
