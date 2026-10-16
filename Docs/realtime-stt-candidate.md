@@ -7,11 +7,11 @@ should be mounted in Nativ.
 
 This is a candidate integration, not enabled by changing production pins:
 
-- mlx-audio https://github.com/Blaizzy/mlx-audio/pull/945 adds Nemotron live-input
-  sessions (signed candidate `c706c4b53a149e0696dfa6f9fd3db9bb5bda6261`).
+- mlx-audio https://github.com/Blaizzy/mlx-audio/pull/945 is merged; released
+  mlx-audio 0.5.9 provides the Nemotron live-input session contract.
 - mlx-vlm https://github.com/Blaizzy/mlx-vlm/pull/2167 exposes that contract on
   its existing authenticated router/audio worker
-  (`64295d91a8535d189b0c4528371d75a28470e75a`).
+  (candidate refreshed on upstream `6d2f226`).
 - Nativ's existing `--mlx-vlm-source` and `--mlx-audio-source` build arguments
   accept local candidate checkouts. Release requirements remain unchanged until
   compatible upstream releases are available.
@@ -19,7 +19,8 @@ This is a candidate integration, not enabled by changing production pins:
 ## Reproduce without modifying the installed app
 
 Use a disposable Python environment with the candidate packages and Nativ's
-server dependencies installed. Use an existing local Nemotron model snapshot;
+server dependencies installed. The live route is checked by connecting to it,
+not by inspecting FastAPI's internal route list. Use an existing local Nemotron model snapshot;
 the probe enforces offline mode. Create non-personal synthetic fixtures, e.g.
 with macOS `say` and `afconvert`, as mono 16-bit little-endian PCM WAV at 16 kHz.
 Use a spoken phrase long enough to observe partial output before it ends.
@@ -55,19 +56,22 @@ not been certified by that proof.
 
 ## Observed proof
 
-On Apple Silicon, the unmodified Nativ overlay at
-`c6b6dbe7539192cb14bc7cdf4da47fd83193804f` with the candidate packages above and
-Nemotron 3.5 0.6B snapshot `e550040c0478027ed679b2b6b0d055502c103663` passed two
-synthetic fixtures using this probe:
+On 16 October 2026, Nativ's unmodified overlay at upstream
+`a3888494f2d51bbff3b13730d1c5fcce1d59b849` with the mlx-vlm candidate above,
+released mlx-audio 0.5.9, MLX 0.32.4 and Nemotron 3.5 0.6B snapshot
+`e550040c0478027ed679b2b6b0d055502c103663` passed both synthetic fixtures:
 
 | Fixture | Audio duration | First partial | Commit to final |
 | --- | ---: | ---: | ---: |
-| Portuguese | 7.812 s | 2.717 s | 0.249 s |
-| English | 6.753 s | 1.636 s | 0.295 s |
+| English | 10.074 s | 3.427 s | 0.605 s |
+| Portuguese | 13.150 s | 2.052 s | 0.187 s |
 
-Both produced partials before commit. These are one-run functional observations,
-not latency percentiles, microphone UX proof, sustained-load certification, or
-proof of an updated packaged app. The server's separate suite passed 36 tests.
+Both produced partials before commit and final transcripts afterwards. The
+probe exited successfully after stopping the loopback server. These are
+single-run functional observations, not latency percentiles, microphone UX
+proof, transcription-accuracy certification, sustained-load certification, or
+proof of an updated packaged app. The mlx-vlm server and realtime STT tests
+passed 672 tests with six skips.
 
 The candidate endpoint is single-utterance, native-rate PCM16, greedy decoding,
 manual commit only. It has bounded queues and duration limits and exclusively

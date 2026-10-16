@@ -110,7 +110,6 @@ def main():
                 parser.error("Fixtures must be mono PCM16 at 16000 Hz")
             fixtures.append((path.name, wav.readframes(wav.getnframes())))
 
-    # These overrides apply only to this disposable process, before import.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["MLX_PLATFORM_ANALYTICS_DB_PATH"] = str(
         Path(tempfile.mkdtemp(prefix="nativ-stt-proof-")) / "analytics.sqlite3"
@@ -125,12 +124,6 @@ def main():
     from websockets.sync.client import connect
 
     route = "/v1/audio/transcriptions/realtime"
-    if not any(
-        getattr(item, "path", None) == route for item in nativ_server.base.app.routes
-    ):
-        raise RuntimeError(
-            "Installed mlx-vlm lacks the live STT route; install candidate dependencies first"
-        )
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
