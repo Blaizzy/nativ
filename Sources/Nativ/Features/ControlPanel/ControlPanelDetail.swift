@@ -66,11 +66,16 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 onOpenRun: { applySidebarSelection(.chat($0)) },
                 onDeleteTaskChats: { taskID, sessionIDs, disposition in
-                    chat.handleScheduledTaskDeletion(
-                        taskID: taskID,
-                        linkedSessionIDs: sessionIDs,
-                        disposition: disposition
-                    )
+                    Task {
+                        do {
+                            try await chat.handleScheduledTaskDeletion(
+                                taskID: taskID, linkedSessionIDs: sessionIDs, disposition: disposition,
+                                confirmDiscard: confirmWorktreeDiscard
+                            )
+                        } catch {
+                            chatDeletionErrorMessage = error.localizedDescription
+                        }
+                    }
                 }
             )
         case .artifacts:
@@ -83,11 +88,11 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 onOpenModels: { navigation.open(.models) },
                 onOpenChat: { artifact in
-                    switch artifact.source {
-                    case .uploaded:
+                    switch artifact.workspace {
+                    case .chat:
                         applySidebarSelection(.chat(artifact.sessionID))
                         chat.scrollTargetMessageID = artifact.messageID
-                    case .generated:
+                    case .imageGeneration:
                         applySidebarSelection(.imageGeneration(artifact.sessionID))
                     }
                 },
@@ -148,6 +153,11 @@ extension ControlPanelView {
         case .settings:
             SettingsView(
                 model: model,
+                chat: chat,
+                onOpenChat: { id in
+                    chat.selectSession(id)
+                    showChatWorkspace()
+                },
                 softwareUpdater: softwareUpdater,
                 launchAtLogin: launchAtLogin
             )
@@ -181,6 +191,7 @@ extension ControlPanelView {
     }
 
     func applySidebarSelection(_ selection: ControlPanelSidebarSelection) {
+        sidebarRenameCommitRequests.send()
         switch selection {
         case .tab(let tab):
             if tab == .extensions {

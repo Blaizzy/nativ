@@ -97,7 +97,9 @@ struct ChatImageModelOption: Identifiable, Equatable, Sendable {
 
 struct ChatImageModelSelectionRequest: Equatable, Sendable {
     let operation: ChatImageOperation
-    let models: [ChatImageModelOption]
+    var models: [ChatImageModelOption]
+    var highlightedModelID: String?
+    var sessionID: UUID?
 
     var installedModels: [ChatImageModelOption] {
         models.filter(\.isInstalled)
@@ -105,6 +107,33 @@ struct ChatImageModelSelectionRequest: Equatable, Sendable {
 
     var downloadableModels: [ChatImageModelOption] {
         models.filter { !$0.isInstalled }
+    }
+
+    var effectiveHighlightedModelID: String? {
+        let options = installedModels
+        if let highlightedModelID,
+            options.contains(where: { $0.modelID == highlightedModelID }) {
+            return highlightedModelID
+        }
+        return options.first?.modelID
+    }
+
+    var canMoveHighlight: Bool {
+        installedModels.count > 1
+    }
+
+    func offers(_ modelID: String) -> Bool {
+        models.contains { $0.modelID == modelID }
+    }
+
+    func movingHighlight(by offset: Int) -> ChatImageModelSelectionRequest {
+        let options = installedModels
+        guard canMoveHighlight else { return self }
+        let current = options.firstIndex { $0.modelID == effectiveHighlightedModelID } ?? 0
+        var updated = self
+        updated.highlightedModelID =
+            options[min(max(current + offset, 0), options.count - 1)].modelID
+        return updated
     }
 }
 
@@ -172,7 +201,7 @@ enum ChatImageModelSelection {
             }
             .filter { !installedModelIDs.contains($0.0.id) }
             downloadableModels = await resolvedDownloadOptions(
-                Array(candidates.prefix(recommendedModelCount))
+                Array(candidates.prefix(recommendedModelCount)), token: huggingFaceToken
             )
         } catch {
             // Hub access is optional. When the device is offline, the picker
@@ -272,17 +301,14 @@ enum ChatImageModelSelection {
     }
 
     private static func resolvedDownloadOptions(
-        _ candidates: [(HuggingFaceModel, Set<LocalModelCapability>)]
+        _ candidates: [(HuggingFaceModel, Set<LocalModelCapability>)], token: String?
     ) async -> [ChatImageModelOption] {
         await withTaskGroup(of: (Int, ChatImageModelOption?).self) { group in
             for (index, candidate) in candidates.enumerated() {
                 group.addTask {
-                    let size: Int64?
-                    if let estimate = candidate.0.estimatedDownloadBytes {
-                        size = estimate
-                    } else {
-                        size = await HubModelSizeResolver.shared.resolveSize(for: candidate.0.id)
-                    }
+                    let size = await HubModelSizeResolver.shared.resolveSize(
+                        for: candidate.0.id, revision: candidate.0.revision, token: token
+                    )
                     guard let size else { return (index, nil) }
                     return (index, ChatImageModelOption(
                         downloadableModel: candidate.0,

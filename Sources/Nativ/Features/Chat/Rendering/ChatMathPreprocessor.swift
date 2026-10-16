@@ -1,6 +1,68 @@
 import Foundation
 
 enum MathPreprocessor {
+  struct SelectionReplacement {
+    let range: NSRange
+    let text: String
+  }
+
+  /// Describe math substitutions in original-source coordinates for quote mapping.
+  /// Each candidate is passed through the renderer's preprocessor, so unsupported
+  /// expressions remain literal and protected code is never treated as math.
+  static func selectionReplacements(in markdown: String) -> [SelectionReplacement] {
+    guard markdown.contains(/[$\\Σ∑Π∏∫]/) || markdown.contains("```") else { return [] }
+    let raw = markdown as NSString
+    let blocks = protectedCodeBlockRanges(in: markdown).map { NSRange($0, in: markdown) }
+    let inlineCode = markdown.matches(of: /(`{1,3})[^`]*?\1/).map { NSRange($0.range, in: markdown) }
+    let protected = blocks + inlineCode
+    // Fence conversion is context independent. Indented blocks must retain their
+    // code semantics here; their renderer repair depends on surrounding list text.
+    var candidates = blocks.filter { raw.substring(with: $0).hasPrefix("```") }
+    let expressions = try! NSRegularExpression(pattern:
+      #"(?s)\$\$.{1,2000}?\$\$|\\\[.{1,2000}?\\\]|\\\(.{1,300}?\\\)|\$[ \t]*([^\s$][^$\n]{0,118}?[^\s$]|[^\s$])[ \t]*\$|[Σ∑Π∏∫](_\{[^}\n]{1,80}\}(\^\{[^}\n]{1,40}\})?|\^\{[^}\n]{1,40}\}(_\{[^}\n]{1,80}\})?)"#)
+    candidates += expressions.matches(in: markdown, range: NSRange(location: 0, length: raw.length))
+      .map(\.range).filter { range in !protected.contains { NSIntersectionRange($0, range).length > 0 } }
+    var searchStart = markdown.startIndex
+    while let (_, range) = firstBoxed(in: markdown, from: searchStart) {
+      let candidate = NSRange(range, in: markdown)
+      if !protected.contains(where: { NSIntersectionRange($0, candidate).length > 0 }) {
+        candidates.append(candidate)
+      }
+      searchStart = range.upperBound
+    }
+    candidates.sort { $0.location == $1.location ? $0.length > $1.length : $0.location < $1.location }
+    var result: [SelectionReplacement] = []
+    var end = 0
+    for range in candidates where range.location >= end {
+      let original = raw.substring(with: range)
+      let transformed = preprocess(original).trimmingCharacters(in: .whitespacesAndNewlines)
+      guard transformed != original.trimmingCharacters(in: .whitespacesAndNewlines) else { continue }
+      if let match = transformed.wholeMatch(of: /!\[math\]\(swiftmath:\/\/[id]\/([A-Za-z0-9_-]+)\)/),
+        let latex = decodeBase64URL(String(match.1))
+      {
+        result.append(SelectionReplacement(range: range, text: latex))
+      } else if original.first == "$", original.last == "$", !original.hasPrefix("$$") {
+        // The fast italic renderer preserves character order. Keep per-character
+        // source ranges so selecting part of an italic expression stays precise.
+        let inner = String(original.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        let count = inner.count
+        guard count == transformed.count else { continue }
+        let innerRange = (original as NSString).range(of: inner)
+        var cursor = range.location + innerRange.location
+        for (index, pair) in zip(inner, transformed).enumerated() {
+          let next = cursor + String(pair.0).utf16.count
+          let lower = index == 0 ? range.location : cursor
+          let upper = index == count - 1 ? NSMaxRange(range) : next
+          result.append(SelectionReplacement(range: NSRange(location: lower, length: upper - lower),
+                                             text: String(pair.1)))
+          cursor = next
+        }
+      } else { continue }
+      end = NSMaxRange(range)
+    }
+    return result
+  }
+
   static func preprocess(_ markdown: String) -> String {
     let markdown = repairAccidentalIndentedMath(
       convertMathFences(markdown))
@@ -378,8 +440,8 @@ enum MathPreprocessor {
     return result + rest
   }
 
-  private static func firstBoxed(in text: String) -> (inner: String, range: Range<String.Index>)? {
-    guard let start = text.range(of: #"\boxed{"#) else { return nil }
+  private static func firstBoxed(in text: String, from cursor: String.Index? = nil) -> (inner: String, range: Range<String.Index>)? {
+    guard let start = text.range(of: #"\boxed{"#, range: (cursor ?? text.startIndex)..<text.endIndex) else { return nil }
     var depth = 1
     var index = start.upperBound
     while index < text.endIndex, depth > 0 {

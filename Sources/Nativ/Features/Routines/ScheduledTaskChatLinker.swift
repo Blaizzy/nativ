@@ -23,7 +23,6 @@ enum ScheduledTaskChatLinker {
             pinned: nil,
             pinnedOrder: nil,
             sessionOrder: nil,
-            folderID: nil,
             imageGenerationModelID: nil,
             scheduledTaskID: routine.id
         )

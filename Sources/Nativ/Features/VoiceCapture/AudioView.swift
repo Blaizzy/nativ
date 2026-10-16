@@ -42,11 +42,100 @@ private enum AudioAnimationPurpose {
     case recording
 }
 
+private enum AudioModelUsageFilter: String, CaseIterable, Identifiable {
+    case all
+    case dictations
+    case recordings
+    case timedAudio
+    case legacy
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "All models"
+        case .dictations: "Dictations"
+        case .recordings: "Recordings"
+        case .timedAudio: "Timed audio"
+        case .legacy: "Legacy"
+        }
+    }
+}
+
+private enum AudioModelUsageSort: String, CaseIterable, Identifiable {
+    case transcriptions
+    case words
+    case audio
+    case recent
+    case name
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .transcriptions: "Transcriptions"
+        case .words: "Words"
+        case .audio: "Audio duration"
+        case .recent: "Recently used"
+        case .name: "Model name"
+        }
+    }
+}
+
+private enum AudioModelUsagePeriod: String, CaseIterable, Identifiable {
+    case day
+    case week
+    case month
+    case year
+    case allTime
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .day: "Day"
+        case .week: "Week"
+        case .month: "Month"
+        case .year: "Year"
+        case .allTime: "All time"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .day: "Compare today's speech-to-text activity across models"
+        case .week: "Compare this week's speech-to-text activity across models"
+        case .month: "Compare this month's speech-to-text activity across models"
+        case .year: "Compare this year's speech-to-text activity across models"
+        case .allTime: "Compare all-time speech-to-text activity across models"
+        }
+    }
+
+    func startDate(
+        relativeTo date: Date = Date(),
+        calendar: Calendar = .current
+    ) -> Date? {
+        switch self {
+        case .day:
+            calendar.startOfDay(for: date)
+        case .week:
+            calendar.dateInterval(of: .weekOfYear, for: date)?.start
+        case .month:
+            calendar.dateInterval(of: .month, for: date)?.start
+        case .year:
+            calendar.dateInterval(of: .year, for: date)?.start
+        case .allTime:
+            nil
+        }
+    }
+}
+
 @MainActor
 struct AudioView: View {
     var model: NativModel
     @ObservedObject private var analytics: AudioAnalyticsStore
     @ObservedObject private var shortcuts: VoiceShortcutPreferences
+    @ObservedObject private var wakeWordMonitor = VoiceWakeWordMonitor.shared
     @ObservedObject private var animations: VoiceAnimationPreferences
     @ObservedObject private var sounds: VoiceSoundPreferences
     @ObservedObject private var captureLibrary: AudioCaptureLibrary
@@ -56,6 +145,13 @@ struct AudioView: View {
     @StateObject private var inputVolume = AudioInputVolumeController()
     @AppStorage(AudioCapturePreferences.automaticallySummarizeKey)
     private var automaticallySummarize = true
+    @AppStorage(AudioCapturePreferences.summaryLanguageKey)
+    private var summaryLanguage = AudioSummaryLanguage.automatic
+    @AppStorage(AudioCapturePreferences.summaryPromptKey)
+    private var summaryPrompt = AudioCapturePreferences.defaultSummaryPrompt
+    @AppStorage(AudioCapturePreferences.summaryMergePromptKey)
+    private var summaryMergePrompt = AudioCapturePreferences.defaultSummaryMergePrompt
+    @State private var showsSummaryPrompts = false
     @AppStorage(AudioCapturePreferences.includeSystemAudioKey)
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
@@ -68,6 +164,14 @@ struct AudioView: View {
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
     @State private var isConfirmingClearAllDictations = false
+    @State private var modelUsageSearchText = ""
+    @State private var modelUsageFilter: AudioModelUsageFilter = .all
+    @State private var modelUsageSort: AudioModelUsageSort = .transcriptions
+    @State private var modelUsageSortAscending = false
+    @State private var modelUsagePeriod: AudioModelUsagePeriod = .allTime
+    @State private var modelUsagePage = 0
+
+    private static let modelUsagePageSize = 10
 
     let titleLeadingInset: CGFloat
     let onOpenSpeechModels: () -> Void
@@ -110,12 +214,10 @@ struct AudioView: View {
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            Task {
-                await inputLevelMonitor.start(
-                    deviceUniqueID: inputDevices.effectiveDeviceID
-                )
-            }
+            startInputMonitoringIfNeeded()
         }
+        .onChange(of: inputDevices.exclusions) { startInputMonitoringIfNeeded() }
+        .onChange(of: inputDevices.devices) { startInputMonitoringIfNeeded() }
         .onChange(of: captureLibrary.phase) { _, phase in
             if phase == .idle {
                 startInputMonitoringIfNeeded()
@@ -128,8 +230,11 @@ struct AudioView: View {
         }
         .onDisappear {
             inputLevelMonitor.stop()
+            shortcuts.isCapturingShortcut = false
         }
-        .sheet(item: $editingShortcut) { kind in
+        .sheet(item: $editingShortcut, onDismiss: {
+            shortcuts.isCapturingShortcut = false
+        }) { kind in
             ShortcutCaptureSheet(
                 kind: kind,
                 conflictMessage: shortcutConflict,
@@ -290,6 +395,7 @@ struct AudioView: View {
             ) {
                 audioInputPanel
                 captureControls
+                summarySettingsPanel
                 capturePrivacyPanel
             }
         case .overview:
@@ -299,6 +405,7 @@ struct AudioView: View {
             ) {
                 metricGrid
                 activityPanel
+                modelUsagePanel
             }
         case .history:
             AudioPage(
@@ -325,10 +432,16 @@ struct AudioView: View {
             }
         case .shortcuts:
             AudioPage(
-                title: "Keyboard Shortcuts",
-                subtitle: "Customize the global commands for recording and retranscription"
+                title: "Shortcuts",
+                subtitle: "Customize keyboard shortcuts and spoken commands for dictation"
             ) {
                 shortcutConfigurationPanel
+                    .frame(maxWidth: 760)
+                wakeWordConfigurationPanel
+                    .frame(maxWidth: 760)
+                excludedMicrophonesPanel
+                    .frame(maxWidth: 760)
+                spokenReturnConfigurationPanel
                     .frame(maxWidth: 760)
             }
         }
@@ -478,6 +591,474 @@ struct AudioView: View {
         .audioPanelStyle()
     }
 
+    private var modelUsagePanel: some View {
+        let usages = analytics.modelUsage(since: modelUsagePeriod.startDate())
+        let visibleUsages = visibleModelUsages(from: usages)
+        let totalTranscriptions = usages.reduce(0) { $0 + $1.transcriptions }
+        let pageCount = max(
+            1,
+            (visibleUsages.count + Self.modelUsagePageSize - 1) / Self.modelUsagePageSize
+        )
+        let currentPage = min(modelUsagePage, pageCount - 1)
+        let pagedUsages = Array(
+            visibleUsages
+                .dropFirst(currentPage * Self.modelUsagePageSize)
+                .prefix(Self.modelUsagePageSize)
+        )
+
+        return VStack(alignment: .leading, spacing: 16) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 16) {
+                    modelUsageTitle
+                    Spacer(minLength: 0)
+                    modelUsagePeriodPicker
+                        .frame(width: 360)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    modelUsageTitle
+                    modelUsagePeriodPicker
+                }
+            }
+
+            if usages.isEmpty {
+                ContentUnavailableView {
+                    Label("No model usage", systemImage: "cpu")
+                } description: {
+                    Text("No successful transcriptions were recorded in this period.")
+                } actions: {
+                    if modelUsagePeriod != .allTime {
+                        Button("Show all time") {
+                            modelUsagePeriod = .allTime
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 150)
+            } else {
+                modelUsageToolbar(
+                    visibleCount: visibleUsages.count,
+                    totalCount: usages.count
+                )
+
+                if visibleUsages.isEmpty {
+                    ContentUnavailableView {
+                        Label("No matching models", systemImage: "magnifyingglass")
+                    } description: {
+                        Text("Try another search or broaden the model filter.")
+                    } actions: {
+                        Button("Clear search and filters") {
+                            modelUsageSearchText = ""
+                            modelUsageFilter = .all
+                            modelUsagePage = 0
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 180)
+                } else {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 360), spacing: 12)],
+                        alignment: .leading,
+                        spacing: 12
+                    ) {
+                        ForEach(pagedUsages) { usage in
+                            modelUsageCard(
+                                usage,
+                                share: Double(usage.transcriptions) / Double(totalTranscriptions)
+                            )
+                        }
+                    }
+
+                    modelUsagePagination(
+                        currentPage: currentPage,
+                        pageCount: pageCount,
+                        totalCount: visibleUsages.count
+                    )
+                }
+            }
+        }
+        .padding(18)
+        .audioPanelStyle()
+        .onChange(of: modelUsageSearchText) { _, _ in
+            modelUsagePage = 0
+        }
+        .onChange(of: modelUsagePeriod) { _, _ in
+            modelUsagePage = 0
+        }
+    }
+
+    private var modelUsageTitle: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Transcription models")
+                .font(.headline)
+            Text(modelUsagePeriod.subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var modelUsagePeriodPicker: some View {
+        Picker("Usage period", selection: $modelUsagePeriod) {
+            ForEach(AudioModelUsagePeriod.allCases) { period in
+                Text(period.title)
+                    .tag(period)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .help("Choose the model usage period")
+    }
+
+    private func modelUsageToolbar(
+        visibleCount: Int,
+        totalCount: Int
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                modelUsageSearchField
+                    .frame(minWidth: 190, idealWidth: 280, maxWidth: 360)
+                Spacer(minLength: 0)
+                modelUsageResultCount(visibleCount: visibleCount, totalCount: totalCount)
+                modelUsageFilterMenu
+                modelUsageSortMenu
+                modelUsageSortOrderButton
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                modelUsageSearchField
+                HStack(spacing: 10) {
+                    modelUsageResultCount(visibleCount: visibleCount, totalCount: totalCount)
+                    Spacer(minLength: 0)
+                    modelUsageFilterMenu
+                    modelUsageSortMenu
+                    modelUsageSortOrderButton
+                }
+            }
+        }
+    }
+
+    private var modelUsageSearchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Search models", text: $modelUsageSearchText)
+                .textFieldStyle(.plain)
+
+            if !modelUsageSearchText.isEmpty {
+                Button {
+                    modelUsageSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear model search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.primary.opacity(0.09), lineWidth: 1)
+        }
+    }
+
+    private func modelUsageResultCount(
+        visibleCount: Int,
+        totalCount: Int
+    ) -> some View {
+        Text(visibleCount == totalCount ? "\(totalCount) shown" : "\(visibleCount) of \(totalCount)")
+            .font(.caption2.weight(.medium).monospacedDigit())
+            .foregroundStyle(.tertiary)
+            .lineLimit(1)
+    }
+
+    private var modelUsageFilterMenu: some View {
+        Menu {
+            ForEach(AudioModelUsageFilter.allCases) { filter in
+                Button {
+                    modelUsageFilter = filter
+                    modelUsagePage = 0
+                } label: {
+                    if modelUsageFilter == filter {
+                        Label(filter.title, systemImage: "checkmark")
+                    } else {
+                        Text(filter.title)
+                    }
+                }
+            }
+        } label: {
+            Label(modelUsageFilter.title, systemImage: "line.3.horizontal.decrease")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Filter transcription models")
+    }
+
+    private var modelUsageSortMenu: some View {
+        Menu {
+            ForEach(AudioModelUsageSort.allCases) { sort in
+                Button {
+                    modelUsageSort = sort
+                    modelUsageSortAscending = sort == .name
+                    modelUsagePage = 0
+                } label: {
+                    if modelUsageSort == sort {
+                        Label(sort.title, systemImage: "checkmark")
+                    } else {
+                        Text(sort.title)
+                    }
+                }
+            }
+        } label: {
+            Label(modelUsageSort.title, systemImage: "arrow.up.arrow.down")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Sort transcription models")
+    }
+
+    private var modelUsageSortOrderButton: some View {
+        Button {
+            modelUsageSortAscending.toggle()
+            modelUsagePage = 0
+        } label: {
+            Image(systemName: modelUsageSortAscending ? "arrow.up" : "arrow.down")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help(modelUsageSortAscending ? "Sorted ascending" : "Sorted descending")
+    }
+
+    private func modelUsageCard(
+        _ usage: AudioModelUsage,
+        share: Double
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                AudioTranscriptionModelProviderBadge(modelID: usage.modelID)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(modelUsageDisplayName(usage))
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+
+                    Text(usage.modelID ?? "Model metadata was not recorded")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 12)
+
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(share.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                    Text("of usage")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .help(
+                usage.modelID.map { "Transcription model: \($0)" }
+                    ?? "No transcription model was recorded for these legacy transcripts."
+            )
+
+            HStack(spacing: 6) {
+                if usage.dictations > 0 {
+                    modelUsageKindBadge(
+                        "\(usage.dictations.formatted()) \(usage.dictations == 1 ? "dictation" : "dictations")",
+                        systemImage: "mic.fill"
+                    )
+                }
+                if usage.recordings > 0 {
+                    modelUsageKindBadge(
+                        "\(usage.recordings.formatted()) \(usage.recordings == 1 ? "recording" : "recordings")",
+                        systemImage: "waveform"
+                    )
+                }
+                if usage.modelID == nil {
+                    modelUsageKindBadge(
+                        "Legacy",
+                        systemImage: "archivebox"
+                    )
+                }
+                Spacer(minLength: 0)
+            }
+
+            ProgressView(value: share)
+                .progressViewStyle(.linear)
+
+            Divider()
+
+            LazyVGrid(
+                columns: Array(
+                    repeating: GridItem(.flexible(minimum: 64), spacing: 12),
+                    count: 4
+                ),
+                alignment: .leading,
+                spacing: 8
+            ) {
+                modelUsageMetric(
+                    "Transcriptions",
+                    value: usage.transcriptions.formatted()
+                )
+                modelUsageMetric(
+                    "Audio",
+                    value: usage.timedTranscriptions == 0
+                        ? "—"
+                        : NativFormatting.elapsedDuration(usage.durationSeconds)
+                )
+                modelUsageMetric("Words", value: usage.words.formatted())
+                modelUsageMetric(
+                    "Last used",
+                    value: usage.lastUsedAt.formatted(date: .abbreviated, time: .omitted)
+                )
+            }
+        }
+        .padding(14)
+        .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+
+    private func modelUsageKindBadge(
+        _ title: String,
+        systemImage: String
+    ) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(Color.primary.opacity(0.055), in: Capsule())
+    }
+
+    private func modelUsagePagination(
+        currentPage: Int,
+        pageCount: Int,
+        totalCount: Int
+    ) -> some View {
+        let firstVisible = currentPage * Self.modelUsagePageSize + 1
+        let lastVisible = min(firstVisible + Self.modelUsagePageSize - 1, totalCount)
+
+        return HStack(spacing: 10) {
+            Text("Showing \(firstVisible)–\(lastVisible) of \(totalCount)")
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.tertiary)
+
+            Spacer(minLength: 0)
+
+            Text("Page \(currentPage + 1) of \(pageCount)")
+                .font(.caption2.weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button {
+                modelUsagePage = max(0, currentPage - 1)
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(currentPage == 0)
+            .help("Previous model page")
+
+            Button {
+                modelUsagePage = min(pageCount - 1, currentPage + 1)
+            } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(currentPage >= pageCount - 1)
+            .help("Next model page")
+        }
+    }
+
+    private func modelUsageMetric(
+        _ title: String,
+        value: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+            Text(value)
+                .font(.caption.weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func visibleModelUsages(
+        from usages: [AudioModelUsage]
+    ) -> [AudioModelUsage] {
+        let query = modelUsageSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return usages
+            .filter { usage in
+                let matchesFilter = switch modelUsageFilter {
+                case .all: true
+                case .dictations: usage.dictations > 0
+                case .recordings: usage.recordings > 0
+                case .timedAudio: usage.timedTranscriptions > 0
+                case .legacy: usage.modelID == nil
+                }
+                guard matchesFilter, !query.isEmpty else {
+                    return matchesFilter
+                }
+                return modelUsageDisplayName(usage).localizedCaseInsensitiveContains(query)
+                    || (usage.modelID?.localizedCaseInsensitiveContains(query) ?? false)
+            }
+            .sorted(by: modelUsagePrecedes)
+    }
+
+    private func modelUsagePrecedes(
+        _ lhs: AudioModelUsage,
+        _ rhs: AudioModelUsage
+    ) -> Bool {
+        let comparison: ComparisonResult = switch modelUsageSort {
+        case .transcriptions:
+            compare(lhs.transcriptions, rhs.transcriptions)
+        case .words:
+            compare(lhs.words, rhs.words)
+        case .audio:
+            compare(lhs.durationSeconds, rhs.durationSeconds)
+        case .recent:
+            compare(lhs.lastUsedAt, rhs.lastUsedAt)
+        case .name:
+            modelUsageDisplayName(lhs).localizedCaseInsensitiveCompare(modelUsageDisplayName(rhs))
+        }
+        let resolvedComparison = comparison == .orderedSame
+            ? lhs.id.localizedCaseInsensitiveCompare(rhs.id)
+            : comparison
+        return modelUsageSortAscending
+            ? resolvedComparison == .orderedAscending
+            : resolvedComparison == .orderedDescending
+    }
+
+    private func compare<Value: Comparable>(
+        _ lhs: Value,
+        _ rhs: Value
+    ) -> ComparisonResult {
+        if lhs < rhs { return .orderedAscending }
+        if lhs > rhs { return .orderedDescending }
+        return .orderedSame
+    }
+
+    private func modelUsageDisplayName(_ usage: AudioModelUsage) -> String {
+        usage.modelID.map(audioTranscriptionModelDisplayName) ?? "Unknown / legacy"
+    }
+
     private var audioInputPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
@@ -537,10 +1118,16 @@ struct AudioView: View {
                     }
 
                     ForEach(inputDevices.devices) { device in
+                        let exclusion = inputDevices.exclusions.first { $0.id == device.id }
+                        let exclusionDescription = exclusion.map {
+                            $0.allUses ? "Excluded from all microphone use" : "Excluded from passive listening"
+                        } ?? ""
                         Button {
                             inputDevices.selectedDeviceID = device.id
                         } label: {
-                            if inputDevices.selectedDeviceID == device.id {
+                            if exclusion != nil {
+                                Label(device.isSystemDefault ? "\(device.name) (Default)" : device.name, systemImage: "mic.slash")
+                            } else if inputDevices.selectedDeviceID == device.id {
                                 Label(device.name, systemImage: "checkmark")
                             } else if device.isSystemDefault {
                                 Text("\(device.name) (Default)")
@@ -548,6 +1135,9 @@ struct AudioView: View {
                                 Text(device.name)
                             }
                         }
+                        .disabled(exclusion?.allUses == true)
+                        .help(exclusionDescription)
+                        .accessibilityHint(exclusionDescription)
                     }
                 } label: {
                     HStack(spacing: 8) {
@@ -630,7 +1220,7 @@ struct AudioView: View {
                     Spacer(minLength: 0)
                 }
 
-                if let errorMessage = inputLevelMonitor.errorMessage {
+                if let errorMessage = audioInputErrorMessage {
                     Text(errorMessage)
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -768,6 +1358,132 @@ struct AudioView: View {
         }
     }
 
+    private var summarySettingsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label("Summary settings", systemImage: "text.bubble")
+                .font(.headline)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Language")
+                        .font(.callout.weight(.medium))
+                    Text("Auto infers the language from your transcript. Select a language to override it.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Summary language", selection: $summaryLanguage) {
+                    Text(AudioSummaryLanguage.automatic.title)
+                        .tag(AudioSummaryLanguage.automatic)
+                    Divider()
+                    ForEach(AudioSummaryLanguage.allCases.filter { $0 != .automatic }) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 210, alignment: .trailing)
+                .accessibilityLabel("Summary language")
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        showsSummaryPrompts.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: showsSummaryPrompts ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 8)
+                        Text("LLM prompts")
+                            .font(.callout.weight(.medium))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("LLM prompts")
+                .accessibilityValue(showsSummaryPrompts ? "Expanded" : "Collapsed")
+
+                if showsSummaryPrompts {
+                    summaryPromptEditors
+                        .padding(.top, 12)
+                }
+            }
+
+            Text("Applies to new and regenerated summaries.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .audioPanelStyle(cornerRadius: 16)
+    }
+
+    private var summaryPromptEditors: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            summaryPromptEditor(
+                title: "Summary prompt",
+                detail: "Used for the transcript, or each section of a long recording.",
+                prompt: $summaryPrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryPrompt
+            )
+
+            Divider()
+
+            summaryPromptEditor(
+                title: "Merge prompt",
+                detail: "Used to combine section summaries for long recordings.",
+                prompt: $summaryMergePrompt,
+                defaultPrompt: AudioCapturePreferences.defaultSummaryMergePrompt
+            )
+
+            Text("Saved automatically. The selected language takes precedence for both prompts. An empty prompt uses its default instructions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func summaryPromptEditor(
+        title: String,
+        detail: String,
+        prompt: Binding<String>,
+        defaultPrompt: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.callout.weight(.medium))
+                Spacer()
+                Button("Reset prompt") {
+                    prompt.wrappedValue = defaultPrompt
+                }
+                .disabled(prompt.wrappedValue == defaultPrompt)
+                .accessibilityLabel("Reset \(title.lowercased())")
+            }
+
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: prompt)
+                .font(.system(.callout, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .frame(height: 120)
+                .padding(10)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+                }
+                .accessibilityLabel(title)
+        }
+    }
+
     private var activeCapturePanel: some View {
         HStack(spacing: 18) {
             ZStack {
@@ -869,8 +1585,10 @@ struct AudioView: View {
         case .processing:
             "Processing"
         case .idle:
-            if inputLevelMonitor.errorMessage != nil {
+            if audioInputErrorMessage != nil {
                 "Unavailable"
+            } else if inputDevices.passiveDeviceID == nil {
+                "Preview off"
             } else if inputLevelMonitor.isMonitoring {
                 "Input active"
             } else {
@@ -879,11 +1597,18 @@ struct AudioView: View {
         }
     }
 
+    private var audioInputErrorMessage: String? {
+        guard inputDevices.effectiveDeviceID != nil else {
+            return VoiceAudioRecorderError.noAllowedMicrophone.localizedDescription
+        }
+        return inputDevices.passiveDeviceID == nil ? nil : inputLevelMonitor.errorMessage
+    }
+
     private var audioInputStatusColor: Color {
         if captureLibrary.phase == .recording {
             return .red
         }
-        if inputLevelMonitor.errorMessage != nil {
+        if audioInputErrorMessage != nil {
             return .orange
         }
         return inputLevelMonitor.isMonitoring ? .green : .secondary
@@ -1856,6 +2581,161 @@ struct AudioView: View {
         .audioPanelStyle()
     }
 
+    private var wakeWordConfigurationPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Hey Nativ", systemImage: "waveform.badge.mic")
+                        .font(.headline)
+                    Text("Start dictation by saying “hey nativ”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 16)
+                Toggle("Listen for hey nativ", isOn: $shortcuts.isWakeWordEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+            Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Uses your selected microphone and local speech model. The Nativ server must be running.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if shortcuts.isWakeWordEnabled {
+                Picker("Listening mode", selection: $shortcuts.wakeWordListeningMode) {
+                    ForEach(VoiceWakeWordListeningMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                if shortcuts.wakeWordListeningMode == .automatic {
+                    Text("On battery, pauses after 5 minutes without keyboard, mouse, or dictation activity—or 1 minute in Low Power Mode. A successful dictation keeps listening available for at least 10 minutes. Stays ready while plugged in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("While paused, move the mouse, press a key, or use your dictation shortcut to resume. Saying “hey nativ” cannot resume a paused microphone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text(wakeWordMonitor.state.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if case .unavailable = wakeWordMonitor.state {
+                        Button("Try Again") { wakeWordMonitor.restart() }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var excludedMicrophonesPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Excluded Microphones", systemImage: "mic.slash")
+                    .font(.headline)
+                Spacer()
+                Menu("Add Microphone") {
+                    ForEach(excludableDevices) { device in
+                        Button(device.name) { inputDevices.exclude(device) }
+                    }
+                }
+                .fixedSize()
+                .disabled(excludableDevices.isEmpty)
+            }
+            Text("These microphones are skipped for Hey Nativ and input previews. Nativ uses another available microphone, or pauses passive listening if none are allowed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(inputDevices.exclusions) { exclusion in
+                let device = inputDevices.devices.first { $0.id == exclusion.id }
+                Divider()
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(device?.name ?? exclusion.name)
+                            .font(.callout.weight(.medium))
+                        if device == nil {
+                            Text("Disconnected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Toggle("Exclude from all microphone use", isOn: Binding(
+                            get: { exclusion.allUses },
+                            set: { inputDevices.setExcludedFromAllUses($0, id: exclusion.id) }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                    Spacer()
+                    Button("Remove") { inputDevices.removeExclusion(id: exclusion.id) }
+                        .accessibilityLabel("Remove exclusion for \(device?.name ?? exclusion.name)")
+                }
+            }
+            Text("Exclusions are remembered when a microphone reconnects and only apply within Nativ.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(captureLibrary.isBusy)
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var excludableDevices: [NativAudioInputDevice] {
+        inputDevices.devices.filter { device in !inputDevices.exclusions.contains { $0.id == device.id } }
+    }
+
+    private var spokenReturnConfigurationPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Spoken Return", systemImage: "return")
+                        .font(.headline)
+                    Text("Say a word or phrase at the end of dictation to press Return.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 16)
+
+                Toggle("Spoken Return", isOn: $shortcuts.isReturnCommandEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Trigger word or phrase")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    TextField("For example, enter", text: $shortcuts.returnCommandTrigger)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Return trigger word or phrase")
+
+                    Button("Restore Default") {
+                        shortcuts.returnCommandTrigger = VoiceDictationTranscript.defaultReturnCommandTrigger
+                    }
+                    .controlSize(.small)
+                    .disabled(shortcuts.returnCommandTrigger == VoiceDictationTranscript.defaultReturnCommandTrigger)
+                }
+            }
+            .disabled(!shortcuts.isReturnCommandEnabled)
+
+            Text(
+                !shortcuts.isReturnCommandEnabled
+                    ? "When off, the trigger remains ordinary dictated text."
+                    : shortcuts.activeReturnCommandTrigger == nil
+                        ? "Enter a word or phrase to activate this command."
+                        : "The trigger is removed from your transcript. Capitalization and trailing punctuation are ignored. Changes take effect immediately."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .audioPanelStyle()
+    }
+
     private var recentDictationsPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 12) {
@@ -1959,6 +2839,7 @@ struct AudioView: View {
                             record: record,
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
+                            isTranscribing: captureLibrary.transcribingRecordIDs.contains(record.id),
                             isPlaying: captureLibrary.playingRecordID == record.id
                                 && !captureLibrary.isPlaybackPaused,
                             isPaused: captureLibrary.playingRecordID == record.id
@@ -2021,6 +2902,7 @@ struct AudioView: View {
             Spacer()
             Button("Change") {
                 shortcutConflict = nil
+                shortcuts.isCapturingShortcut = true
                 editingShortcut = kind
             }
             .buttonStyle(.bordered)
@@ -2202,9 +3084,13 @@ struct AudioView: View {
         guard destination == .record, captureLibrary.phase == .idle else {
             return
         }
+        guard inputDevices.passiveDeviceID != nil else {
+            inputLevelMonitor.stop()
+            return
+        }
         Task {
             await inputLevelMonitor.start(
-                deviceUniqueID: inputDevices.effectiveDeviceID
+                deviceUniqueID: inputDevices.selectedDeviceID
             )
         }
     }
@@ -2556,6 +3442,10 @@ private struct AudioTranscriptRow: View {
                         metadataSeparator
                         Text(applicationName)
                     }
+                    if let modelID = record.modelID, !modelID.isEmpty {
+                        metadataSeparator
+                        AudioTranscriptionModelMetadata(modelID: modelID)
+                    }
                     metadataSeparator
                     Text("\(record.wordCount) words")
                     if let wordsPerMinute = record.wordsPerMinute {
@@ -2617,10 +3507,79 @@ private struct AudioTranscriptRow: View {
     }
 }
 
+private func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
+    modelID.split(separator: "/").last.map(String.init) ?? modelID
+}
+
+private struct AudioTranscriptionModelProviderBadge: View {
+    let modelID: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var provider: LocalModelProvider? {
+        guard let modelID else { return nil }
+        if modelID.caseInsensitiveCompare("apple-speech") == .orderedSame {
+            return .apple
+        }
+        return LocalModelProviderResolver.resolve(
+            repoID: modelID,
+            modelType: nil,
+            architectures: []
+        )
+    }
+
+    private var backgroundColor: Color {
+        if provider?.needsLightIconBackgroundInDarkMode == true, colorScheme == .dark {
+            return Color.white.opacity(0.92)
+        }
+        return Color.secondary.opacity(0.10)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(backgroundColor)
+
+            if let provider, let image = LocalModelProviderIcon.image(for: provider) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(Color(nsColor: provider.iconTintColor))
+                    .frame(width: 17, height: 17)
+                    .accessibilityLabel(provider.displayName)
+            } else if let provider {
+                Text(provider.monogram)
+                    .font(.system(size: provider.monogram.count > 2 ? 7 : 10, weight: .bold))
+                    .foregroundStyle(Color(nsColor: provider.iconTintColor))
+            } else {
+                Image(systemName: modelID == nil ? "questionmark" : "cpu")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .help(provider?.displayName ?? "Unknown model provider")
+    }
+}
+
+private struct AudioTranscriptionModelMetadata: View {
+    let modelID: String
+
+    var body: some View {
+        Label(
+            "Model: \(audioTranscriptionModelDisplayName(modelID))",
+            systemImage: "cpu"
+        )
+            .lineLimit(1)
+            .help("Transcribed with \(modelID)")
+            .accessibilityLabel("Transcription model \(modelID)")
+    }
+}
+
 private struct AudioCaptureRecordRow: View {
     let record: AudioTranscriptionRecord
     let audioIsAvailable: Bool
     let isProcessing: Bool
+    let isTranscribing: Bool
     let isPlaying: Bool
     let isPaused: Bool
     let onPlay: () -> Void
@@ -2634,6 +3593,10 @@ private struct AudioCaptureRecordRow: View {
     @State private var selectedDetail: DetailSection?
     @State private var copiedDetail: DetailSection?
     @State private var hoveredDetail: DetailSection?
+    @State private var isExporting = false
+    @State private var exportedFormat: AudioRecordExportFormat?
+    @State private var exportError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DetailSection: Hashable {
         case summary
@@ -2693,6 +3656,10 @@ private struct AudioCaptureRecordRow: View {
                             Text("·")
                             Text("\(record.wordCount) words")
                         }
+                        if let modelID = record.modelID, !modelID.isEmpty {
+                            Text("·")
+                            AudioTranscriptionModelMetadata(modelID: modelID)
+                        }
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2703,7 +3670,7 @@ private struct AudioCaptureRecordRow: View {
                 if isProcessing {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
-                        Text(record.transcript.isEmpty ? "Transcribing" : "Summarizing")
+                        Text(processingLabel)
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -2736,21 +3703,40 @@ private struct AudioCaptureRecordRow: View {
                         .disabled(!audioIsAvailable)
                 }
 
+                exportStatus
+
                 Menu {
+                    Menu {
+                        ForEach(AudioRecordExportFormat.allCases, id: \.self) { format in
+                            Button(format.title) { export(as: format) }
+                        }
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExporting || !AudioRecordExport(record: record).isAvailable)
+                    .help("Export the summary and transcript together")
+                    Divider()
                     if !record.transcript.isEmpty {
+                        Menu {
+                            Button(action: onTranscribe) {
+                                Label("Transcript", systemImage: "text.alignleft")
+                            }
+                            .disabled(!audioIsAvailable || isProcessing)
+
+                            Button(action: onSummarize) {
+                                Label("Summary", systemImage: "sparkles")
+                            }
+                            .disabled(isProcessing)
+                        } label: {
+                            Label("Regenerate", systemImage: "arrow.clockwise")
+                        }
+                        Divider()
                         Button("Copy Transcript", action: copyTranscript)
                         if let summary = record.summary, !summary.isEmpty {
                             Button("Copy Summary") {
                                 copy(summary, detail: .summary)
                             }
                         }
-                        Button(
-                            record.summary?.isEmpty == false
-                                ? "Regenerate summary"
-                                : "Generate summary",
-                            action: onSummarize
-                        )
-                        .disabled(isProcessing)
                     }
                     Divider()
                     Button("Reveal in Finder", action: onReveal)
@@ -2804,6 +3790,55 @@ private struct AudioCaptureRecordRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
+        .alert("Export Failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "The document could not be saved.")
+        }
+        .task(id: exportedFormat) {
+            guard exportedFormat != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        }
+    }
+
+    @ViewBuilder
+    private var exportStatus: some View {
+        if isExporting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Exporting…")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .transition(.opacity)
+        } else if let exportedFormat {
+            Label("\(exportedFormat.title) exported", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.green.opacity(0.1), in: Capsule())
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+        }
+    }
+
+    private var exportFeedbackAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.7)
+    }
+
+    private var processingLabel: String {
+        if isTranscribing {
+            return record.transcript.isEmpty ? "Transcribing" : "Regenerating transcript"
+        }
+        return "Summarizing"
     }
 
     private var detailMenu: some View {
@@ -2895,9 +3930,8 @@ private struct AudioCaptureRecordRow: View {
                     )
 
                     ScrollView {
-                        NativMarkdownRenderer(
+                        MarkdownRenderer(
                             content: MathPreprocessor.preprocess(summary),
-                            font: .callout,
                             fontSize: NSFont.preferredFont(forTextStyle: .callout).pointSize
                         )
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2979,6 +4013,36 @@ private struct AudioCaptureRecordRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
+        }
+    }
+
+    private func export(as format: AudioRecordExportFormat) {
+        let document = AudioRecordExport(record: record)
+        guard document.isAvailable, !isExporting else { return }
+        withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        let panel = NSSavePanel()
+        panel.title = "Export Summary and Transcript"
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = document.filename(for: format)
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            withAnimation(exportFeedbackAnimation) { isExporting = true }
+            Task { @MainActor in
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try document.write(to: url, format: format)
+                    }.value
+                    withAnimation(exportFeedbackAnimation) {
+                        isExporting = false
+                        exportedFormat = format
+                    }
+                } catch {
+                    withAnimation(exportFeedbackAnimation) { isExporting = false }
+                    exportError = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -3094,7 +4158,7 @@ private final class ShortcutRecorderNSView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         let modifiers = VoiceShortcutModifiers(
-            cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+            eventFlags: event.modifierFlags
         )
         if modifiers.isEmpty {
             if !pendingModifiers.isEmpty {
@@ -3109,8 +4173,9 @@ private final class ShortcutRecorderNSView: NSView {
             }
             return
         }
-        pendingModifiers = modifiers
-        onPreview?(modifiers.displayParts.joined(separator: " + "))
+        // Keep the full chord while its modifiers are released one at a time.
+        pendingModifiers.formUnion(modifiers)
+        onPreview?(pendingModifiers.displayParts.joined(separator: " + "))
     }
 
     override func keyDown(with event: NSEvent) {

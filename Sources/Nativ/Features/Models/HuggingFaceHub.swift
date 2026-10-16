@@ -2,6 +2,7 @@ import Combine
 import Darwin
 import Foundation
 import NativServerKit
+import Xet
 
 enum HuggingFaceModelSort: String, CaseIterable, Hashable, Identifiable, Sendable {
     case downloads
@@ -73,76 +74,199 @@ enum HuggingFaceSortDirection: Int, CaseIterable, Hashable, Identifiable, Sendab
 }
 
 enum HuggingFaceCapabilityFilter {
-    /// `draft-model` is the emerging convention, but older and vendor-specific
-    /// repositories use these aliases. `speculative-decoding` is deliberately
-    /// only a search candidate: config metadata must still identify a drafter.
-    static let drafterCandidateTags = [
-        "draft-model",
-        "drafter",
-        "speculative-decoding-draft",
-        "speculative-decoding",
+    struct QueryVariant: Hashable {
+        let pipelineTag: String?
+        let tags: [String]
+    }
+
+    private struct Rule {
+        let capability: LocalModelCapability
+        let pipelineTags: [String]
+        let tags: [String]
+        var fallbackPipelineTags: [String] = []
+        var queryOnlyTags: [String] = []
+        var descriptorFragments: [String] = []
+        var includesUnfilteredQuery = false
+
+        var queryVariants: [QueryVariant] {
+            let constrainedVariants = (pipelineTags + fallbackPipelineTags).map {
+                QueryVariant(pipelineTag: $0, tags: [])
+            } + (tags + queryOnlyTags).map {
+                QueryVariant(pipelineTag: nil, tags: [$0])
+            }
+            return includesUnfilteredQuery
+                ? constrainedVariants + [QueryVariant(pipelineTag: nil, tags: [])]
+                : constrainedVariants
+        }
+
+        func matches(
+            pipelineTag: String,
+            metadataValues: Set<String>,
+            descriptors: String
+        ) -> Bool {
+            pipelineTags.contains(pipelineTag)
+                || !metadataValues.isDisjoint(with: tags)
+                || (fallbackPipelineTags.contains(pipelineTag)
+                    && descriptorFragments.contains { descriptors.contains($0) })
+        }
+    }
+
+    private static let videoPipelineTags = [
+        "video-text-to-text", "text-to-video", "image-to-video",
+        "image-text-to-video", "video-to-video", "video-classification",
     ]
 
-    /// Reasoning, tool calling, and drafter are Hub model tags rather than pipeline tasks.
-    /// Apply them to the API request so Discover searches the full matching
-    /// catalog instead of filtering a small window of unrelated trending models.
-    static func hubTags(for capabilities: Set<LocalModelCapability>) -> [String] {
-        var tags: [String] = []
-        if capabilities.contains(.reasoning) {
-            tags.append("reasoning")
-        }
-        if capabilities.contains(.tools) {
-            tags.append("tool-calling")
-        }
-        if capabilities.contains(.drafter) {
-            tags.append("draft-model")
-        }
-        return tags
-    }
+    private static let rules: [Rule] = [
+        Rule(
+            capability: .text,
+            pipelineTags: [
+                "text-generation", "image-text-to-text", "image-to-text",
+                "visual-question-answering", "audio-text-to-text", "video-text-to-text",
+            ],
+            tags: ["conversational", "causal-lm"]
+        ),
+        Rule(
+            capability: .vision,
+            pipelineTags: [
+                "image-text-to-text", "image-to-text", "visual-question-answering",
+            ] + videoPipelineTags,
+            tags: ["vision", "vision-language", "vlm", "llava", "multimodal", "video"]
+        ),
+        Rule(
+            capability: .audio,
+            pipelineTags: ["audio-text-to-text"],
+            tags: []
+        ),
+        Rule(
+            capability: .video,
+            pipelineTags: videoPipelineTags,
+            tags: ["video"]
+        ),
+        Rule(
+            capability: .imageGeneration,
+            pipelineTags: ["text-to-image"],
+            tags: []
+        ),
+        Rule(
+            capability: .imageEditing,
+            pipelineTags: ["image-to-image", "image-text-to-image"],
+            tags: []
+        ),
+        Rule(
+            capability: .speechToText,
+            pipelineTags: ["automatic-speech-recognition"],
+            tags: [
+                "automatic-speech-recognition", "speech-to-text", "transcription",
+                "transcribe", "asr", "stt", "whisper",
+            ]
+        ),
+        Rule(
+            capability: .textToSpeech,
+            pipelineTags: ["text-to-speech"],
+            tags: ["text-to-speech", "tts"]
+        ),
+        Rule(
+            capability: .embeddings,
+            pipelineTags: [
+                "feature-extraction", "image-feature-extraction", "sentence-similarity",
+            ],
+            tags: ["embedding", "embeddings", "sentence-transformers"]
+        ),
+        Rule(
+            capability: .reranking,
+            pipelineTags: ["text-ranking"],
+            tags: ["reranker", "reranking"],
+            fallbackPipelineTags: ["text-classification"],
+            descriptorFragments: ["reranker", "reranking"]
+        ),
+        Rule(
+            capability: .reasoning,
+            pipelineTags: [],
+            tags: ["reasoning", "thinking"]
+        ),
+        Rule(
+            capability: .tools,
+            pipelineTags: [],
+            tags: ["tool-calling", "function-calling", "tool-use"]
+        ),
+        Rule(
+            capability: .drafter,
+            pipelineTags: [],
+            tags: ["draft-model", "drafter", "speculative-decoding-draft"],
+            queryOnlyTags: ["speculative-decoding"],
+            includesUnfilteredQuery: true
+        ),
+    ]
 
-    static func hubTagSets(
+    static func queryVariants(
         for capabilities: Set<LocalModelCapability>
-    ) -> [[String]] {
-        let canonicalTags = hubTags(for: capabilities)
-        guard capabilities.contains(.drafter) else {
-            return [canonicalTags]
+    ) -> [QueryVariant] {
+        guard !capabilities.isEmpty else {
+            return [QueryVariant(pipelineTag: nil, tags: [])]
         }
-        let commonTags = canonicalTags.filter { $0 != "draft-model" }
-        return drafterCandidateTags.map { commonTags + [$0] }
+
+        let maximumVariantCount = 32
+        let selectedRules = rules
+            .filter { capabilities.contains($0.capability) }
+            .sorted {
+                if $0.queryVariants.count != $1.queryVariants.count {
+                    return $0.queryVariants.count < $1.queryVariants.count
+                }
+                return $0.capability.rawValue < $1.capability.rawValue
+            }
+        var variants = [QueryVariant(pipelineTag: nil, tags: [])]
+
+        for rule in selectedRules {
+            let combined: [QueryVariant] = variants.flatMap { variant in
+                rule.queryVariants.compactMap { featureVariant in
+                    guard variant.pipelineTag == nil || featureVariant.pipelineTag == nil
+                        || variant.pipelineTag == featureVariant.pipelineTag
+                    else {
+                        return nil
+                    }
+                    return QueryVariant(
+                        pipelineTag: variant.pipelineTag ?? featureVariant.pipelineTag,
+                        tags: variant.tags + featureVariant.tags
+                    )
+                }
+            }
+            if !combined.isEmpty && combined.count <= maximumVariantCount {
+                variants = combined
+            }
+        }
+        return Array(Set(variants)).sorted {
+            let leftPipeline = $0.pipelineTag ?? ""
+            let rightPipeline = $1.pipelineTag ?? ""
+            if leftPipeline != rightPipeline {
+                return leftPipeline < rightPipeline
+            }
+            return $0.tags.joined(separator: "\u{0}")
+                < $1.tags.joined(separator: "\u{0}")
+        }
     }
 
-    /// Select the canonical Hub task for a single Nativ model capability.
-    /// Feature-only filters remain Hub tags and do not prevent a task filter
-    /// from being sent alongside them.
-    static func pipelineTag(for capabilities: Set<LocalModelCapability>) -> String? {
-        let taskCapabilities = capabilities.subtracting([.reasoning, .tools, .drafter])
-        guard taskCapabilities.count == 1, let capability = taskCapabilities.first else {
-            return nil
+    static func resolveCapabilities(
+        pipelineTag: String?,
+        tags: [String],
+        configIdentifiesDrafter: Bool
+    ) -> Set<LocalModelCapability> {
+        let pipeline = pipelineTag?.lowercased() ?? ""
+        let normalizedTags = tags.map { $0.lowercased() }
+        let metadataValues = Set(normalizedTags)
+        let descriptors = normalizedTags.joined(separator: " ")
+        var capabilities = Set(
+            rules.filter {
+                $0.matches(
+                    pipelineTag: pipeline,
+                    metadataValues: metadataValues,
+                    descriptors: descriptors
+                )
+            }.map(\.capability)
+        )
+        if configIdentifiesDrafter {
+            capabilities.insert(.drafter)
         }
-        switch capability {
-        case .text:
-            return "text-generation"
-        case .vision:
-            return "image-text-to-text"
-        case .audio:
-            return "audio-text-to-text"
-        case .video:
-            return "video-text-to-text"
-        case .imageGeneration:
-            return "text-to-image"
-        case .imageEditing:
-            return "image-to-image"
-        case .speechToText:
-            return "automatic-speech-recognition"
-        case .textToSpeech:
-            return "text-to-speech"
-        case .embeddings:
-            return "feature-extraction"
-        case .reranking:
-            return "text-ranking"
-        case .reasoning, .tools, .drafter:
-            return nil
-        }
+        return capabilities
     }
 
     static func matches(
@@ -154,9 +278,8 @@ enum HuggingFaceCapabilityFilter {
 }
 
 enum HuggingFaceDownloadFilePolicy {
-    /// Repositories are selected through the Hub's SafeTensors index. A mixed
-    /// repository can still contain optional GGUF artifacts, so exclude those
-    /// files from the snapshot instead of hiding the entire repository.
+    /// Also skip optional GGUF artifacts when repository metadata does not
+    /// identify them or a download is requested outside Discover.
     static let ignoredPatterns = ["*.[gG][gG][uU][fF]"]
 
     static var pythonListLiteral: String {
@@ -179,15 +302,21 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let tags: [String]
     let isPrivate: Bool
     let isGated: Bool
-    let safetensors: HuggingFaceSafetensors?
+    let supportConfiguration: HuggingFaceModelSupportConfiguration?
+    let support: HuggingFaceModelSupport
     // These values are used by every visible row. Resolve them once while the
     // response is decoded instead of repeating string parsing, provider lookup,
     // and memory estimation during every SwiftUI body pass while scrolling.
     let provider: LocalModelProvider?
-    let sizeBytes: Int64?
+    let revision: String?
     let capabilities: Set<LocalModelCapability>
-    let memoryEstimate: LocalModelMemoryEstimate?
     let drafterKind: String?
+
+    var isGGUF: Bool {
+        id.localizedCaseInsensitiveContains("gguf")
+            || libraryName?.localizedCaseInsensitiveContains("gguf") == true
+            || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -200,9 +329,13 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         case tags
         case isPrivate = "private"
         case gated
-        case safetensors
+        case revision = "sha"
         case modelConfiguration = "config"
     }
+
+    private static let supportClassifier = try? HuggingFaceModelSupportClassifier(
+        registry: Nativ.modelTypeRegistry()
+    )
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -216,7 +349,10 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         libraryName = try container.decodeIfPresent(String.self, forKey: .libraryName)
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         isPrivate = try container.decodeIfPresent(Bool.self, forKey: .isPrivate) ?? false
-        safetensors = try container.decodeIfPresent(HuggingFaceSafetensors.self, forKey: .safetensors)
+        supportConfiguration = try? container.decode(
+            HuggingFaceModelSupportConfiguration.self,
+            forKey: .modelConfiguration
+        )
         let modelConfiguration = try? container.decode(
             DrafterModelConfiguration.self,
             forKey: .modelConfiguration
@@ -230,273 +366,26 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
             isGated = false
         }
 
-        provider = LocalModelProviderResolver.resolve(repoID: id, modelType: nil, architectures: [])
-        sizeBytes = safetensors?.sizeBytes
+        support = Self.supportClassifier?.classify(
+            configuration: supportConfiguration,
+            pipelineTag: pipelineTag,
+            tags: tags
+        ) ?? .unknown
+        provider = LocalModelProviderResolver.resolve(
+            repoID: id,
+            modelType: supportConfiguration?.modelType,
+            architectures: supportConfiguration?.architectures ?? []
+        )
+        revision = try container.decodeIfPresent(String.self, forKey: .revision)
         drafterKind =
             MLXDrafterModelResolver.shared.metadata(
                 for: modelConfiguration
             )?.kind
-        capabilities = Self.resolveCapabilities(
+        capabilities = HuggingFaceCapabilityFilter.resolveCapabilities(
             pipelineTag: pipelineTag,
-            libraryName: libraryName,
             tags: tags,
             configIdentifiesDrafter: drafterKind != nil
         )
-        memoryEstimate = Self.resolveMemoryEstimate(
-            repoID: id,
-            safetensors: safetensors,
-            sizeBytes: sizeBytes,
-            capabilities: capabilities
-        )
-    }
-
-    // The safetensors parameter summary only covers the diffusion transformer,
-    // so for image models it lands well under the real download. Scale it toward
-    // the components a modern image pipeline also ships (text encoder + VAE).
-    // The download manager validates available capacity again before enqueueing.
-    var estimatedDownloadBytes: Int64? {
-        guard let sizeBytes else {
-            return nil
-        }
-        let isImageModel = capabilities.contains(.imageGeneration)
-            || capabilities.contains(.imageEditing)
-        guard isImageModel else {
-            return sizeBytes
-        }
-        let scaled = Double(sizeBytes) * 2.5
-        guard scaled <= Double(Int64.max) else {
-            return sizeBytes
-        }
-        return Int64(scaled.rounded(.up))
-    }
-
-    private static func resolveMemoryEstimate(
-        repoID: String,
-        safetensors: HuggingFaceSafetensors?,
-        sizeBytes: Int64?,
-        capabilities: Set<LocalModelCapability>
-    ) -> LocalModelMemoryEstimate? {
-        guard let safetensors,
-              safetensors.hasOnlyKnownDataTypes,
-              let sizeBytes,
-              sizeBytes > 0
-        else {
-            return nil
-        }
-
-        let parameterCount = LocalModelDiscovery.parameterCount(from: repoID)
-        let quantizationBits = LocalModelDiscovery.quantizationBits(from: repoID)
-        var estimatedModelBytes = Double(sizeBytes)
-
-        // Packed integer summaries and explicitly quantized repositories need a
-        // second, independent signal before we present a compatibility label.
-        if quantizationBits != nil || safetensors.hasPotentiallyPackedWeights {
-            guard let parameterCount,
-                  let quantizationBits
-            else {
-                return nil
-            }
-
-            let bytesPerParameter = Double(quantizationBits) / 8 + (4 / 64)
-            let parameterEstimate = Double(parameterCount) * bytesPerParameter
-            let metadataRatio = estimatedModelBytes / parameterEstimate
-            guard metadataRatio.isFinite,
-                  (0.65...1.75).contains(metadataRatio)
-            else {
-                return nil
-            }
-            estimatedModelBytes = max(estimatedModelBytes, parameterEstimate)
-        }
-
-        let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
-        guard totalMemoryBytes > 0,
-              estimatedModelBytes.isFinite,
-              estimatedModelBytes > 0,
-              estimatedModelBytes <= Double(Int64.max)
-        else {
-            return nil
-        }
-
-        let memoryBudgetBytes = UInt64(
-            (Double(totalMemoryBytes) * (1 - LocalModelMemoryEstimate.headroomFraction))
-                .rounded(.down)
-        )
-        return LocalModelMemoryEstimate(
-            estimatedModelBytes: UInt64(estimatedModelBytes.rounded(.up)),
-            memoryBudgetBytes: memoryBudgetBytes,
-            totalMemoryBytes: totalMemoryBytes,
-            activationReserveBytes: LocalModelMemoryEstimate.activationReserveBytes(for: capabilities)
-        )
-    }
-
-    private static func resolveCapabilities(
-        pipelineTag: String?,
-        libraryName: String?,
-        tags: [String],
-        configIdentifiesDrafter: Bool
-    ) -> Set<LocalModelCapability> {
-        let pipeline = pipelineTag?.lowercased() ?? ""
-        let descriptors = ([pipelineTag, libraryName].compactMap { $0 } + tags)
-            .joined(separator: " ")
-            .lowercased()
-        var result = Set<LocalModelCapability>()
-
-        let textPipelines: Set<String> = [
-            "text-generation",
-            "image-text-to-text",
-            "image-to-text",
-            "visual-question-answering",
-            "audio-text-to-text",
-            "video-text-to-text",
-        ]
-        if textPipelines.contains(pipeline)
-            || descriptors.contains("conversational")
-            || descriptors.contains("causal-lm") {
-            result.insert(.text)
-        }
-
-        let visionPipelines: Set<String> = [
-            "image-text-to-text", "image-to-text", "visual-question-answering",
-        ]
-        if visionPipelines.contains(pipeline)
-            || descriptors.contains("vision")
-            || descriptors.contains("vlm")
-            || descriptors.contains("llava") {
-            result.insert(.vision)
-        }
-
-        if pipeline.contains("video") || descriptors.contains("video") {
-            result.insert(.video)
-            result.insert(.vision)
-        }
-
-        if pipeline == "text-to-image" {
-            result.insert(.imageGeneration)
-        }
-        if pipeline == "image-to-image" || pipeline == "image-text-to-image" {
-            result.insert(.imageEditing)
-        }
-
-        if pipeline == "automatic-speech-recognition"
-            || descriptors.contains("whisper")
-            || descriptors.contains("transcribe")
-            || descriptors.contains(" asr") {
-            result.insert(.speechToText)
-        }
-
-        if pipeline == "text-to-speech" || descriptors.contains(" tts") {
-            result.insert(.textToSpeech)
-        }
-
-        let embeddingPipelines: Set<String> = [
-            "feature-extraction", "image-feature-extraction", "sentence-similarity",
-        ]
-        if embeddingPipelines.contains(pipeline)
-            || descriptors.contains("embedding")
-            || descriptors.contains("sentence-transformers") {
-            result.insert(.embeddings)
-        }
-
-        if pipeline == "text-ranking"
-            || descriptors.contains("reranker")
-            || descriptors.contains("reranking") {
-            result.insert(.reranking)
-        }
-
-        if descriptors.contains("reasoning") || descriptors.contains("thinking") {
-            result.insert(.reasoning)
-        }
-
-        if pipeline.contains("audio")
-            || descriptors.contains("speech")
-            || result.contains(.speechToText)
-            || result.contains(.textToSpeech) {
-            result.insert(.audio)
-        }
-
-        if descriptors.contains("tool") || descriptors.contains("function-call") {
-            result.insert(.tools)
-        }
-
-        let normalizedTags = Set(tags.map { $0.lowercased() })
-        let drafterTags: Set<String> = [
-            "draft-model", "drafter", "speculative-decoding-draft",
-        ]
-        if !normalizedTags.isDisjoint(with: drafterTags) {
-            result.insert(.drafter)
-        }
-        if configIdentifiesDrafter {
-            result.insert(.drafter)
-        }
-        return result
-    }
-}
-
-struct HuggingFaceSafetensors: Decodable, Equatable, Sendable {
-    let parameters: [String: Int64]
-
-    private static let knownDataTypes: Set<String> = [
-        "F64", "I64", "U64", "F32", "I32", "U32", "F16", "BF16", "I16", "U16",
-        "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL", "F6_E2M3", "F6_E3M2", "F4",
-        "I4", "U4", "I2", "U2"
-    ]
-
-    var hasOnlyKnownDataTypes: Bool {
-        !parameters.isEmpty
-            && parameters.keys.allSatisfy { Self.knownDataTypes.contains($0.uppercased()) }
-    }
-
-    var hasPotentiallyPackedWeights: Bool {
-        let totalCount = parameters.values.reduce(Int64(0)) { partialResult, count in
-            partialResult.addingReportingOverflow(count).overflow
-                ? Int64.max
-                : partialResult + count
-        }
-        guard totalCount > 0 else {
-            return false
-        }
-        let packedCount = parameters.reduce(Int64(0)) { partialResult, entry in
-            guard ["I32", "U32"].contains(entry.key.uppercased()) else {
-                return partialResult
-            }
-            return partialResult.addingReportingOverflow(entry.value).overflow
-                ? Int64.max
-                : partialResult + entry.value
-        }
-        return Double(packedCount) / Double(totalCount) >= 0.10
-    }
-
-    var sizeBytes: Int64? {
-        guard !parameters.isEmpty else { return nil }
-
-        let byteCount = parameters.reduce(0.0) { result, entry in
-            result + (Double(entry.value) * bitsPerParameter(for: entry.key) / 8)
-        }
-        guard byteCount.isFinite, byteCount > 0, byteCount <= Double(Int64.max) else {
-            return nil
-        }
-        return Int64(byteCount.rounded(.up))
-    }
-
-    private func bitsPerParameter(for dataType: String) -> Double {
-        switch dataType.uppercased() {
-        case "F64", "I64", "U64":
-            64
-        case "F32", "I32", "U32":
-            32
-        case "F16", "BF16", "I16", "U16":
-            16
-        case "F8_E4M3", "F8_E5M2", "I8", "U8", "BOOL":
-            8
-        case "F6_E2M3", "F6_E3M2":
-            6
-        case "F4", "I4", "U4":
-            4
-        case "I2", "U2":
-            2
-        default:
-            16
-        }
     }
 }
 
@@ -525,6 +414,7 @@ enum HuggingFaceHubError: LocalizedError {
 
 enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
     case gatedRepository
+    case insufficientSpace(required: Int64, available: Int64, reservedByOtherDownloads: Int64)
     case message(String)
 
     init(processOutput: String) {
@@ -536,10 +426,15 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
             return
         }
 
-        let usefulMessage = processOutput
+        let lines = processOutput
             .split(whereSeparator: { $0.isNewline || $0 == "\r" })
-            .suffix(4)
-            .joined(separator: "\n")
+            .filter { !$0.hasPrefix("__NATIV_") }
+        let usefulMessage = if processOutput.contains("Traceback (most recent call last):"),
+            let exception = lines.last {
+            String(exception).replacing(#/^[A-Za-z_][\w.]*(Error|Exception): /#, with: "")
+        } else {
+            lines.suffix(4).joined(separator: "\n")
+        }
         self = .message(
             usefulMessage.isEmpty ? "The model download failed. Try again." : usefulMessage
         )
@@ -549,9 +444,18 @@ enum HuggingFaceDownloadFailure: LocalizedError, Equatable {
         switch self {
         case .gatedRepository:
             "This gated model requires access approval from its publisher."
+        case let .insufficientSpace(required, available, reservedByOtherDownloads):
+            "Not enough disk space. This model needs \(Self.bytes(required)), but only \(Self.bytes(available)) is available."
+                + (reservedByOtherDownloads > 0
+                    ? " Downloads in progress are holding \(Self.bytes(reservedByOtherDownloads))."
+                    : "")
         case .message(let message):
             message
         }
+    }
+
+    private static func bytes(_ count: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
     }
 }
 
@@ -563,14 +467,14 @@ private struct HuggingFaceHubClient: Sendable {
         token: String?
     ) async throws -> HuggingFaceModelPage {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let urls = try HuggingFaceCapabilityFilter.hubTagSets(for: capabilities).map {
-            hubTags in
+        let urls = try HuggingFaceCapabilityFilter.queryVariants(for: capabilities).map {
+            variant in
             var components = URLComponents()
             components.scheme = "https"
             components.host = "huggingface.co"
             components.path = "/api/models"
 
-            let hubFilters = ["safetensors"] + hubTags
+            let hubFilters = ["safetensors"] + variant.tags
             var queryItems = [
                 URLQueryItem(name: "filter", value: hubFilters.joined(separator: ",")),
                 URLQueryItem(name: "sort", value: sort.apiSortValue),
@@ -582,7 +486,7 @@ private struct HuggingFaceHubClient: Sendable {
                 ),
                 URLQueryItem(name: "limit", value: "50"),
             ]
-            if let pipelineTag = HuggingFaceCapabilityFilter.pipelineTag(for: capabilities) {
+            if let pipelineTag = variant.pipelineTag {
                 queryItems.append(URLQueryItem(name: "pipeline_tag", value: pipelineTag))
             }
             queryItems.append(
@@ -698,7 +602,7 @@ private struct HuggingFaceHubClient: Sendable {
 
     private static let expandedFields = [
         "downloads", "likes", "trendingScore", "lastModified", "pipeline_tag",
-        "library_name", "tags", "private", "gated", "safetensors", "config",
+        "library_name", "tags", "private", "gated", "config", "sha",
     ]
 }
 
@@ -810,6 +714,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
     private var activeDirection: HuggingFaceSortDirection = .descending
     private var visibilityPredicate: (HuggingFaceModel) -> Bool = { _ in true }
     private var nextPageURLs: [URL] = []
+    @Published private(set) var resolvedDownloadSizes: [String: Int64] = [:]
     private let pageSize = 24
     private let maximumPageCount = 5
     private let maximumFillFetches = 8
@@ -831,6 +736,7 @@ final class HuggingFaceModelLibrary: ObservableObject {
         error = nil
         models = []
         buffer = []
+        resolvedDownloadSizes = [:]
         nextPageURLs = []
         pageNumber = 1
         activeSort = sort
@@ -859,6 +765,13 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     self.nextPageURLs = []
                 }
                 try Task.checkCancellation()
+                if sort.sortsBySize {
+                    let sizes = await Self.downloadSizes(
+                        for: self.buffer.filter(predicate), token: token
+                    )
+                    try Task.checkCancellation()
+                    self.resolvedDownloadSizes = sizes
+                }
                 self.models = self.slice(forPage: 1)
                 self.error = nil
             } catch is CancellationError {
@@ -900,6 +813,28 @@ final class HuggingFaceModelLibrary: ObservableObject {
                 ? HuggingFaceHubError.invalidResponse.errorDescription
                 : nil
             self.isSearching = false
+            let sizes = await Self.downloadSizes(for: ordered, token: token)
+            guard !Task.isCancelled else { return }
+            self.resolvedDownloadSizes = sizes
+        }
+    }
+
+    private static func downloadSizes(
+        for models: [HuggingFaceModel],
+        token: String?
+    ) async -> [String: Int64] {
+        await withTaskGroup(of: (String, Int64?).self) { group in
+            for model in models {
+                group.addTask {
+                    let bytes = await HubModelSizeResolver.shared.resolveSize(
+                        for: model.id, revision: model.revision, token: token
+                    )
+                    return (model.id, bytes)
+                }
+            }
+            var result: [String: Int64] = [:]
+            for await (id, bytes) in group where bytes != nil { result[id] = bytes }
+            return result
         }
     }
 
@@ -1015,8 +950,8 @@ final class HuggingFaceModelLibrary: ObservableObject {
                     }
                 }
             case .size:
-                if lhs.sizeBytes != rhs.sizeBytes {
-                    switch (lhs.sizeBytes, rhs.sizeBytes) {
+                if resolvedDownloadSizes[lhs.id] != resolvedDownloadSizes[rhs.id] {
+                    switch (resolvedDownloadSizes[lhs.id], resolvedDownloadSizes[rhs.id]) {
                     case (let lhsSize?, let rhsSize?):
                         return isAscending ? lhsSize < rhsSize : lhsSize > rhsSize
                     case (nil, _):
@@ -1137,7 +1072,6 @@ final class HuggingFaceDownloadManager: ObservableObject {
     enum DownloadPhase: Equatable {
         case preparing
         case downloading
-        case finalizing
         case retrying
     }
 
@@ -1164,6 +1098,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
         let cachePath: String
         let volumeIdentifier: String?
         let token: String?
+        let revision: String?
         var onCompletion: (() -> Void)?
         var operation: HuggingFaceDownloadOperation?
         var task: Task<Void, Never>?
@@ -1174,12 +1109,14 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: String,
             volumeIdentifier: String?,
             token: String?,
+            revision: String?,
             onCompletion: (() -> Void)?
         ) {
             self.modelID = modelID
             self.cachePath = cachePath
             self.volumeIdentifier = volumeIdentifier
             self.token = token
+            self.revision = revision
             self.onCompletion = onCompletion
         }
     }
@@ -1189,6 +1126,8 @@ final class HuggingFaceDownloadManager: ObservableObject {
     /// Emits the affected model ID for progress/state changes. `nil` denotes
     /// a structural change that can affect capacity for every download row.
     let rowUpdates = PassthroughSubject<String?, Never>()
+    /// Emits only after a model download succeeds.
+    let completedDownloads = PassthroughSubject<String, Never>()
 
     private var contexts: [String: DownloadContext] = [:]
     private let progressClock = ContinuousClock()
@@ -1256,6 +1195,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func download(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1267,12 +1207,10 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 path: cachePath,
                 expectedVolumeIdentifier: volumeIdentifier
             )
-            if let blocker = capacityBlocker(sizeBytes: sizeBytes, cachePath: cachePath) {
-                throw HuggingFaceDownloadFailure.message(blocker)
-            }
             try enqueue(
                 repoID: repoID,
                 sizeBytes: sizeBytes,
+                revision: revision,
                 cachePath: cachePath,
                 volumeIdentifier: volumeIdentifier,
                 token: token,
@@ -1287,6 +1225,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     func downloadIfNeeded(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?
@@ -1302,6 +1241,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
                 try enqueue(
                     repoID: repoID,
                     sizeBytes: sizeBytes,
+                    revision: revision,
                     cachePath: expandedCachePath,
                     volumeIdentifier: volumeIdentifier,
                     token: token,
@@ -1376,6 +1316,22 @@ final class HuggingFaceDownloadManager: ObservableObject {
         }
     }
 
+    func stopDownloads(
+        forVolumeIdentifier volumeIdentifier: String,
+        reason: ExternalModelCacheReference.ValidationError
+    ) {
+        let modelIDs = contexts.values.compactMap { context in
+            context.volumeIdentifier == volumeIdentifier ? context.modelID : nil
+        }
+        let failure = downloadFailure(for: reason)
+        for modelID in modelIDs {
+            guard let context = contexts[modelID] else { continue }
+            context.task?.cancel()
+            context.operation?.cancel()
+            finishDownload(repoID: modelID, error: failure)
+        }
+    }
+
     /// Stops downloader subprocesses before the app exits while preserving the
     /// Hugging Face cache, including resumable `.incomplete` files.
     func shutdownForTermination(timeout: Duration = .seconds(2)) async {
@@ -1407,6 +1363,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
     private func enqueue(
         repoID: String,
         sizeBytes: Int64?,
+        revision: String? = nil,
         cachePath: String,
         volumeIdentifier: String?,
         token: String?,
@@ -1421,6 +1378,7 @@ final class HuggingFaceDownloadManager: ObservableObject {
             cachePath: cacheURL.path,
             volumeIdentifier: volumeIdentifier,
             token: token,
+            revision: revision,
             onCompletion: onCompletion
         )
         contexts[repoID] = context
@@ -1450,17 +1408,18 @@ final class HuggingFaceDownloadManager: ObservableObject {
             repoID: repoID,
             cachePath: context.cachePath,
             token: normalizedToken,
-            progress: { progress in
+            revision: context.revision,
+            progress: { [weak self] progress in
                 Task { @MainActor [weak self] in
                     self?.updateProgress(repoID, progress)
                 }
             },
-            transferSpeed: { bytesPerSecond in
+            transferSpeed: { [weak self] bytesPerSecond in
                 Task { @MainActor [weak self] in
                     self?.updateTransferSpeed(repoID, bytesPerSecond)
                 }
             },
-            phase: { phase in
+            phase: { [weak self] phase in
                 Task { @MainActor [weak self] in
                     self?.updatePhase(repoID, phase)
                 }
@@ -1490,11 +1449,12 @@ final class HuggingFaceDownloadManager: ObservableObject {
             errorByModelID[repoID] = downloadFailure(for: error)
         }
         removeContext(repoID)
+        NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
 
         if let error {
             waiters.forEach { $0.resume(throwing: error) }
         } else {
-            NotificationCenter.default.post(name: .localModelLibraryDidChange, object: nil)
+            completedDownloads.send(repoID)
             completion?()
             waiters.forEach { $0.resume() }
         }
@@ -1557,6 +1517,11 @@ final class HuggingFaceDownloadManager: ObservableObject {
             return
         }
         downloads[index].phase = phase
+        if phase == .retrying {
+            progressFlushTasks.removeValue(forKey: modelID)?.cancel()
+            progressLimiters.removeValue(forKey: modelID)
+            downloads[index].metrics = ModelDownloadProgress(totalBytes: downloads[index].metrics.totalBytes)
+        }
         if phase != .downloading {
             downloads[index].bytesPerSecond = nil
         }
@@ -1671,10 +1636,6 @@ struct HuggingFaceDownloadProgressState: Equatable {
     private var speedSampleBytes: Int64 = 0
     private var speedSampleTime: Date
     private var lastTransferTime: Date?
-    private var checkpointReconstructedBytes: Int64 = 0
-    private var checkpointTransferredBytes: Int64 = 0
-    private var checkpointDisplayedBytes: Int64 = 0
-    private var logicalBytesPerTransferByte = 1.0
 
     init(now: Date = .now) {
         self.lastActivity = now
@@ -1683,15 +1644,14 @@ struct HuggingFaceDownloadProgressState: Equatable {
     }
 
     mutating func beginAttempt(at now: Date = .now) {
+        progress = nil
+        reconstructedBytes = 0
         lastActivity = now
         bytesPerSecond = nil
         transferredBytes = 0
         speedSampleBytes = 0
         speedSampleTime = now
         lastTransferTime = nil
-        checkpointReconstructedBytes = reconstructedBytes
-        checkpointTransferredBytes = 0
-        checkpointDisplayedBytes = progress?.completedBytes ?? 0
     }
 
     mutating func resume(at now: Date = .now) {
@@ -1710,31 +1670,16 @@ struct HuggingFaceDownloadProgressState: Equatable {
         let hasNewTotal = update.totalBytes != progress?.totalBytes
         guard hasNewBytes || hasNewTotal else { return nil }
 
-        let nextReconstructedBytes = max(reconstructedBytes, update.completedBytes)
-        let logicalDelta = nextReconstructedBytes - checkpointReconstructedBytes
-        let transferDelta = transferredBytes - checkpointTransferredBytes
-        if logicalDelta > 0, transferDelta > 0 {
-            // Xet reconstructs in buffered bursts. Re-anchor to each exact
-            // update, then advance smoothly using network bytes between them.
-            let observedRatio = Double(logicalDelta) / Double(transferDelta)
-            let boundedRatio = min(max(observedRatio, 0.25), 4)
-            logicalBytesPerTransferByte = (logicalBytesPerTransferByte + boundedRatio) / 2
-        }
-
-        reconstructedBytes = nextReconstructedBytes
-        let displayedBytes = max(progress?.completedBytes ?? 0, reconstructedBytes)
+        reconstructedBytes = max(reconstructedBytes, update.completedBytes)
         guard let totalBytes = update.totalBytes,
               let nextProgress = ModelDownloadProgress(
-                  completedBytes: displayedBytes,
+                  completedBytes: reconstructedBytes,
                   totalBytes: totalBytes
               )
         else {
             return nil
         }
 
-        checkpointReconstructedBytes = reconstructedBytes
-        checkpointTransferredBytes = transferredBytes
-        checkpointDisplayedBytes = nextProgress.completedBytes
         lastActivity = now
         guard nextProgress != progress else { return nil }
         progress = nextProgress
@@ -1744,9 +1689,9 @@ struct HuggingFaceDownloadProgressState: Equatable {
     mutating func recordTransferredBytes(
         _ bytes: Int64,
         at now: Date = .now
-    ) -> ModelDownloadProgress? {
+    ) {
         let bytes = max(bytes, 0)
-        guard bytes > transferredBytes else { return nil }
+        guard bytes > transferredBytes else { return }
 
         transferredBytes = bytes
         lastActivity = now
@@ -1761,29 +1706,6 @@ struct HuggingFaceDownloadProgressState: Equatable {
             speedSampleBytes = bytes
             speedSampleTime = now
         }
-
-        guard let totalBytes = progress?.totalBytes else { return nil }
-        let transferDelta = bytes - checkpointTransferredBytes
-        let estimatedBytes = checkpointDisplayedBytes
-            + Int64(Double(transferDelta) * logicalBytesPerTransferByte)
-        // Transfer bytes are only an estimate of reconstructed bytes. Cap the
-        // estimate at the first finishing byte so it cannot show 100%, but can
-        // still switch the UI and stall watchdog into their finishing state.
-        let activeLimit = min(
-            Int64(
-                (Double(totalBytes) * ModelDownloadProgressPresentation.finishingThreshold)
-                    .rounded(.up)
-            ),
-            totalBytes
-        )
-        guard let estimate = ModelDownloadProgress(
-            completedBytes: min(estimatedBytes, activeLimit),
-            totalBytes: totalBytes
-        ), var progress, progress.merge(estimate) else {
-            return nil
-        }
-        self.progress = progress
-        return progress
     }
 
     func transferSpeed(at now: Date = .now) -> Double? {
@@ -1802,22 +1724,9 @@ struct HuggingFaceDownloadProgressState: Equatable {
     ) -> Bool {
         !isPaused && now.timeIntervalSince(lastActivity) >= timeout
     }
-
-    var isFinishing: Bool {
-        ModelDownloadProgressPresentation.isFinishing(progress?.fractionCompleted ?? 0)
-    }
 }
 
 enum ModelDownloadProgressPresentation {
-    /// Xet can continue reconstructing model files after the measurable
-    /// transfer estimate reaches its safe limit. Present that interval as a
-    /// distinct finishing state instead of leaving a percentage visibly stuck.
-    static let finishingThreshold = 0.95
-
-    static func isFinishing(_ progress: Double) -> Bool {
-        progress >= finishingThreshold
-    }
-
     static func activePercentage(_ progress: Double) -> Int {
         let clampedProgress = min(max(progress, 0), 1)
         return min(Int((clampedProgress * 100).rounded(.down)), 99)
@@ -1870,7 +1779,7 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
         lock.withLock { state.recordProgress(progress) }
     }
 
-    func recordTransferredBytes(_ bytes: Int64) -> ModelDownloadProgress? {
+    func recordTransferredBytes(_ bytes: Int64) {
         lock.withLock { state.recordTransferredBytes(bytes) }
     }
 
@@ -1881,19 +1790,19 @@ private final class HuggingFaceDownloadActivity: @unchecked Sendable {
     func isStalled(timeout: TimeInterval, isPaused: Bool) -> Bool {
         lock.withLock { state.isStalled(timeout: timeout, isPaused: isPaused) }
     }
-
-    var isFinishing: Bool {
-        lock.withLock { state.isFinishing }
-    }
 }
 
 enum HuggingFaceDownloadOutput: Equatable {
+    case reservation(Int64)
     case progress(ModelDownloadProgress)
     case transferredBytes(Int64)
     case phase(HuggingFaceDownloadManager.DownloadPhase)
 
     init?(line: String) {
-        if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
+        if let payload = Self.payload(in: line, after: "__NATIV_RESERVE__:"),
+           let bytes = Int64(payload) {
+            self = .reservation(bytes)
+        } else if let payload = Self.payload(in: line, after: "__NATIV_PROGRESS__:"),
            let separator = payload.firstIndex(of: ":"),
            let completedBytes = Int64(payload[..<separator]),
            let totalBytes = Int64(payload[payload.index(after: separator)...]),
@@ -1909,7 +1818,6 @@ enum HuggingFaceDownloadOutput: Equatable {
             switch payload {
             case "preparing": self = .phase(.preparing)
             case "downloading": self = .phase(.downloading)
-            case "finalizing": self = .phase(.finalizing)
             default: return nil
             }
         } else {
@@ -1953,9 +1861,81 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
     }
 }
 
-private final class HuggingFaceDownloadOperation: @unchecked Sendable {
-    private static let stallTimeout: TimeInterval = 60
-    private static let finalizationStallTimeout: TimeInterval = 10 * 60
+enum HuggingFaceXetDownload {
+    static let script = """
+    import subprocess
+    from huggingface_hub import file_download
+
+    def native_xet_get(*, incomplete_path, xet_file_data, headers, expected_size=None,
+                       displayed_filename=None, tqdm_class=None, _tqdm_bar=None):
+        if expected_size is None or expected_size < 0:
+            raise ValueError("Missing Xet file size")
+        environment = os.environ.copy()
+        authorization = next((v for k, v in headers.items() if k.lower() == "authorization"), "")
+        if authorization.lower().startswith("bearer "):
+            environment["HF_TOKEN"] = authorization[7:]
+        with file_download._get_progress_bar_context(
+            desc=displayed_filename or str(incomplete_path), total=expected_size,
+            log_level=20, name="huggingface_hub.xet_get",
+            tqdm_class=tqdm_class, _tqdm_bar=_tqdm_bar,
+        ) as progress:
+            completed = 0
+            with subprocess.Popen(
+                [sys.argv[5], "--xet-download", xet_file_data.file_hash, xet_file_data.refresh_route,
+                 str(incomplete_path), str(expected_size)],
+                env=environment, stdout=subprocess.PIPE, text=True,
+            ) as helper:
+                try:
+                    for line in helper.stdout:
+                        written = int(line.strip())
+                        if not completed <= written <= expected_size:
+                            raise ValueError("Invalid Xet progress")
+                        delta = written - completed
+                        progress.update(delta)
+                        if callable(update_transfer := getattr(progress, "update_transfer", None)):
+                            update_transfer(delta)
+                        completed = written
+                    if helper.wait() != 0 or completed != expected_size:
+                        raise RuntimeError("Xet download did not complete")
+                finally:
+                    if helper.poll() is None:
+                        helper.kill()
+                        helper.wait()
+
+    file_download.xet_get = native_xet_get
+    """
+
+    static func run() async -> Never {
+        do {
+            let arguments = Array(CommandLine.arguments.dropFirst(2))
+            guard arguments.count == 4,
+                  let refreshURL = URL(string: arguments[1]),
+                  let expectedSize = Int64(arguments[3]), expectedSize >= 0 else {
+                throw CocoaError(.fileReadInvalidFileName)
+            }
+            let written = try await Xet.withDownloader(
+                refreshURL: refreshURL,
+                hubToken: ProcessInfo.processInfo.environment["HF_TOKEN"]
+            ) { downloader in
+                try await downloader.download(
+                    arguments[0], to: URL(fileURLWithPath: arguments[2])
+                ) { completed, _ in
+                    print(completed)
+                    fflush(stdout)
+                }
+            }
+            guard written == expectedSize else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            exit(0)
+        } catch {
+            FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+            exit(1)
+        }
+    }
+}
+
+final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private static let monitorInterval: TimeInterval = 0.5
     private static let maximumAttempts = 3
     private static let maximumCapturedOutputBytes = 256 * 1024
@@ -1963,6 +1943,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private let executableURL: URL
     private let arguments: [String]
     private let environment: [String: String]
+    private let cachePath: String
+    private let capacity: HuggingFaceDownloadCapacity
+    private let stallTimeout: TimeInterval
     private let progress: @Sendable (ModelDownloadProgress) -> Void
     private let transferSpeed: @Sendable (Double?) -> Void
     private let phase: @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -1971,11 +1954,13 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     private var process: Process?
     private var wasCancelled = false
     private var isPaused = false
+    private var admissionFailure: HuggingFaceDownloadFailure?
 
-    init(
+    convenience init(
         repoID: String,
         cachePath: String,
         token: String?,
+        revision: String?,
         progress: @escaping @Sendable (ModelDownloadProgress) -> Void,
         transferSpeed: @escaping @Sendable (Double?) -> Void,
         phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void
@@ -1986,39 +1971,34 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceHubError.pythonUnavailable
         }
 
+        guard let helperURL = Bundle.main.executableURL else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
         let script = """
         import os
+        import signal
         import sys
         import threading
         import time
         from huggingface_hub import snapshot_download
         from huggingface_hub.utils import tqdm
 
+        if os.getpgrp() != os.getpid():
+            os.setsid()
         parent_pid = int(sys.argv[3])
 
         def exit_if_parent_terminates():
             while os.getppid() == parent_pid:
                 time.sleep(0.25)
-            os._exit(0)
+            os.killpg(os.getpgrp(), signal.SIGTERM)
 
         threading.Thread(target=exit_if_parent_terminates, daemon=True).start()
 
+        \(HuggingFaceXetDownload.script)
+
         ignored_patterns = \(HuggingFaceDownloadFilePolicy.pythonListLiteral)
-        total_bytes = 0
-        cached_bytes = 0
-        print("__NATIV_STAGE__:preparing", flush=True)
-        try:
-            files = snapshot_download(
-                repo_id=sys.argv[1],
-                cache_dir=sys.argv[2],
-                dry_run=True,
-                ignore_patterns=ignored_patterns,
-            )
-            total_bytes = sum(item.file_size for item in files)
-            cached_bytes = sum(item.file_size for item in files if not item.will_download)
-        except Exception:
-            pass
-        print(f"__NATIV_PROGRESS__:{cached_bytes}:{total_bytes}", flush=True)
+        \(HuggingFaceDownloadPreflight.script)
 
         class NativProgress(tqdm):
             _lock = threading.Lock()
@@ -2085,13 +2065,13 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         print("__NATIV_STAGE__:downloading", flush=True)
         snapshot_download(
             repo_id=sys.argv[1],
+            revision=revision,
             cache_dir=sys.argv[2],
             ignore_patterns=ignored_patterns,
             tqdm_class=NativProgress,
         )
         final_bytes = NativProgress._total_bytes
         print(f"__NATIV_PROGRESS__:{final_bytes}:{final_bytes}", flush=True)
-        print("__NATIV_STAGE__:finalizing", flush=True)
         """
 
         var environment = ProcessInfo.processInfo.environment
@@ -2104,15 +2084,38 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             environment[HuggingFaceAuthentication.environmentVariableName] = token
         }
 
-        self.executableURL = pythonURL
-        self.arguments = [
+        let arguments = [
             "-c",
             script,
             repoID,
             cachePath,
-            String(ProcessInfo.processInfo.processIdentifier)
+            String(ProcessInfo.processInfo.processIdentifier),
+            revision ?? "main",
+            helperURL.path
         ]
+        self.init(executableURL: pythonURL, arguments: arguments, environment: environment,
+                  cachePath: cachePath, capacity: .shared,
+                  progress: progress, transferSpeed: transferSpeed, phase: phase)
+    }
+
+    /// Also allows subprocess tests to exercise admission and cleanup without Hub access.
+    init(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        cachePath: String,
+        capacity: HuggingFaceDownloadCapacity,
+        stallTimeout: TimeInterval = 60,
+        progress: @escaping @Sendable (ModelDownloadProgress) -> Void = { _ in },
+        transferSpeed: @escaping @Sendable (Double?) -> Void = { _ in },
+        phase: @escaping @Sendable (HuggingFaceDownloadManager.DownloadPhase) -> Void = { _ in }
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
         self.environment = environment
+        self.cachePath = cachePath
+        self.capacity = capacity
+        self.stallTimeout = stallTimeout
         self.progress = progress
         self.transferSpeed = transferSpeed
         self.phase = phase
@@ -2138,15 +2141,29 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
     }
 
     private func runAttempt() throws {
+        let reservationID = UUID()
+        defer { capacity.release(reservationID) }
         activity.beginAttempt()
+        lock.withLock { admissionFailure = nil }
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
         process.environment = environment
 
         let pipe = Pipe()
+        let approvalPipe = Pipe()
+        process.standardInput = approvalPipe
         process.standardOutput = pipe
         process.standardError = pipe
+        defer {
+            try? approvalPipe.fileHandleForWriting.close()
+            try? approvalPipe.fileHandleForReading.close()
+        }
+        // Cancellation may close the child's stdin before its approval is sent.
+        // Treat that as a failed write, never a signal that terminates the app.
+        guard fcntl(approvalPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
 
         let outputGroup = DispatchGroup()
         let output = HuggingFaceCapturedOutput(
@@ -2154,7 +2171,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         )
         outputGroup.enter()
         DispatchQueue.global(qos: .utility).async {
-            [activity, phase, progress] in
+            [self, activity, phase, progress] in
             var lineBuffer = ""
             while true {
                 let data = pipe.fileHandleForReading.availableData
@@ -2169,14 +2186,40 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
                 for line in lines.dropLast() {
                     guard let output = HuggingFaceDownloadOutput(line: line) else { continue }
                     switch output {
+                    case .reservation(let bytes):
+                        let response: [String: Any]
+                        do {
+                            guard !isCancelled else { throw CancellationError() }
+                            try capacity.reserve(reservationID, bytes: bytes, atPath: cachePath)
+                            response = ["approved": true]
+                        } catch {
+                            if case let HuggingFaceDownloadCapacity.Failure.insufficientSpace(
+                                required, available, reservedByOtherDownloads
+                            ) = error {
+                                lock.withLock {
+                                    admissionFailure = .insufficientSpace(
+                                        required: required,
+                                        available: available,
+                                        reservedByOtherDownloads: reservedByOtherDownloads
+                                    )
+                                }
+                            }
+                            response = ["error": error.localizedDescription]
+                        }
+                        do {
+                            var data = try JSONSerialization.data(withJSONObject: response)
+                            data.append(0x0a)
+                            try approvalPipe.fileHandleForWriting.write(contentsOf: data)
+                        } catch {
+                            // EOF also denies admission if the reply cannot be delivered.
+                        }
+                        try? approvalPipe.fileHandleForWriting.close()
                     case .progress(let reportedProgress):
                         if let updatedProgress = activity.recordProgress(reportedProgress) {
                             progress(updatedProgress)
                         }
                     case .transferredBytes(let bytes):
-                        if let updatedProgress = activity.recordTransferredBytes(bytes) {
-                            progress(updatedProgress)
-                        }
+                        activity.recordTransferredBytes(bytes)
                     case .phase(let downloadPhase):
                         phase(downloadPhase)
                     }
@@ -2197,6 +2240,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
 
         do {
             try process.run()
+            try? approvalPipe.fileHandleForReading.close()
         } catch {
             try? pipe.fileHandleForWriting.close()
             clearProcess(process)
@@ -2208,7 +2252,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         if flagsAfterLaunch.cancelled {
             stopProcess(process)
         } else if flagsAfterLaunch.paused {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
 
         var stalled = false
@@ -2220,10 +2264,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             }
             if !flags.paused {
                 transferSpeed(activity.bytesPerSecond)
-                let timeout = activity.isFinishing
-                    ? Self.finalizationStallTimeout
-                    : Self.stallTimeout
-                if activity.isStalled(timeout: timeout, isPaused: false) {
+                if activity.isStalled(timeout: stallTimeout, isPaused: false) {
                     stalled = true
                     stopProcess(process)
                     break
@@ -2243,6 +2284,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
             throw HuggingFaceDownloadAttemptError.stalled
         }
         guard process.terminationStatus == 0 else {
+            if let admissionFailure = lock.withLock({ admissionFailure }) {
+                throw admissionFailure
+            }
             let message = String(decoding: output.snapshot(), as: UTF8.self)
             throw HuggingFaceDownloadFailure(processOutput: message)
         }
@@ -2257,9 +2301,9 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         if let process, process.isRunning {
             if wasPaused {
-                Darwin.kill(process.processIdentifier, SIGCONT)
+                signalProcess(process, SIGCONT)
             }
-            process.terminate()
+            signalProcess(process, SIGTERM)
         }
     }
 
@@ -2271,7 +2315,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         }
 
         guard let process = currentProcess, process.isRunning else { return }
-        Darwin.kill(process.processIdentifier, SIGKILL)
+        signalProcess(process, SIGKILL)
 
         let forcedExitDeadline = clock.now.advanced(by: .seconds(1))
         while process.isRunning, clock.now < forcedExitDeadline {
@@ -2285,7 +2329,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         let process = self.process
         lock.unlock()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGSTOP)
+            signalProcess(process, SIGSTOP)
         }
     }
 
@@ -2296,7 +2340,7 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
         activity.resume()
         if let process, process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGCONT)
+            signalProcess(process, SIGCONT)
         }
     }
 
@@ -2326,15 +2370,21 @@ private final class HuggingFaceDownloadOperation: @unchecked Sendable {
         lock.unlock()
     }
 
+    private func signalProcess(_ process: Process, _ signal: Int32) {
+        if Darwin.kill(-process.processIdentifier, signal) != 0 {
+            Darwin.kill(process.processIdentifier, signal)
+        }
+    }
+
     private func stopProcess(_ process: Process) {
         guard process.isRunning else { return }
-        process.terminate()
+        signalProcess(process, SIGTERM)
         let deadline = Date().addingTimeInterval(2)
         while process.isRunning, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
         if process.isRunning {
-            Darwin.kill(process.processIdentifier, SIGKILL)
+            signalProcess(process, SIGKILL)
         }
     }
 

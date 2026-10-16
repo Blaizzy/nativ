@@ -13,6 +13,28 @@ Installed models are found by scanning the Hugging Face cache plus any additiona
 - Capabilities are derived per model from its `config.json` (or `model_index.json` for
   diffusion pipelines) — see [`LocalModelDiscovery`](../../Sources/Nativ/Features/Models/LocalModelDiscovery.swift).
 
+Discover shows the total size of the files selected for download, including tokenizers and
+additional weight formats in the repository. Optional GGUF files are excluded. Sizes load in
+the background for visible rows; “Checking size…” changes to a verified total or “Size unavailable.”
+Size sorting uses these totals across the buffered search results. Memory-fit warnings remain
+separate estimates of runtime memory needs.
+
+## External model storage
+
+The primary Hugging Face cache can live on a locally attached APFS external drive. Open
+**Models → Sources → Choose External Location** and select a folder on that drive. Nativ records
+the drive identity as well as the folder, so reconnecting the same drive restores the location
+even if the volume is renamed.
+
+Changing locations stops and restarts the model server and clears its preloaded model selections.
+Active downloads must finish or be cancelled first. Existing model files are not moved or deleted;
+they remain in their original cache. Use **Restore System Default** to return to the cache selected
+by `HF_HUB_CACHE`, `HF_HOME`, or Nativ's per-user default.
+
+If the drive is disconnected, Nativ stops downloads using it, stops the model server, and marks the
+cache unavailable. Reconnect the original drive before downloading, deleting, or loading models.
+A different drive mounted at the same path is rejected.
+
 ## Capabilities
 
 Each model carries a set of capabilities (`LocalModelCapability`):
@@ -40,6 +62,18 @@ Compatible models download from Hugging Face
 warning when a model is unlikely to fit in available unified memory. Gated repositories require a
 Hugging Face token, set in the Developer page or via `HF_TOKEN`. Sharded downloads verify that
 every shard is present before a model counts as installed.
+
+Downloads from Discover use the repository revision displayed in the model list. Before any
+transfer, Nativ verifies the file list and checks the additional space needed after accounting for
+cached files and reservations for other downloads. If that verification fails, the download
+reports an error instead of proceeding with an unknown total.
+
+After resolving its exact uncached size, each downloader waits for the app to approve a disk
+reservation. A shared lock makes the fresh capacity check and reservation atomic across
+downloads on the same filesystem. Reservations remain held while paused and until the
+subprocess exits, including on cancellation or failure. Retries resolve and reserve again.
+The full reservation is retained during each attempt because displayed progress can be
+interpolated; this conservatively leaves less space available for additional downloads.
 
 ## Roles and preloading
 

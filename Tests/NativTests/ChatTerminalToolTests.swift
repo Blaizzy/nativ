@@ -38,7 +38,7 @@ private func terminalJSON(_ value: String) throws -> [String: Any] {
 }
 
 final class ChatTerminalToolTests: XCTestCase {
-    func testDefinitionExposesOnlyTheInitialLocalCommandContract() throws {
+    func testDefinitionExposesLocalCommandsAndBackgroundExecution() throws {
         let data = try JSONEncoder().encode(ChatTerminalToolRegistry.definition)
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -48,9 +48,8 @@ final class ChatTerminalToolTests: XCTestCase {
         let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
 
         XCTAssertEqual(function["name"] as? String, "terminal")
-        XCTAssertEqual(Set(properties.keys), ["command", "cwd", "timeout"])
+        XCTAssertEqual(Set(properties.keys), ["command", "cwd", "timeout", "background"])
         XCTAssertEqual(parameters["required"] as? [String], ["command"])
-        XCTAssertNil(properties["background"])
         XCTAssertNil(properties["pty"])
     }
 
@@ -61,6 +60,11 @@ final class ChatTerminalToolTests: XCTestCase {
         XCTAssertEqual(request.command, "pwd")
         XCTAssertEqual(request.cwd, "projects")
         XCTAssertEqual(request.timeoutSeconds, 180)
+        XCTAssertFalse(request.background)
+        XCTAssertTrue(try ChatTerminalToolRequest(argumentsJSON: #"{"command":"npm run dev","background":true}"#).background)
+        for value in ["1", "\"true\"", "null"] {
+            XCTAssertThrowsError(try ChatTerminalToolRequest(argumentsJSON: "{\"command\":\"pwd\",\"background\":\(value)}"))
+        }
 
         XCTAssertThrowsError(
             try ChatTerminalToolRequest(
@@ -219,6 +223,63 @@ final class ChatTerminalToolTests: XCTestCase {
             XCTAssertEqual(json["exit_code"] as? Int, 7)
             XCTAssertEqual(json["stdout"] as? String, "partial result")
             XCTAssertEqual(json["stderr"] as? String, "bad input")
+        }
+    }
+
+    func testRunningCommandReturnsItsTerminalInsteadOfAFalseFailure() async throws {
+        let id = UUID()
+        let dependencies = ChatTerminalToolDependencies { request in
+            XCTAssertTrue(request.background)
+            return TerminalProcessResult(stdout: "Listening\nAPI_KEY=supersecretvalue", stderr: "", exitCode: nil,
+                terminationSignal: nil, timedOut: false, durationMilliseconds: 2000, outputTruncated: false, terminalID: id)
+        }
+        let payload = try await ChatTerminalToolExecutor(dependencies: dependencies).execute(
+            call: terminalCall(#"{"command":"npm run dev","background":true}"#),
+            context: terminalContext(approved: true, dependencies: dependencies))
+        let json = try terminalJSON(payload)
+        XCTAssertEqual(json["ok"] as? Bool, true)
+        XCTAssertEqual(json["running"] as? Bool, true)
+        XCTAssertEqual(json["terminal_id"] as? String, id.uuidString)
+        XCTAssertNil(json["exit_code"])
+        XCTAssertFalse(payload.contains("supersecretvalue"))
+    }
+
+    func testRunnerDoesNotWaitForAnInheritedOutputPipeAfterShellExit() async throws {
+        let request = TerminalProcessRequest(command: "sleep 2 & printf inherited",
+            currentDirectoryURL: FileManager.default.temporaryDirectory, timeout: 0.2,
+            environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"))
+        let start = Date()
+        let result = try await TerminalProcessRunner().run(request)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertEqual(result.stdout, "inherited")
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertFalse(result.timedOut)
+    }
+
+    func testRunnerTimeoutAndCancellationStopShellChildren() async throws {
+        for background in [false, true] {
+            let pidFile = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: pidFile) }
+            let request = TerminalProcessRequest(command: "sleep 60 & child=$!; printf '%s' $child > '\(pidFile.path)'; wait $child",
+                currentDirectoryURL: pidFile.deletingLastPathComponent(), timeout: 0.3,
+                environment: ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin"), background: background)
+            let task = Task { try await TerminalProcessRunner().run(request) }
+            defer { task.cancel() }
+            if background {
+                try await Task.sleep(for: .milliseconds(500))
+                task.cancel()
+                do { _ = try await task.value; XCTFail("Expected cancellation") }
+                catch is CancellationError {}
+            } else {
+                let result = try await task.value
+                XCTAssertTrue(result.timedOut)
+            }
+            let pid = try XCTUnwrap(Int32(String(contentsOf: pidFile, encoding: .utf8)))
+            for _ in 0..<100 {
+                if kill(pid, 0) == -1 { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertEqual(kill(pid, 0), -1, "Stopping the shell must stop its child too")
         }
     }
 

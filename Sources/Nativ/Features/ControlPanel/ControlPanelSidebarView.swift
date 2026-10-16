@@ -25,8 +25,16 @@ extension ControlPanelView {
                     )
 
                 Text("Nativ")
-                    .nativTextStyle(.brandTitle)
+                    .legacyTextStyle(.brandTitle)
                     .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Button("Search chats", systemImage: "magnifyingglass") { chatLibrarySearch.present() }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .contentShape(.rect)
+                    .help("Search all chats")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: ControlPanelLayout.sidebarBrandHeight)
@@ -35,33 +43,23 @@ extension ControlPanelView {
 
             sidebarNavigation
                 .padding(.horizontal, 10)
-                .padding(.bottom, 5)
-
-            if isSelectingRecents {
-                bulkSelectionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            } else {
-                sidebarActionBar
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 8)
-            }
+                .padding(.bottom, 16)
 
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if !pinnedSessions.isEmpty {
+                        pinnedChats
+                            .padding(.bottom, 8)
+                    }
                     projectsSection
-                    if showsPinnedSection {
-                        pinnedSection
-                    }
-                    if showsFoldersSection {
-                        foldersSection
-                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
+                // Animate the shared layout so sibling sections move with the fading rows.
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarProjectsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: chromeState.sidebarSessionsCollapsed)
+                .animation(.easeInOut(duration: 0.2), value: isSelectingRecents)
             }
             .frame(maxHeight: .infinity)
 
@@ -89,15 +87,17 @@ extension ControlPanelView {
             presenting: pendingDeleteRecent
         ) { recent in
             Button("Delete", role: .destructive) {
-                deleteRecentSession(recent)
                 pendingDeleteRecent = nil
+                Task { await deleteRecentSession(recent) }
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {
                 pendingDeleteRecent = nil
             }
         } message: { recent in
-            if recent.scheduledTaskID != nil {
+            if case .chat(let id) = recent.selection, chat.sessions.contains(where: { $0.id == id && $0.worktree != nil }) {
+                Text("“\(recent.title)” will be permanently deleted. Its worktree will be saved in Settings > Recently deleted worktrees before the checkout and branch are removed. Ignored files require confirmation and aren’t saved. The local project folder will be kept.")
+            } else if recent.scheduledTaskID != nil {
                 Text(
                     "“\(recent.title)” will be permanently deleted. "
                         + "The scheduled task and its run record will be kept."
@@ -107,30 +107,11 @@ extension ControlPanelView {
             }
         }
         .alert(
-            "Delete folder?",
-            isPresented: Binding(
-                get: { pendingDeleteFolder != nil },
-                set: { if !$0 { pendingDeleteFolder = nil } }
-            ),
-            presenting: pendingDeleteFolder
-        ) { folder in
-            Button("Delete", role: .destructive) {
-                chat.deleteFolder(folder.id)
-                pendingDeleteFolder = nil
-            }
-            .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {
-                pendingDeleteFolder = nil
-            }
-        } message: { folder in
-            Text("“\(folder.name)” will be removed. Its chats will be moved out, not deleted.")
-        }
-        .alert(
-            "Delete \(selectedRecentIDs.count + selectedFolderIDs.count) items?",
+            "Delete \(selectedRecentIDs.count) items?",
             isPresented: $isConfirmingBulkDelete
         ) {
             Button("Delete", role: .destructive) {
-                bulkDeleteSelected()
+                Task { await bulkDeleteSelected() }
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
@@ -146,18 +127,20 @@ extension ControlPanelView {
             presenting: pendingDeleteProject
         ) { project in
             Button("Keep Chats") {
-                removeProject(project, disposition: .keepChats)
+                pendingDeleteProject = nil
+                Task { await removeProject(project, disposition: .keepChats) }
             }
             .keyboardShortcut(.defaultAction)
             Button("Delete Chats", role: .destructive) {
-                removeProject(project, disposition: .deleteChats)
+                pendingDeleteProject = nil
+                Task { await removeProject(project, disposition: .deleteChats) }
             }
             Button("Cancel", role: .cancel) {
                 pendingDeleteProject = nil
             }
         } message: { project in
             Text(
-                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted."
+                "“\(project.name)” will be removed from Nativ. Its local folder and files will not be deleted. Deleting its chats saves recoverable worktree snapshots before removing their checkouts and branches. Ignored files require confirmation and aren’t saved."
             )
         }
         .alert(
@@ -173,11 +156,19 @@ extension ControlPanelView {
         } message: {
             Text(projectErrorMessage ?? "The project could not be updated.")
         }
+        .alert("Couldn’t delete chat", isPresented: Binding(
+            get: { chatDeletionErrorMessage != nil },
+            set: { if !$0 { chatDeletionErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { chatDeletionErrorMessage = nil }
+        } message: {
+            Text(chatDeletionErrorMessage ?? "The chat and its remaining worktree data have been kept. Try again.")
+        }
     }
 
-    var resizableSidebar: some View {
+    func resizableSidebar(width: CGFloat, maximumWidth: CGFloat) -> some View {
         sidebar
-            .frame(width: sidebarWidth)
+            .frame(width: width)
             .background {
                 ControlPanelSidebarMaterial()
                     .overlay {
@@ -187,12 +178,12 @@ extension ControlPanelView {
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
             }
             .overlay(alignment: .trailing) {
-                sidebarResizeHandle
+                sidebarResizeHandle(width: width, maximumWidth: maximumWidth)
             }
             .zIndex(1)
     }
 
-    var sidebarResizeHandle: some View {
+    func sidebarResizeHandle(width: CGFloat, maximumWidth: CGFloat) -> some View {
         ZStack {
             Color.clear
 
@@ -210,14 +201,14 @@ extension ControlPanelView {
             DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { value in
                     if sidebarDragStartWidth == nil {
-                        sidebarDragStartWidth = sidebarWidth
+                        sidebarDragStartWidth = width
                     }
 
-                    let startWidth = sidebarDragStartWidth ?? sidebarWidth
+                    let startWidth = sidebarDragStartWidth ?? width
                     let proposedWidth = startWidth + value.translation.width
                     sidebarWidth = min(
                         max(proposedWidth, ControlPanelLayout.sidebarMinimumWidth),
-                        ControlPanelLayout.sidebarMaximumWidth
+                        maximumWidth
                     )
                 }
                 .onEnded { _ in
@@ -232,8 +223,13 @@ extension ControlPanelView {
     }
 
     var sidebarNavigation: some View {
-        VStack(spacing: 0) {
-            ForEach(ControlPanelTab.allCases) { tab in
+        VStack(spacing: 2) {
+            sidebarChatAction("New chat", systemImage: "square.and.pencil") {
+                createChatSession()
+            }
+            .help("Start a new chat")
+
+            ForEach(ControlPanelTab.allCases.filter { $0 != .chat }) { tab in
                 sidebarTabButton(tab)
 
                 if tab == .models {
@@ -245,6 +241,20 @@ extension ControlPanelView {
         }
     }
 
+    func sidebarChatAction(
+        _ title: String,
+        systemImage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .labelStyle(SidebarNavigationLabelStyle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .sidebarRowSelectionStyle(isSelected: false, isNavigation: true)
+        }
+        .buttonStyle(.plain)
+    }
+
     func sidebarTabButton(_ tab: ControlPanelTab) -> some View {
         let selection = ControlPanelSidebarSelection.tab(tab)
         return Button {
@@ -253,15 +263,13 @@ extension ControlPanelView {
             HStack(spacing: 8) {
                 Label(tab.rawValue, systemImage: tab.systemImage)
                     .labelStyle(SidebarNavigationLabelStyle())
-                if tab == .extensions, !isExtensionsBadgeDismissed {
-                    Text("NEW")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.accentColor, in: Capsule())
-                }
                 Spacer(minLength: 0)
+                if tab == .extensions, !isExtensionsBadgeDismissed {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("New extensions available")
+                }
                 if tab == .models {
                     HStack(spacing: 6) {
                         if chromeState.isModelLoading,
@@ -278,7 +286,7 @@ extension ControlPanelView {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(.rect)
-            .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+            .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection, isNavigation: true)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 1)
@@ -295,7 +303,7 @@ extension ControlPanelView {
                 .labelStyle(SidebarNavigationLabelStyle())
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
-                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection)
+                .sidebarRowSelectionStyle(isSelected: sidebarSelection == selection, isNavigation: true)
         }
         .buttonStyle(.plain)
         .padding(.vertical, 1)

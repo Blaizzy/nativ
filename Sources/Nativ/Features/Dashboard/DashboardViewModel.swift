@@ -39,6 +39,22 @@ final class DashboardViewModel: ObservableObject {
             }
         }
 
+        /// Trailing window used to list removed models, or nil when every model is listed.
+        var usageWindowTitle: String? {
+            switch self {
+            case .last24Hours:
+                "Last 24 hours"
+            case .last7Days:
+                "Last 7 days"
+            case .last30Days:
+                "Last 30 days"
+            case .lastYear:
+                "Last year"
+            case .allTime:
+                nil
+            }
+        }
+
         var analyticsRange: NativAnalyticsRange {
             switch self {
             case .last24Hours:
@@ -156,12 +172,17 @@ final class DashboardViewModel: ObservableObject {
         }
     }
 
-    @Published private(set) var availableModels: [ModelOption] = [.all]
+    @Published private(set) var installedModels: [ModelOption] = []
+    /// Models that still have analytics history but are no longer found in the local model cache,
+    /// limited to the selected period (plus the current selection) and ordered by most recent use.
+    @Published private(set) var previouslyUsedModels: [ModelOption] = []
+    @Published private(set) var hiddenPreviouslyUsedModelCount = 0
     @Published private(set) var historicalSummary = NativHistoricalAnalyticsSummary.empty
     @Published private(set) var bucketPoints: [BucketPoint] = []
     @Published private(set) var hourlyActivityPoints: [ActivityPoint] = []
     @Published private(set) var modelPerformance: [ModelPerformance] = []
     @Published private(set) var modelTokenPoints: [ModelTokenPoint] = []
+    @Published private(set) var tokenUsageModels: [TokenUsageModel] = []
     @Published private(set) var recentRequestEvents: [NativAnalyticsRequestEvent] = []
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var localModelError: String?
@@ -175,15 +196,20 @@ final class DashboardViewModel: ObservableObject {
     @Published var selectedRange: RangeOption = .last24Hours {
         didSet {
             guard oldValue != selectedRange else { return }
+            rebuildAvailableModels()
             reloadHistorical()
         }
+    }
+
+    var availableModels: [ModelOption] {
+        [.all] + installedModels + previouslyUsedModels
     }
 
     private var analyticsDatabaseURL: URL
     private var preferredModelID: String?
     private var hasAppliedPreferredSelection = false
     private var scannedModelOptions: [ModelOption] = []
-    private var historicalModelIDs: [String] = []
+    private var historicalModelUsage: [NativAnalyticsModelUsage] = []
     private var modelScanTask: Task<Void, Never>?
     private var modelSelectionReloadTask: Task<Void, Never>?
     private var historyLoadTask: Task<DashboardSnapshot, Never>?
@@ -282,7 +308,7 @@ final class DashboardViewModel: ObservableObject {
                     modelID: selectedModelID,
                     limit: 10
                 )
-                let knownModelIDs = store.fetchKnownModelIDs()
+                let modelUsage = store.fetchModelUsage()
                 let points = Self.bucketPoints(
                     from: rawBuckets,
                     ttftEvents: ttftEvents,
@@ -300,13 +326,20 @@ final class DashboardViewModel: ObservableObject {
                     leadingModelIDs: leadingModelIDs,
                     groupsRemainingModels: modelPerformance.count > 12
                 )
+                let tokenUsageModels = TokenUsageModel.grouped(Self.modelTokenPoints(
+                    from: modelBuckets,
+                    bucketDates: points.map(\.bucketStart),
+                    leadingModelIDs: [],
+                    groupsRemainingModels: false
+                ))
                 return DashboardSnapshot(
                     summary: summary,
                     points: points,
                     activityPoints: activityPoints,
                     modelPerformance: modelPerformance,
                     modelTokenPoints: modelTokenPoints,
-                    knownModelIDs: knownModelIDs,
+                    tokenUsageModels: tokenUsageModels,
+                    modelUsage: modelUsage,
                     recentRequestEvents: recentRequestEvents
                 )
             }
@@ -323,8 +356,9 @@ final class DashboardViewModel: ObservableObject {
             hourlyActivityPoints = snapshot.activityPoints
             modelPerformance = snapshot.modelPerformance
             modelTokenPoints = snapshot.modelTokenPoints
+            tokenUsageModels = snapshot.tokenUsageModels
             appliedModelID = selectedModelID ?? ModelOption.allID
-            historicalModelIDs = snapshot.knownModelIDs
+            historicalModelUsage = snapshot.modelUsage
             rebuildAvailableModels()
             if !availableModels.contains(where: { $0.id == self.selectedModelID }) {
                 self.selectedModelID = ModelOption.allID
@@ -367,13 +401,22 @@ final class DashboardViewModel: ObservableObject {
     }
 
     private func rebuildAvailableModels() {
-        var optionsByID = Dictionary(uniqueKeysWithValues: scannedModelOptions.map { ($0.id, $0) })
-        for modelID in historicalModelIDs where optionsByID[modelID] == nil {
-            optionsByID[modelID] = ModelOption(id: modelID, modelID: modelID, title: modelID)
-        }
-        availableModels = [.all] + optionsByID.values.sorted {
+        let installedOptionsByID = Dictionary(uniqueKeysWithValues: scannedModelOptions.map { ($0.id, $0) })
+        installedModels = installedOptionsByID.values.sorted {
             $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
         }
+
+        // Keep the selection listed so changing the period never silently resets the model filter.
+        let rangeStartUnix = selectedRange.analyticsRange.rangeStartUnix
+        let removedModelUsage = historicalModelUsage.filter { installedOptionsByID[$0.modelID] == nil }
+        let listedModelUsage = removedModelUsage.filter { usage in
+            guard let rangeStartUnix, usage.modelID != selectedModelID else { return true }
+            return usage.lastCompletedAt.timeIntervalSince1970 >= rangeStartUnix
+        }
+        previouslyUsedModels = listedModelUsage.map {
+            ModelOption(id: $0.modelID, modelID: $0.modelID, title: $0.modelID)
+        }
+        hiddenPreviouslyUsedModelCount = removedModelUsage.count - listedModelUsage.count
         applyPreferredSelectionIfPossible()
     }
 
@@ -413,7 +456,8 @@ private extension DashboardViewModel {
         let activityPoints: [ActivityPoint]
         let modelPerformance: [ModelPerformance]
         let modelTokenPoints: [ModelTokenPoint]
-        let knownModelIDs: [String]
+        let tokenUsageModels: [TokenUsageModel]
+        let modelUsage: [NativAnalyticsModelUsage]
         let recentRequestEvents: [NativAnalyticsRequestEvent]
     }
 
@@ -682,5 +726,51 @@ private extension DashboardViewModel {
         case .day:
             return calendar.startOfDay(for: date)
         }
+    }
+}
+
+struct TokenUsageModel: Identifiable, Equatable, Sendable {
+    let id: String
+    let totalTokens: Int
+    let points: [DashboardViewModel.ModelTokenPoint]
+
+    static func grouped(_ points: [DashboardViewModel.ModelTokenPoint]) -> [Self] {
+        Dictionary(grouping: points, by: \.modelID)
+            .map { modelID, points in
+                Self(id: modelID, totalTokens: points.reduce(0) { $0 + $1.totalTokens }, points: points)
+            }
+            .sorted {
+                if $0.totalTokens != $1.totalTokens { return $0.totalTokens > $1.totalTokens }
+                return $0.id.localizedStandardCompare($1.id) == .orderedAscending
+            }
+    }
+}
+
+struct TokenUsageModelPage {
+    static let size = 8
+
+    let models: [TokenUsageModel]
+    let index: Int
+    let matchingCount: Int
+    let showsControls: Bool
+
+    init(models: [TokenUsageModel], query: String, index: Int) {
+        showsControls = models.count > Self.size
+        let query = showsControls ? query.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let matches = query.isEmpty ? models : models.filter { $0.id.localizedStandardContains(query) }
+        matchingCount = matches.count
+        self.index = min(max(index, 0), max((matches.count - 1) / Self.size, 0))
+        let start = self.index * Self.size
+        self.models = Array(matches.dropFirst(start).prefix(Self.size))
+    }
+
+    var hasPrevious: Bool { index > 0 }
+    var hasNext: Bool { (index + 1) * Self.size < matchingCount }
+    var points: [DashboardViewModel.ModelTokenPoint] { models.flatMap(\.points) }
+
+    var rangeLabel: String {
+        guard matchingCount > 0 else { return "0 of 0" }
+        let first = index * Self.size + 1
+        return "\(first)–\(first + models.count - 1) of \(matchingCount)"
     }
 }

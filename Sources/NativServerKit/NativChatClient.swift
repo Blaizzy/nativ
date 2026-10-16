@@ -321,7 +321,7 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
             promptTokens: promptTokens,
             completionTokens: completionTokens,
             totalTokens: totalTokens,
-            promptTokensPerSecond: promptTokensPerSecond,
+            promptTokensPerSecond: timings?.promptTokensPerSecond ?? promptTokensPerSecond,
             decodeTokensPerSecond: timings?.resolvedDecodeTokensPerSecond
                 ?? decodeTokensPerSecond,
             peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB,
@@ -459,6 +459,9 @@ public struct MLXChatJSONSchema: Encodable, Equatable, Sendable {
 public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var model: String
     public var messages: [MLXChatMessage]
+    /// Current environment state, sent after history without becoming part of the stored conversation.
+    public var transientContext: String? = nil
+
     public var maxTokens: Int
     public var temperature: Double
     public var topK: Int
@@ -474,6 +477,11 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var toolChoice: String?
     public var stream: Bool
     public var streamOptions: MLXChatStreamOptions?
+
+    public var contextMessages: [MLXChatMessage] {
+        guard let transientContext, !transientContext.isEmpty else { return [] }
+        return [MLXChatMessage(role: "user", content: transientContext)]
+    }
 
     public init(
         model: String,
@@ -531,6 +539,27 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         case toolChoice = "tool_choice"
         case stream
         case streamOptions = "stream_options"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(model, forKey: .model)
+        try container.encode(messages + contextMessages, forKey: .messages)
+        try container.encode(maxTokens, forKey: .maxTokens)
+        try container.encode(temperature, forKey: .temperature)
+        try container.encode(topK, forKey: .topK)
+        try container.encode(topP, forKey: .topP)
+        try container.encode(minP, forKey: .minP)
+        try container.encodeIfPresent(repetitionPenalty, forKey: .repetitionPenalty)
+        try container.encodeIfPresent(enableThinking, forKey: .enableThinking)
+        try container.encodeIfPresent(thinkingBudget, forKey: .thinkingBudget)
+        try container.encodeIfPresent(thinkingStartToken, forKey: .thinkingStartToken)
+        try container.encodeIfPresent(thinkingEndToken, forKey: .thinkingEndToken)
+        try container.encodeIfPresent(responseFormat, forKey: .responseFormat)
+        try container.encodeIfPresent(tools, forKey: .tools)
+        try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
+        try container.encode(stream, forKey: .stream)
+        try container.encodeIfPresent(streamOptions, forKey: .streamOptions)
     }
 }
 
@@ -879,7 +908,7 @@ private struct PromptTokenCountRequest: Encodable {
     let thinkingEndToken: String?
 
     init(_ request: MLXChatCompletionRequest) {
-        input = request.messages
+        input = request.messages + request.contextMessages
         model = request.model
         tools = request.tools
         toolChoice = request.toolChoice
@@ -975,14 +1004,18 @@ private struct ChatStreamChunk: Decodable {
     }
 }
 
-struct MLXChatToolCallAccumulator {
+public struct MLXChatToolCallAccumulator {
     private var callsByIndex: [Int: MLXChatToolCall] = [:]
 
-    var toolCalls: [MLXChatToolCall] {
+    public init(toolCalls: [MLXChatToolCall] = []) {
+        merge(toolCalls)
+    }
+
+    public var toolCalls: [MLXChatToolCall] {
         callsByIndex.keys.sorted().compactMap { callsByIndex[$0] }
     }
 
-    mutating func merge(_ deltas: [MLXChatToolCall]) {
+    public mutating func merge(_ deltas: [MLXChatToolCall]) {
         for (position, delta) in deltas.enumerated() {
             let index = delta.index
                 ?? callsByIndex.first(where: { $0.value.id == delta.id && delta.id != nil })?.key
@@ -999,10 +1032,9 @@ struct MLXChatToolCallAccumulator {
             if let functionDelta = delta.function {
                 var function = call.function ?? MLXChatFunctionCall(name: nil, arguments: nil)
                 function.name = mergedFragment(current: function.name, incoming: functionDelta.name)
-                function.arguments = mergedFragment(
-                    current: function.arguments,
-                    incoming: functionDelta.arguments
-                )
+                if let fragment = functionDelta.arguments {
+                    function.arguments = (function.arguments ?? "") + fragment
+                }
                 call.function = function
             }
             callsByIndex[index] = call
@@ -1024,6 +1056,7 @@ struct MLXChatToolCallAccumulator {
 }
 
 private struct MLXChatTimings: Decodable {
+    let promptTokensPerSecond: Double?
     let predictedTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specDraftKind: String?
@@ -1051,6 +1084,7 @@ private struct MLXChatTimings: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case promptTokensPerSecond = "prompt_per_second"
         case predictedTokensPerSecond = "predicted_per_second"
         case peakMemoryGB = "peak_memory"
         case specDraftKind = "draft_kind"

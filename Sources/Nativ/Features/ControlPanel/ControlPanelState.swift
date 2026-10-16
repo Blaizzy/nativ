@@ -21,7 +21,6 @@ final class ControlPanelChromeState: ObservableObject {
         let languageModelID: String?
         let sidebarPinnedCollapsed: Bool
         let sidebarProjectsCollapsed: Bool
-        let sidebarFoldersCollapsed: Bool
         let sidebarSessionsCollapsed: Bool
         let artifactSettings: ArtifactSettings
     }
@@ -36,7 +35,6 @@ final class ControlPanelChromeState: ObservableObject {
         var languageModelID: String?
         var sidebarPinnedCollapsed: Bool
         var sidebarProjectsCollapsed: Bool
-        var sidebarFoldersCollapsed: Bool
         var sidebarSessionsCollapsed: Bool
         var artifactSettings: ArtifactSettings
     }
@@ -57,7 +55,6 @@ final class ControlPanelChromeState: ObservableObject {
             languageModelID: settings.languageModelID,
             sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
             sidebarProjectsCollapsed: settings.sidebarProjectsCollapsed,
-            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
             sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
             artifactSettings: settings.artifactSettings
         )
@@ -85,7 +82,6 @@ final class ControlPanelChromeState: ObservableObject {
             $0.languageModelID = settings.languageModelID
             $0.sidebarPinnedCollapsed = settings.sidebarPinnedCollapsed
             $0.sidebarProjectsCollapsed = settings.sidebarProjectsCollapsed
-            $0.sidebarFoldersCollapsed = settings.sidebarFoldersCollapsed
             $0.sidebarSessionsCollapsed = settings.sidebarSessionsCollapsed
             $0.artifactSettings = settings.artifactSettings
         }
@@ -99,7 +95,6 @@ final class ControlPanelChromeState: ObservableObject {
     }
     var sidebarPinnedCollapsed: Bool { snapshot.sidebarPinnedCollapsed }
     var sidebarProjectsCollapsed: Bool { snapshot.sidebarProjectsCollapsed }
-    var sidebarFoldersCollapsed: Bool { snapshot.sidebarFoldersCollapsed }
     var sidebarSessionsCollapsed: Bool { snapshot.sidebarSessionsCollapsed }
     var artifactSettings: ArtifactSettings { snapshot.artifactSettings }
 
@@ -130,7 +125,6 @@ final class ControlPanelChromeState: ObservableObject {
             languageModelID: settings.languageModelID,
             sidebarPinnedCollapsed: settings.sidebarPinnedCollapsed,
             sidebarProjectsCollapsed: settings.sidebarProjectsCollapsed,
-            sidebarFoldersCollapsed: settings.sidebarFoldersCollapsed,
             sidebarSessionsCollapsed: settings.sidebarSessionsCollapsed,
             artifactSettings: ArtifactSettings(
                 serverPort: settings.serverPort,

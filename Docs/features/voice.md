@@ -12,7 +12,54 @@ and enabled by default; disable, remove, and restore are supported — see
 A global shortcut starts capture anywhere. On release/stop, the recording is transcribed and the
 text is inserted at the current cursor position; the transcript is also placed on the clipboard.
 
+By default, say **“enter”** as the final word to press Return after inserting the text. For example,
+“Send me the details enter” inserts “Send me the details” and then presses Return in the target
+app. The command is omitted from the inserted text, clipboard, saved transcript, and dictation
+history. Capitalization and trailing punctuation (such as “Enter.”) are ignored. Saying only
+“enter” presses Return without pasting text or changing the clipboard. “Enter” elsewhere in a
+dictation remains ordinary text. This also applies when retrying a dictation.
+
+In **Audio → Shortcuts → Spoken Return**, turn the command on or off and change its **Trigger
+word or phrase** (for example, “send it”). Only the configured trigger at the end of dictation
+presses Return; earlier occurrences remain text. **Restore Default** changes the trigger back to
+“enter”. Settings are saved automatically and take effect immediately for both speech engines
+and retries. Turning the command off or leaving the trigger blank keeps all dictated words in
+the transcript without pressing Return.
+
 ## Shortcuts and modes
+
+### “Hey Nativ” wake word
+
+Enable **Audio → Shortcuts → Hey Nativ** to start dictation by saying
+**“hey nativ”** and continuing directly into your sentence. Two seconds of silence finishes
+and inserts the transcript through the normal dictation flow. The record shortcut finishes
+early; the overlay's cancel button discards the capture. The transcript omits the wake phrase
+and anything said before it. Spoken commands such as “enter” work as usual.
+Wake-started captures finish after at most two minutes. Steady background noise can delay
+automatic silence detection; use the record shortcut to finish in that case.
+
+The setting is off by default and independent of the keyboard's hands-free mode. While listening,
+it keeps the selected microphone active. A running Nativ server and an installed speech-to-text
+model are required; your selected dictation model is used. Speech is processed locally.
+
+**Listening mode** defaults to **Automatic power saving**. On battery, listening pauses after
+five minutes without keyboard, mouse, or dictation activity, or one minute in Low Power Mode.
+A successful dictation keeps listening available for at least ten more minutes, including in
+Low Power Mode. While plugged in, listening stays available without an inactivity timeout.
+
+Move the mouse, press a key, wake the display, or use the dictation shortcut to resume.
+Saying “hey nativ” cannot resume a paused microphone. The settings panel shows when listening
+is paused to save power. Choose **Always listening** to turn off inactivity pauses. Automatic
+pausing lets an ongoing wake-word confirmation or dictation finish first.
+
+Wake-started recordings follow the normal five-minute retention policy. Retrying a recording
+also omits the wake phrase from its transcript.
+
+Both modes pause listening during transcription and other audio activity, and while your Mac
+or display is asleep or your login session is inactive. It resumes when available. The settings panel shows the
+current status and offers **Try Again** if listening encounters an error.
+
+### Keyboard shortcuts
 
 | Action | Default | Behavior |
 |---|---|---|

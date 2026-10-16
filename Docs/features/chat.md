@@ -11,20 +11,77 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
   it renders in a collapsible panel separate from the final answer.
 - Per-response metrics (time to first token, decode speed, token counts) are recorded and
   surfaced from the analytics store.
+- During prefill, a “Reading prompt” status pill with a circular progress ring and
+  percentage appears next to the model's name above the active assistant response,
+  including responses that use tools. Hover over the pill for processed/total tokens.
+  This shared server activity includes requests from other windows and API clients.
+  Progress starts at 0%, advances with processed tokens
+  (including cached tokens), briefly holds at 100%, then fades out. Animations respect
+  Reduce Motion. Runtimes that report only prefill start/end advance directly from 0% to
+  100% when prefill completes.
 - Image attachments accompany a user message for vision-capable models.
 - The active model is chosen from the model picker; only language-capable models are
   selectable as the conversation model.
 
-## Sessions and folders
+## Conversation compaction
+
+**Auto compact** is enabled by default in Model Configuration. With
+a compaction-capable mlx-vlm server, chat uses `/v1/responses` and asks the server
+to summarize older context before generation. Use the slider below **Auto compact**
+under **Model Context** to choose when it triggers; hover the info icon for details.
+Its scale runs from 1–100%, with
+the handle limited to 20–90% (default 75%). Changes apply to
+the next message without restarting the server. With a 10,000-token context window,
+50% triggers at 5,000 input tokens. **Max output** is an upper bound on generated
+tokens; it does not reserve input space or change the compaction threshold.
+The server counts the rendered input, compacts older history when the threshold
+is reached, then limits generation to the smaller of **Max output** and the
+remaining context capacity. The saved setting stays unchanged. Summary generation
+has its own server-managed budget. Compaction runs before each generation request,
+including subsequent tool rounds, rather than during a streaming response.
+If a response reaches the context limit, it stops with a length finish reason;
+the next request can compact the accumulated history.
+If neither server nor local model metadata gives a limit, Nativ uses an
+8,192-token fallback.
+
+Chat shows compaction progress and a completed notice with server-measured input
+token counts when available. The completed notice is saved with the transcript;
+an interrupted progress indicator is not restored after relaunch.
+
+The full transcript stays visible and editable. Encrypted compaction state is saved
+separately with the session and replayed with subsequent messages, including tool
+results. Editing covered messages or changing the model, server, or instructions
+rebuilds the request from the transcript. Failed or cancelled requests do not replace
+saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
+the new compacted prefix. Compaction also works with caching disabled.
+
+Compaction requires a server that supports the Responses compaction API and
+budgets output from actual input usage. The bundled requirements pin the server
+revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
+External servers need that change too. To test a different checkout containing
+the fix, override the bundled source:
+
+```sh
+MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
+```
+
+Keep the server's compaction encryption key across restarts. A changed or missing
+key makes existing capsules unusable; the transcript is still preserved. Disabling
+compaction sends the full transcript through Chat Completions.
+
+## Sessions
 
 Each conversation is one session, persisted as a JSON file under
 `~/Library/Application Support/Nativ/` and loaded on launch
 ([`ChatSessionStore`](../../Sources/Nativ/Features/Chat/ChatSessionStore.swift)). A session
-carries its title, messages, timestamps, pin state, and an optional folder assignment.
+carries its title, messages, timestamps, pin state, and optional project membership.
 
 - Sessions can be renamed, pinned, and deleted from the sidebar.
-- Folders (`ChatFolder`) group sessions in the sidebar; folder membership is stored on the
-  session (`folderID`) and the folder list persists alongside sessions.
+- Chats previously assigned to folders appear automatically in **Sessions**. Individually
+  pinned chats remain in **Pinned**, and project chats remain with their projects.
+- Older session files load with their obsolete `folderID` ignored; the next save removes
+  that field. Old `folders.json` files are left unused, so missing or damaged folder
+  metadata cannot block chat loading or migration from the legacy cache.
 - Empty, redundant sessions are pruned automatically.
 
 ### Import and export
@@ -38,6 +95,210 @@ switch to the original model when it is installed and links to Models when it is
 Users can instead continue with any downloaded language model. A chat remains read-only when
 its recorded token count exceeds the selected model's context window.
 
+## Project chat environments
+
+New project chats start in **Local**, using the project's existing folder. Before sending
+messages or opening work-pane items, check **Worktree** above the composer to reserve a separate
+Git checkout directly, without a confirmation popup. Uncheck it before the first message to
+return to the local project folder. Once the chat starts or a checkout exists, the choice is locked.
+The project must be a Git repository with at least one commit. On the first message, before
+the agent starts, Nativ fetches the remote's
+default branch, asks the selected model for a descriptive branch name based on that message,
+and creates the checkout on `nativ/<name>` without a chat ID or numeric suffix. If naming fails,
+returns an invalid name, or names an existing local branch, Nativ picks two random words such
+as `nativ/quiet-cedar`, excluding existing local branches. It prefers `origin`, otherwise the current
+branch's remote or the sole configured remote. Repositories without a remote use their local
+commit. The project's current branch and uncommitted files stay unchanged.
+
+A setup card above the composer shows **Sync remote**, **Name branch**, and **Create worktree**,
+with a spinner on the active step and circular checkmarks on completed steps. The completed
+card closes automatically after one second. Sync or checkout
+failures stop the request before the agent can act; send another message to retry using the
+original first prompt. Existing worktrees are never synced or renamed automatically, and an
+interrupted checkout resumes its saved branch and commit.
+
+File read/write/search tools, project MCP scope, and new terminals use the chat's checkout.
+Projects rooted in a repository subfolder keep that relative folder in the checkout.
+The worktree is the default working directory, not a sandbox for shell commands. Work-pane
+documents, code, and generated websites live inside its project folder at
+`Nativ Files/<item-id>/<filename>`. Existing worktree chats migrate their side-pane files
+there, preserving external edits and keeping legacy copies for recovery. Missing checkouts
+never fall back to the local project or chat storage.
+
+Empty project chats show project, environment, and branch controls directly above the composer.
+Once the conversation starts, the **Pinned summary** toolbar toggle opens these controls,
+the checkout path, project-tool status, and file count without a full-width header.
+The project menu beside the branch name provides **Copy branch name**,
+**Copy folder path**, and **Show in Finder**. Checkouts live under the app profile's
+`Chat/Worktrees/<chat-id>` folder. Each chat keeps this association across launches;
+an unavailable checkout disables project tools instead of redirecting them to Local.
+Pending or failed setup remains attached to the chat across launches and resumes when a message is sent.
+Agents can create, switch, or rename branches through the approved terminal. Git is the
+source of truth: the visible controls refresh every two seconds and agent context reads HEAD
+on every model request, including follow-ups in the same turn. Detached HEAD shows the commit
+instead of a stale branch, with **Copy commit ID** in the menu.
+
+Empty worktree chats are retained. Closing a chat keeps its checkout and branch. Deleting
+it saves and verifies a self-contained Git bundle of the current HEAD before removing its
+managed checkout, including after a branch switch or detached checkout. Only the original
+Nativ-created branch is eligible for deletion, and only when its history is included in the
+snapshot and it is unused elsewhere. Other branches, including renamed and user-created
+branches, are preserved. Snapshots preserve committed history, the index, unstaged edits, and non-ignored new
+files. Ignored files require an additional confirmation listing excluded paths; cancel keeps
+the chat and its work. Submodules and nested Git repositories block cleanup because their
+contents cannot be fully captured by the parent repository's snapshot. Cleanup
+refuses changed checkout registrations and locked worktrees;
+on failure the chat remains available for retry. The local project folder is never removed.
+Bulk deletion and **Remove project > Delete Chats** use the same cleanup; **Keep Chats**
+preserves their worktrees. Active worktree chats and terminal commands must be stopped first.
+
+**Settings > Projects > Recently deleted worktrees** lists snapshots, independently of the
+deleted chat. **Restore** recreates the files and staged/unstaged changes on a new managed
+branch in a new chat, using the original repository, which must still be available at its
+original location. Saved side-pane file entries are reopened against the restored checkout;
+ignored or externally deleted files are not recreated. The old conversation is not restored. Snapshots are kept under
+`Chat/DeletedWorktrees/<snapshot-id>` until explicitly removed with **Delete permanently**;
+that action requires confirmation and never deletes restored checkouts. An interrupted cleanup
+may leave a snapshot alongside its original chat, so the saved work remains recoverable.
+
+Git commit and merge remain terminal operations. Conversation forking is unavailable for
+worktree chats in this first version, to avoid silently sharing their checkout with another
+chat; create a new project chat for another worktree instead.
+
+## Multiple windows
+
+Choose **File > New Window** or press Command + Shift + N to open another workspace.
+Each window keeps its own navigation, chat, draft, and generation state while sharing the
+inference server, loaded models, and settings. A chat can generate in only one window at a
+time, and model selection is unavailable while any window is generating.
+
+## Work pane
+
+Select **Work pane** (⌘⇧B) to open a resizable workspace beside the conversation.
+The **+** button opens a new-tab page without closing existing tabs. **Tools**
+creates terminals, documents, and HTML pages; **Suggested** and
+**Recents** reopen saved work. The rounded address bar accepts HTTP(S) URLs, bare
+hostnames, local development addresses, or search terms (searched with Google).
+The expand control switches between split and full view. Model configuration and
+the work pane share the right side of chat.
+
+- **Documents and code:** use the eye and code icons to switch between preview and
+  source. **Copy** copies the full source; its menu also offers plain text for Markdown
+  and the file name. You can also export a file. Markdown previews render math and
+  resolve newly imported documents' relative images against the original file location. Text imports are copies;
+  editing them does not modify the original.
+- **Files:** browse the documents, code, and generated HTML saved in this chat,
+  including closed tabs. **Search files** filters by filename or extension.
+  Selecting a file reopens its existing side-pane tab.
+  The **Files options** menu in the header offers
+  **Import**, **Refresh files**, **Copy folder path**, and **Show folder in Finder**.
+  Right-click a file for **Rename…**, **Copy file path**, **Show in Finder**, and **Delete**.
+  Delete moves the saved file to macOS Trash and removes its tab and entry from this chat;
+  imported originals are kept. Recover a deleted file from Trash and import it to use it again.
+  Renaming updates
+  the existing tab and the file on disk while preserving its contents. You can also
+  rename from a tab's context menu or the file's toolbar menu. Sources live under the app's
+  chat storage at `Files/<chat-id>/<item-id>/<filename>` for Local chats, or in the
+  checkout's `Nativ Files/<item-id>/<filename>` for Worktree chats, so duplicate names do not
+  overwrite each other. Pane and agent edits save to these files. Edits made in an
+  external editor or terminal are picked up by **Refresh files**, when returning
+  to the app, or before the next agent work action; conflicting edits are rejected.
+  Agent `chat_work` results include the same `file_path`. Remote website and terminal
+  tabs are not source files.
+- **Websites:** switch generated HTML between source and an interactive preview,
+  or browse an HTTP(S) URL, including a local development server. Remote pages have
+  back, forward, reload, and address controls. Agents can search Google in the same
+  tab with `chat_work` (`action: search`, `query: ...`) without a search API key.
+  Search requests start with results instead of guessed domains. Connection failures
+  and HTTP errors such as 404 include the failed URL, tab ID, and guidance to search
+  the original subject; the previous page is never returned as the failed destination.
+  Cookies and website storage use a
+  persistent profile shared across tabs, chats, and windows, so website sign-ins
+  survive closing tabs and restarting the app, until the website expires them.
+  This profile is separate from the user's regular browser; Nativ Preview also
+  has its own profile. The page's **⋮ → Clear website data…** action asks for
+  confirmation, then removes this app profile's cookies, website storage, and
+  caches and reloads open pages. Chats and documents are kept. Existing sign-ins
+  from older builds' temporary tabs require signing in once after upgrading.
+- **Terminal:** choose **+ → Terminal** for an interactive zsh shell in the chat's
+  project folder, or your home folder. Each terminal retains its process, working
+  directory, and environment while switching tabs or chats. Closing the tab stops
+  the shell and saves a bounded, redacted output snapshot; reopening it or
+  restarting the app starts a fresh shell. Approved agent `terminal` commands stream
+  into a separate, output-only **Agent terminal** tab without changing the selected
+  tab or opening a hidden work pane. Each native `terminal` command
+  still runs in its own process and uses the existing command approval flow.
+  After two seconds, a command that is still running returns `running: true` and
+  a `terminal_id`, allowing the agent to continue. It can read output with
+  `chat_work.read` or stop the command with `chat_work.interrupt`. Servers and
+  watchers should use `terminal` with `background: true`; they stay alive until
+  stopped or the terminal closes. Other commands retain their execution timeout
+  (180 seconds by default). Running does not guarantee that a server is ready.
+  New commands use another agent terminal while an existing command is running.
+  Quitting Nativ stops managed commands, interactive shells, and their foreground
+  child processes before the app exits. Closing a window does not quit Nativ.
+  Agents can also run commands in an existing interactive tab with `chat_work.run`,
+  including in standalone chats. Each command shows its target and arguments for
+  approval and passes the terminal command safety checks. Shell input or process
+  changes invalidate pending approval. User zsh startup files still load normally.
+- **Translation:** the Translate button opens the native macOS translation popover
+  for selected source or browser text, or the document/page's prose. Select the target
+  language in the popover; macOS may offer to download a language. Selected Markdown
+  in chat messages also has a **Translate…** context-menu action. Translation does not
+  overwrite the original content.
+- **Collaboration:** **Add to chat** adds an annotation directly to the composer,
+  including the page or file, selected source text, and the item's revision. **Annotate**
+  adds a selected webpage element the same way. Files also offer **Add to chat** in
+  their right-click menu. To reference a section of a document, select its text in
+  Preview or Source. The selection menu contains only **Add to chat** and **Edit**.
+  **Add to chat** focuses the composer so you can type your comment; nothing is sent
+  until you send the draft. **Edit** opens a compact input below the selection;
+  the arrow button (Return or Command-Return) sends the instruction and selected passage
+  directly to the agent to edit that file. Escape or clicking outside dismisses the input. Both actions preserve existing draft text and attachments.
+- **Persistence:** items, open tabs, selection, and pane visibility are saved with
+  the session. Closing a tab preserves its contents under **+ → Recents**.
+  Work-only sessions are retained even if no messages have been sent.
+
+The native `chat_work` tool lists, reads, creates, opens, and updates these items.
+Terminal creation accepts a title with `kind: "terminal"`. For an existing terminal,
+`run` takes its `id` and a `command`, preserving the shell's working directory and
+environment. An omitted ID uses only the selected terminal. `read` and `inspect`
+return current output, working directory, running state, readiness, and exit code;
+`interrupt` sends Ctrl-C. `run` waits up to `timeout` seconds (1–30, default 10), then
+returns the current state without stopping a longer command. Read again to follow
+progress. A busy terminal or a partially typed command must be finished or
+interrupted before another agent command can run. Browser click/type actions and
+editing terminal content never execute shell commands.
+Updates require the revision returned by `read`; an intervening user edit causes
+a conflict instead of being overwritten. If an agent omits an update's ID, the app
+uses only its latest read in that chat with the same revision and matching title/kind
+when provided. This read receipt is kept in memory, and the target is fixed before
+consent. A `.md` or `.markdown` creation can omit `kind`. `open` with a `url` opens a website directly
+without requiring a pre-existing item ID; it reuses a saved tab with the same URL.
+`navigate` with a `url` changes the selected website, or opens a website if no remote
+page is selected. An explicit `id` always targets that tab. Opening or creating a
+remote website waits for the page and returns its ID, loaded URL, text, and controls.
+`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, and `type` operate on
+the same browser instance displayed to the user and return a fresh page snapshot.
+Browser actions can omit `id` to use the selected remote website; `click` and `type`
+instead resolve the tab from the supplied element ID, even after selecting another
+tab. The resolved target is shown and fixed before consent. The item list
+includes website URLs so agents can distinguish renamed or navigated tabs.
+Browser element IDs expire after
+the next inspection or action, and changed inputs are rejected. All `chat_work`
+calls use the existing consent UI, showing the action arguments before execution.
+
+This version supports up to 24 items per chat and 256 KB of text per item. Office
+documents and PDFs are not editable in this pane. Code-file previews do not
+execute code; use a terminal for local commands.
+Browser inspection covers the main document's DOM, not canvas controls, shadow
+roots, or embedded frames. Password and file inputs require direct user interaction.
+HTML previews run scripts in a sandboxed frame without native host access.
+
+Sources: [`ChatWorkPane`](../../Sources/Nativ/Features/Chat/ChatWorkPane.swift),
+[`ChatWorkState`](../../Sources/Nativ/Features/Chat/ChatWorkState.swift), and
+[`ChatWorkBrowser`](../../Sources/Nativ/Features/Chat/ChatWorkBrowser.swift).
+
 ## Chat tools
 
 A tool-calling model can invoke host capabilities mid-conversation. The registry is
@@ -49,6 +310,7 @@ A tool-calling model can invoke host capabilities mid-conversation. The registry
 | Model library | List installed models or switch the active model. |
 | Server stats | Report server and request statistics. |
 | System monitor | Report live CPU, GPU, and memory readings. |
+| Chat work | Create and edit shared work, open tabs, and interact with remote websites in the work pane. |
 | File Read | Read bounded text and search contents or filenames in a user-authorized local folder. |
 | File Write | Create, overwrite, and patch text files in a user-authorized local folder. |
 

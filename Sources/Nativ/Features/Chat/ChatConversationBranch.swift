@@ -141,7 +141,7 @@ enum ChatConversationBranch {
     ) -> ChatSession {
         ChatSession(
             id: id,
-            title: ChatSession.defaultTitle(for: messages, createdAt: createdAt),
+            title: ChatSession.defaultTitle(for: messages),
             customTitle: nil,
             createdAt: createdAt,
             updatedAt: createdAt,
@@ -149,9 +149,10 @@ enum ChatConversationBranch {
             pinned: false,
             pinnedOrder: nil,
             sessionOrder: nil,
-            folderID: source.folderID,
             projectID: source.projectID,
-            imageGenerationModelID: source.imageGenerationModelID
+            imageGenerationModelID: source.imageGenerationModelID,
+            workState: source.workState,
+            personalizationSnapshot: source.personalizationSnapshot
         )
     }
 }

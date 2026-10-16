@@ -40,21 +40,22 @@ struct ControlPanelView: View {
     @State var sidebarDragStartWidth: CGFloat?
     @State var isModelConfigurationVisible = false
     @State var selectedDevSection: DevHubView.Section = .integrations
-    @State var isNewChatHovering = false
+    @State var isProjectsHeaderHovering = false
+    @State var isSessionsHeaderHovering = false
+    @State var sidebarRenameCommitRequests = PassthroughSubject<Void, Never>()
     @State var isSelectingRecents = false
     @State var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
-    @State var selectedFolderIDs: Set<UUID> = []
     @State var isPinnedDropTargeted = false
     @State var isSessionsDropTargeted = false
     @State var reorderTargetID: ControlPanelRecentSession.ID?
     @State var reorderInsertAfter = false
-    @State var isFoldersDropTargeted = false
     @State var pendingDeleteRecent: ControlPanelRecentSession?
-    @State var pendingDeleteFolder: ChatFolder?
     @State var pendingDeleteProject: ChatProject?
     @State var projectErrorMessage: String?
+    @State var chatDeletionErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
+    @State var chatLibrarySearch = ChatLibrarySearchState()
 
     var chat: ChatViewModel { dependencies.chat }
     var mcpHost: MCPHostManager { dependencies.mcpHost }
@@ -118,31 +119,37 @@ struct ControlPanelView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: isSidebarVisible ? sidebarWidth : 0)
+        GeometryReader { geometry in
+            let maximumSidebarWidth = ControlPanelLayout.maximumSidebarWidth(
+                availableWidth: geometry.size.width
+            )
+            let visibleSidebarWidth = min(sidebarWidth, maximumSidebarWidth)
+            let sidebarInset = isSidebarVisible ? visibleSidebarWidth : 0
 
-                detail
-                    .frame(
-                        minWidth: ControlPanelLayout.detailMinimumWidth,
-                        maxWidth: .infinity,
-                        maxHeight: .infinity
-                    )
-                    .ignoresSafeArea(
-                        .container,
-                        edges: isSidebarVisible ? .top : []
-                    )
-            }
+            ZStack(alignment: .leading) {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarInset)
 
-            resizableSidebar
-                .offset(
-                    x: isSidebarVisible
-                        ? 0
-                        : -sidebarWidth
+                    detail
+                        .frame(width: max(0, geometry.size.width - sidebarInset))
+                        .frame(maxHeight: .infinity)
+                        .clipped()
+                        .ignoresSafeArea(
+                            .container,
+                            edges: isSidebarVisible ? .top : []
+                        )
+                }
+
+                resizableSidebar(
+                    width: visibleSidebarWidth,
+                    maximumWidth: maximumSidebarWidth
                 )
+                .offset(x: isSidebarVisible ? 0 : -visibleSidebarWidth)
                 .allowsHitTesting(isSidebarVisible)
                 .accessibilityHidden(!isSidebarVisible)
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .leading)
         }
         .animation(
             .easeInOut(duration: ControlPanelLayout.sidebarTransitionDuration),
@@ -151,6 +158,10 @@ struct ControlPanelView: View {
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .toolbar(removing: .title)
         .frame(minWidth: 1040, minHeight: 600)
+        .environment(\.chatLibrarySearch, chatLibrarySearch)
+        .sheet(isPresented: $chatLibrarySearch.isPresented) {
+            ChatLibrarySearchPopup(search: chatLibrarySearch, chat: chat, onSelect: openChatSearchResult)
+        }
         .environment(\.controlPanelIsFullScreen, isFullScreen)
         .environment(\.controlPanelIsSidebarVisible, isSidebarVisible)
         .environment(\.openExtensionsHubSection) { section in
@@ -307,8 +318,20 @@ struct ControlPanelView: View {
             )
 
             Spacer(minLength: 0)
+                .frame(height: ControlPanelLayout.topControlSize)
+                .contentShape(.rect)
+                .onTapGesture(count: 2) {
+                    NSApp.keyWindow?.performZoom(nil)
+                }
+                .simultaneousGesture(WindowDragGesture())
 
-            if showsModelConfigurationToggle {
+            if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
+                ChatWorkWindowControls(
+                    chat: chat,
+                    isConfigurationVisible: isModelConfigurationVisible,
+                    toggleConfiguration: toggleModelConfigurationVisibility
+                )
+            } else if showsModelConfigurationToggle {
                 controlPanelTopButton(
                     systemName: "sidebar.right",
                     help: isModelConfigurationVisible

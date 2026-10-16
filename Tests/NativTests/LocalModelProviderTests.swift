@@ -137,77 +137,214 @@ final class LocalModelProviderTests: XCTestCase {
 
         XCTAssertEqual(provider, .blackForestLabs)
     }
+
+    func testHuggingFaceOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "HuggingFaceTB/SmolLM3-3B",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .huggingFace)
+        XCTAssertEqual(provider?.displayName, "Hugging Face")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-huggingface")
+    }
+
+    func testRepublishedSmolVLMModelResolvesToHuggingFace() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "mlx-community/SmolVLM2-2.2B-Instruct-4bit",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .huggingFace)
+    }
+
+    func testStepFunOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "stepfun-ai/step3",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .stepFun)
+        XCTAssertEqual(provider?.displayName, "StepFun")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-stepfun")
+    }
+
+    func testInternLMOrganizationResolvesToProvider() {
+        let provider = LocalModelProviderResolver.resolve(
+            repoID: "internlm/internlm3-8b-instruct",
+            modelType: nil,
+            architectures: []
+        )
+
+        XCTAssertEqual(provider, .internLM)
+        XCTAssertEqual(provider?.displayName, "InternLM")
+        XCTAssertEqual(provider?.iconResourceName, "ModelProviderIcon-internlm")
+    }
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
-    func testReasoningUsesCanonicalHubFilter() {
+    func testEmptyCapabilitySelectionUsesOneUnfilteredQuery() {
         XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.reasoning]),
-            ["reasoning"]
+            HuggingFaceCapabilityFilter.queryVariants(for: []),
+            [.init(pipelineTag: nil, tags: [])]
         )
     }
 
-    func testToolCallingUsesCanonicalHubFilter() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.tools]),
-            ["tool-calling"]
-        )
+    func testFeatureQueriesCoverEveryClassifiedAlias() throws {
+        for reasoning in ["reasoning", "thinking"] {
+            for tools in ["tool-calling", "function-calling", "tool-use"] {
+                let model = try decodeModel(pipelineTag: "text-generation", tags: [reasoning, tools])
+                let selected: Set<LocalModelCapability> = [.reasoning, .tools]
+                XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: selected))
+                XCTAssertTrue(queryCanReturn(model, capabilities: selected))
+            }
+        }
     }
 
-    func testCombinedCapabilitiesUseBothCanonicalHubFilters() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.tools, .reasoning]),
-            ["reasoning", "tool-calling"]
-        )
+    func testCombinedFeatureFilterRequiresBothCapabilities() throws {
+        for tags in [["thinking"], ["function-calling"], []] {
+            let model = try decodeModel(pipelineTag: "text-generation", tags: tags)
+            XCTAssertFalse(HuggingFaceCapabilityFilter.matches(
+                model, capabilities: [.reasoning, .tools]
+            ))
+        }
     }
 
-    func testDrafterUsesCanonicalHubFilter() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTags(for: [.drafter]),
-            ["draft-model"]
-        )
+    func testEveryCapabilityMetadataSignalHasACompatibleQuery() throws {
+        let fixtures: [(LocalModelCapability, String, [String])] = [
+            (.text, "text-generation", []),
+            (.text, "image-text-to-text", []),
+            (.text, "", ["conversational"]),
+            (.vision, "visual-question-answering", []),
+            (.vision, "", ["vision-language"]),
+            (.audio, "audio-text-to-text", []),
+            (.video, "image-to-video", []),
+            (.video, "", ["video"]),
+            (.imageGeneration, "text-to-image", []),
+            (.imageEditing, "image-text-to-image", []),
+            (.speechToText, "automatic-speech-recognition", []),
+            (.speechToText, "", ["asr"]),
+            (.textToSpeech, "", ["tts"]),
+            (.embeddings, "sentence-similarity", []),
+            (.embeddings, "", ["sentence-transformers"]),
+            (.reranking, "text-ranking", []),
+            (.reranking, "text-classification", ["base_model:org/model-reranker"]),
+            (.reasoning, "text-generation", ["thinking"]),
+            (.tools, "text-generation", ["function-calling"]),
+            (.drafter, "text-generation", ["draft-model"]),
+        ]
+
+        for (capability, pipelineTag, tags) in fixtures {
+            let model = try decodeModel(pipelineTag: pipelineTag, tags: tags)
+            XCTAssertTrue(model.capabilities.contains(capability), "Missing badge for \(capability)")
+            XCTAssertTrue(
+                queryCanReturn(model, capabilities: [capability]),
+                "No compatible query for \(capability)"
+            )
+        }
     }
 
-    func testDrafterDiscoverySearchesKnownTagVariants() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.hubTagSets(for: [.drafter]),
-            [
-                ["draft-model"],
-                ["drafter"],
-                ["speculative-decoding-draft"],
-                ["speculative-decoding"],
-            ]
+    func testIncidentalMetadataDoesNotCreateFeatureBadges() throws {
+        let model = try decodeModel(
+            pipelineTag: "text-generation",
+            libraryName: "thinking-tools",
+            tags: ["base_model:org/model-thinking", "dataset:org/function-calling", "toolkit"]
         )
+        XCTAssertFalse(model.capabilities.contains(.reasoning))
+        XCTAssertFalse(model.capabilities.contains(.tools))
     }
 
-    func testSupportedCapabilitiesUseCanonicalPipelineTasks() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.text]),
-            "text-generation"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.audio]),
-            "audio-text-to-text"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.video]),
-            "video-text-to-text"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.embeddings]),
-            "feature-extraction"
-        )
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.reranking]),
-            "text-ranking"
-        )
+    func testInstalledVisionLanguageModelsSurviveTextFilter() throws {
+        for id in ["mlx-community/Qwen3.5-9B-MLX-4bit", "mlx-community/Muse-Glimmer-30B-4bit"] {
+            let model = try decodeModel(id: id, pipelineTag: "image-text-to-text")
+            XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
+            XCTAssertTrue(queryCanReturn(model, capabilities: [.text]))
+        }
     }
 
-    func testFeatureTagCanBeCombinedWithPipelineTask() {
-        XCTAssertEqual(
-            HuggingFaceCapabilityFilter.pipelineTag(for: [.text, .reasoning]),
-            "text-generation"
+    func testAudioDoesNotAbsorbSpeechOnlyModels() throws {
+        let speechToText = try decodeModel(
+            pipelineTag: "automatic-speech-recognition",
+            tags: ["speech", "audio", "asr"]
         )
+        let textToSpeech = try decodeModel(
+            pipelineTag: "text-to-speech",
+            tags: ["speech", "audio", "tts"]
+        )
+
+        XCTAssertEqual(speechToText.capabilities, [.speechToText])
+        XCTAssertEqual(textToSpeech.capabilities, [.textToSpeech])
+        XCTAssertFalse(queryCanReturn(speechToText, capabilities: [.audio]))
+        XCTAssertFalse(queryCanReturn(textToSpeech, capabilities: [.audio]))
+    }
+
+    func testReportedHiddenModelsMatchTheirDiscoveryQueries() throws {
+        let fixtures: [(HuggingFaceModel, LocalModelCapability)] = [
+            (
+                try decodeModel(
+                    id: "mlx-community/Qwen3.8-27B-4bit",
+                    pipelineTag: "image-text-to-text",
+                    tags: ["conversational"]
+                ),
+                .text
+            ),
+            (
+                try decodeModel(
+                    id: "mlx-community/Qwen3.8-27B-Uncensored-OptiQ-4bit",
+                    pipelineTag: "text-generation",
+                    tags: ["reasoning", "function-calling", "tool-use"]
+                ),
+                .tools
+            ),
+            (
+                try decodeModel(
+                    id: "mlx-community/parakeet-tdt-0.6b-v3",
+                    pipelineTag: "automatic-speech-recognition",
+                    tags: ["speech", "audio", "asr"]
+                ),
+                .speechToText
+            ),
+            (
+                try decodeModel(
+                    id: "sentence-transformers/all-MiniLM-L6-v2",
+                    pipelineTag: "sentence-similarity",
+                    tags: ["sentence-transformers", "feature-extraction"]
+                ),
+                .embeddings
+            ),
+            (
+                try decodeModel(
+                    id: "heykorshun/bge-reranker-v2-m3-mlx-int8",
+                    pipelineTag: "text-classification",
+                    tags: ["base_model:BAAI/bge-reranker-v2-m3"]
+                ),
+                .reranking
+            ),
+            (
+                try decodeModel(
+                    id: "Qwen/Qwen-Image-Layered",
+                    pipelineTag: "image-text-to-image"
+                ),
+                .imageEditing
+            ),
+        ]
+
+        for (model, capability) in fixtures {
+            XCTAssertTrue(model.capabilities.contains(capability))
+            XCTAssertTrue(queryCanReturn(model, capabilities: [capability]))
+        }
+    }
+
+    func testCombinedFiltersStayBoundedAndConstrained() {
+        let capabilities = Set(LocalModelCapability.allCases)
+        let variants = HuggingFaceCapabilityFilter.queryVariants(for: capabilities)
+
+        XCTAssertFalse(variants.isEmpty)
+        XCTAssertLessThanOrEqual(variants.count, 32)
+        XCTAssertTrue(variants.allSatisfy { $0.pipelineTag != nil || !$0.tags.isEmpty })
     }
 
     func testSupportedHubTaskAliasesResolveToNativCapabilities() throws {
@@ -275,6 +412,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
 
         XCTAssertTrue(model.capabilities.contains(.drafter))
         XCTAssertEqual(model.drafterKind, "dflash")
+        XCTAssertTrue(queryCanReturn(model, capabilities: [.drafter]))
     }
 
     func testMalformedDrafterConfigDoesNotBreakHubModelDecoding() throws {
@@ -293,7 +431,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         XCTAssertNil(model.drafterKind)
     }
 
-    func testGGUFTaggedSafetensorsRepositoryRemainsVisible() throws {
+    func testGGUFTaggedSafetensorsRepositoryIsIdentifiedAsGGUF() throws {
         let model = try decodeModel(
             id: "test/model-GGUF",
             pipelineTag: "text-generation",
@@ -301,9 +439,38 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             safetensors: ["parameters": ["F16": 1_000]]
         )
 
-        XCTAssertTrue(
-            HuggingFaceCapabilityFilter.matches(model, capabilities: [.text])
+        XCTAssertTrue(model.isGGUF)
+    }
+
+    func testGGUFIdentificationChecksEachMetadataFieldIgnoringCase() throws {
+        let models = [
+            try decodeModel(id: "test/model-GgUf", pipelineTag: "text-generation"),
+            try decodeModel(pipelineTag: "text-generation", libraryName: "GGUF"),
+            try decodeModel(pipelineTag: "text-generation", tags: ["safetensors", "gguf"]),
+        ]
+
+        for model in models {
+            XCTAssertTrue(model.isGGUF, "Expected GGUF metadata to exclude \(model.id)")
+        }
+    }
+
+    func testSafetensorsRepositoryWithoutGGUFMetadataIsNotExcluded() throws {
+        let model = try decodeModel(
+            id: "mlx-community/model-4bit",
+            pipelineTag: "text-generation",
+            libraryName: "mlx",
+            tags: ["safetensors", "4-bit"],
+            safetensors: ["parameters": ["F16": 1_000]]
         )
+
+        XCTAssertFalse(model.isGGUF)
+        XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
+    }
+
+    func testMissingOptionalMetadataDoesNotIdentifyRepositoryAsGGUF() throws {
+        let model = try decodeModel(pipelineTag: "text-generation")
+
+        XCTAssertFalse(model.isGGUF)
     }
 
     func testGGUFArtifactsAreExcludedFromSnapshotDownloads() {
@@ -325,9 +492,21 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         try decodeModel(pipelineTag: pipelineTag, tags: tags).capabilities
     }
 
+    private func queryCanReturn(
+        _ model: HuggingFaceModel,
+        capabilities: Set<LocalModelCapability>
+    ) -> Bool {
+        let modelTags = Set(model.tags.map { $0.lowercased() })
+        return HuggingFaceCapabilityFilter.queryVariants(for: capabilities).contains {
+            ($0.pipelineTag == nil || $0.pipelineTag == model.pipelineTag?.lowercased())
+                && Set($0.tags).isSubset(of: modelTags)
+        }
+    }
+
     private func decodeModel(
         id: String = "test/model",
         pipelineTag: String,
+        libraryName: String? = nil,
         tags: [String] = [],
         safetensors: [String: Any]? = nil,
         config: [String: Any]? = nil
@@ -337,6 +516,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             "pipeline_tag": pipelineTag,
             "tags": tags,
         ]
+        payload["library_name"] = libraryName
         payload["safetensors"] = safetensors
         payload["config"] = config
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -534,6 +714,30 @@ final class HuggingFaceDownloadOutputTests: XCTestCase {
         XCTAssertEqual(failure, .gatedRepository)
     }
 
+    func testShowsOnlyTheExceptionMessageForPythonTracebacks() {
+        let failure = HuggingFaceDownloadFailure(processOutput: """
+        __NATIV_STAGE__:preparing
+        Traceback (most recent call last):
+          File "<string>", line 44, in <module>
+        RuntimeError: Could not verify the model's download size. Try again.
+        """)
+
+        XCTAssertEqual(failure, .message("Could not verify the model's download size. Try again."))
+    }
+
+    func testDescribesInsufficientSpaceWithoutInternalOutput() {
+        let alone = HuggingFaceDownloadFailure.insufficientSpace(
+            required: 62_578_686_256, available: 44_260_000_000, reservedByOtherDownloads: 0
+        ).localizedDescription
+        let shared = HuggingFaceDownloadFailure.insufficientSpace(
+            required: 62_578_686_256, available: 44_260_000_000, reservedByOtherDownloads: 5_000_000_000
+        ).localizedDescription
+
+        XCTAssertTrue(alone.hasPrefix("Not enough disk space."))
+        XCTAssertFalse(alone.contains("Downloads in progress"))
+        XCTAssertTrue(shared.contains("Downloads in progress are holding"))
+    }
+
     func testKeepsUsefulLinesForUnknownDownloadFailure() {
         let failure = HuggingFaceDownloadFailure(processOutput: """
         first line
@@ -580,47 +784,32 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
     }
 
-    func testNearCompleteProgressUsesFinishingState() throws {
-        let start = Date(timeIntervalSinceReferenceDate: 3_000)
-        var state = HuggingFaceDownloadProgressState(now: start)
-        let progress = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 950, totalBytes: 1_000)
-        )
-
-        _ = state.recordProgress(progress, at: start)
-
-        XCTAssertTrue(state.isFinishing)
-    }
-
-    func testTransferEstimateCeilingUsesFinishingState() throws {
+    func testTransferredBytesDoNotAdvanceProgress() throws {
         let start = Date(timeIntervalSinceReferenceDate: 3_500)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
-            ModelDownloadProgress(completedBytes: 0, totalBytes: 1_001)
+            ModelDownloadProgress(completedBytes: 200, totalBytes: 1_000)
         )
 
         _ = state.recordProgress(initial, at: start)
-        let capped = try XCTUnwrap(
-            state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
-        )
+        state.recordTransferredBytes(2_000, at: start.addingTimeInterval(1))
 
-        XCTAssertEqual(capped.completedBytes, 951)
-        XCTAssertLessThan(capped.fractionCompleted, 1)
-        XCTAssertTrue(state.isFinishing)
+        XCTAssertEqual(state.progress, initial)
+        XCTAssertEqual(state.bytesPerSecond, 2_000)
     }
 
     func testTransferredBytesProduceSmoothedTransferSpeed() {
         let start = Date(timeIntervalSinceReferenceDate: 4_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
+        state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
         XCTAssertEqual(state.bytesPerSecond, 1_000)
 
-        _ = state.recordTransferredBytes(3_000, at: start.addingTimeInterval(2))
+        state.recordTransferredBytes(3_000, at: start.addingTimeInterval(2))
         XCTAssertEqual(state.bytesPerSecond, 1_350)
     }
 
-    func testTransferBytesAdvanceProgressBetweenReconstructionUpdates() throws {
+    func testReconstructionUpdatesRemainExactAfterTransfers() throws {
         let start = Date(timeIntervalSinceReferenceDate: 5_000)
         var state = HuggingFaceDownloadProgressState(now: start)
         let initial = try XCTUnwrap(
@@ -631,22 +820,29 @@ final class HuggingFaceDownloadProgressStateTests: XCTestCase {
         )
 
         _ = state.recordProgress(initial, at: start)
-        XCTAssertEqual(
-            state.recordTransferredBytes(100, at: start.addingTimeInterval(0.1))?.completedBytes,
-            100
-        )
-        _ = state.recordProgress(reconstructed, at: start.addingTimeInterval(0.2))
-        XCTAssertEqual(
-            state.recordTransferredBytes(200, at: start.addingTimeInterval(0.3))?.completedBytes,
-            350
-        )
+        state.recordTransferredBytes(600, at: start.addingTimeInterval(1))
+        XCTAssertEqual(state.progress, initial)
+        XCTAssertEqual(state.recordProgress(reconstructed), reconstructed)
+        state.recordTransferredBytes(900, at: start.addingTimeInterval(2))
+        XCTAssertEqual(state.progress, reconstructed)
+    }
+
+    func testRetryUsesTheNewConfirmedByteCount() throws {
+        var state = HuggingFaceDownloadProgressState()
+        _ = state.recordProgress(try XCTUnwrap(ModelDownloadProgress(completedBytes: 600, totalBytes: 1_000)))
+
+        state.beginAttempt()
+        let cached = try XCTUnwrap(ModelDownloadProgress(completedBytes: 100, totalBytes: 1_000))
+
+        XCTAssertEqual(state.recordProgress(cached), cached)
+        XCTAssertEqual(state.progress, cached)
     }
 
     func testTransferSpeedBecomesUnknownWhenStale() {
         let start = Date(timeIntervalSinceReferenceDate: 6_000)
         var state = HuggingFaceDownloadProgressState(now: start)
 
-        _ = state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
+        state.recordTransferredBytes(1_000, at: start.addingTimeInterval(1))
         XCTAssertEqual(state.transferSpeed(at: start.addingTimeInterval(2)), 1_000)
         XCTAssertNil(state.transferSpeed(at: start.addingTimeInterval(3)))
     }
@@ -659,12 +855,6 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0), 0)
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(0.994), 99)
         XCTAssertEqual(ModelDownloadProgressPresentation.activePercentage(1), 99)
-    }
-
-    func testNearCompleteDownloadUsesFinishingState() {
-        XCTAssertFalse(ModelDownloadProgressPresentation.isFinishing(0.949))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(0.95))
-        XCTAssertTrue(ModelDownloadProgressPresentation.isFinishing(1))
     }
 
     func testActiveProgressRingDoesNotBecomeComplete() {
@@ -701,5 +891,63 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
             ),
             "3.4 GB / 8 GB"
         )
+    }
+}
+
+final class HuggingFaceXetDownloadTests: XCTestCase {
+    func testForwardsWrittenBytesWithoutDoubleCounting() throws {
+        let result = try run(helper: "print(20)\nprint(80)\nprint(100)")
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("written=[20, 60, 20]"))
+        XCTAssertTrue(result.output.contains("speed=[20, 60, 20]"))
+    }
+
+    func testRejectsFailedIncompleteAndInvalidDownloads() throws {
+        for helper in ["print(20)\nexit(1)", "print(20)", "print(101)", "print(20)\nprint(10)"] {
+            let result = try run(helper: helper)
+            XCTAssertNotEqual(result.status, 0, result.output)
+            XCTAssertFalse(result.output.contains("written="))
+        }
+    }
+
+    private func run(helper: String) throws -> (status: Int32, output: String) {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("helper")
+        try "#!/usr/bin/python3\n\(helper)\n".write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let script = """
+        import os, sys, types
+        written, speed = [], []
+        class Bar:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def update(self, count): written.append(count)
+            def update_transfer(self, count): speed.append(count)
+        hub = types.ModuleType('huggingface_hub')
+        download = types.ModuleType('huggingface_hub.file_download')
+        download._get_progress_bar_context = lambda **kwargs: Bar()
+        hub.file_download = download
+        sys.modules['huggingface_hub'] = hub
+        sys.modules['huggingface_hub.file_download'] = download
+        \(HuggingFaceXetDownload.script)
+        download.xet_get(
+            incomplete_path='unused', expected_size=100, headers={},
+            xet_file_data=types.SimpleNamespace(file_hash='hash', refresh_route='url'),
+        )
+        print('written=' + str(written))
+        print('speed=' + str(speed))
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = ["-c", script, "", "", "", "", executable.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self))
     }
 }

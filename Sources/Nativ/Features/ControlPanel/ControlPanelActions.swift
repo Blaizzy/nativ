@@ -6,15 +6,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension ControlPanelView {
-    func createRecentSession() {
-        if selectedTab == .chat, chatWorkspaceMode == .images {
-            imageGeneration.beginNewDraft()
-            showImageWorkspace()
-        } else {
-            createChatSession(projectID: activeProjectContextID)
-        }
-    }
-
     func handleNewChatRequest() {
         guard navigation.consumeNewChatRequest() else {
             return
@@ -54,19 +45,34 @@ extension ControlPanelView {
     }
 
     func exportRecentConversation(_ recent: ControlPanelRecentSession) {
-        guard case .chat(let sessionID) = recent.selection,
-            let archive = chat.archive(
-                for: sessionID,
-                selectedModelID: model.settings.normalized().languageModelID,
-                systemPrompt: model.settings.systemPrompt
-            )
-        else {
-            return
-        }
+        guard case .chat(let sessionID) = recent.selection else { return }
         let panel = NSSavePanel()
         panel.nameFieldStringValue = chatExportFileName(for: recent.title)
         panel.allowedContentTypes = [.json]
+        let includePersonalization = NSButton(checkboxWithTitle: "Include personalization", target: nil, action: nil)
+        includePersonalization.state = .off
+        let explanation = NSTextField(wrappingLabelWithString:
+            "Includes the saved profile and response preferences. Anyone with this file can read them.")
+        explanation.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        explanation.textColor = .secondaryLabelColor
+        let options = NSStackView(views: [includePersonalization, explanation])
+        options.orientation = .vertical
+        options.alignment = .leading
+        options.spacing = 4
+        options.edgeInsets = NSEdgeInsets(top: 8, left: 20, bottom: 8, right: 20)
+        explanation.widthAnchor.constraint(equalToConstant: 380).isActive = true
+        options.setFrameSize(options.fittingSize)
+        panel.accessoryView = options
         guard panel.runModal() == .OK, let url = panel.url else {
+            return
+        }
+        guard let archive = chat.archive(
+            for: sessionID,
+            selectedModelID: model.settings.normalized().languageModelID,
+            systemPrompt: model.settings.systemPrompt,
+            includePersonalization: includePersonalization.state == .on
+        ) else {
+            chatImportAlert = .failed("The chat could not be exported. Make sure it is still available and a model is selected.")
             return
         }
         do {
@@ -102,8 +108,10 @@ extension ControlPanelView {
                 chatImportAlert = .failed("Nativ could not save the imported chat.")
                 return
             }
+            exitSelectMode()
             showChatWorkspace()
             applySidebarSelection(.chat(sessionID))
+            revealSidebarSection(\.sidebarSessionsCollapsed)
         } catch {
             chatImportAlert = .failed(error.localizedDescription)
             return
@@ -142,43 +150,6 @@ extension ControlPanelView {
         }
     }
 
-    func exportFolder(_ folder: ChatFolder) {
-        let chatIDs = sessions(inFolder: folder.id).compactMap(\.chatID)
-        guard !chatIDs.isEmpty else {
-            return
-        }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Export"
-        guard panel.runModal() == .OK, let directory = panel.url else {
-            return
-        }
-        let root = directory.appendingPathComponent(
-            sanitizedFileName(folder.name), isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-
-        var usedNames: Set<String> = []
-        for sessionID in chatIDs {
-            guard let text = chat.conversationText(for: sessionID) else {
-                continue
-            }
-            let title = sidebarState.recents.chatTitle(for: sessionID) ?? sessionID.uuidString
-            let base = sanitizedFileName(title)
-            var candidate = base
-            var suffix = 2
-            while usedNames.contains(candidate.lowercased()) {
-                candidate = "\(base) \(suffix)"
-                suffix += 1
-            }
-            usedNames.insert(candidate.lowercased())
-            let fileURL = root.appendingPathComponent("\(candidate).txt")
-            try? text.write(to: fileURL, atomically: true, encoding: .utf8)
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([root])
-    }
-
     func sanitizedFileName(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
@@ -211,7 +182,7 @@ extension ControlPanelView {
         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
 
-    func deleteRecentSession(_ recent: ControlPanelRecentSession) {
+    func deleteRecentSession(_ recent: ControlPanelRecentSession) async {
         let shouldSelectReplacement = isDisplayedRecent(recent)
         let replacementSelection =
             shouldSelectReplacement
@@ -220,7 +191,7 @@ extension ControlPanelView {
 
         switch recent.selection {
         case .chat(let sessionID):
-            deleteChatSession(sessionID)
+            guard await deleteChatSession(sessionID) else { return }
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
@@ -243,8 +214,23 @@ extension ControlPanelView {
         }
     }
 
-    func deleteChatSession(_ sessionID: UUID) {
-        chat.deleteSession(sessionID)
+    func deleteChatSession(_ sessionID: UUID) async -> Bool {
+        do {
+            return try await chat.deleteSession(sessionID, confirmDiscard: confirmWorktreeDiscard)
+        } catch {
+            chatDeletionErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func confirmWorktreeDiscard(_ warning: String) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Remove ignored files?"
+        alert.informativeText = warning
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Save Snapshot and Delete")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func adjacentRecentSelection(
@@ -315,26 +301,6 @@ extension ControlPanelView {
         }
     }
 
-    var newRecentHelp: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "Start a new image draft"
-            : activeProjectContextID.flatMap { projects.project(withID: $0)?.name }
-                .map { "Create a new chat in \($0)" }
-                ?? "Create a new chat"
-    }
-
-    var newRecentTitle: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "New image"
-            : "New chat"
-    }
-
-    var newRecentSystemImage: String {
-        selectedTab == .chat && chatWorkspaceMode == .images
-            ? "photo.badge.plus"
-            : "square.and.pencil"
-    }
-
     var activeProjectContextID: UUID? {
         selectedTab == .chat && chatWorkspaceMode == .chat
             ? chat.currentProjectID
@@ -342,8 +308,23 @@ extension ControlPanelView {
     }
 
     func createChatSession(projectID: UUID? = nil) {
+        exitSelectMode()
+        sidebarRenameCommitRequests.send()
         chat.createSession(projectID: projectID)
         showChatWorkspace()
+
+        if let projectID, let project = projects.project(withID: projectID) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarProjectsCollapsed = false
+                if project.isCollapsed {
+                    projects.setCollapsed(projectID, collapsed: false)
+                }
+            }
+        } else if projectID == nil {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.settings.sidebarSessionsCollapsed = false
+            }
+        }
     }
 
     func createProject() {
@@ -396,16 +377,15 @@ extension ControlPanelView {
     func removeProject(
         _ project: ChatProject,
         disposition: ChatProjectSessionRemovalDisposition
-    ) {
-        guard chat.removeProjectSessions(projectID: project.id, disposition: disposition) else {
-            pendingDeleteProject = nil
-            projectErrorMessage =
-                "One or more project chats are active in another window. Stop them and try again."
-            return
+    ) async {
+        do {
+            guard try await chat.removeProjectSessions(projectID: project.id, disposition: disposition,
+                                                      confirmDiscard: confirmWorktreeDiscard) else { return }
+            projects.removeProject(project.id)
+            showChatWorkspace()
+        } catch {
+            projectErrorMessage = error.localizedDescription
         }
-        projects.removeProject(project.id)
-        pendingDeleteProject = nil
-        showChatWorkspace()
     }
 
     func selectChatWorkspaceMode(_ mode: ChatWorkspaceMode) {

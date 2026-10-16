@@ -75,6 +75,19 @@ struct AudioDailyUsage: Identifiable, Equatable, Sendable {
     var id: Date { date }
 }
 
+struct AudioModelUsage: Identifiable, Equatable, Sendable {
+    let modelID: String?
+    let transcriptions: Int
+    let dictations: Int
+    let recordings: Int
+    let words: Int
+    let durationSeconds: TimeInterval
+    let timedTranscriptions: Int
+    let lastUsedAt: Date
+
+    var id: String { modelID ?? "__unknown_transcription_model__" }
+}
+
 @MainActor
 final class AudioAnalyticsStore: ObservableObject {
     static let shared = AudioAnalyticsStore()
@@ -190,6 +203,52 @@ final class AudioAnalyticsStore: ObservableObject {
         }
     }
 
+    func modelUsage(since startDate: Date? = nil) -> [AudioModelUsage] {
+        let transcribedRecords = records.filter { record in
+            !record.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (startDate.map { record.recordedAt >= $0 } ?? true)
+        }
+        let grouped = Dictionary(grouping: transcribedRecords) { record in
+            record.modelID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+
+        return grouped.map { modelID, matchingRecords in
+            let durations = matchingRecords.compactMap { record -> TimeInterval? in
+                guard let duration = record.durationSeconds,
+                      duration.isFinite,
+                      duration >= 0
+                else {
+                    return nil
+                }
+                return duration
+            }
+            let dictations = matchingRecords.count {
+                $0.resolvedKind == .dictation
+            }
+            return AudioModelUsage(
+                modelID: modelID.isEmpty ? nil : modelID,
+                transcriptions: matchingRecords.count,
+                dictations: dictations,
+                recordings: matchingRecords.count - dictations,
+                words: matchingRecords.reduce(0) { $0 + wordCount(for: $1) },
+                durationSeconds: durations.reduce(0, +),
+                timedTranscriptions: durations.count,
+                lastUsedAt: matchingRecords.map(\.recordedAt).max() ?? .distantPast
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.transcriptions != rhs.transcriptions {
+                return lhs.transcriptions > rhs.transcriptions
+            }
+            if lhs.words != rhs.words {
+                return lhs.words > rhs.words
+            }
+            guard let lhsModelID = lhs.modelID else { return false }
+            guard let rhsModelID = rhs.modelID else { return true }
+            return lhsModelID.localizedCaseInsensitiveCompare(rhsModelID) == .orderedAscending
+        }
+    }
+
     func record(withID id: String) -> AudioTranscriptionRecord? {
         records.first { $0.id == id }
     }
@@ -204,6 +263,7 @@ final class AudioAnalyticsStore: ObservableObject {
         title: String? = nil,
         persistAudioReference: Bool = false,
         summary: String? = nil,
+        preserveExistingSummary: Bool = true,
         recordedAt: Date? = nil,
         updatedAt: Date = Date()
     ) {
@@ -226,7 +286,7 @@ final class AudioAnalyticsStore: ObservableObject {
             audioFileName: persistAudioReference
                 ? recordingURL.lastPathComponent
                 : existing?.audioFileName,
-            summary: summary ?? existing?.summary
+            summary: summary ?? (preserveExistingSummary ? existing?.summary : nil)
         )
         records.removeAll { $0.id == id }
         records.append(record)

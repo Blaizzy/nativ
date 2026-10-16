@@ -41,36 +41,6 @@ struct RowReorderDropDelegate: DropDelegate {
     }
 }
 
-struct FolderDropDelegate: DropDelegate {
-    let onChatDrop: (UUID) -> Void
-    let onFolderDrop: (UUID) -> Void
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard let provider = info.itemProviders(for: [.text]).first else {
-            return false
-        }
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let string = object as? String, !string.isEmpty else {
-                return
-            }
-            DispatchQueue.main.async {
-                if string.hasPrefix("folder:") {
-                    if let id = UUID(uuidString: String(string.dropFirst("folder:".count))) {
-                        onFolderDrop(id)
-                    }
-                } else if let id = UUID(uuidString: string) {
-                    onChatDrop(id)
-                }
-            }
-        }
-        return true
-    }
-}
-
 extension ControlPanelView {
     func dropHighlight(isTargeted: Bool) -> some View {
         RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -83,7 +53,7 @@ extension ControlPanelView {
         isPinnedRow: Bool
     ) -> some View {
         if let payload = recent.dragPayload, !isSelectingRecents {
-            recentSessionRow(recent)
+            recentSessionRow(recent, alignsContentWithSectionHeader: true)
                 .onDrag {
                     NSItemProvider(object: payload as NSString)
                 } preview: {
@@ -109,7 +79,7 @@ extension ControlPanelView {
                         }
                     ))
         } else {
-            recentSessionRow(recent)
+            recentSessionRow(recent, alignsContentWithSectionHeader: true)
         }
     }
 
@@ -142,32 +112,6 @@ extension ControlPanelView {
         }
     }
 
-    func handleFolderRowDrop(
-        draggedPayload: String,
-        target: ControlPanelRecentSession,
-        insertAfter: Bool,
-        folderID: UUID
-    ) {
-        reorderTargetID = nil
-        reorderInsertAfter = false
-        guard let draggedID = UUID(uuidString: draggedPayload),
-            sidebarState.recents.containsChatSession(draggedID),
-            let targetID = target.chatID,
-            draggedID != targetID
-        else {
-            return
-        }
-        var order = sessions(inFolder: folderID).compactMap(\.chatID)
-        order.removeAll { $0 == draggedID }
-        if let index = order.firstIndex(of: targetID) {
-            order.insert(draggedID, at: insertAfter ? index + 1 : index)
-        } else {
-            order.append(draggedID)
-        }
-        chat.moveSession(draggedID, toFolder: folderID)
-        chat.applySessionOrder(order)
-    }
-
     @discardableResult
     func loadDropString(
         _ providers: [NSItemProvider],
@@ -197,7 +141,7 @@ extension ControlPanelView {
             Image(systemName: "bubble.left")
                 .font(.system(size: 11))
             Text(recent.title)
-                .nativTextStyle(.rowTitle)
+                .legacyTextStyle(.rowTitle)
                 .lineLimit(1)
         }
         .padding(.horizontal, 10)

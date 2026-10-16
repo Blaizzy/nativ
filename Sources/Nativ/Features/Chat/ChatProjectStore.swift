@@ -82,9 +82,10 @@ struct ChatToolScope: Equatable, Sendable {
     let projectName: String?
     let rootPath: String?
     let projectToolsEnabled: Bool
+    var worktree: ChatGitWorktree? = nil
 
     var isProject: Bool {
-        projectID != nil
+        projectID != nil || worktree != nil
     }
 
     var projectToolsAreAvailable: Bool {
@@ -100,7 +101,7 @@ struct ChatToolScope: Equatable, Sendable {
     }
 
     var terminalWorkingDirectory: String? {
-        isProject ? rootPath : nil
+        isProject ? (rootPath ?? worktree?.projectPath) : nil
     }
 
     var systemPrompt: String? {
@@ -113,12 +114,22 @@ struct ChatToolScope: Equatable, Sendable {
                 """
         }
         let name = projectName ?? "Project"
+        let checkoutContext = worktree.map { tree in
+            let headContext: String
+            switch tree.currentHead {
+            case .branch(let name): headContext = "Current branch: \(name)."
+            case .detached(let commit): headContext = "HEAD is detached at \(commit). Create a branch before committing new work."
+            case nil: headContext = "Git HEAD is unavailable; inspect Git before changing branches or committing."
+            }
+            return " This chat uses a dedicated Git worktree. \(headContext) Keep project changes in this checkout. "
+                + "Use the terminal for git branch/switch operations and check git status afterward."
+        } ?? ""
         if projectToolsEnabled {
             return """
                 You are working in the Nativ project “\(name)”. Its workspace root is \
                 \(rootPath). Resolve relative file-tool paths from that root. Terminal commands start \
                 in that directory but are not otherwise filesystem-confined. Every terminal command \
-                still requires the user's approval.
+                still requires the user's approval.\(checkoutContext)
                 """
         }
         return """
@@ -259,8 +270,16 @@ final class ChatProjectStore: ObservableObject {
 
     func toolScope(
         for projectID: UUID?,
-        settings: NativSettings
+        settings: NativSettings,
+        worktree: ChatGitWorktree? = nil
     ) -> ChatToolScope {
+        if let worktree {
+            return ChatToolScope(
+                projectID: projectID, projectName: projectID.flatMap { project(withID: $0)?.name },
+                rootPath: worktree.availableRootPath, projectToolsEnabled: settings.projectToolsEnabled,
+                worktree: worktree
+            )
+        }
         guard let projectID else {
             return .standalone(settings: settings)
         }

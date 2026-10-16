@@ -27,6 +27,9 @@ enum LocalModelProvider: String, Hashable, Sendable {
     case stabilityAI
     case thinkingMachines
     case meituanLongCat
+    case huggingFace
+    case stepFun
+    case internLM
 
     var displayName: String {
         switch self {
@@ -56,6 +59,9 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .stabilityAI: "Stability AI"
         case .thinkingMachines: "Thinking Machines"
         case .meituanLongCat: "Meituan LongCat"
+        case .huggingFace: "Hugging Face"
+        case .stepFun: "StepFun"
+        case .internLM: "InternLM"
         }
     }
 
@@ -87,6 +93,9 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .stabilityAI: "ModelProviderIcon-stability"
         case .thinkingMachines: "ModelProviderIcon-thinking-machines"
         case .meituanLongCat: "ModelProviderIcon-longcat"
+        case .huggingFace: "ModelProviderIcon-huggingface"
+        case .stepFun: "ModelProviderIcon-stepfun"
+        case .internLM: "ModelProviderIcon-internlm"
         }
     }
 
@@ -118,6 +127,9 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .stabilityAI: "S"
         case .thinkingMachines: "TM"
         case .meituanLongCat: "LC"
+        case .huggingFace: "HF"
+        case .stepFun: "S"
+        case .internLM: "IL"
         }
     }
 
@@ -125,7 +137,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         switch self {
         case .google, .mistral, .microsoft, .cohere, .openBMB, .openMOSS, .poolside,
              .prismML, .inclusionAI, .miniMax, .baidu, .stabilityAI,
-             .thinkingMachines, .meituanLongCat:
+             .thinkingMachines, .meituanLongCat, .huggingFace, .stepFun, .internLM:
             true
         default:
             false
@@ -140,7 +152,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         switch self {
         case .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI,
              .inclusionAI, .miniMax, .baidu, .moonshotAI, .stabilityAI,
-             .thinkingMachines, .meituanLongCat:
+             .thinkingMachines, .meituanLongCat, .huggingFace, .stepFun, .internLM:
             .labelColor
         case .meta:
             NSColor(srgbRed: 0 / 255, green: 129 / 255, blue: 251 / 255, alpha: 1)
@@ -204,7 +216,10 @@ enum LocalModelProviderResolver {
             identifiers: ["stablediffusion", "stablelm", "stableaudio", "stablevideo", "stablecascade", "sdxl"]
         ),
         ModelFamilyMapping(provider: .thinkingMachines, identifiers: ["inkling"]),
-        ModelFamilyMapping(provider: .meituanLongCat, identifiers: ["longcat"])
+        ModelFamilyMapping(provider: .meituanLongCat, identifiers: ["longcat"]),
+        ModelFamilyMapping(provider: .huggingFace, identifiers: ["smol", "idefics"]),
+        ModelFamilyMapping(provider: .stepFun, identifiers: ["step3", "stepaudio"]),
+        ModelFamilyMapping(provider: .internLM, identifiers: ["internvl", "internlm"])
     ]
 
     private static let organizationMappings: [String: LocalModelProvider] = [
@@ -251,7 +266,15 @@ enum LocalModelProviderResolver {
         "stabilityai": .stabilityAI,
         "thinkingmachines": .thinkingMachines,
         "thinkingmachineslab": .thinkingMachines,
-        "meituanlongcat": .meituanLongCat
+        "meituanlongcat": .meituanLongCat,
+        "huggingfacetb": .huggingFace,
+        "huggingfacem4": .huggingFace,
+        "huggingface": .huggingFace,
+        "stepfun": .stepFun,
+        "stepfunai": .stepFun,
+        "internlm": .internLM,
+        "opengvlab": .internLM,
+        "shanghaiailab": .internLM
     ]
 
     static func resolve(

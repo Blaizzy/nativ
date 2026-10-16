@@ -14,7 +14,13 @@
     "name": "git",
     "summary": "Inspect and operate on Git repositories.",
     "command": "uvx",
-    "args": ["--with", "mcp==1.12.0", "mcp-server-git"],
+    "args": ["--with", "mcp==1.30.0", "mcp-server-git"],
+    "legacyLaunchConfigurations": [
+      {
+        "command": "uvx",
+        "args": ["--with", "mcp==1.12.0", "mcp-server-git"]
+      }
+    ],
     "symbol": "arrow.triangle.branch",
     "tint": "orange",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
@@ -42,7 +48,13 @@
     "name": "fetch",
     "summary": "Fetch and read web pages as markdown.",
     "command": "uvx",
-    "args": ["--with", "mcp==1.12.0", "mcp-server-fetch"],
+    "args": ["--with", "mcp==1.30.0", "mcp-server-fetch"],
+    "legacyLaunchConfigurations": [
+      {
+        "command": "uvx",
+        "args": ["--with", "mcp==1.12.0", "mcp-server-fetch"]
+      }
+    ],
     "symbol": "globe",
     "tint": "teal",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
@@ -58,11 +70,27 @@
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
   },
   {
+    "id": "lwc",
+    "name": "LWC",
+    "summary": "Explore source-grounded project memory and code context with bounded read-only MCP tools.",
+    "command": "npx",
+    "args": ["-y", "@i-xor/lwc@0.18.5", "serve", "--mcp"],
+    "symbol": "brain.head.profile",
+    "tint": "purple",
+    "sourceURL": "https://github.com/JanYork/llm-wiki-cli"
+  },
+  {
     "id": "sqlite",
     "name": "sqlite",
     "summary": "Query and edit a local SQLite database.",
     "command": "uvx",
-    "args": ["--with", "mcp==1.12.0", "mcp-server-sqlite", "--db-path", "database.db"],
+    "args": ["--with", "mcp==1.30.0", "mcp-server-sqlite", "--db-path", "database.db"],
+    "legacyLaunchConfigurations": [
+      {
+        "command": "uvx",
+        "args": ["--with", "mcp==1.12.0", "mcp-server-sqlite", "--db-path", "database.db"]
+      }
+    ],
     "symbol": "cylinder.split.1x2",
     "tint": "green",
     "sourceURL": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
@@ -72,7 +100,7 @@
     "name": "Parallel Search",
     "summary": "Search the live web and fetch clean content from URLs.",
     "command": "npx",
-    "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only"],
+    "args": ["-y", "mcp-remote@0.1.38", "https://search.parallel.ai/mcp", "--transport", "http-only", "--header", "User-Agent: Nativ"],
     "symbol": "globe",
     "tint": "indigo"
   }

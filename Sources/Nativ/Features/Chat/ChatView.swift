@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 struct ChatView: View {
     var model: NativModel
-    let chat: ChatViewModel
+    @ObservedObject var chat: ChatViewModel
     @ObservedObject var mcpHost: MCPHostManager
     @ObservedObject var extensionManager: NativExtensionManager
     @ObservedObject var projects: ChatProjectStore
@@ -25,31 +25,21 @@ struct ChatView: View {
             model: model,
             isConfigurationVisible: $showsConfiguration
         ) {
-            ChatTranscriptView(
-                model: model,
-                chat: chat,
-                extensionManager: extensionManager,
-                project: project,
-                projectRootIsAvailable: project.map { projects.isRootAvailable(for: $0) } ?? true,
-                workspaceMode: workspaceMode,
-                onSelectWorkspaceMode: onSelectWorkspaceMode,
-                onExploreImageModels: onExploreImageModels,
-                onFindDraftModels: onFindDraftModels,
-                onPreviewAttachment: { previewedAttachment = $0 }
-            )
-            .dropDestination(for: URL.self) { urls, _ in
-                chat.attachFiles(fromURLs: urls)
-            } isTargeted: {
-                isDropTargeted = $0
-            }
-            .overlay {
-                if isDropTargeted {
-                    dropOverlay
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
+            ChatWorkSplitView(
+                isWorkVisible: chat.workState.isVisible,
+                isExpanded: Binding(get: { chat.workState.isExpanded == true }, set: { expanded in
+                    if expanded != (chat.workState.isExpanded == true) { chat.toggleWorkPaneExpanded() }
+                }),
+                isWorkOnLeft: Binding(get: { chat.workState.isWorkOnLeft == true },
+                                      set: { chat.setWorkPaneOnLeft($0) }),
+                onShowChatOnly: { chat.setWorkPaneVisible(false) }
+            ) {
+                transcript(project: project)
+            } work: {
+                ChatWorkPane(chat: chat) { target, request in
+                    try await chat.sendWorkEdit(target, request: request, using: model)
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
         }
         .background(Color.nativMainContentBackground)
         .overlay {
@@ -59,6 +49,12 @@ struct ChatView: View {
                     onClose: { self.previewedAttachment = nil }
                 )
             }
+        }
+        .onChange(of: chat.workState.isVisible) { _, visible in
+            if visible { showsConfiguration = false }
+        }
+        .onChange(of: showsConfiguration) { _, visible in
+            if visible { chat.setWorkPaneVisible(false) }
         }
         .onAppear {
             chat.mcpHost = mcpHost
@@ -74,7 +70,41 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
             chat.refreshPendingImageModelSelections()
         }
+        .onReceive(HuggingFaceDownloadManager.shared.completedDownloads) { modelID in
+            chat.highlightImageModel(modelID)
+            chat.refreshPendingImageModelSelections()
+        }
         .environment(\.chatFontScale, model.settings.chatFontScale)
+        .environmentObject(projects)
+    }
+
+    private func transcript(project: ChatProject?) -> some View {
+        ChatTranscriptView(
+            model: model,
+            chat: chat,
+            extensionManager: extensionManager,
+            project: project,
+            projectRootIsAvailable: project.map { projects.isRootAvailable(for: $0) } ?? true,
+            workspaceMode: workspaceMode,
+            onSelectWorkspaceMode: onSelectWorkspaceMode,
+            onExploreImageModels: onExploreImageModels,
+            onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: { isDropTargeted = $0 },
+            onPreviewAttachment: { previewedAttachment = $0 }
+        )
+        .onDrop(
+            of: [UTType.fileURL.identifier, UTType.image.identifier],
+            isTargeted: $isDropTargeted,
+            perform: chat.loadAttachments
+        )
+        .overlay {
+            if isDropTargeted {
+                dropOverlay
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: isDropTargeted)
     }
 
     private var dropOverlay: some View {
@@ -84,7 +114,7 @@ struct ChatView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 34, weight: .semibold))
                 Text("Drop files here")
-                    .nativTextStyle(.emptyStateTitle)
+                    .legacyTextStyle(.emptyStateTitle)
             }
             .foregroundStyle(.secondary)
             .padding(44)
@@ -110,42 +140,576 @@ private enum ChatTranscriptLayout {
     static let scrollIndicatorClearance: CGFloat = 17
 }
 
-private struct ChatProjectContextBanner: View {
-    let project: ChatProject
-    let rootIsAvailable: Bool
-    let toolsEnabled: Bool
+private struct ChatWorktreeSetupView: View {
+    let progress: ChatWorktreeSetupProgress
+    let dismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: rootIsAvailable ? "folder.fill" : "folder.badge.questionmark")
-                .foregroundStyle(rootIsAvailable ? Color.accentColor : Color.orange)
-
-            Text(project.name)
-                .nativTextStyle(.rowTitleEmphasized)
-                .lineLimit(1)
-
-            Text(project.rootPath)
-                .nativTextStyle(.metadata)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            Spacer(minLength: 8)
-
-            if !rootIsAvailable || !toolsEnabled {
-                Text(rootIsAvailable ? "Tools Off" : "Unavailable")
-                    .nativTextStyle(.badgeMuted)
-                    .foregroundStyle(rootIsAvailable ? Color.secondary : Color.orange)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(progress.isComplete ? "Worktree ready" : progress.error == nil ? "Preparing worktree" : "Worktree setup stopped")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                if progress.isComplete || progress.error != nil {
+                    Button(action: dismiss) { Image(systemName: "xmark") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Dismiss setup progress").accessibilityLabel("Dismiss setup progress")
+                }
+            }
+            ForEach(ChatWorktreeSetupProgress.Step.allCases, id: \.rawValue) { step in
+                let complete = progress.isComplete || step.rawValue < progress.step.rawValue
+                let active = !progress.isComplete && step == progress.step
+                HStack(spacing: 8) {
+                    Group {
+                        if complete {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else if active && progress.error != nil {
+                            Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                        } else if active {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Image(systemName: "circle").foregroundStyle(.tertiary)
+                        }
+                    }.frame(width: 14, height: 14)
+                    Text(step.title)
+                    Spacer(minLength: 8)
+                    if let detail = step == .sync ? progress.source : step == .name ? progress.branch : nil {
+                        Text(detail).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(detail)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(complete ? "Complete" : active ? (progress.error == nil ? "In progress" : "Stopped") : "Waiting")
+            }
+            if let error = progress.error {
+                Text(error).foregroundStyle(.secondary).lineLimit(3).help(error).textSelection(.enabled)
             }
         }
-        .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
-        .padding(.vertical, 10)
+        .font(.system(size: 12))
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.nativMainContentBackground)
-        .overlay(alignment: .bottom) {
-            Divider()
+        .background(UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
+            .fill(Color.primary.opacity(0.035)))
+    }
+}
+
+private struct ChatProjectContextControls: View {
+    let project: ChatProject?
+    let rootIsAvailable: Bool
+    let toolsEnabled: Bool
+    @ObservedObject var chat: ChatViewModel
+    @EnvironmentObject private var projects: ChatProjectStore
+    @State private var setupError: String?
+    @State private var gitHead: ChatGitHead?
+    @State private var gitDiff: ChatGitDiffStat?
+    @State private var pullRequest: ChatPullRequestLookup?
+    @State private var pullRequestRevision = 0
+    @State private var showsProjectPicker = false
+    @State private var isProjectHovered = false
+    @State private var isSummaryMenuHovered = false
+    @State private var isCreatingPullRequest = false
+    var isSummary = false
+    var isVisible: Binding<Bool> = .constant(true)
+    var onCreatePullRequest: ((String, String) async throws -> Void)?
+
+    private var path: String {
+        chat.currentWorktree?.isReady == false ? project?.rootPath ?? "" : chat.currentWorktree?.projectPath ?? project?.rootPath ?? ""
+    }
+    private var available: Bool {
+        chat.currentWorktree?.isReady == false ? rootIsAvailable : chat.currentWorktree.map { $0.availableRootPath != nil } ?? rootIsAvailable
+    }
+
+    private var branch: String? { gitHead?.displayName }
+    private var activePath: String { isVisible.wrappedValue ? path : "" }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: isSummary ? 4 : 12) {
+            HStack(spacing: 10) {
+                if isSummary {
+                    Text(project?.name ?? "Worktree")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(path)
+                    Spacer(minLength: 4)
+                    Menu { projectActions } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(isSummaryMenuHovered ? Color.primary.opacity(0.08) : .clear,
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(.rect)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .onHover { isSummaryMenuHovered = $0 }
+                    .help("Project actions")
+                    .accessibilityLabel("Project actions")
+                } else if chat.canChangeCurrentProject {
+                    Button { showsProjectPicker.toggle() } label: {
+                        projectLabel
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(Color.primary.opacity(showsProjectPicker ? 0.1 : isProjectHovered ? 0.06 : 0),
+                                        in: RoundedRectangle(cornerRadius: 6))
+                            .contentShape(.rect)
+                    }
+                        .buttonStyle(.plain)
+                        .onHover { isProjectHovered = $0 }
+                        .help("Change the project for this chat")
+                        .accessibilityLabel("Change project")
+                        .accessibilityValue(showsProjectPicker ? "Shown" : "Hidden")
+                        .background {
+                            NativArrowlessPopoverPresenter(isPresented: $showsProjectPicker, gap: 14,
+                                                           alignment: .leading, cornerRadius: 10, title: "Choose project") {
+                                ChatProjectPicker(projects: projects, selectedID: chat.currentProjectID,
+                                                  onSelect: selectProject, onCreate: createProject)
+                            }
+                        }
+                        .contextMenu { projectActions }
+                } else {
+                    projectMenu
+                }
+                if !isSummary, let branch {
+                    branchLabel(branch)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(branch)
+                }
+                if !isSummary { Spacer(minLength: 4) }
+                if chat.isPreparingCurrentWorktree || chat.isDeletingCurrentSession {
+                    ProgressView().controlSize(.small)
+                }
+                if !isSummary, project != nil, chat.currentWorktree?.isReady != true {
+                    HStack(spacing: 6) {
+                        Text("Worktree")
+                        Toggle("Worktree", isOn: Binding(
+                            get: { chat.currentWorktree != nil },
+                            set: { enabled in
+                                setupError = nil
+                                Task {
+                                    do { try await chat.setCurrentWorktreeEnabled(enabled) }
+                                    catch { setupError = error.localizedDescription }
+                                }
+                            }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .labelsHidden()
+                        .disabled(!chat.canChangeCurrentWorktree)
+                    }
+                    .fixedSize()
+                    .help("Use a separate checkout when you send your first message")
+                }
+                if !isSummary && project != nil && (!available || !toolsEnabled) {
+                    Image(systemName: "exclamationmark.circle")
+                        .foregroundStyle(available ? Color.secondary : Color.orange)
+                        .help(available ? "Project tools are off" : "Project folder unavailable")
+                        .accessibilityLabel(available ? "Project tools are off" : "Project folder unavailable")
+                }
+            }
+            .padding(.horizontal, isSummary ? 8 : 0)
+            if let setupError {
+                Text(setupError).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if isSummary {
+                HStack(spacing: 10) {
+                    if let branch {
+                        branchLabel(branch)
+                            .lineLimit(1).truncationMode(.middle)
+                            .textSelection(.enabled)
+                            .help(branch)
+                    } else {
+                        Text("—").foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    if let gitDiff, gitDiff.additions != 0 || gitDiff.deletions != 0 {
+                        HStack(spacing: 4) {
+                            Text("+\(gitDiff.additions)").foregroundStyle(.green)
+                            Text("−\(gitDiff.deletions)").foregroundStyle(.red)
+                        }
+                        .monospacedDigit()
+                        .fixedSize()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(gitDiff.additions) lines added, \(gitDiff.deletions) lines removed")
+                        .help("Branch changes, including uncommitted edits and new files")
+                    }
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 30)
+                pullRequestRow
+                Divider().padding(.horizontal, 8).padding(.vertical, 4)
+                summaryRow("Files", icon: "folder", value: "\(chat.workState.items.filter(\.canEdit).count)")
+                summaryRow("Project tools", icon: "wrench.and.screwdriver",
+                           value: available ? (toolsEnabled ? "Enabled" : "Off") : "Folder unavailable")
+            }
         }
-        .help(project.rootPath)
+        .font(.system(size: 12))
+        .padding(.horizontal, isSummary ? 0 : 12)
+        .padding(.vertical, isSummary ? 0 : 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            if !isSummary {
+                UnevenRoundedRectangle(topLeadingRadius: 14, topTrailingRadius: 14)
+                    .fill(Color.primary.opacity(0.035))
+            }
+        }
+        .onChange(of: chat.currentSessionID) { _, _ in
+            showsProjectPicker = false
+            setupError = nil
+        }
+        .task(id: activePath) {
+            gitHead = nil
+            gitDiff = nil
+            pullRequest = nil
+            pullRequestRevision = 0
+            guard !activePath.isEmpty else { return }
+            let directory = activePath
+            let worktree = chat.currentWorktree
+            let includeDiff = isSummary
+            let (events, refresh) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+            let paths = includeDiff ? await Task.detached {
+                try? ChatGitWorktreeStore(root: URL(fileURLWithPath: directory)).observationPaths(at: directory)
+            }.value : nil
+            guard !Task.isCancelled else { return }
+            let observer = paths.flatMap { ChatGitChangeObserver(paths: $0) { refresh.yield() } }
+            // Only the composer branch label polls; the summary refreshes on open and file events.
+            let poll = !includeDiff ? Task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    refresh.yield()
+                }
+            } : nil
+            defer {
+                observer?.stop()
+                poll?.cancel()
+                refresh.finish()
+            }
+            refresh.yield()
+            // File events are coalesced by FSEvents. Buffer at most one more refresh while Git runs.
+            for await _ in events {
+                guard !Task.isCancelled else { return }
+                let (head, diff) = await Task.detached {
+                    let store = ChatGitWorktreeStore(root: URL(fileURLWithPath: directory))
+                    let head = worktree?.isReady == true ? worktree?.currentHead : try? store.currentHead(at: directory)
+                    let diff = includeDiff && head != nil
+                        ? try? store.diffStat(at: directory, baseReference: worktree?.isReady == true ? worktree?.baseReference : nil,
+                                              fallbackBaseCommit: worktree?.isReady == true ? worktree?.baseCommit : nil)
+                        : nil
+                    return (head, diff)
+                }.value
+                guard !Task.isCancelled else { return }
+                if gitHead != head { pullRequest = nil }
+                gitHead = head
+                gitDiff = diff
+                if includeDiff { pullRequestRevision += 1 }
+            }
+        }
+        .task(id: "\(activePath)\0\(pullRequestRevision)") {
+            guard isSummary, !activePath.isEmpty, case .branch(let name) = gitHead else { return }
+            do {
+                // Opening checks immediately. Subsequent file events wait for a brief
+                // pause, cancelling superseded lookups instead of querying on every write.
+                if pullRequestRevision > 1 { try await Task.sleep(for: .seconds(1)) }
+                let result = try await ChatGitHubPullRequestDetector.lookup(at: path, branch: name)
+                try Task.checkCancellation()
+                guard gitHead == .branch(name) else { return }
+                pullRequest = result
+            } catch is CancellationError {
+            } catch {
+                if !Task.isCancelled { pullRequest = .unavailable("Couldn’t check GitHub pull requests") }
+            }
+        }
+    }
+
+    private var pullRequestRow: some View {
+        HStack(spacing: 8) {
+            if case .found(let request) = pullRequest {
+                Button {
+                    do {
+                        if let item = chat.workState.items.first(where: { $0.url == request.url.absoluteString }) {
+                            chat.openWorkItem(item.id)
+                        } else {
+                            try chat.createWorkItem(title: "#\(request.number) \(request.title)", kind: .website,
+                                                    url: request.url.absoluteString)
+                        }
+                    } catch { setupError = error.localizedDescription }
+                } label: {
+                    HStack(spacing: 8) {
+                        gitHubIcon
+                        Text("#\(request.number) \(request.title)").lineLimit(1)
+                        Spacer(minLength: 0)
+                        Image(request.statusIconName).renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 14, height: 14)
+                            .foregroundStyle(request.state == .merged ? Color.purple : request.state == .closed ? .red : request.isDraft ? .secondary : .green)
+                            .help(request.status)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pull request #\(request.number), \(request.title), \(request.status)")
+                .help("\(request.title) — \(request.status)\n\(request.url.absoluteString)")
+            } else if pullRequest == .notFound, case .branch(let name) = gitHead, let onCreatePullRequest {
+                Button {
+                    isCreatingPullRequest = true
+                    setupError = nil
+                    let repositoryPath = path
+                    Task {
+                        defer { isCreatingPullRequest = false }
+                        do {
+                            try await onCreatePullRequest(name, repositoryPath)
+                            isVisible.wrappedValue = false
+                        } catch { setupError = error.localizedDescription }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        gitHubIcon
+                        Text("Create pull request")
+                        Spacer(minLength: 0)
+                        if isCreatingPullRequest { ProgressView().controlSize(.mini) }
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isCreatingPullRequest)
+                .help("Ask the agent to create a draft pull request for this branch")
+            } else {
+                gitHubIcon
+                Text(pullRequestMessage).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+        }
+        .foregroundStyle(pullRequest == nil ? Color.secondary : .primary)
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .help(pullRequestMessage)
+    }
+
+    private var gitHubIcon: some View {
+        Image("GitHubMark").renderingMode(.template).resizable().scaledToFit()
+            .frame(width: 14, height: 14)
+            .accessibilityHidden(true)
+    }
+
+    private var pullRequestMessage: String {
+        guard case .branch = gitHead else { return "No branch selected" }
+        return switch pullRequest {
+        case .found(let request): "Open pull request #\(request.number)"
+        case .notFound: "Create pull request"
+        case .unavailable(let message): message
+        case nil: "Checking pull request…"
+        }
+    }
+
+    private var projectMenu: some View {
+        Menu { projectActions } label: { projectLabel }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(path)
+        .accessibilityLabel("Project folder")
+    }
+
+    private func summaryRow(_ title: String, icon: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(.secondary).frame(width: 14)
+            Text(title)
+            Spacer(minLength: 12)
+            Text(value).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var projectLabel: some View {
+        Label(project?.name ?? (chat.currentWorktree == nil ? "No project" : "Worktree"),
+              systemImage: available ? "folder" : "folder.badge.questionmark")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(available ? (showsProjectPicker ? Color.primary : Color.secondary) : Color.orange)
+            .lineLimit(1).truncationMode(.middle)
+    }
+
+    @ViewBuilder
+    private var projectActions: some View {
+        if chat.currentWorktree?.isReady == false {
+            Text("Setup starts when you send a message")
+        }
+        switch gitHead {
+        case .branch(let name):
+            Button("Copy branch name", systemImage: "doc.on.doc") { copy(name) }
+        case .detached(let commit):
+            Button("Copy commit ID", systemImage: "doc.on.doc") { copy(commit) }
+        case nil: EmptyView()
+        }
+        if !path.isEmpty {
+            Divider()
+            Button("Copy folder path", systemImage: "doc.on.doc") { copy(path) }
+            Button("Show in Finder", systemImage: "folder") {
+                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: path)
+            }.disabled(!available)
+        }
+    }
+
+    private func selectProject(_ id: UUID?) {
+        showsProjectPicker = false
+        setupError = nil
+        Task {
+            do { try await chat.setCurrentProject(id) }
+            catch { setupError = error.localizedDescription }
+        }
+    }
+
+    private func createProject() {
+        showsProjectPicker = false
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Create Project"
+        panel.message = "Choose a folder Nativ can read and write for this project."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { selectProject(try projects.createProject(directoryURL: url).id) }
+        catch { setupError = error.localizedDescription }
+    }
+
+    private func branchLabel(_ name: String) -> some View {
+        Label {
+            Text(name)
+        } icon: {
+            Image(systemName: "arrow.triangle.branch")
+                .rotationEffect(.degrees(90))
+        }
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+}
+
+private struct ChatProjectPicker: View {
+    @ObservedObject var projects: ChatProjectStore
+    let selectedID: UUID?
+    let onSelect: (UUID?) -> Void
+    let onCreate: () -> Void
+    @State private var search = ""
+    @FocusState private var searchIsFocused: Bool
+
+    private var matches: [ChatProject] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return projects.projects.filter { query.isEmpty || $0.name.localizedStandardContains(query) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search projects", text: $search)
+                    .textFieldStyle(.plain)
+                    .focused($searchIsFocused)
+                    .onSubmit { if let project = matches.first { onSelect(project.id) } }
+            }
+            .font(.system(size: 11))
+            .padding(.horizontal, 8)
+            .frame(height: 30)
+            Group {
+                if matches.isEmpty {
+                    Text(search.isEmpty ? "No projects yet" : "No matching projects")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(matches) { project in
+                                ChatProjectPickerRow(title: project.name, icon: "folder", selected: project.id == selectedID) {
+                                    onSelect(project.id)
+                                }
+                                .help(project.rootPath)
+                            }
+                        }
+                    }
+                }
+            }
+            .frame(height: CGFloat(max(1, min(projects.projects.count, 7)) * 26))
+            Divider().padding(.horizontal, 4).padding(.vertical, 4)
+            ChatProjectPickerRow(title: "New project", icon: "plus", action: onCreate)
+            ChatProjectPickerRow(title: "Don’t work in a project", icon: "xmark", selected: selectedID == nil) {
+                onSelect(nil)
+            }
+        }
+        .font(.system(size: 12))
+        .padding(4)
+        .frame(width: 248)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .onAppear { searchIsFocused = true }
+    }
+}
+
+private struct ChatProjectPickerRow: View {
+    let title: String
+    let icon: String
+    var selected = false
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(.secondary).frame(width: 14)
+                Text(title).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                if selected { Image(systemName: "checkmark").fontWeight(.medium) }
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 26)
+            .background(isHovering ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityValue(selected ? "Selected" : "")
+    }
+}
+
+private struct ChatPinnedSummaryToggle: View {
+    let project: ChatProject?
+    let rootIsAvailable: Bool
+    let toolsEnabled: Bool
+    @ObservedObject var chat: ChatViewModel
+    let onCreatePullRequest: (String, String) async throws -> Void
+    @EnvironmentObject private var projects: ChatProjectStore
+    @State private var isPresented = false
+    @State private var isHovered = false
+
+    var body: some View {
+        Button { isPresented.toggle() } label: {
+            Image(systemName: "list.bullet")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(isPresented ? Color.primary : Color.secondary)
+                .frame(width: ControlPanelLayout.topControlSize, height: ControlPanelLayout.topControlSize)
+                .background(Color.primary.opacity(isPresented ? 0.1 : isHovered ? 0.06 : 0),
+                            in: RoundedRectangle(cornerRadius: 8))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(isPresented ? "Hide pinned summary" : "Show pinned summary")
+        .accessibilityLabel("Pinned summary")
+        .accessibilityValue(isPresented ? "Shown" : "Hidden")
+        .background {
+            NativArrowlessPopoverPresenter(isPresented: $isPresented, gap: 14, alignment: .trailing,
+                                           edge: .bottom, cornerRadius: 10, title: "Pinned summary") {
+                ChatProjectContextControls(project: project, rootIsAvailable: rootIsAvailable,
+                                           toolsEnabled: toolsEnabled, chat: chat, isSummary: true, isVisible: $isPresented,
+                                           onCreatePullRequest: onCreatePullRequest)
+                    .environmentObject(projects)
+                    .padding(8)
+                    .frame(width: 300)
+                    .background(Color(nsColor: .controlBackgroundColor))
+            }
+        }
+        .onChange(of: chat.currentSessionID) { _, _ in isPresented = false }
     }
 }
 
@@ -159,12 +723,34 @@ private struct ChatTranscriptView: View {
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
-    @State private var atBottom = true
-    @State private var userPausedAutoScroll = false
-    @State private var userIsScrolling = false
     @State private var composerHeight: CGFloat = 0
     @State private var composerBackdropHeight: CGFloat = 0
+    @State private var search: ChatSearchState
+    @Environment(\.chatLibrarySearch) private var librarySearch
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(model: NativModel, chat: ChatViewModel, extensionManager: NativExtensionManager,
+         project: ChatProject?, projectRootIsAvailable: Bool, workspaceMode: ChatWorkspaceMode,
+         onSelectWorkspaceMode: @escaping (ChatWorkspaceMode) -> Void,
+         onExploreImageModels: @escaping (ChatImageOperation) -> Void,
+         onFindDraftModels: @escaping (String) -> Void,
+         onAttachmentDropTargetChange: @escaping (Bool) -> Void,
+         onPreviewAttachment: @escaping (ChatImageAttachment) -> Void) {
+        self.model = model
+        self.chat = chat
+        self.extensionManager = extensionManager
+        self.project = project
+        self.projectRootIsAvailable = projectRootIsAvailable
+        self.workspaceMode = workspaceMode
+        self.onSelectWorkspaceMode = onSelectWorkspaceMode
+        self.onExploreImageModels = onExploreImageModels
+        self.onFindDraftModels = onFindDraftModels
+        self.onAttachmentDropTargetChange = onAttachmentDropTargetChange
+        self.onPreviewAttachment = onPreviewAttachment
+        _search = State(initialValue: ChatSearchState(library: chat.searchLibrary))
+    }
 
     private var selectedModelID: String? {
         model.settings.normalized().languageModelID
@@ -187,11 +773,27 @@ private struct ChatTranscriptView: View {
             }
         }
         .background(Color.nativMainContentBackground)
-        .onChange(of: chat.currentSessionID) { _, _ in
-            atBottom = true
-            userPausedAutoScroll = false
-            userIsScrolling = false
+        .environment(\.chatAnnotationActions, chat.annotationActions)
+        .environment(\.canAddChatAnnotation, chat.pendingAnnotations.count < ChatAnnotation.maximumCount)
+        .environment(\.chatSearchState, search)
+        .focusedSceneValue(\.chatSearch, search)
+        .onChange(of: chat.currentSessionID, initial: true) { _, id in
+            search.reset(sessionID: id)
         }
+        .onChange(of: search.query) { _, _ in
+            search.update(queryChanged: true)
+        }
+        .onChange(of: search.query.isEmpty ? 0 : chat.searchLibrary.revision) { _, _ in
+            if !search.query.isEmpty {
+                search.update()
+            }
+        }
+        .task(id: librarySearch?.destination?.id) {
+            guard let destination = librarySearch?.takeDestination(for: chat.currentSessionID) else { return }
+            search.reveal(destination.result.occurrence, query: destination.query,
+                          sessionID: destination.result.sessionID)
+        }
+        .onDisappear { search.reset(sessionID: nil) }
     }
 
     private func transcript(
@@ -199,131 +801,79 @@ private struct ChatTranscriptView: View {
         forkableAssistantResponseIDs: Set<UUID>,
         latestUserMessageID: UUID?
     ) -> some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if items.isEmpty {
-                        if chat.messages.isEmpty {
-                            ChatEmptyTranscriptView(
-                                isRunning: model.isRunning,
-                                selectedModelID: selectedModelID,
-                                modelLoadingProgress: model.isModelLoading
-                                    ? model.modelLoadingProgress : nil
-                            )
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 120)
-                        }
-                    } else {
-                        ForEach(items) { item in
-                            transcriptItemRow(
-                                item,
-                                latestUserMessageID: latestUserMessageID,
-                                forkableAssistantResponseIDs: forkableAssistantResponseIDs
-                            )
-                        }
-                    }
-
-                    // Keep the overlay clearance inside the scroll target so pinning lands
-                    // above the composer rather than aligning hidden content behind it.
-                    Color.clear
-                        .frame(
-                            height: max(
-                                18,
-                                composerHeight + ChatTranscriptLayout.composerClearance
-                            )
-                        )
-                        .id(ChatTranscriptScrollTarget.bottom)
-                }
-                .frame(
-                    maxWidth: ChatTranscriptLayout.conversationMaxWidth
-                        - (ChatTranscriptLayout.messageHorizontalInset * 2)
-                )
-                .frame(maxWidth: .infinity)
-                .padding(
-                    .horizontal,
-                    ChatTranscriptLayout.horizontalPadding
-                        + ChatTranscriptLayout.messageHorizontalInset
-                )
-                .padding(.top, 18)
-                .animation(.easeOut(duration: 0.25), value: items.count)
-            }
-            .defaultScrollAnchor(.bottom)
-            .id(chat.currentSessionID)
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if let project {
-                    ChatProjectContextBanner(
-                        project: project,
-                        rootIsAvailable: projectRootIsAvailable,
-                        toolsEnabled: model.settings.projectToolsEnabled
+        ChatTranscriptScroller(
+            currentSessionID: chat.currentSessionID,
+            revision: chat.transcriptRevision,
+            submissionID: chat.transcriptSubmissionID,
+            scrollTargetMessageID: $chat.scrollTargetMessageID,
+            itemIDs: items.map(\.id),
+            searchNavigation: search.navigationRequest,
+            onSearchNavigation: search.finishNavigation,
+            bottomOverlayClearance: max(
+                composerHeight,
+                composerBackdropHeight + ChatTranscriptLayout.composerFadeExtension
+            )
+        ) { attachedRange in
+            ChatTranscriptStack(items: Array(items[attachedRange])) {
+                if chat.messages.isEmpty {
+                    ChatEmptyTranscriptView(
+                        isRunning: model.isRunning,
+                        selectedModelID: selectedModelID,
+                        modelLoadingProgress: model.isModelLoading
+                            ? model.modelLoadingProgress : nil
                     )
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 120)
                 }
-            }
-            .onScrollGeometryChange(for: ChatTranscriptPinState.self) { geometry in
-                ChatTranscriptPinState(
-                    atBottom: isNearTranscriptBottom(geometry),
-                    contentHeight: geometry.contentSize.height
+            } row: { item in
+                transcriptItemRow(
+                    item,
+                    latestUserMessageID: latestUserMessageID,
+                    forkableAssistantResponseIDs: forkableAssistantResponseIDs
                 )
-            } action: { oldState, newState in
-                atBottom = newState.atBottom
-                if newState.atBottom {
-                    userPausedAutoScroll = false
-                } else if userIsScrolling {
-                    userPausedAutoScroll = true
-                }
-
-                if oldState.contentHeight != newState.contentHeight,
-                   oldState.atBottom || newState.atBottom
-                    || (chat.isCurrentSessionSending && !userPausedAutoScroll)
-                {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
+            } footer: {
+                Color.clear
+                    .frame(
+                        height: max(
+                            18,
+                            composerHeight + ChatTranscriptLayout.composerClearance
+                        )
+                    )
+                    .id(ChatTranscriptScrollTarget.bottom)
             }
-            .onScrollPhaseChange { _, newPhase, context in
-                let isUserPhase = newPhase == .tracking
-                    || newPhase == .interacting
-                    || newPhase == .decelerating
-                if isUserPhase {
-                    userIsScrolling = true
-                    if !isNearTranscriptBottom(context.geometry) {
-                        userPausedAutoScroll = true
+            .frame(
+                maxWidth: ChatTranscriptLayout.conversationMaxWidth
+                    - (ChatTranscriptLayout.messageHorizontalInset * 2)
+            )
+            .frame(maxWidth: .infinity)
+            .padding(
+                .horizontal,
+                ChatTranscriptLayout.horizontalPadding
+                    + ChatTranscriptLayout.messageHorizontalInset
+            )
+            .padding(.top, 18)
+        }
+        .overlay(alignment: .topTrailing) {
+            ZStack(alignment: .topTrailing) {
+                if !chat.messages.isEmpty, project != nil || chat.currentWorktree != nil {
+                    ChatPinnedSummaryToggle(project: project, rootIsAvailable: projectRootIsAvailable,
+                                            toolsEnabled: model.settings.projectToolsEnabled, chat: chat) { branch, path in
+                        try await chat.sendCreatePullRequest(branch: branch, path: path, using: model)
                     }
-                } else if newPhase == .idle {
-                    if userIsScrolling {
-                        userPausedAutoScroll = !isNearTranscriptBottom(context.geometry)
-                    }
-                    userIsScrolling = false
+                        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                 + (chat.workState.isVisible ? 0 : ControlPanelLayout.topControlSize * 2))
+                        .padding(.top, ControlPanelLayout.topControlsTopPadding)
+                }
+                if search.isPresented {
+                    ChatSearchBar(search: search)
+                        .padding(.leading, 16)
+                        .padding(.trailing, ControlPanelLayout.topControlsTrailingPadding
+                                 + ControlPanelLayout.topControlSize * (chat.workState.isVisible ? 1 : 3) + 12)
+                        .padding(.top, 8)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -6)))
                 }
             }
-            .onAppear {
-                atBottom = true
-                userPausedAutoScroll = false
-                proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-            }
-            .onChange(of: transcriptFingerprint(items)) { _, _ in
-                if atBottom || (chat.isCurrentSessionSending && !userPausedAutoScroll) {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
-            }
-            .onChange(of: chat.scrollTargetMessageID) { _, target in
-                guard let target else {
-                    return
-                }
-                userPausedAutoScroll = true
-                Task { @MainActor in
-                    await Task.yield()
-                    proxy.scrollTo(target, anchor: .center)
-                    chat.scrollTargetMessageID = nil
-                }
-            }
-            .background {
-                ChatTranscriptScrollPinner(
-                    revision: chat.transcriptRevision,
-                    proxy: proxy,
-                    atBottom: atBottom,
-                    userPausedAutoScroll: userPausedAutoScroll,
-                    isStreaming: chat.isCurrentSessionSending
-                )
-            }
+            .animation(.easeInOut(duration: 0.18), value: search.isPresented)
         }
     }
 
@@ -344,6 +894,7 @@ private struct ChatTranscriptView: View {
         case .agentTurn(let turn):
             ChatAgentTurnRow(
                 turn: turn,
+                prefillProgress: turn.isAssistantStreaming ? model.prefillProgress : .init(),
                 imageModelSelectionRequests: imageModelSelectionRequests(for: turn),
                 canForkAssistantResponse: turn.finalAssistantMessage.map {
                     forkableAssistantResponseIDs.contains($0.id)
@@ -385,7 +936,9 @@ private struct ChatTranscriptView: View {
             onSelectImageModel: chat.selectImageModel,
             onCancelImageModelSelection: chat.cancelImageModelSelection,
             onExploreImageModels: onExploreImageModels,
-            onPreviewAttachment: onPreviewAttachment
+            onPreviewAttachment: onPreviewAttachment,
+            prefillProgress: message.role == .assistant && message.isStreaming
+                ? model.prefillProgress : .init()
         )
         .equatable()
         .id(message.id)
@@ -396,9 +949,12 @@ private struct ChatTranscriptView: View {
             model: model,
             chat: chat,
             extensionManager: extensionManager,
+            project: project,
+            projectRootIsAvailable: projectRootIsAvailable,
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: onAttachmentDropTargetChange,
             onBackdropHeightChange: { composerBackdropHeight = $0 }
         )
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -440,20 +996,6 @@ private struct ChatTranscriptView: View {
         )
     }
 
-    private func transcriptFingerprint(
-        _ items: [ChatTranscriptItem]
-    ) -> ChatTranscriptFingerprint {
-        ChatTranscriptFingerprint(
-            messageCount: items.count,
-            lastMessageID: items.last?.id
-        )
-    }
-
-    private func isNearTranscriptBottom(_ geometry: ScrollGeometry) -> Bool {
-        geometry.contentOffset.y + geometry.containerSize.height
-            >= geometry.contentSize.height - 60
-    }
-
     private func userPromptEditingUnavailableReason(
         for message: ChatTranscriptMessage
     ) -> String? {
@@ -483,9 +1025,12 @@ private struct ChatComposerContainer: View {
     var model: NativModel
     @ObservedObject var chat: ChatViewModel
     @ObservedObject var extensionManager: NativExtensionManager
+    let project: ChatProject?
+    let projectRootIsAvailable: Bool
     let workspaceMode: ChatWorkspaceMode
     let onSelectWorkspaceMode: (ChatWorkspaceMode) -> Void
     let onFindDraftModels: (String) -> Void
+    let onAttachmentDropTargetChange: (Bool) -> Void
     let onBackdropHeightChange: (CGFloat) -> Void
 
     private var selectedModelID: String? {
@@ -511,6 +1056,7 @@ private struct ChatComposerContainer: View {
             workspaceMode: workspaceMode,
             onSelectWorkspaceMode: onSelectWorkspaceMode,
             onFindDraftModels: onFindDraftModels,
+            onAttachmentDropTargetChange: onAttachmentDropTargetChange,
             onSend: { languageModelSupportsTools, languageModelSupportsVision in
                 chat.send(
                     using: model,
@@ -518,43 +1064,25 @@ private struct ChatComposerContainer: View {
                     languageModelSupportsVision: languageModelSupportsVision
                 )
             },
-            onBackdropHeightChange: onBackdropHeightChange
+            onBackdropHeightChange: onBackdropHeightChange,
+            contextHeader: contextHeader
         )
         .frame(maxWidth: ChatTranscriptLayout.conversationMaxWidth)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, ChatTranscriptLayout.horizontalPadding)
+        .transformPreference(ChatComposerMinimumWidthKey.self) { width in
+            if width > 0 { width += ChatTranscriptLayout.horizontalPadding * 2 }
+        }
     }
-}
 
-private enum ChatTranscriptScrollTarget {
-    static let bottom = "chat-transcript-bottom"
-}
-
-private struct ChatTranscriptFingerprint: Equatable {
-    let messageCount: Int
-    let lastMessageID: UUID?
-}
-
-private struct ChatTranscriptPinState: Equatable {
-    let atBottom: Bool
-    let contentHeight: CGFloat
-}
-
-private struct ChatTranscriptScrollPinner: View {
-    let revision: ChatTranscriptRevision
-    let proxy: ScrollViewProxy
-    let atBottom: Bool
-    let userPausedAutoScroll: Bool
-    let isStreaming: Bool
-
-    var body: some View {
-        Color.clear
-            .accessibilityHidden(true)
-            .onChange(of: revision.value) { _, _ in
-                if atBottom || (isStreaming && !userPausedAutoScroll) {
-                    proxy.scrollTo(ChatTranscriptScrollTarget.bottom, anchor: .bottom)
-                }
-            }
+    @ViewBuilder
+    private var contextHeader: some View {
+        if let progress = chat.currentWorktreeSetupProgress {
+            ChatWorktreeSetupView(progress: progress, dismiss: chat.dismissWorktreeSetupProgress)
+        } else if chat.messages.isEmpty {
+            ChatProjectContextControls(project: project, rootIsAvailable: projectRootIsAvailable,
+                                       toolsEnabled: model.settings.projectToolsEnabled, chat: chat)
+        }
     }
 }
 
@@ -578,6 +1106,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     var displaysModelTitle = true
     var displaysThinking = true
+    var prefillProgress = NativPrefillProgressState()
     @State private var didCopyMessage = false
     @State private var isHoveringMessage = false
 
@@ -591,15 +1120,23 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             && lhs.canForkAssistantResponse == rhs.canForkAssistantResponse
             && lhs.displaysModelTitle == rhs.displaysModelTitle
             && lhs.displaysThinking == rhs.displaysThinking
+            && lhs.prefillProgress == rhs.prefillProgress
     }
 
     var body: some View {
         VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
             if displaysModelTitle && !title.isEmpty {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(title)
+                    if !message.isCompacting {
+                        ServerPrefillProgressLabel(progress: prefillProgress)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
+
+            ChatCompactionNotice(message: message)
 
             if message.role == .tool {
                 ChatAgentStepCell(
@@ -626,21 +1163,31 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 if displaysThinkingBubble {
                     ChatThinkingBubble(
                         content: message.reasoningContent,
-                        isThinking: message.isStreaming && message.content.isEmpty,
+                        isThinking: message.isStreaming && message.content.isEmpty && message.streamingToolCalls.isEmpty,
                         isStreaming: message.isStreaming,
                         thinkingDuration: message.thinkingDuration
                     )
                 }
 
+                if message.role == .assistant, message.isStreaming {
+                    ForEach(Array(message.streamingToolCalls.enumerated()), id: \.offset) { _, call in
+                        ChatAgentStepCell(streamingCall: call)
+                    }
+                }
+
+                if !message.annotationPresentation.annotations.isEmpty {
+                    ChatAnnotationCards(annotations: message.annotationPresentation.annotations)
+                }
                 if showsTextContent {
-                    textBubble
+                    if message.role == .user, !message.pastedTexts.isEmpty {
+                        pastedTextContent
+                    } else {
+                        textBubble(displayContent)
+                    }
                 }
             }
 
-            if let liveResponseMetrics {
-                ChatLiveDecodeMetricsBadge(metrics: liveResponseMetrics)
-                    .equatable()
-            } else if let responseMetrics {
+            if let responseMetrics {
                 ChatResponseMetricsRow(metrics: responseMetrics)
             }
 
@@ -683,6 +1230,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                 }
+                // Align the visible icons with the response text, keeping their full hit areas.
+                .padding(.leading, message.role == .assistant ? -10 : 0)
                 .opacity(isHoveringMessage || didCopyMessage || isEditingUserMessage ? 1 : 0)
                 .accessibilityHidden(!isHoveringMessage && !didCopyMessage && !isEditingUserMessage)
             }
@@ -694,22 +1243,42 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     @ViewBuilder
-    private var textBubble: some View {
+    private var pastedTextContent: some View {
+        let items = ChatPastedText.validated(message.pastedTexts, in: message.content)
+        let source = message.content as NSString
+        if items.isEmpty {
+            textBubble(displayContent)
+        } else {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                let start = index == 0 ? 0 : NSMaxRange(items[index - 1].range)
+                if item.location > start {
+                    textBubble(source.substring(with: NSRange(location: start, length: item.location - start)))
+                }
+                ChatPastedTextCard(pastedText: item)
+                if index == items.count - 1, NSMaxRange(item.range) < source.length {
+                    textBubble(source.substring(from: NSMaxRange(item.range)))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textBubble(_ content: String) -> some View {
+        let usesCompactBubble = !content.contains(where: \.isNewline) && content.count <= 72
         Group {
             if usesCompactBubble {
                 ChatMessageText(
                     messageID: message.id,
-                    content: displayContent,
+                    content: content,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
                     isUserPrompt: message.role == .user
                 )
                 .lineSpacing(2)
-                .fixedSize(horizontal: true, vertical: false)
             } else {
                 ChatMessageText(
                     messageID: message.id,
-                    content: displayContent,
+                    content: content,
                     rendersMarkdown: rendersMarkdown,
                     isStreaming: message.isStreaming,
                     isUserPrompt: message.role == .user
@@ -720,10 +1289,12 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .modifier(ChatSelectionReplyModifier(message: message))
         .font(.body)
         .padding(.horizontal, message.role == .assistant ? 0 : 12)
         .padding(.vertical, message.role == .assistant ? 3 : 9)
-        .frame(maxWidth: bubbleMaximumWidth, alignment: alignment)
+        .frame(maxWidth: message.role == .user && !usesCompactBubble ? Self.maximumUserBubbleWidth : nil,
+               alignment: alignment)
         .foregroundStyle(foregroundStyle)
         .background(
             RoundedRectangle(cornerRadius: 8)
@@ -753,10 +1324,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         message.role == .user ? .trailing : .leading
     }
 
-    private var bubbleMaximumWidth: CGFloat? {
-        message.role == .user && !usesCompactBubble ? Self.maximumUserBubbleWidth : nil
-    }
-
     private var alignment: Alignment {
         .leading
     }
@@ -770,12 +1337,8 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 
     private var displayContent: String {
-        message.content.isEmpty ? " " : message.content
-    }
-
-    private var usesCompactBubble: Bool {
-        !displayContent.contains(where: \.isNewline)
-            && displayContent.count <= 72
+        let content = message.annotationPresentation.content
+        return content.isEmpty ? " " : content
     }
 
     private var showsTextContent: Bool {
@@ -796,7 +1359,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
             return false
         }
         return !message.reasoningContent.isEmpty
-            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty)
+            || (message.isThinkingEnabled && message.isStreaming && message.content.isEmpty && message.streamingToolCalls.isEmpty)
     }
 
     private var rendersMarkdown: Bool {
@@ -845,21 +1408,6 @@ private struct ChatMessageRow: View, @MainActor Equatable {
         return responseMetrics
     }
 
-    private var liveResponseMetrics: ChatResponseMetrics? {
-        guard message.role == .assistant,
-            message.isStreaming,
-            let responseMetrics = message.responseMetrics,
-            responseMetrics.generatedTokens.map({ $0 > 0 }) == true
-                || responseMetrics.decodeTokensPerSecond.map({
-                    $0 > 0 && $0.isFinite
-                }) == true
-        else {
-            return nil
-        }
-
-        return responseMetrics
-    }
-
     private var canCopyMessage: Bool {
         (message.role == .user || message.role == .assistant)
             && !message.isStreaming
@@ -898,8 +1446,86 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     }
 }
 
+private struct ChatCompactionNotice: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let message: ChatTranscriptMessage
+
+    var body: some View {
+        if message.isCompacting || message.compactionMetrics != nil {
+            HStack(spacing: 12) {
+                rule
+                HStack(spacing: 7) {
+                    symbol
+                    Group {
+                        if message.isCompacting {
+                            ChatThinkingShimmerText(title)
+                        } else {
+                            Text(title)
+                        }
+                    }
+                    .contentTransition(.opacity)
+                    .lineLimit(1)
+                }
+                .fixedSize()
+                rule
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 12)
+            .help(detail)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: message.isCompacting)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(detail)
+        }
+    }
+
+    private var title: String {
+        message.isCompacting ? "Compacting context…" : "Context compacted"
+    }
+
+    private var detail: String {
+        if message.isCompacting {
+            return "Summarizing older context…"
+        }
+        if let before = message.compactionMetrics?.inputTokensBefore,
+           let after = message.compactionMetrics?.inputTokensAfter {
+            return "Compacted • \(before.formatted()) → \(after.formatted()) tokens."
+        }
+        return "Compacted."
+    }
+
+    private var rule: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.1))
+            .frame(height: 1)
+            .frame(maxWidth: .infinity)
+            .accessibilityHidden(true)
+    }
+
+    private var symbol: some View {
+        ZStack {
+            Path { path in
+                path.move(to: CGPoint(x: 4, y: 2))
+                path.addLines([CGPoint(x: 1, y: 2), CGPoint(x: 1, y: 13), CGPoint(x: 4, y: 16)])
+                path.move(to: CGPoint(x: 14, y: 16))
+                path.addLines([CGPoint(x: 17, y: 16), CGPoint(x: 17, y: 5), CGPoint(x: 14, y: 2)])
+            }
+            .stroke(style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+            VStack(alignment: .leading, spacing: 2) {
+                Capsule().frame(width: 7, height: 1.4)
+                Capsule().frame(width: 7, height: 1.4)
+                Capsule().frame(width: 4, height: 1.4)
+            }
+        }
+        .frame(width: 18, height: 18)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct ChatAgentTurnRow: View {
     let turn: ChatAgentTurnPresentation
+    var prefillProgress = NativPrefillProgressState()
     let imageModelSelectionRequests: [UUID: ChatImageModelSelectionRequest]
     let canForkAssistantResponse: Bool
     let onForkAssistantResponse: (UUID) -> Void
@@ -912,9 +1538,18 @@ private struct ChatAgentTurnRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(modelTitle)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(modelTitle)
+                if !turn.assistantMessages.contains(where: \.isCompacting) {
+                    ServerPrefillProgressLabel(progress: prefillProgress)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            ForEach(turn.assistantMessages.filter { $0.id != turn.finalAssistantMessage?.id }) { message in
+                ChatCompactionNotice(message: message)
+            }
 
             if showsThinkingBubble {
                 ChatThinkingBubble(
@@ -969,6 +1604,7 @@ private struct ChatAgentTurnRow: View {
                     displaysThinking: false
                 )
                 .equatable()
+                .id(finalAssistantMessage.id)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -988,7 +1624,9 @@ private struct ChatAgentTurnRow: View {
     }
 
     private func shouldRender(_ message: ChatTranscriptMessage) -> Bool {
-        !message.content.isEmpty
+        message.isCompacting || message.compactionMetrics != nil
+            || !message.streamingToolCalls.isEmpty
+            || !message.content.isEmpty
             || !message.imageAttachments.isEmpty
             || message.responseMetrics != nil
             || canForkAssistantResponse
@@ -1153,7 +1791,12 @@ private struct ChatAgentStepCell: View {
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
-    @State private var isExpanded = false
+    var isReceivingArguments = false
+    @State private var isExpanded: Bool?
+
+    private var showsDetails: Bool {
+        isExpanded ?? isReceivingArguments
+    }
 
     private var isAwaitingConsent: Bool {
         message.toolStatus == .awaitingConsent
@@ -1168,13 +1811,13 @@ private struct ChatAgentStepCell: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 withAnimation(.snappy(duration: 0.2)) {
-                    isExpanded.toggle()
+                    isExpanded = !showsDetails
                 }
             } label: {
                 header
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Hide call details" : "Show call details")
+            .help(showsDetails ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
             if isAwaitingImageModelSelection {
@@ -1185,7 +1828,7 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 consentPrompt
-            } else if isExpanded {
+            } else if showsDetails {
                 Divider()
                     .padding(.top, 7)
                 details
@@ -1227,7 +1870,7 @@ private struct ChatAgentStepCell: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .rotationEffect(.degrees(showsDetails ? 90 : 0))
                 }
             }
             if message.toolStatus == .failed, let toolErrorMessage {
@@ -1242,18 +1885,22 @@ private struct ChatAgentStepCell: View {
 
     @ViewBuilder
     private var statusBadge: some View {
-        switch message.toolStatus {
-        case .succeeded:
-            NativStatusBadge(text: "Done", tone: .success)
-        case .failed:
-            NativStatusBadge(text: "Failed", tone: .danger)
-        case .cancelled:
-            NativStatusBadge(text: "Canceled", tone: .neutral)
-        case .declined:
-            NativStatusBadge(text: "Declined", tone: .neutral)
-        case .preparing, .running, .awaitingConsent,
-            .awaitingImageModelSelection, nil:
-            EmptyView()
+        if isReceivingArguments {
+            NativStatusBadge(text: "In progress", tone: .active)
+        } else {
+            switch message.toolStatus {
+            case .succeeded:
+                NativStatusBadge(text: "Done", tone: .success)
+            case .failed:
+                NativStatusBadge(text: "Failed", tone: .danger)
+            case .cancelled:
+                NativStatusBadge(text: "Canceled", tone: .neutral)
+            case .declined:
+                NativStatusBadge(text: "Declined", tone: .neutral)
+            case .preparing, .running, .awaitingConsent,
+                .awaitingImageModelSelection, nil:
+                EmptyView()
+            }
         }
     }
 
@@ -1267,16 +1914,22 @@ private struct ChatAgentStepCell: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if message.toolName == ChatWorkToolRegistry.toolName {
+                ScrollView {
+                    NativCodeBlock(raw: formattedArguments)
+                }
+                .frame(maxHeight: 180)
+            }
             HStack(spacing: 8) {
                 Button("Deny") {
                     onDeny(message.id)
                 }
                 .buttonStyle(.bordered)
+                .help("Deny (Esc)")
 
-                Button("Confirm") {
+                ChatToolConfirmationButton {
                     onConfirm(message.id)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1313,6 +1966,14 @@ private struct ChatAgentStepCell: View {
     }
 
     private var consentDescription: Text {
+        if message.toolName == ChatWorkToolRegistry.toolName {
+            if let data = message.content.data(using: .utf8),
+               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let description = payload["consent_description"] as? String {
+                return Text(verbatim: description)
+            }
+            return Text("The agent wants to work in this chat’s side pane. Review the action and arguments below before allowing it.")
+        }
         if message.toolName == ChatSwitchModelToolRegistry.toolName {
             return Text(
                 "The model wants to switch to \(Text(verbatim: requestedModelID).bold()). The server restarts briefly; your session is kept."
@@ -1347,7 +2008,8 @@ private struct ChatAgentStepCell: View {
                 if !request.installedModels.isEmpty {
                     imageModelSection(
                         title: "Downloaded",
-                        models: request.installedModels
+                        models: request.installedModels,
+                        defaultActionModelID: request.effectiveHighlightedModelID
                     )
                 }
 
@@ -1363,6 +2025,7 @@ private struct ChatAgentStepCell: View {
                         onCancelImageModelSelection(message.id)
                     }
                     .buttonStyle(.bordered)
+                    .help("Cancel (Esc)")
 
                     Button("Open Models") {
                         onExploreImageModels(request.operation)
@@ -1377,7 +2040,8 @@ private struct ChatAgentStepCell: View {
 
     private func imageModelSection(
         title: String,
-        models: [ChatImageModelOption]
+        models: [ChatImageModelOption],
+        defaultActionModelID: String? = nil
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
@@ -1385,7 +2049,10 @@ private struct ChatAgentStepCell: View {
                 .foregroundStyle(.secondary)
 
             ForEach(models) { model in
-                ChatImageModelOptionRow(model: model) {
+                ChatImageModelOptionRow(
+                    model: model,
+                    isDefaultAction: model.modelID == defaultActionModelID
+                ) {
                     onSelectImageModel(message.id, model.modelID)
                 }
             }
@@ -1421,7 +2088,15 @@ private struct ChatAgentStepCell: View {
                 Text("Arguments")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                NativCodeBlock(raw: formattedArguments)
+                if isReceivingArguments {
+                    ScrollView {
+                        NativCodeBlock(raw: formattedArguments)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .frame(maxHeight: 240)
+                } else {
+                    NativCodeBlock(raw: formattedArguments)
+                }
             }
             if !message.content.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1446,11 +2121,13 @@ private struct ChatAgentStepCell: View {
     private var title: String {
         // For MCP tools show the bare tool name, not the mcp__slug__ prefix.
         let name = mcpToolParts?.tool ?? message.toolName
-        return ChatToolPresentation.title(toolName: name, status: message.toolStatus)
+        return ChatToolPresentation.title(
+            toolName: name, status: isReceivingArguments ? nil : message.toolStatus)
     }
 
     private var symbolName: String {
-        ChatToolPresentation.symbolName(toolName: message.toolName, status: message.toolStatus)
+        ChatToolPresentation.symbolName(
+            toolName: message.toolName, status: isReceivingArguments ? nil : message.toolStatus)
     }
 
     private var statusTone: NativStatusTone {
@@ -1482,7 +2159,8 @@ private struct ChatAgentStepCell: View {
     private var mcpServerSlug: String? { mcpToolParts?.slug }
 
     private var accessibilityStatus: String {
-        switch message.toolStatus {
+        if isReceivingArguments { return "in progress" }
+        return switch message.toolStatus {
         case .preparing:
             "preparing"
         case .running:
@@ -1514,15 +2192,63 @@ private struct ChatAgentStepCell: View {
     }
 }
 
+private extension ChatAgentStepCell {
+    init(streamingCall: MLXChatToolCall) {
+        self.init(
+            message: ChatTranscriptMessage(
+                role: .tool,
+                content: "",
+                toolCallID: streamingCall.id,
+                toolName: streamingCall.function?.name,
+                toolStatus: .preparing,
+                toolArguments: streamingCall.function?.arguments
+            ),
+            imageModelSelectionRequest: nil,
+            onConfirm: { _ in },
+            onDeny: { _ in },
+            onSelectImageModel: { _, _ in },
+            onCancelImageModelSelection: { _ in },
+            onExploreImageModels: { _ in },
+            isReceivingArguments: true
+        )
+    }
+}
+
 private struct ChatImageModelOptionRow: View {
     private static let downloadButtonLabelWidth: CGFloat = 180
 
     @ObservedObject private var downloadManager = HuggingFaceDownloadManager.shared
+    @State private var isHovered = false
 
     let model: ChatImageModelOption
+    var isDefaultAction = false
     let onChoose: () -> Void
 
+    private var choosesOnRowClick: Bool {
+        model.isInstalled && !isDefaultAction
+    }
+
+    private var rowBackground: Color {
+        choosesOnRowClick && isHovered
+            ? Color.primary.opacity(0.07)
+            : Color(nsColor: .controlBackgroundColor)
+    }
+
+    @ViewBuilder
     var body: some View {
+        if choosesOnRowClick {
+            Button(action: onChoose) {
+                rowContent
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .accessibilityLabel("Use \(model.displayName)")
+        } else {
+            rowContent
+        }
+    }
+
+    private var rowContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -1549,25 +2275,29 @@ private struct ChatImageModelOptionRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(
-            Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 7)
-        )
+        .contentShape(.rect)
+        .background(rowBackground, in: RoundedRectangle(cornerRadius: 7))
         .overlay {
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                .stroke(
+                    isDefaultAction ? Color.accentColor : Color(nsColor: .separatorColor),
+                    lineWidth: isDefaultAction ? 1.5 : 0.5
+                )
         }
     }
 
     @ViewBuilder
     private var trailingControl: some View {
         if model.isInstalled {
-            Button(action: onChoose) {
-                Label("Use", systemImage: "chevron.right")
-                    .labelStyle(.titleAndIcon)
+            if isDefaultAction {
+                ChatToolConfirmationButton(
+                    title: "Use",
+                    systemImage: "chevron.right",
+                    showsReturnHint: false,
+                    accessibilityLabel: "Use \(model.displayName)",
+                    action: onChoose
+                )
             }
-            .buttonStyle(.bordered)
-            .accessibilityLabel("Use \(model.displayName)")
         } else if downloadManager.isDownloading(model.modelID) {
             ModelDownloadProgressControl(
                 progress: downloadManager.progress(for: model.modelID),
@@ -1597,63 +2327,6 @@ private struct ChatImageModelOptionRow: View {
         }
         let size = ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
         return "Download · \(size)"
-    }
-}
-
-private struct ChatLiveDecodeMetricsBadge: View, Equatable {
-    let metrics: ChatResponseMetrics
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: 6, height: 6)
-
-            Text("Decode")
-                .foregroundStyle(.secondary)
-
-            if let generatedTokens = metrics.generatedTokens {
-                Text("\(NativFormatting.integer(generatedTokens)) tokens")
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-            }
-
-            if metrics.generatedTokens != nil,
-                metrics.decodeTokensPerSecond != nil
-            {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-            }
-
-            if let decodeTokensPerSecond = metrics.decodeTokensPerSecond {
-                Text(NativFormatting.rate(decodeTokensPerSecond))
-                    .fontWeight(.medium)
-                    .monospacedDigit()
-            }
-        }
-        .font(.caption)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.accentColor.opacity(0.1))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.accentColor.opacity(0.25), lineWidth: 0.5)
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Decode metrics")
-        .accessibilityValue(accessibilityValue)
-    }
-
-    private var accessibilityValue: String {
-        [
-            metrics.generatedTokens.map { "\($0) generated tokens" },
-            metrics.decodeTokensPerSecond.map(NativFormatting.rate),
-        ]
-        .compactMap { $0 }
-        .joined(separator: ", ")
     }
 }
 
@@ -1798,7 +2471,7 @@ private struct ChatThinkingBubble: View {
                             .padding(14)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.opacity)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1902,6 +2575,8 @@ private struct ChatResponseMetricsRow: View {
             }
         }
         .padding(.top, 2)
+        // Align the labels with the response text; the card border hangs into the margin.
+        .padding(.leading, -ChatResponseMetricPill.horizontalPadding)
     }
 
     @ViewBuilder
@@ -1911,7 +2586,11 @@ private struct ChatResponseMetricsRow: View {
             value: NativFormatting.integer(metrics.totalTokens)
         )
         ChatResponseMetricPill(
-            label: "Decode tok/s",
+            label: "Prefill",
+            value: NativFormatting.rate(metrics.prefillTokensPerSecond)
+        )
+        ChatResponseMetricPill(
+            label: "Decode",
             value: NativFormatting.rate(metrics.decodeTokensPerSecond)
         )
         if let acceptanceRate = metrics.specAcceptanceRate {
@@ -1929,6 +2608,8 @@ private struct ChatResponseMetricsRow: View {
 }
 
 private struct ChatResponseMetricPill: View {
+    static let horizontalPadding: CGFloat = 9
+
     let label: String
     let value: String
 
@@ -1942,7 +2623,7 @@ private struct ChatResponseMetricPill: View {
                 .monospacedDigit()
         }
         .font(.caption)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, Self.horizontalPadding)
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -2150,13 +2831,23 @@ private struct ChatMessageText: View {
     let isStreaming: Bool
     var isUserPrompt = false
     @Environment(\.chatFontScale) private var chatFontScale
+    @Environment(\.chatSearchState) private var search
+    @Environment(\.colorScheme) private var colorScheme
 
     @ViewBuilder
     var body: some View {
+        let highlight = messageID.flatMap { search?.highlight(for: $0) }
         if isUserPrompt {
-            Text(verbatim: content)
-                .textSelection(.enabled)
-                .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            if let highlight {
+                MarkdownView(content: content,
+                             style: MarkdownStyle(fontSize: ChatFontMetrics.baseBodyPointSize * chatFontScale,
+                                                  dark: colorScheme == .dark), plainText: true)
+                    .environment(\.chatSearchHighlight, highlight)
+            } else {
+                Text(verbatim: content)
+                    .textSelection(.enabled)
+                    .font(ChatFontMetrics.bodyFont(scale: chatFontScale))
+            }
         } else if rendersMarkdown {
             ChatMarkdownRenderer(
                 messageID: messageID,
@@ -2164,6 +2855,7 @@ private struct ChatMessageText: View {
                 isStreaming: isStreaming,
                 fontScale: chatFontScale
             )
+            .environment(\.chatSearchHighlight, highlight)
         } else {
             Text(verbatim: content)
                 .textSelection(.enabled)

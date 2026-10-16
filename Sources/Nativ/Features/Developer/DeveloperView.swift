@@ -444,9 +444,9 @@ struct DeveloperView: View {
         case .available:
             return nil
         case .addressInUse:
-            return "\(settings.serverBaseURL.absoluteString) is already in use — Nativ can’t bind to that address."
+            return "\(settings.serverHost):\(settings.serverPort) is already in use — Nativ can’t bind to that address."
         case .invalidAddress:
-            return "\(settings.serverBaseURL.absoluteString) can’t be used — check the host and port."
+            return "\(settings.serverHost):\(settings.serverPort) can’t be used — check the host and port."
         }
     }
 
@@ -1580,6 +1580,7 @@ private struct ServerEndpoint: Identifiable {
     static let supported: [ServerEndpoint] = [
         .init(method: .post, path: "/v1/chat/completions", category: .openAI),
         .init(method: .post, path: "/v1/responses", category: .openAI),
+        .init(method: .post, path: "/v1/responses/compact", category: .openAI),
         .init(method: .post, path: "/v1/responses/input_tokens", category: .openAI),
         .init(method: .get, path: "/v1/responses/{response_id}", category: .openAI),
         .init(method: .delete, path: "/v1/responses/{response_id}", category: .openAI),
@@ -1648,12 +1649,12 @@ private struct ServerEndpointRow: View {
         Button(action: copyAction) {
             HStack(spacing: 8) {
                 Text(endpoint.method.displayTitle)
-                    .nativTextStyle(.codeEmphasized)
+                    .legacyTextStyle(.codeEmphasized)
                     .foregroundStyle(endpoint.method.tint)
                     .frame(width: 42, alignment: .leading)
 
                 Text(endpoint.path)
-                    .nativTextStyle(.code)
+                    .legacyTextStyle(.code)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .truncationMode(.middle)

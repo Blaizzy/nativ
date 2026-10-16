@@ -155,9 +155,10 @@ final class FnControlShortcutMonitor {
 
     private var localMonitor: Any?
     private var globalMonitor: Any?
-    private var modifierPollTimer: Timer?
-    private var preferenceObserver: NSObjectProtocol?
+    private var modifierPollTask: Task<Void, Never>?
+    private var preferenceObserver: NotificationCenter.ObservationToken?
     private var recordIsHeld = false
+    private var isAwaitingCaptureModifierRelease = false
     private var retryModifierIsHeld = false
     private var retryState = FnRetryShortcutState()
     private var recordModifierToggleState = VoiceModifierToggleShortcutState()
@@ -166,17 +167,29 @@ final class FnControlShortcutMonitor {
     private var hotKeys: [UInt32: EventHotKeyRef] = [:]
     private var hotKeyEventHandler: EventHandlerRef?
     private let preferences: VoiceShortcutPreferences
+    private let readModifiers: () -> VoiceShortcutModifiers
     private let hotKeySignature = OSType(0x4E_41_54_56)
     private let recordHotKeyID: UInt32 = 1
     private let retryHotKeyID: UInt32 = 2
 
-    init(preferences: VoiceShortcutPreferences? = nil) {
+    init(
+        preferences: VoiceShortcutPreferences? = nil,
+        readModifiers: @escaping () -> VoiceShortcutModifiers = {
+            VoiceShortcutModifiers(
+                cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
+            )
+        }
+    ) {
         self.preferences = preferences ?? .shared
+        self.readModifiers = readModifiers
     }
 
     func start() {
         guard localMonitor == nil, globalMonitor == nil else {
             return
+        }
+        if preferences.isCapturingShortcut {
+            isAwaitingCaptureModifierRelease = true
         }
 
         localMonitor = NSEvent.addLocalMonitorForEvents(
@@ -196,13 +209,9 @@ final class FnControlShortcutMonitor {
         }
         startModifierPolling()
         preferenceObserver = NotificationCenter.default.addObserver(
-            forName: .voiceShortcutPreferencesDidChange,
-            object: preferences,
-            queue: .main
+            of: preferences, for: VoiceShortcutPreferences.DidChange.self
         ) { [weak self] _ in
-            Task { @MainActor in
-                self?.reloadShortcuts()
-            }
+            self?.reloadShortcuts()
         }
         installHotKeys()
     }
@@ -216,8 +225,8 @@ final class FnControlShortcutMonitor {
         }
         localMonitor = nil
         globalMonitor = nil
-        modifierPollTimer?.invalidate()
-        modifierPollTimer = nil
+        modifierPollTask?.cancel()
+        modifierPollTask = nil
         if let preferenceObserver {
             NotificationCenter.default.removeObserver(preferenceObserver)
         }
@@ -250,24 +259,26 @@ final class FnControlShortcutMonitor {
     }
 
     private func startModifierPolling() {
-        modifierPollTimer?.invalidate()
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) {
-            [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.consumeCurrentModifierFlags()
+        modifierPollTask?.cancel()
+        // The task inherits this monitor's isolation. Sleeping suspends it
+        // without occupying the main actor.
+        modifierPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(1.0 / 60.0))
+                } catch {
+                    return
+                }
+                // stop() may run after sleep completes but before we resume.
+                guard !Task.isCancelled, let self else { return }
+                self.consumeCurrentModifierFlags()
             }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        modifierPollTimer = timer
         consumeCurrentModifierFlags()
     }
 
     private func consumeCurrentModifierFlags() {
-        consume(
-            VoiceShortcutModifiers(
-                cgEventFlags: CGEventSource.flagsState(.combinedSessionState)
-            )
-        )
+        consume(readModifiers())
     }
 
     private func consume(_ event: NSEvent) {
@@ -288,6 +299,13 @@ final class FnControlShortcutMonitor {
     }
 
     private func consume(_ activeModifiers: VoiceShortcutModifiers) {
+        guard !preferences.isCapturingShortcut else { return }
+        if isAwaitingCaptureModifierRelease {
+            if activeModifiers.isEmpty {
+                isAwaitingCaptureModifierRelease = false
+            }
+            return
+        }
         if preferences.recordShortcut.keyCode == nil {
             if preferences.isHandsFreeEnabled {
                 if recordModifierToggleState.update(
@@ -320,7 +338,10 @@ final class FnControlShortcutMonitor {
         }
     }
 
-    fileprivate func consumeHotKeyEvent(id: UInt32, kind: UInt32) {
+    func consumeHotKeyEvent(id: UInt32, kind: UInt32) {
+        guard !preferences.isCapturingShortcut, !isAwaitingCaptureModifierRelease else {
+            return
+        }
         let isPressed: Bool
         switch kind {
         case UInt32(kEventHotKeyPressed):
@@ -358,6 +379,9 @@ final class FnControlShortcutMonitor {
     }
 
     private func reloadShortcuts() {
+        if preferences.isCapturingShortcut {
+            isAwaitingCaptureModifierRelease = true
+        }
         if recordIsHeld {
             updateRecordState(false)
         }
@@ -372,7 +396,7 @@ final class FnControlShortcutMonitor {
     }
 
     private func installHotKeys() {
-        guard hotKeys.isEmpty, hotKeyEventHandler == nil else {
+        guard !preferences.isCapturingShortcut, hotKeys.isEmpty, hotKeyEventHandler == nil else {
             return
         }
 

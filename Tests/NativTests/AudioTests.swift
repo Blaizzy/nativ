@@ -1,4 +1,5 @@
 import AVFoundation
+import Carbon.HIToolbox
 import Foundation
 import XCTest
 @testable import NativServerKit
@@ -104,6 +105,84 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records.first?.applicationName, "Notes")
     }
 
+    func testAggregatesTranscriptionUsageByModel() throws {
+        let localModelID = "mlx-community/parakeet"
+        let appleModelID = "apple-speech (on-device)"
+        let firstDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let secondDate = firstDate.addingTimeInterval(60)
+        let thirdDate = secondDate.addingTimeInterval(60)
+
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("dictation.wav"),
+            transcript: "one two three four",
+            durationSeconds: 10,
+            modelID: localModelID,
+            applicationName: "Notes",
+            recordedAt: firstDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("meeting.wav"),
+            transcript: "five six seven",
+            durationSeconds: 20,
+            modelID: localModelID,
+            applicationName: nil,
+            kind: .meeting,
+            recordedAt: secondDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("apple.wav"),
+            transcript: "eight nine",
+            durationSeconds: nil,
+            modelID: appleModelID,
+            applicationName: nil,
+            recordedAt: thirdDate
+        )
+        store.upsertTranscription(
+            recordingURL: temporaryDirectory.appendingPathComponent("legacy.wav"),
+            transcript: "legacy transcript",
+            durationSeconds: nil,
+            modelID: nil,
+            applicationName: nil,
+            recordedAt: firstDate
+        )
+        store.addCapture(
+            recordingURL: temporaryDirectory.appendingPathComponent("untranscribed.wav"),
+            kind: .voiceNote,
+            title: "Untranscribed",
+            durationSeconds: 30
+        )
+
+        let usages = store.modelUsage()
+
+        XCTAssertEqual(usages.map(\.modelID), [localModelID, appleModelID, nil])
+        let localUsage = try XCTUnwrap(usages.first)
+        XCTAssertEqual(localUsage.transcriptions, 2)
+        XCTAssertEqual(localUsage.dictations, 1)
+        XCTAssertEqual(localUsage.recordings, 1)
+        XCTAssertEqual(localUsage.words, 7)
+        XCTAssertEqual(localUsage.durationSeconds, 30, accuracy: 0.001)
+        XCTAssertEqual(localUsage.timedTranscriptions, 2)
+        XCTAssertEqual(localUsage.lastUsedAt, secondDate)
+
+        let appleUsage = try XCTUnwrap(usages.first { $0.modelID == appleModelID })
+        XCTAssertEqual(appleUsage.transcriptions, 1)
+        XCTAssertEqual(appleUsage.dictations, 1)
+        XCTAssertEqual(appleUsage.recordings, 0)
+        XCTAssertEqual(appleUsage.words, 2)
+        XCTAssertEqual(appleUsage.timedTranscriptions, 0)
+
+        let unknownUsage = try XCTUnwrap(usages.first { $0.modelID == nil })
+        XCTAssertEqual(unknownUsage.transcriptions, 1)
+        XCTAssertEqual(unknownUsage.words, 2)
+
+        let recentUsages = store.modelUsage(since: secondDate)
+        XCTAssertEqual(recentUsages.map(\.modelID), [localModelID, appleModelID])
+        XCTAssertEqual(recentUsages[0].transcriptions, 1)
+        XCTAssertEqual(recentUsages[0].dictations, 0)
+        XCTAssertEqual(recentUsages[0].recordings, 1)
+        XCTAssertEqual(recentUsages[0].words, 3)
+    }
+
     func testRetryPreservesOriginalDurationAndRecordedDate() {
         let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
         let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -129,6 +208,32 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(store.records[0].durationSeconds, 4)
         XCTAssertEqual(store.records[0].applicationName, "Notes")
         XCTAssertEqual(store.records[0].modelID, "second-model")
+    }
+
+    func testRegeneratedTranscriptCanInvalidateExistingSummary() {
+        let recordingURL = temporaryDirectory.appendingPathComponent("recording.wav")
+
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "first transcript",
+            durationSeconds: 4,
+            modelID: "first-model",
+            applicationName: nil,
+            summary: "Summary of the first transcript"
+        )
+        store.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "replacement transcript",
+            durationSeconds: 4,
+            modelID: "second-model",
+            applicationName: nil,
+            preserveExistingSummary: false
+        )
+
+        XCTAssertEqual(store.records.count, 1)
+        XCTAssertEqual(store.records[0].transcript, "replacement transcript")
+        XCTAssertEqual(store.records[0].modelID, "second-model")
+        XCTAssertNil(store.records[0].summary)
     }
 
     func testImportsExistingTranscriptWithoutAudio() throws {
@@ -232,6 +337,38 @@ final class AudioAnalyticsStoreTests: XCTestCase {
             storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
         )
         XCTAssertEqual(reloaded.records.map(\.id), ["meeting"])
+    }
+
+    func testUntranscribedMeetingSurvivesReloadAndCanBeTranscribedInPlace() throws {
+        let recordingURL = temporaryDirectory.appendingPathComponent("sleep-meeting.wav")
+        try Data([0x00]).write(to: recordingURL)
+        store.addCapture(
+            recordingURL: recordingURL,
+            kind: .meeting,
+            title: "Interrupted meeting",
+            durationSeconds: 60
+        )
+
+        let reloaded = AudioAnalyticsStore(
+            storageURL: temporaryDirectory.appendingPathComponent("analytics.json")
+        )
+        let saved = try XCTUnwrap(reloaded.records.first)
+        XCTAssertEqual(saved.transcript, "")
+        XCTAssertEqual(saved.audioFileName, recordingURL.lastPathComponent)
+        XCTAssertEqual(saved.resolvedKind, .meeting)
+        XCTAssertNil(saved.summary)
+
+        reloaded.upsertTranscription(
+            recordingURL: recordingURL,
+            transcript: "Audio captured before sleep.",
+            durationSeconds: 60,
+            modelID: "local-asr",
+            applicationName: nil
+        )
+        XCTAssertEqual(reloaded.records.count, 1)
+        XCTAssertEqual(reloaded.records.first?.id, saved.id)
+        XCTAssertEqual(reloaded.records.first?.audioFileName, saved.audioFileName)
+        XCTAssertEqual(reloaded.records.first?.transcript, "Audio captured before sleep.")
     }
 
     func testPersistsMeetingAudioTranscriptAndSummaryMetadata() throws {
@@ -356,6 +493,184 @@ final class AudioAnalyticsStoreTests: XCTestCase {
         XCTAssertEqual(components.hour, 2)
         XCTAssertEqual(components.minute, 18)
         XCTAssertEqual(components.second, 18)
+    }
+}
+
+@MainActor
+final class FnControlShortcutMonitorTests: XCTestCase {
+    func testShortcutCaptureSuppressesPollingAndWaitsForReleaseBeforeResuming() async throws {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = []
+        var changes: [Bool] = []
+        var retries = 0
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.onRetry = { retries += 1 }
+        monitor.start()
+        defer { monitor.stop() }
+
+        for handsFree in [false, true] {
+            preferences.isHandsFreeEnabled = handsFree
+            preferences.isCapturingShortcut = true
+            modifiers = [.function, .control, .option]
+            try await Task.sleep(for: .milliseconds(75))
+            modifiers = []
+            try await Task.sleep(for: .milliseconds(75))
+            XCTAssertEqual(changes, [])
+            XCTAssertEqual(retries, 0)
+        }
+
+        preferences.isHandsFreeEnabled = false
+        modifiers = [.function, .control, .option]
+        preferences.isCapturingShortcut = false
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = []
+        try await Task.sleep(for: .milliseconds(75))
+        let resumed = expectation(description: "A fresh dictation shortcut works after setup")
+        monitor.onChange = { held in
+            changes.append(held)
+            if held { resumed.fulfill() }
+        }
+        modifiers = [.function, .control]
+        await fulfillment(of: [resumed], timeout: 2)
+        XCTAssertEqual(changes, [true])
+
+        let retried = expectation(description: "Retry works after setup")
+        monitor.onRetry = { retried.fulfill() }
+        modifiers = [.option]
+        await fulfillment(of: [retried], timeout: 2)
+    }
+
+    func testShortcutCaptureSuppressesHotKeysThroughPreferenceChanges() {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = []
+        var changes: [Bool] = []
+        var retries = 0
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.onRetry = { retries += 1 }
+        monitor.start()
+        defer { monitor.stop() }
+
+        preferences.isCapturingShortcut = true
+        preferences.isHandsFreeEnabled = true
+        for id: UInt32 in [1, 2] {
+            monitor.consumeHotKeyEvent(id: id, kind: UInt32(kEventHotKeyPressed))
+            monitor.consumeHotKeyEvent(id: id, kind: UInt32(kEventHotKeyReleased))
+        }
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = [.command]
+        preferences.isCapturingShortcut = false
+        monitor.consumeHotKeyEvent(id: 1, kind: UInt32(kEventHotKeyPressed))
+        monitor.consumeHotKeyEvent(id: 2, kind: UInt32(kEventHotKeyPressed))
+        XCTAssertEqual(changes, [])
+        XCTAssertEqual(retries, 0)
+
+        modifiers = []
+        monitor.resynchronizeAfterModalInteraction()
+        monitor.consumeHotKeyEvent(id: 1, kind: UInt32(kEventHotKeyPressed))
+        monitor.consumeHotKeyEvent(id: 2, kind: UInt32(kEventHotKeyPressed))
+        XCTAssertEqual(changes, [true])
+        XCTAssertEqual(retries, 1)
+    }
+
+    func testMonitorStartedDuringShortcutCaptureWaitsForRelease() {
+        let preferences = makePreferences()
+        preferences.isCapturingShortcut = true
+        var modifiers: VoiceShortcutModifiers = [.function, .control]
+        var changes: [Bool] = []
+        let monitor = FnControlShortcutMonitor(preferences: preferences) { modifiers }
+        monitor.onChange = { changes.append($0) }
+        monitor.start()
+        defer { monitor.stop() }
+
+        preferences.isCapturingShortcut = false
+        XCTAssertEqual(changes, [])
+        modifiers = []
+        monitor.resynchronizeAfterModalInteraction()
+        modifiers = [.function, .control]
+        monitor.resynchronizeAfterModalInteraction()
+        XCTAssertEqual(changes, [true])
+    }
+
+    func testPollingDeliversPressAndReleaseThenStops() async throws {
+        let preferences = makePreferences()
+        var modifiers: VoiceShortcutModifiers = [.function, .control]
+        var samples = 0
+        var changes: [Bool] = []
+        let released = expectation(description: "Polling observes modifier release")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return modifiers
+        }
+        monitor.onChange = { held in
+            XCTAssertTrue(Thread.isMainThread)
+            changes.append(held)
+            if !held { released.fulfill() }
+        }
+        monitor.start()
+        defer { monitor.stop() }
+
+        // The first sample is synchronous, before the polling task starts.
+        XCTAssertEqual(changes, [true])
+        modifiers = []
+        await fulfillment(of: [released], timeout: 2)
+        XCTAssertEqual(changes, [true, false])
+
+        monitor.stop()
+        let samplesAtStop = samples
+        modifiers = [.function, .control]
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+        XCTAssertEqual(changes, [true, false])
+    }
+
+    func testImmediateStopAndRestartDoNotLeaveOldPollersRunning() async throws {
+        let preferences = makePreferences()
+        var samples = 0
+        var retryEnabled = false
+        let polled = expectation(description: "Restarted monitor polls")
+        let monitor = FnControlShortcutMonitor(preferences: preferences) {
+            samples += 1
+            return retryEnabled && samples > 21 ? [.option] : []
+        }
+
+        for _ in 0 ..< 20 {
+            monitor.start()
+            monitor.stop()
+        }
+        XCTAssertEqual(samples, 20)
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, 20)
+
+        monitor.onRetry = { polled.fulfill() }
+        retryEnabled = true
+        monitor.start()
+        defer { monitor.stop() }
+        await fulfillment(of: [polled], timeout: 2)
+        monitor.stop()
+        let samplesAtStop = samples
+        try await Task.sleep(for: .milliseconds(75))
+        XCTAssertEqual(samples, samplesAtStop)
+    }
+
+    private func makePreferences() -> VoiceShortcutPreferences {
+        let suiteName = "FnControlShortcutMonitorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = VoiceShortcutPreferences(defaults: defaults)
+        preferences.isHandsFreeEnabled = false
+        preferences.retryShortcut = VoiceShortcut(
+            keyCode: nil,
+            keyDisplay: nil,
+            modifiers: [.option]
+        )
+        return preferences
     }
 }
 

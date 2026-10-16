@@ -414,6 +414,33 @@ if [[ "$is_disk_image" == true ]]; then
     exit 0
 fi
 
+# Collect bundles inside out, including the app. Their main executables must
+# only be signed with their bundles, after all nested code has been signed.
+code_bundles=()
+bundle_executables=()
+while IFS= read -r -d '' code_bundle; do
+    code_bundles+=("$code_bundle")
+    if [[ "$code_bundle" == *.framework ]]; then
+        info_plist="$code_bundle/Resources/Info.plist"
+        executable_directory="$code_bundle"
+    else
+        info_plist="$code_bundle/Contents/Info.plist"
+        executable_directory="$code_bundle/Contents/MacOS"
+    fi
+    if [[ ! -f "$info_plist" ]]; then
+        info_plist="$code_bundle/Info.plist"
+        executable_directory="$code_bundle"
+    fi
+    executable_name="$(plutil -extract CFBundleExecutable raw -o - "$info_plist" 2>/dev/null || true)"
+    if [[ -n "$executable_name" && -f "$executable_directory/$executable_name" ]]; then
+        bundle_executables+=("$executable_directory/$executable_name")
+    fi
+done < <(
+    find "$app_path" -depth -type d \
+        \( -name '*.framework' -o -name '*.xpc' -o -name '*.appex' -o -name '*.plugin' -o -name '*.app' \) \
+        -print0
+)
+
 native_files=()
 while IFS= read -r -d '' candidate; do
     file_type="$(file -b "$candidate" 2>/dev/null || true)"
@@ -424,19 +451,23 @@ done < <(find "$app_path" -type f -print0)
 
 echo "Signing ${#native_files[@]} Mach-O files with: $identity"
 for native_file in "${native_files[@]}"; do
+    is_bundle_executable=false
+    for bundle_executable in "${bundle_executables[@]}"; do
+        # Compare file identities so versioned framework symlinks also match.
+        if [[ "$native_file" -ef "$bundle_executable" ]]; then
+            is_bundle_executable=true
+            break
+        fi
+    done
+    [[ "$is_bundle_executable" == false ]] || continue
     sign_target "$native_file"
 done
 
-# Re-seal nested code bundles after their contents have been modified. `find
-# -depth` guarantees that nested bundles are handled before their containers.
-while IFS= read -r -d '' code_bundle; do
+# Sign nested bundles only after their contents, leaving the outer app last.
+for code_bundle in "${code_bundles[@]}"; do
+    [[ "$code_bundle" != "$app_path" ]] || continue
     sign_target "$code_bundle"
-done < <(
-    find "$app_path" -depth -type d \
-        \( -name '*.framework' -o -name '*.xpc' -o -name '*.appex' -o -name '*.plugin' -o -name '*.app' \) \
-        ! -path "$app_path" \
-        -print0
-)
+done
 
 # Preserve the production entitlements while intentionally omitting
 # development-only entitlements such as com.apple.security.get-task-allow.

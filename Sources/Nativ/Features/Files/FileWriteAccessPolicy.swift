@@ -67,8 +67,9 @@ struct FileWriteAccessPolicy: Sendable {
         guard contains(resolved) else {
             throw FileWriteAccessError.outsideAllowedRoot
         }
-        try Self.rejectSensitivePath(standardized)
-        try Self.rejectSensitivePath(resolved)
+        let permitsManagedWorktree = ChatGitWorktree.isManagedProjectRoot(rootURL)
+        try Self.rejectSensitivePath(standardized, permitsManagedWorktree: permitsManagedWorktree)
+        try Self.rejectSensitivePath(resolved, permitsManagedWorktree: permitsManagedWorktree)
         if !permitsBinaryDocument,
             Self.binaryDocumentExtensions.contains(resolved.pathExtension.lowercased())
         {
@@ -102,7 +103,7 @@ struct FileWriteAccessPolicy: Sendable {
         return relative.isEmpty ? "." : relative
     }
 
-    private static func rejectSensitivePath(_ url: URL) throws {
+    private static func rejectSensitivePath(_ url: URL, permitsManagedWorktree: Bool = false) throws {
         let path = url.path.lowercased()
         let blockedRoots = [
             "/boot", "/dev", "/etc", "/proc", "/sys", "/system", "/bin", "/sbin",
@@ -114,8 +115,8 @@ struct FileWriteAccessPolicy: Sendable {
         {
             throw FileWriteAccessError.sensitivePath
         }
-        if path.contains("/library/application support/nativ/")
-            || path.hasSuffix("/library/application support/nativ")
+        if !permitsManagedWorktree && (path.contains("/library/application support/nativ/")
+            || path.hasSuffix("/library/application support/nativ"))
         {
             throw FileWriteAccessError.sensitivePath
         }

@@ -110,7 +110,7 @@ struct IntegrationProfileManager {
         case .codex, .hermes, .aider, .qwenCode, .continueDev, .openInterpreter:
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return text.contains(Self.providerID) && text.contains(openAIBaseURL)
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             return false
         case .cline:
             return false
@@ -121,7 +121,8 @@ struct IntegrationProfileManager {
         tool: IntegrationTool,
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int = 0
     ) throws {
         switch tool {
         case .pi:
@@ -142,7 +143,8 @@ struct IntegrationProfileManager {
                 openCodeConfiguration(
                     selectedModelID: selectedModelID,
                     models: models,
-                    maxOutputTokens: maxOutputTokens
+                    maxOutputTokens: maxOutputTokens,
+                    contextLimit: contextLimit
                 ),
                 to: configurationURL(for: tool)
             )
@@ -162,7 +164,7 @@ struct IntegrationProfileManager {
             try configureContinue(selectedModelID: selectedModelID, models: models)
         case .openInterpreter:
             try configureOpenInterpreter(selectedModelID: selectedModelID)
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             break
         case .cline:
             break
@@ -264,7 +266,7 @@ struct IntegrationProfileManager {
                 text.contains(previous)
             else { continue }
             let rewritten = text.replacingOccurrences(of: previous, with: origin)
-            guard (try? rewritten.write(to: url, atomically: true, encoding: .utf8)) != nil else {
+            guard (try? writeText(rewritten, to: url)) != nil else {
                 continue
             }
             migrated.append(tool)
@@ -312,6 +314,8 @@ struct IntegrationProfileManager {
             return integrationsSupportURL.appendingPathComponent("buzz-guided.json")
         case .openInterpreter:
             return integrationsSupportURL.appendingPathComponent("openinterpreter/config.toml")
+        case .dsh:
+            return integrationsSupportURL.appendingPathComponent("dsh-guided.json")
         }
     }
 
@@ -489,9 +493,11 @@ struct IntegrationProfileManager {
     private func openCodeConfiguration(
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int
     ) -> [String: Any] {
         var modelCatalog: [String: Any] = [:]
+        var smallestContext = 131_072
         for model in models {
             var entry: [String: Any] = [
                 "name": model.displayName,
@@ -504,10 +510,14 @@ struct IntegrationProfileManager {
                     "output": ["text"]
                 ]
             ]
-            let contextWindow = model.contextWindow ?? 131_072
+            let contextWindow = max(2, min(model.contextWindow ?? 131_072, contextLimit > 0 ? contextLimit : Int.max))
+            let outputTokens = min(max(maxOutputTokens, 1), contextWindow / 2)
+            smallestContext = min(smallestContext, contextWindow)
+            // OpenCode applies compaction.reserved only when an input limit is present.
             entry["limit"] = [
                 "context": contextWindow,
-                "output": min(max(maxOutputTokens, 1), contextWindow)
+                "input": contextWindow - outputTokens,
+                "output": outputTokens
             ]
             if model.supportsReasoning {
                 entry["interleaved"] = ["field": "reasoning_content"]
@@ -518,6 +528,7 @@ struct IntegrationProfileManager {
         return [
             "$schema": "https://opencode.ai/config.json",
             "model": "\(Self.providerID)/\(selectedModelID)",
+            "compaction": ["auto": true, "reserved": min(20_000, smallestContext / 5)],
             "provider": [
                 Self.providerID: [
                     "npm": "@ai-sdk/openai-compatible",
@@ -747,7 +758,7 @@ struct IntegrationProfileManager {
                     "NATIV_API_KEY": apiKey
                 ]
             )
-        case .vscode, .cursor, .jetbrains, .buzz:
+        case .vscode, .cursor, .jetbrains, .buzz, .dsh:
             return ([], [:])
         case .cline:
             return ([], [:])
@@ -770,8 +781,9 @@ struct IntegrationProfileManager {
     }
 
     private func writeData(_ data: Data, to url: URL) throws {
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        let destination = url.resolvingSymlinksInPath()
+        try fileManager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
     }
 
     private func shellQuote(_ value: String) -> String {
