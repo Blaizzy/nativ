@@ -11,12 +11,37 @@ public final class NativResponsesClient: @unchecked Sendable {
     private let apiKey: String?
     private let tenant: String
     private let session: URLSession
+    private let idleTimeout: TimeInterval
+    private let ownsSession: Bool
 
-    public init(baseURL: URL, apiKey: String? = nil, tenant: String, session: URLSession = .shared) {
+    public init(
+        baseURL: URL,
+        apiKey: String? = nil,
+        tenant: String,
+        idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout,
+        session: URLSession? = nil
+    ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tenant = tenant
-        self.session = session
+        self.idleTimeout = idleTimeout
+        self.ownsSession = session == nil
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = idleTimeout
+            configuration.timeoutIntervalForResource = resourceTimeout
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
+        }
     }
 
     public func contextLimit(for model: String) async throws -> Int? {
@@ -70,6 +95,7 @@ public final class NativResponsesClient: @unchecked Sendable {
             "compact_threshold": .number(Double(compactThreshold)),
         ])])
         var urlRequest = makeRequest(path: "v1/responses")
+        urlRequest.timeoutInterval = idleTimeout
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -134,7 +160,7 @@ public final class NativResponsesClient: @unchecked Sendable {
 
     private func makeRequest(path: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.timeoutInterval = 600
+        request.timeoutInterval = 10
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(tenant, forHTTPHeaderField: "X-APC-Tenant")
         NativServerAuthorization.authorize(&request, apiKey: apiKey)

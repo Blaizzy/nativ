@@ -688,6 +688,7 @@ struct NativSettings: Codable, Equatable {
     /// Set once the Up-arrow recall has been used, which retires its hint.
     var hasUsedPromptRecall: Bool
     var chatFontScale: Double
+    var chatResponseTimeout: NativChatTimeout
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
@@ -748,6 +749,7 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize: Int = 16,
         hasUsedPromptRecall: Bool = false,
         chatFontScale: Double = Self.defaultChatFontScale,
+        chatResponseTimeout: NativChatTimeout = .tenMinutes,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
@@ -807,6 +809,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.hasUsedPromptRecall = hasUsedPromptRecall
         self.chatFontScale = chatFontScale
+        self.chatResponseTimeout = chatResponseTimeout
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
@@ -869,6 +872,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlockSize
         case hasUsedPromptRecall
         case chatFontScale
+        case chatResponseTimeout
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
         case sidebarSessionsCollapsed
@@ -1026,6 +1030,8 @@ struct NativSettings: Codable, Equatable {
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
+        chatResponseTimeout = (try container.decodeIfPresent(Int.self, forKey: .chatResponseTimeout))
+            .flatMap(NativChatTimeout.init(rawValue:)) ?? defaults.chatResponseTimeout
         sidebarPinnedCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed)
             ?? defaults.sidebarPinnedCollapsed
@@ -1094,6 +1100,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(hasUsedPromptRecall, forKey: .hasUsedPromptRecall)
         try container.encode(chatFontScale, forKey: .chatFontScale)
+        try container.encode(chatResponseTimeout, forKey: .chatResponseTimeout)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)

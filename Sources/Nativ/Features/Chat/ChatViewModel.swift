@@ -2701,7 +2701,9 @@ final class ChatViewModel: ObservableObject {
     private func runChatLoop(_ request: QueuedChatRequest) async throws {
         let client = NativChatClient(
             baseURL: request.settings.serverBaseURL,
-            apiKey: request.settings.serverAPIKey
+            apiKey: request.settings.serverAPIKey,
+            idleTimeout: request.settings.chatResponseTimeout.idleTimeout,
+            resourceTimeout: request.settings.chatResponseTimeout.resourceTimeout
         )
         let firstPrompt = sessionMessages(for: request.sessionID)?.first(where: { $0.role == .user })?.content ?? ""
         try await prepareWorktree(in: request.sessionID, firstPrompt: firstPrompt) { prompt in
@@ -2732,7 +2734,9 @@ final class ChatViewModel: ObservableObject {
         let responsesClient = NativResponsesClient(
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey,
-            tenant: queuedRequest.sessionID.uuidString
+            tenant: queuedRequest.sessionID.uuidString,
+            idleTimeout: queuedRequest.settings.chatResponseTimeout.idleTimeout,
+            resourceTimeout: queuedRequest.settings.chatResponseTimeout.resourceTimeout
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
@@ -3947,7 +3951,11 @@ final class ChatViewModel: ObservableObject {
                 mutate: { message in
                     message.role = .error
                     message.streamingToolCalls = []
-                    message.content = error.localizedDescription
+                    if let urlError = error as? URLError, urlError.code == .timedOut {
+                        message.content = "The response timed out. For large prompts, increase Chat Response Timeout in Settings → Advanced, then try again."
+                    } else {
+                        message.content = error.localizedDescription
+                    }
                     message.isStreaming = false
                     message.isCompacting = false
                     if !message.reasoningContent.isEmpty,
