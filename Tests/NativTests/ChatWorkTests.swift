@@ -69,6 +69,9 @@ final class ChatWorkTests: XCTestCase {
         let invalid = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: ChatWorkError.conflict))
         XCTAssertEqual(invalid["error"] as? String, ChatWorkError.conflict.localizedDescription)
         XCTAssertNil(invalid["recovery_hint"], "Invalid arguments and edit conflicts must not trigger web searches")
+        XCTAssertNil(invalid["id"])
+        XCTAssertNil(invalid["revision"])
+        XCTAssertNil(invalid["content"])
     }
 
     func testBrowserRequestsResolveURLsAndSelectedTabsWithoutGuessing() throws {
@@ -196,16 +199,32 @@ final class ChatWorkTests: XCTestCase {
         var state = ChatWorkState()
         let item = try state.create(title: "Notes", kind: .document, content: "Original")
         try state.update(id: item.id, content: "User edit", expectedRevision: 1, author: "You")
-        XCTAssertThrowsError(try state.execute(ChatWorkRequest(
-            action: .update, id: item.id, content: "Stale agent edit", expectedRevision: 1
-        ))) { XCTAssertTrue($0 is ChatWorkError) }
-        XCTAssertEqual(state.selectedItem?.content, "User edit")
-        XCTAssertEqual(state.selectedItem?.revision, 2)
-        let read = try json(state.execute(ChatWorkRequest(action: .read, id: item.id)))
-        XCTAssertEqual(read["revision"] as? Int, 2)
-        try state.execute(ChatWorkRequest(action: .update, id: item.id, content: "Merged edit", expectedRevision: 2))
+        let other = try state.create(title: "Other", kind: .document, content: "Unrelated content")
+        let before = state
+        var payload: [String: Any]?
+        do {
+            _ = try state.execute(ChatWorkRequest(action: .update, id: item.id,
+                                                  content: "Stale agent edit", expectedRevision: 1))
+            XCTFail("Expected a revision conflict")
+        } catch {
+            payload = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+        }
+        XCTAssertEqual(state, before)
+        let conflict = try XCTUnwrap(payload)
+        XCTAssertEqual(conflict["ok"] as? Bool, false)
+        XCTAssertEqual(conflict["error_code"] as? String, "revision_conflict")
+        XCTAssertEqual(conflict["id"] as? String, item.id.uuidString)
+        XCTAssertEqual(conflict["revision"] as? Int, 2)
+        XCTAssertEqual(conflict["content"] as? String, "User edit")
+        XCTAssertNotNil(conflict["recovery_hint"])
+        let id = try XCTUnwrap(UUID(uuidString: XCTUnwrap(conflict["id"] as? String)))
+        let content = try XCTUnwrap(conflict["content"] as? String) + "\nAgent addition"
+        let revision = try XCTUnwrap(conflict["revision"] as? Int)
+        try state.execute(ChatWorkRequest(action: .update, id: id, content: content, expectedRevision: revision))
+        XCTAssertEqual(state.selectedItem?.content, "User edit\nAgent addition")
         XCTAssertEqual(state.selectedItem?.revision, 3)
         XCTAssertEqual(state.selectedItem?.updatedBy, "Agent")
+        XCTAssertEqual(state.items.first { $0.id == other.id }?.content, "Unrelated content")
     }
 
     func testFailedUpdatesAreAtomic() throws {
@@ -332,6 +351,41 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testConflictPayloadTracksExternalEditsAndSupportsRetryWithoutReadingAgain() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id)
+        var revision = 1
+        var currentContent = "Original"
+        for newContent in ["First external edit", "Second external edit 📝"] {
+            try newContent.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                    content: currentContent + "\nAgent addition", expectedRevision: revision), in: session.id)
+                XCTFail("A stale update must not overwrite an external edit")
+            } catch {
+                let conflict = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+                XCTAssertEqual(conflict["error_code"] as? String, "revision_conflict")
+                XCTAssertEqual(conflict["id"] as? String, item.id.uuidString)
+                XCTAssertEqual(conflict["revision"] as? Int, revision + 1)
+                XCTAssertEqual(conflict["content"] as? String, newContent)
+                revision = try XCTUnwrap(conflict["revision"] as? Int)
+                currentContent = try XCTUnwrap(conflict["content"] as? String)
+            }
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), newContent)
+        }
+        let merged = currentContent + "\nAgent addition"
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+            content: merged, expectedRevision: revision), in: session.id)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), merged)
+        XCTAssertEqual(chat.workState.selectedItem?.revision, 4)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem?.content, merged)
+    }
+
     func testTabReorderingPreservesSelectionContentsAndSavedOrder() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
@@ -752,7 +806,7 @@ final class ChatWorkSessionTests: XCTestCase {
             _ = try await chat.executeWorkAction(stale, in: session.id)
             XCTFail("An omitted ID must not bypass an intervening user edit")
         } catch {
-            guard case ChatWorkError.conflict = error else { return XCTFail("Expected a revision conflict: \(error)") }
+            guard case ChatWorkError.revisionConflict = error else { return XCTFail("Expected a revision conflict: \(error)") }
         }
         XCTAssertEqual(chat.workState.items.first { $0.id == first.id }?.content, "User edit")
         var missingID = ChatWorkState()
@@ -1030,7 +1084,7 @@ final class ChatWorkSessionTests: XCTestCase {
             _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
                 content: "Stale", expectedRevision: 2), in: session.id)
             XCTFail("A stale revision must not overwrite an external edit")
-        } catch ChatWorkError.conflict {
+        } catch ChatWorkError.revisionConflict {
             // The disk edit increments the revision before the agent update is applied.
         } catch { XCTFail("Unexpected error: \(error)") }
         let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id))
