@@ -1024,7 +1024,8 @@ final class ChatViewModel: ObservableObject {
         return String(decoding: data, as: UTF8.self)
     }
 
-    func executeWorkAction(_ request: ChatWorkRequest, in sessionID: UUID, terminalApprovalGranted: Bool = false) async throws -> String {
+    func executeWorkAction(_ request: ChatWorkRequest, in sessionID: UUID, terminalApprovalGranted: Bool = false,
+                           onSave: ((ChatWorkItem) -> Void)? = nil) async throws -> String {
         if request.action.isTerminalMutation, !terminalApprovalGranted {
             throw ChatTerminalToolError.approvalRequired
         }
@@ -1080,6 +1081,10 @@ final class ChatViewModel: ObservableObject {
         }
         if request.action != .read && request.action != .list {
             try saveWorkState(state, in: sessionID, updateTimestamp: true)
+            if request.action == .create || request.action == .update,
+               let item = state.selectedItem, item.canEdit {
+                onSave?(item)
+            }
         }
         if request.action == .create, let item = state.selectedItem, item.kind == .terminal {
             let terminal = workTerminal(for: item, sessionID: sessionID)
@@ -2736,6 +2741,8 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
+        var tracksWorkSaves = workState(for: request.sessionID)?.items.contains(where: \.canEdit) == true
+        var savedWorkFiles: [UUID: String] = [:]
         var activeSettings = queuedRequest.settings
         var activeImageModelID = queuedRequest.imageGenerationModelID
         let fileReadTracker = ChatReadFileTracker()
@@ -2870,6 +2877,7 @@ final class ChatViewModel: ObservableObject {
                 fallbackReasoningContent: completion.reasoningContent,
                 responseMetrics: ChatResponseMetrics(completion: completion),
                 toolCalls: toolCalls,
+                savedWorkFiles: toolCalls.isEmpty && tracksWorkSaves ? savedWorkFiles.values.sorted() : nil,
                 isCancelled: false
             )
 
@@ -2886,6 +2894,10 @@ final class ChatViewModel: ObservableObject {
                     toolCall.function?.name == ChatWorkToolRegistry.toolName
                     ? Result { try resolvedWorkRequest(ChatWorkRequest.decode(toolCall), in: queuedRequest.sessionID) }
                     : nil
+                if let workRequest = try? workRequestAtConsent?.get(),
+                   workRequest.action == .update || (workRequest.action == .create && workRequest.kind != .terminal) {
+                    tracksWorkSaves = true
+                }
                 let toolMessageID = UUID()
                 let initialToolStatus: ChatTranscriptMessage.ToolStatus =
                     switch toolCall.function?.name {
@@ -3253,7 +3265,9 @@ final class ChatViewModel: ObservableObject {
                                 throw ChatWorkError.invalid("The selected tab changed while awaiting approval. List the tabs and retry with an explicit id.")
                             }
                             return try await self.executeWorkAction(request, in: queuedRequest.sessionID,
-                                                                   terminalApprovalGranted: terminalApprovalGranted)
+                                                                   terminalApprovalGranted: terminalApprovalGranted) { item in
+                                savedWorkFiles[item.id] = item.title
+                            }
                         }
                     )
                     let outcome: ChatToolExecutionOutcome
@@ -3929,6 +3943,7 @@ final class ChatViewModel: ObservableObject {
         fallbackReasoningContent: String?,
         responseMetrics: ChatResponseMetrics?,
         toolCalls: [MLXChatToolCall] = [],
+        savedWorkFiles: [String]? = nil,
         isCancelled: Bool
     ) {
         liveDecodeRateRefreshDates.removeValue(forKey: id)
@@ -3944,6 +3959,7 @@ final class ChatViewModel: ObservableObject {
                 message.reasoningContent = fallbackReasoningContent
             }
             message.toolCalls = toolCalls
+            message.savedWorkFiles = savedWorkFiles
             message.streamingToolCalls = []
             if !message.reasoningContent.isEmpty,
                 message.thinkingDuration == nil

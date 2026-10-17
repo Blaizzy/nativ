@@ -240,6 +240,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var imageAttachments: [ChatImageAttachment]
     var responseMetrics: ChatResponseMetrics?
     var compactionMetrics: ChatCompactionMetrics?
+    var savedWorkFiles: [String]?
     var isCompacting = false
     var toolCalls: [MLXChatToolCall]
     // Preview only: unfinished calls must not be persisted or replayed.
@@ -300,6 +301,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case imageAttachments
         case responseMetrics
         case compactionMetrics
+        case savedWorkFiles
         case toolCalls
         case toolCallID
         case toolName
@@ -329,6 +331,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         responseMetrics = try container.decodeIfPresent(
             ChatResponseMetrics.self, forKey: .responseMetrics)
         compactionMetrics = try container.decodeIfPresent(ChatCompactionMetrics.self, forKey: .compactionMetrics)
+        savedWorkFiles = try container.decodeIfPresent([String].self, forKey: .savedWorkFiles)
         toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
@@ -363,6 +366,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encodeIfPresent(responseMetrics, forKey: .responseMetrics)
         try container.encodeIfPresent(compactionMetrics, forKey: .compactionMetrics)
+        try container.encodeIfPresent(savedWorkFiles, forKey: .savedWorkFiles)
         try container.encode(toolCalls, forKey: .toolCalls)
         try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
         try container.encodeIfPresent(toolName, forKey: .toolName)

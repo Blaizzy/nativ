@@ -351,6 +351,56 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testSaveConfirmationRequiresAPersistedWrite() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        var receipts: [ChatWorkItem] = []
+        let record: (ChatWorkItem) -> Void = { item in
+            receipts.append(item)
+            let file = chat.workFileURL(for: item)
+            XCTAssertEqual(file.flatMap { try? String(contentsOf: $0, encoding: .utf8) }, item.content)
+            XCTAssertEqual(store.loadSession(id: session.id)?.workState?.items.first { $0.id == item.id }, item)
+        }
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Notes.md",
+            kind: .document, content: "Original"), in: session.id, onSave: record)
+        let item = try XCTUnwrap(receipts.first)
+        XCTAssertEqual(receipts.count, 1)
+        receipts.removeAll()
+
+        for action in [ChatWorkRequest.Action.read, .list, .open] {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: action, id: item.id),
+                                                in: session.id, onSave: record)
+        }
+        XCTAssertTrue(receipts.isEmpty)
+        try chat.createWorkItem(title: "Other.md", kind: .document, content: "Unrelated")
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+            content: "Updated", expectedRevision: 1), in: session.id, onSave: record)
+        XCTAssertEqual(receipts.map(\.id), [item.id])
+        XCTAssertEqual(receipts.first?.revision, 2)
+        receipts.removeAll()
+
+        do {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                content: "Stale", expectedRevision: 1), in: session.id, onSave: record)
+            XCTFail("A stale update must fail")
+        } catch ChatWorkError.revisionConflict { }
+        XCTAssertTrue(receipts.isEmpty)
+
+        let sessionURL = store.sessionURL(for: session.id)
+        let saved = try Data(contentsOf: sessionURL)
+        try FileManager.default.removeItem(at: sessionURL)
+        try FileManager.default.createDirectory(at: sessionURL, withIntermediateDirectories: false)
+        do {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                content: "Cannot persist", expectedRevision: 2), in: session.id, onSave: record)
+            XCTFail("A persistence failure must not confirm a save")
+        } catch { }
+        XCTAssertTrue(receipts.isEmpty)
+        try FileManager.default.removeItem(at: sessionURL)
+        try saved.write(to: sessionURL)
+    }
+
     func testConflictPayloadTracksExternalEditsAndSupportsRetryWithoutReadingAgain() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
