@@ -215,7 +215,19 @@ struct IntegrationProfileManager {
             .map { "export \($0.key)=\(shellQuote($0.value))" }
         let arguments = launch.arguments.map(shellQuote).joined(separator: " ")
         let executable = shellQuote(executableURL.path)
-        let invocation = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
+        let command = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
+        let invocation: String
+        if tool == .openCode {
+            invocation = """
+            if \(executable) --help 2>&1 | /usr/bin/grep -Eq '^[[:space:]]*--standalone([[:space:]]|$)'; then
+                \(command) '--standalone'
+            else
+                \(command)
+            fi
+            """
+        } else {
+            invocation = command
+        }
         return (["cd \(shellQuote(workingDirectory.path))"] + exports + [invocation])
             .joined(separator: "\n")
     }
