@@ -720,7 +720,7 @@ struct IntegrationProfileManager {
             return (["-p", Self.providerID, "chat", "--provider", "custom", "--model", selectedModelID], [:])
         case .openCode:
             return (
-                ["--model", "\(Self.providerID)/\(selectedModelID)"],
+                [],
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
         case .aider:

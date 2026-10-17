@@ -238,7 +238,7 @@ final class IntegrationServicesTests: XCTestCase {
             """
             cd '/tmp/Nativ Project'
             export OPENCODE_CONFIG='\(configurationURL.path)'
-            '/tools/opencode' '--model' 'nativ/org/local-model'
+            '/tools/opencode'
             """
         )
     }
