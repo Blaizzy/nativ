@@ -214,6 +214,14 @@ enum ChatToolRegistry {
 enum ChatUnknownToolError: LocalizedError {
     case unknownTool(String)
 
+    static let recoveryHint = """
+        A tool call was rejected because its name was not registered. That call performed no action. \
+        Choose a tool from the current tool list using its exact name and schema. \
+        For work-pane documents, when chat_work is available, call chat_work with action="read", \
+        then chat_work with action="update" using the returned id and revision as expected_revision. \
+        read and update are action values, not tool names. Do not retry the rejected tool name.
+        """
+
     var errorDescription: String? {
         switch self {
         case .unknownTool(let name):
@@ -222,9 +230,17 @@ enum ChatUnknownToolError: LocalizedError {
     }
 }
 
-private struct ChatUnknownToolResultPayload: Encodable {
+private struct ChatUnknownToolResultPayload: Codable {
     let ok: Bool
     let error: String?
+    var errorCode: String?
+    var recoveryHint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, error
+        case errorCode = "error_code"
+        case recoveryHint = "recovery_hint"
+    }
 }
 
 enum ChatToolDispatcher {
@@ -340,8 +356,21 @@ enum ChatToolDispatcher {
     }
 
     private static func unknownToolFailurePayload(error: Error) -> String {
-        let payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        var payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        if error is ChatUnknownToolError {
+            payload.errorCode = "unknown_tool"
+            payload.recoveryHint = ChatUnknownToolError.recoveryHint
+        }
         return (try? encodedPayload(payload)) ?? #"{"ok":false,"error":"Unknown tool."}"#
+    }
+
+    static func isUnknownToolFailure(_ message: ChatTranscriptMessage) -> Bool {
+        guard message.role == .tool, message.toolStatus == .failed,
+              let payload = try? JSONDecoder().decode(ChatUnknownToolResultPayload.self, from: Data(message.content.utf8)),
+              !payload.ok else { return false }
+        if payload.errorCode == "unknown_tool" { return true }
+        guard let name = message.toolName else { return false }
+        return payload.error == ChatUnknownToolError.unknownTool(name).localizedDescription
     }
 
     private static func encodedPayload(_ payload: ChatUnknownToolResultPayload) throws -> String {
