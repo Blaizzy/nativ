@@ -1315,3 +1315,168 @@ final class ServerPortProbeTests: XCTestCase {
 private enum SocketTestError: Error {
     case operation(String, Int32)
 }
+
+final class NativDecisionClientTests: XCTestCase {
+    private func client(path: String = "") -> NativDecisionClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DecisionURLProtocol.self]
+        return NativDecisionClient(
+            baseURL: URL(string: "https://decision.test/\(path)")!, apiKey: " test-key ",
+            session: URLSession(configuration: configuration)
+        )
+    }
+
+    func testDecisionRequestAndTypedResponse() async throws {
+        let response = try await client().predict(
+            model: "test/decision", state: .object(["action": .string("Next page")]),
+            questions: ["permission": .init(instructions: "Classify the action", criteria: .array([
+                .string("allow"), .string("ask"), .string("deny"),
+            ]))]
+        )
+        XCTAssertEqual(response.model, "test/decision")
+        XCTAssertEqual(response.answers["permission"]?.value, .string("allow"))
+        XCTAssertEqual(response.answers["permission"]?.probabilities?["allow"], 0.9)
+    }
+
+    func testHTTPAndMissingAnswersAreErrors() async {
+        for path in ["failure", "missing"] {
+            do {
+                _ = try await client(path: path).predict(
+                    state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
+                )
+                XCTFail("Expected an error for \(path)")
+            } catch let error as NativDecisionError {
+                switch (path, error) {
+                case ("failure", .httpStatus(400, _)), ("missing", .invalidResponse): break
+                default: XCTFail("Unexpected error: \(error)")
+                }
+            } catch { XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testCancelledRequestDoesNotReachTransport() async {
+        let decisionClient = client(path: "cancelled")
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await decisionClient.predict(
+                state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testEmptyRequestIsRejected() async {
+        do {
+            _ = try await client().predict(questions: [:])
+            XCTFail("Expected invalid request")
+        } catch NativDecisionError.invalidRequest {} catch { XCTFail("\(error)") }
+    }
+
+    func testDecisionResponseValidationRejectsInvalidTypesLabelsAndRanges() throws {
+        let choice = NativDecisionQuestion(instructions: "Choose", criteria: .array([.string("A"), .string("B")]))
+        let score = NativDecisionQuestion(type: .score, instructions: "Rate", criteria: .array([.string("Low"), .string("High")]))
+        let boolean = NativDecisionQuestion(type: .bool, instructions: "Yes?")
+        let cases: [(NativDecisionQuestion, String)] = [
+            (choice, #"{"type":"bool","value":true}"#),
+            (choice, #"{"type":"choice","value":"C"}"#),
+            (choice, #"{"type":"choice","value":"A","probabilities":{"A":1.2}}"#),
+            (choice, #"{"type":"choice","value":"A","probabilities":{"C":0.5}}"#),
+            (score, #"{"type":"score","value":2}"#),
+            (score, #"{"type":"score","value":-1}"#),
+            (boolean, #"{"type":"bool","value":"true"}"#),
+            (boolean, #"{"type":"bool","value":true,"probability":-0.2}"#),
+        ]
+        for (question, answer) in cases {
+            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
+            let response = try JSONDecoder().decode(NativDecisionResponse.self, from: data)
+            XCTAssertThrowsError(try response.validate(questions: ["answer": question]))
+        }
+        for (question, answer) in [
+            (score, #"{"type":"score","value":0.75,"probabilities":{"0":0.25,"1":0.75}}"#),
+            (boolean, #"{"type":"bool","value":true,"probability":0.9}"#),
+        ] {
+            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
+            XCTAssertNoThrow(try JSONDecoder().decode(NativDecisionResponse.self, from: data).validate(questions: ["answer": question]))
+        }
+    }
+
+    func testDecisionPreloadReadsRuntimeModelRegistry() throws {
+        let loaded = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_model":null,"loaded_models":{"decision":{"model":"LiquidAI/d1-3B","adapter":null,"model_kind":"decision"},"stt":{"model":"test/speech","adapter":null}},"preload_failures":{}}"#.utf8
+        ))
+        XCTAssertEqual(loaded.loadedDecisionModel, "LiquidAI/d1-3B")
+        XCTAssertNil(loaded.loadedModel)
+        XCTAssertNil(loaded.decisionModelLoadError)
+        let failed = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_models":{},"preload_failures":{"decision":{"model":"test/decision","error":"Out of memory"}}}"#.utf8
+        ))
+        XCTAssertNil(failed.loadedDecisionModel)
+        XCTAssertEqual(failed.decisionModelLoadError, "Out of memory")
+    }
+
+    func testDecisionPreloadMetricsRemainBackwardCompatible() throws {
+        let legacy = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data("{}".utf8))
+        XCTAssertNil(legacy.loadedDecisionModel)
+        XCTAssertNil(legacy.decisionModelLoadError)
+        let failure = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_model":"test/chat","decision_model_load_error":"Cannot load decisions"}"#.utf8
+        ))
+        XCTAssertEqual(failure.loadedModel, "test/chat")
+        XCTAssertEqual(failure.decisionModelLoadError, "Cannot load decisions")
+    }
+}
+
+private final class DecisionURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let path = request.url!.path
+        let body: String
+        let status: Int
+        if path.hasPrefix("/failure/") {
+            body = #"{"detail":"Unsupported decision type"}"#
+            status = 400
+        } else if path.hasPrefix("/missing/") {
+            body = #"{"model":"test/decision","answers":{}}"#
+            status = 200
+        } else {
+            XCTAssertEqual(path, "/v1/decisions")
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+                let payload = try? JSONDecoder().decode(MLXJSONValue.self, from: data)
+                XCTAssertEqual(payload, .object([
+                    "model": .string("test/decision"), "state": .object(["action": .string("Next page")]),
+                    "questions": .object(["permission": .object([
+                        "type": .string("choice"), "instructions": .string("Classify the action"),
+                        "criteria": .array([.string("allow"), .string("ask"), .string("deny")]),
+                    ])]),
+                ]))
+            } else {
+                XCTFail("Missing request body")
+            }
+            body = #"{"model":"test/decision","answers":{"permission":{"type":"choice","value":"allow","probabilities":{"allow":0.9,"ask":0.08,"deny":0.02}}},"usage":{"input_tokens":42,"output_tokens":0}}"#
+            status = 200
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil
+        )!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
