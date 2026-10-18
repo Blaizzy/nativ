@@ -1,6 +1,6 @@
 import Combine
 import NativServerKit
-import SwiftUI
+import Foundation
 
 @MainActor
 final class DecisionRequestComposer: ObservableObject {
