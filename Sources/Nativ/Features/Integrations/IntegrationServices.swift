@@ -217,10 +217,11 @@ struct IntegrationProfileManager {
         let executable = shellQuote(executableURL.path)
         let command = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
         let invocation: String
-        if tool == .openCode {
+        if let flag = tool.optionalLaunchFlag {
+            let pattern = shellQuote("^[[:space:]]*\(NSRegularExpression.escapedPattern(for: flag))([[:space:]]|$)")
             invocation = """
-            if \(executable) --help 2>&1 | /usr/bin/grep -Eq '^[[:space:]]*--standalone([[:space:]]|$)'; then
-                \(command) '--standalone'
+            if \(executable) --help 2>&1 | /usr/bin/grep -Eq \(pattern); then
+                \(command) \(shellQuote(flag))
             else
                 \(command)
             fi
