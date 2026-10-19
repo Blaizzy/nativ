@@ -267,6 +267,22 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
     }
 
+    func testDecisionModelSelectionPersistsSeparatelyFromChat() throws {
+        var settings = NativSettings(languageModelID: "org/chat")
+        settings.setModelID("  org/decision  ", for: .decision)
+        let normalized = settings.normalized()
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(normalized))
+        XCTAssertEqual(decoded.modelID(for: .decision), "org/decision")
+        XCTAssertEqual(decoded.languageModelID, "org/chat")
+        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--decision-model", "org/decision"))
+        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--model", "org/chat"))
+        XCTAssertFalse(decoded.hasSameLaunchConfiguration(as: NativSettings(languageModelID: "org/chat")))
+        settings.setModelID(" ", for: .decision)
+        XCTAssertFalse(settings.launchArguments.contains("--decision-model"))
+        let legacy = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+        XCTAssertNil(legacy.decisionModelID)
+    }
+
     func testEmbeddingModelSlotRoundTripsAndRequiresRestart() throws {
         var settings = NativSettings()
         settings.setModelID("org/embed", for: .embeddings)
