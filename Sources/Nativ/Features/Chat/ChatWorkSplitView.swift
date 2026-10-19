@@ -1,6 +1,23 @@
 import AppKit
 import SwiftUI
 
+/// The window's invisible drag target must yield to the work pane's tab buttons.
+/// Observe the chat here so opening/closing the pane updates hit testing immediately.
+struct ChatWorkWindowDragRegion: View {
+    @ObservedObject var chat: ChatViewModel
+    let isChatWorkspace: Bool
+    let height: CGFloat
+
+    var body: some View {
+        Spacer(minLength: 0)
+            .frame(height: height)
+            .contentShape(.rect)
+            .onTapGesture(count: 2) { NSApp.keyWindow?.performZoom(nil) }
+            .simultaneousGesture(WindowDragGesture())
+            .allowsHitTesting(!isChatWorkspace || !chat.workState.isVisible)
+    }
+}
+
 /// The composer reports its controls' ideal width, including the transcript inset.
 struct ChatComposerMinimumWidthKey: PreferenceKey {
     static let defaultValue: CGFloat = 0

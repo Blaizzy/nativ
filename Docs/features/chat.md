@@ -60,6 +60,12 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
+PDF and other document excerpts are sent as current source context, separately
+from the saved conversation. Selecting different passages or fitting them to the
+remaining space preserves the summary; editing a covered message or replacing
+its attachment still rebuilds the history. Document fitting counts the summary
+and uncovered messages rather than the full pre-compaction transcript.
+
 Compaction requires a server that supports the Responses compaction API and
 budgets output from actual input usage. The bundled requirements pin the server
 revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).

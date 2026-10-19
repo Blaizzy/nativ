@@ -317,13 +317,10 @@ struct ControlPanelView: View {
                 action: toggleSidebarVisibility
             )
 
-            Spacer(minLength: 0)
-                .frame(height: ControlPanelLayout.topControlSize)
-                .contentShape(.rect)
-                .onTapGesture(count: 2) {
-                    NSApp.keyWindow?.performZoom(nil)
-                }
-                .simultaneousGesture(WindowDragGesture())
+            ChatWorkWindowDragRegion(
+                chat: chat, isChatWorkspace: selectedTab == .chat && chatWorkspaceMode == .chat,
+                height: ControlPanelLayout.topControlSize
+            )
 
             if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
                 ChatWorkWindowControls(
