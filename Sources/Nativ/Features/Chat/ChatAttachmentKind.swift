@@ -12,6 +12,70 @@ enum ChatAttachmentKind: Equatable, Sendable {
     }
 }
 
+/// Original files stay in the media store; only these IDs and metadata go to the model.
+enum ChatWorkAttachments {
+    static let maximumFiles = 20
+    static let maximumBytes = 64 * 1024 * 1024
+
+    static func available(in messages: [ChatTranscriptMessage]) -> [ChatImageAttachment] {
+        var seen = Set<UUID>()
+        return messages.flatMap(\.imageAttachments).filter {
+            $0.chatAttachmentKind != .unsupported && seen.insert($0.id).inserted
+        }
+    }
+
+    static func resolve(_ ids: [UUID]?, in messages: [ChatTranscriptMessage]) throws -> [ChatImageAttachment] {
+        guard let ids, !ids.isEmpty, ids.count <= maximumFiles, Set(ids).count == ids.count else {
+            throw ChatWorkError.invalid("upload requires 1–20 distinct attachment_ids from this chat's attachments list.")
+        }
+        let available = available(in: messages)
+        return try ids.map { id in
+            guard let attachment = available.first(where: { $0.id == id }) else {
+                throw ChatWorkError.invalid("An attachment is no longer available in this chat. Call attachments again.")
+            }
+            return attachment
+        }
+    }
+
+    static func listJSON(in messages: [ChatTranscriptMessage]) throws -> String {
+        let entries = available(in: messages).map { attachment in
+            ["attachment_id": attachment.id.uuidString,
+             "filename": attachment.filename, "mime_type": attachment.mimeType]
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: entries, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    struct File: Sendable {
+        let id: UUID
+        let filename: String
+        let mimeType: String
+        let data: Data
+    }
+
+    @concurrent
+    static func load(_ attachments: [ChatImageAttachment]) async throws -> [File] {
+        var remaining = maximumBytes
+        return try attachments.map { attachment in
+            try Task.checkCancellation()
+            // Bound disk reads before allocating the JavaScript bridge's base64 copy.
+            let byteCount = try attachment.assetFileURL?.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                ?? (attachment.base64Data.utf8.count / 4 * 3)
+            guard byteCount <= remaining else {
+                throw ChatWorkError.invalid("Upload supports up to 64 MiB per action. Upload fewer or smaller files.")
+            }
+            guard let data = attachment.imageData else {
+                throw ChatWorkError.invalid("The original file “\(attachment.filename)” could not be read. Attach it again.")
+            }
+            guard data.count <= remaining else {
+                throw ChatWorkError.invalid("Upload supports up to 64 MiB per action.")
+            }
+            remaining -= data.count
+            return File(id: attachment.id, filename: ChatAttachmentPreviewFile.safeFilename(attachment.filename),
+                        mimeType: attachment.mimeType, data: data)
+        }
+    }
+}
+
 struct ChatAttachmentPreviewFile: Sendable {
     let url: URL
     let directoryURL: URL

@@ -343,7 +343,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         onNavigate?(url)
     }
 
-    func execute(_ request: ChatWorkRequest) async throws -> [String: Any] {
+    func execute(_ request: ChatWorkRequest, attachments: [ChatImageAttachment] = []) async throws -> [String: Any] {
         try Task.checkCancellation()
         guard !profile.isClearingWebsiteData else {
             throw ChatWorkError.invalid("Website data is being cleared. Try again in a moment.")
@@ -363,17 +363,35 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         default: break
         }
         try await waitForPage()
-        if request.action == .click || request.action == .type {
+        var selectedFiles: [[String: Any]]?
+        if request.action == .click || request.action == .type || request.action == .upload {
             guard let elementID = request.elementID else {
                 throw ChatWorkError.invalid("Inspect the page, then supply an element_id.")
             }
             if request.action == .type && request.text == nil {
                 throw ChatWorkError.invalid("type requires text.")
             }
+            var files: [ChatWorkAttachments.File] = []
+            if request.action == .upload {
+                guard !attachments.isEmpty, attachments.count <= ChatWorkAttachments.maximumFiles,
+                      request.attachmentIDs == attachments.map(\.id),
+                      Set(attachments.map(\.id)).count == attachments.count else {
+                    throw ChatWorkError.invalid("upload requires original attachments resolved from this chat.")
+                }
+                files = try await ChatWorkAttachments.load(attachments)
+            }
+            try Task.checkCancellation()
             let result = try await webView.callAsyncJavaScript(Self.actionScript, arguments: [
-                "elementID": elementID, "action": request.action.rawValue, "text": request.text ?? ""
+                "elementID": elementID, "action": request.action.rawValue, "text": request.text ?? "",
+                "files": files.map { ["name": $0.filename, "type": $0.mimeType, "base64": $0.data.base64EncodedString()] }
             ], in: nil, contentWorld: .defaultClient)
             if let error = result as? String, !error.isEmpty { throw ChatWorkError.invalid(error) }
+            if request.action == .upload {
+                selectedFiles = files.map {
+                    ["attachment_id": $0.id.uuidString, "filename": $0.filename,
+                     "mime_type": $0.mimeType, "size": $0.data.count]
+                }
+            }
             // Let click/input event handlers and resulting navigations begin before observing again.
             try await Task.sleep(for: .milliseconds(150))
             try await waitForPage()
@@ -387,6 +405,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         ) as? [String: Any] else { throw ChatWorkError.invalid("The page could not be inspected.") }
         object["runtime_errors"] = runtimeErrors
         object["local_page_url"] = localPageURL?.absoluteString
+        object["selected_files"] = selectedFiles
         if let elements = object["elements"] as? [[String: Any]] {
             elementLabels = Dictionary(elements.compactMap { element in
                 guard let id = element["id"] as? String, let label = element["label"] as? String else { return nil }
@@ -431,15 +450,22 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         };
         const token = snapshotID;
         const refs = new Map();
-        const elements = [...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')]
-            .filter(visible).slice(0, 150).map((el, i) => {
+        const fileInputs = [...document.querySelectorAll('input[type="file"]')].slice(0, 20);
+        const controls = [...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')]
+            .filter(el => el.type !== 'file' && visible(el)).slice(0, 150);
+        const elements = [...controls, ...fileInputs].map((el, i) => {
                 const id = token + ':' + i;
                 const label = (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText
-                    || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '').slice(0, 180);
-                refs.set(id, {el, label, value: el.value, type: el.getAttribute('type'), href: el.getAttribute('href')});
+                    || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name')
+                    || (el.type === 'file' ? el.id || 'File upload' : '')).slice(0, 180);
+                refs.set(id, {el, label, value: el.value, type: el.getAttribute('type'), href: el.getAttribute('href'),
+                    url: location.href, accept: el.accept, multiple: el.multiple, directory: el.webkitdirectory,
+                    formAction: el.form?.action, files: el.files ? [...el.files] : []});
                 const value = ['password','file','hidden'].includes(el.type) ? undefined : el.value;
                 return {id, tag: el.tagName.toLowerCase(), type: el.getAttribute('type'), label,
                     ...(value === undefined ? {} : {value}),
+                    ...(el.type === 'file' ? {accept: el.accept, multiple: el.multiple, hidden: !visible(el),
+                        files: [...el.files].map(file => ({name: file.name, type: file.type, size: file.size}))} : {}),
                     href: el.getAttribute('href'), disabled: !!el.disabled};
             });
         globalThis.__nativWorkRefs = refs;
@@ -453,15 +479,45 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         if (!ref || !ref.el.isConnected) return 'The element is stale. Inspect the page again.';
         const el = ref.el;
         const label = (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText
-            || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '').slice(0, 180);
+            || el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name')
+            || (el.type === 'file' ? el.id || 'File upload' : '')).slice(0, 180);
         const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-        if (el.disabled || !r.width || !r.height || s.visibility === 'hidden' || s.display === 'none'
+        const upload = action === 'upload';
+        if (el.matches(':disabled') || location.href !== ref.url
+            || (!upload && (!r.width || !r.height || s.visibility === 'hidden' || s.display === 'none'))
             || label !== ref.label || el.value !== ref.value || el.getAttribute('type') !== ref.type || el.getAttribute('href') !== ref.href)
             return 'The element changed. Inspect the page again.';
+        if (upload) {
+            if (!(el instanceof HTMLInputElement) || el.type !== 'file') return 'upload requires a file input from inspect.';
+            if (el.accept !== ref.accept || el.multiple !== ref.multiple || el.webkitdirectory !== ref.directory
+                || el.form?.action !== ref.formAction || el.files.length !== ref.files.length
+                || [...el.files].some((file, i) => file !== ref.files[i]))
+                return 'The file input changed. Inspect the page again.';
+            if (el.webkitdirectory) return 'Folder uploads are not supported. Choose a file input.';
+            if (!files.length || (!el.multiple && files.length > 1)) return 'This file input accepts one file. Upload one attachment.';
+            const accepted = el.accept.toLowerCase().split(',').map(value => value.trim()).filter(Boolean);
+            const accepts = file => !accepted.length || accepted.some(type => type === '*/*'
+                || (type.startsWith('.') ? file.name.toLowerCase().endsWith(type)
+                    : type.endsWith('/*') ? file.type.toLowerCase().startsWith(type.slice(0, -1))
+                    : file.type.toLowerCase() === type));
+            if (!files.every(accepts)) return 'A file does not match this input’s accept types. Inspect the page and choose a compatible input.';
+            const transfer = new DataTransfer();
+            for (const file of files) {
+                const bytes = Uint8Array.from(atob(file.base64), character => character.charCodeAt(0));
+                transfer.items.add(new File([bytes], file.name, {type: file.type}));
+            }
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files').set.call(el, transfer.files);
+            globalThis.__nativWorkRefs = null;
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+            return '';
+        }
         globalThis.__nativWorkRefs = null;
         el.scrollIntoView({block:'center'});
         if (action === 'click') { el.click(); return ''; }
-        if (el instanceof HTMLInputElement && ['password','file','hidden'].includes(el.type))
+        if (el instanceof HTMLInputElement && el.type === 'file')
+            return 'Use upload with attachment_ids from this chat’s attachments list.';
+        if (el instanceof HTMLInputElement && ['password','hidden'].includes(el.type))
             return 'This input must be filled by the user.';
         if (el.readOnly) return 'This input is read-only.';
         el.focus();

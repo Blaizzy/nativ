@@ -283,9 +283,9 @@ without requiring a pre-existing item ID; it reuses a saved tab with the same UR
 `navigate` with a `url` changes the selected website, or opens a website if no remote
 page is selected. An explicit `id` always targets that tab. Opening or creating a
 remote website waits for the page and returns its ID, loaded URL, text, and controls.
-`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, and `type` operate on
+`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, `type`, and `upload` operate on
 the same browser instance displayed to the user and return a fresh page snapshot.
-Browser actions can omit `id` to use the selected remote website; `click` and `type`
+Browser actions can omit `id` to use the selected remote website; `click`, `type`, and `upload`
 instead resolve the tab from the supplied element ID, even after selecting another
 tab. The resolved target is shown and fixed before consent. The item list
 includes website URLs so agents can distinguish renamed or navigated tabs.
@@ -293,11 +293,26 @@ Browser element IDs expire after
 the next inspection or action, and changed inputs are rejected. All `chat_work`
 calls use the existing consent UI, showing the action arguments before execution.
 
+To attach an original chat file to an email or another website, the model calls
+`chat_work` with `action: "attachments"`, then `upload` with `attachment_ids` and
+the `element_id` of a file input from the latest page snapshot. The attachment list
+survives compaction and includes PDFs, supported Office/text documents, and images
+saved in this chat. Original bytes go directly from Nativ's media store to the
+website; filenames, MIME types, and IDs go to the model. Excerpts are never used as
+replacement files, and the tool does not accept arbitrary filesystem paths.
+Inspection includes hidden file inputs, their accepted types, and whether they
+allow multiple files. Upload replaces that input's selection, supports up to 20
+files totaling 64 MiB per action, and rejects changed inputs, missing attachments,
+and files from another chat. Consent shows the original filenames and destination.
+`selected_files` confirms the file selection; the model must check the website's
+upload status before sending or submitting. Upload itself does not click Send.
+
 This version supports up to 24 items per chat and 256 KB of text per item. Office
 documents and PDFs are not editable in this pane. Code-file previews do not
 execute code; use a terminal for local commands.
 Browser inspection covers the main document's DOM, not canvas controls, shadow
-roots, or embedded frames. Password and file inputs require direct user interaction.
+roots, or embedded frames. Password inputs require direct user interaction. File
+inputs accept chat attachments through `upload`; folder selection is not supported.
 HTML previews run scripts in a sandboxed frame without native host access.
 
 Sources: [`ChatWorkPane`](../../Sources/Nativ/Features/Chat/ChatWorkPane.swift),
