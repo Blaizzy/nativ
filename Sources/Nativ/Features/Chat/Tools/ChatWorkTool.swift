@@ -73,7 +73,7 @@ enum ChatWorkToolRegistry {
                 "action": .object(["type": .string("string"), "enum": .array(
                     ["list", "read", "create", "update", "open", "search", "inspect", "navigate", "back", "forward", "reload", "click", "type", "run", "interrupt"].map { .string($0) }
                 )]),
-                "id": field("Tab/item ID returned by this tool. Required for read or opening an existing item without a URL. For update, use the ID from read or a revision_conflict result; omission targets only the last document read in this chat with the matching expected_revision. For click/type, omission targets the tab that supplied element_id. Other browser actions default to the selected website. open with url needs no ID."),
+                "id": field("Tab/item ID returned by this tool. Required for read or opening an existing item without a URL. For update, use the ID from read; omission targets only the last document read in this chat with the matching expected_revision. For click/type, omission targets the tab that supplied element_id. Other browser actions default to the selected website. open with url needs no ID."),
                 "title": field("Name or filename; required for create."),
                 "kind": .object(["type": .string("string"), "enum": .array(
                     ["document", "code", "website", "terminal"].map { .string($0) }
@@ -96,7 +96,7 @@ enum ChatWorkToolRegistry {
                 ]),
                 "expected_revision": .object([
                     "type": .string("integer"),
-                    "description": .string("Revision returned by read; required for update.")
+                    "description": .string("Revision returned by read or a revision_conflict result; required for update. Use the id from the same result.")
                 ])
             ]),
             "required": .array([.string("action")])
