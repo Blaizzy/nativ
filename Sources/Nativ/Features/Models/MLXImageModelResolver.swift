@@ -5,12 +5,12 @@ struct MLXImageModelResolver: Sendable {
     static let shared = MLXImageModelResolver(
         generationModelTypes: (try? Nativ.imageGenerationModelTypes())
             ?? [
-                "bonsai", "ernie_image", "flux2", "ideogram4",
-                "llada_image", "mage_flow", "qwen_image", "z_image",
+                "bonsai", "ernie_image", "flux2", "flux3", "ideogram4",
+                "llada_image", "mage_flow", "moss_image", "qwen_image", "z_image",
             ],
         editingModelTypes: (try? Nativ.imageEditingModelTypes())
             ?? [
-                "ernie_image", "flux2", "llada_image", "mage_flow",
+                "ernie_image", "flux2", "flux3", "llada_image", "mage_flow",
                 "qwen_image", "z_image",
             ]
     )
@@ -166,6 +166,11 @@ struct MLXImageModelResolver: Sendable {
                 options: [.skipsHiddenFiles]
             )) ?? []
         for componentURL in componentURLs.sorted(by: { $0.path < $1.path }) {
+            // Shared autoencoders and schedulers don't identify the image
+            // model family (MOSS-Image, for example, uses the Flux 2 VAE).
+            if ["vae", "scheduler"].contains(componentURL.lastPathComponent) {
+                continue
+            }
             let configURL = componentURL.appendingPathComponent("config.json")
             if let metadata = loadJSONObject(
                 at: configURL,
@@ -185,7 +190,11 @@ struct MLXImageModelResolver: Sendable {
         addModelType(metadata["model_type"], to: &candidates)
         addClassNameCandidates(metadata["_class_name"], to: &candidates)
 
-        for component in ["transformer", "vae", "scheduler", "text_encoder"] {
+        if isFlux3Configuration(metadata) {
+            addModelType("flux3", to: &candidates)
+        }
+
+        for component in ["transformer", "text_encoder"] {
             let value = metadata[component]
             if let values = value as? [Any], let className = values.last {
                 addClassNameCandidates(className, to: &candidates)
@@ -261,6 +270,11 @@ struct MLXImageModelResolver: Sendable {
     private func modelType(from model: String) -> String? {
         guard let normalizedName = Self.normalizedModelName(model) else {
             return nil
+        }
+        if normalizedName.hasPrefix("flux_3_")
+            || normalizedName.hasPrefix("flux.3_")
+        {
+            return "flux3"
         }
         for modelType in generationModelTypes.union(editingModelTypes)
             .sorted(by: { $0.count > $1.count })
@@ -388,6 +402,52 @@ struct MLXImageModelResolver: Sendable {
                         "tokenizer/tokenizer.json"
                     ).path
                 )
+        case "flux3":
+            guard
+                let metadata = loadJSONObject(
+                    at: root.appendingPathComponent("config.json"),
+                    fileManager: fileManager
+                ), isFlux3Configuration(metadata),
+                metadata["quantization"] == nil
+                    || metadata["quantization"] is NSNull
+                    || (metadata["quantization"] as? [String: Any])?.isEmpty == true
+            else {
+                return false
+            }
+            return [
+                "model.safetensors",
+                "ae.safetensors",
+                "text_encoder/config.json",
+                "text_encoder/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+                && hasSafetensors(
+                    in: "text_encoder",
+                    at: root,
+                    fileManager: fileManager
+                )
+        case "moss_image":
+            guard
+                let metadata = loadJSONObject(
+                    at: root.appendingPathComponent("model_index.json"),
+                    fileManager: fileManager
+                ), metadata["_class_name"] as? String == "MOSSImagePipeline"
+            else {
+                return false
+            }
+            return [
+                "scheduler/scheduler_config.json",
+                "tokenizer/tokenizer.json",
+            ].allSatisfy {
+                fileManager.fileExists(atPath: root.appendingPathComponent($0).path)
+            }
+                && ["transformer", "text_encoder", "vae"].allSatisfy {
+                    fileManager.fileExists(
+                        atPath: root.appendingPathComponent("\($0)/config.json").path
+                    )
+                        && hasSafetensors(in: $0, at: root, fileManager: fileManager)
+                }
         case "ideogram4":
             let componentDirectories = [
                 "transformer",
@@ -498,6 +558,17 @@ struct MLXImageModelResolver: Sendable {
         return contents.contains { $0.pathExtension == "safetensors" }
     }
 
+    private func isFlux3Configuration(_ metadata: [String: Any]) -> Bool {
+        guard let model = metadata["model"] as? String,
+            model.hasPrefix("flux-3-image"),
+            let dit = metadata["dit"] as? [String: Any],
+            let inputChannels = dit["in_channels"] as? [String: Any]
+        else {
+            return false
+        }
+        return Set(["image", "image_cond", "text"]).isSubset(of: Set(inputChannels.keys))
+    }
+
     private static let qwenImageWeightMarkers: Set<String> = [
         "transformer_blocks.0.img_mlp.gate_layer.weight",
         "txt_in.text_norm.weight",
@@ -505,6 +576,6 @@ struct MLXImageModelResolver: Sendable {
     ]
 
     private static let pascalCaseTokenRegex = try! NSRegularExpression(
-        pattern: #"[A-Z][a-z0-9]*|[A-Z]+(?=[A-Z]|$)"#
+        pattern: #"[A-Z]+(?=[A-Z][a-z]|$)|[A-Z][a-z0-9]*"#
     )
 }

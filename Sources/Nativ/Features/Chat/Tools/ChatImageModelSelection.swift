@@ -277,8 +277,14 @@ enum ChatImageModelSelection {
         let name = modelID.split(separator: "/").last.map(String.init)?
             .lowercased()
             .replacingOccurrences(of: "-", with: "_") ?? ""
-        let family: String? = if name.contains("flux2") || name.contains("flux_2") {
+        let family: String? = if ["flux_3_image_klein", "flux_3_image_klein_base"].contains(name) {
+            // The Flux 3 loader currently accepts the original root BF16
+            // packages, rather than ComfyUI, Diffusers, or quantized exports.
+            "flux3"
+        } else if name.contains("flux2") || name.contains("flux_2") || name.contains("flux.2") {
             "flux2"
+        } else if name == "moss_image" || name.hasPrefix("moss_image_") {
+            "moss_image"
         } else if name.contains("bonsai") {
             "bonsai"
         } else if name.contains("ideogram_4") || name.contains("ideogram4") {
@@ -291,7 +297,7 @@ enum ChatImageModelSelection {
         guard let family, supportedDownloadableModelFamilies.contains(family) else {
             return []
         }
-        if family == "flux2" {
+        if family == "flux2" || family == "flux3" {
             return [.imageGeneration, .imageEditing]
         }
         if family == "mage_flow", MLXImageModelResolver.isKnownImageEditOnlyModelID(modelID) {
