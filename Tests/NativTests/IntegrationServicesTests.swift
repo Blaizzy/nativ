@@ -238,9 +238,55 @@ final class IntegrationServicesTests: XCTestCase {
             """
             cd '/tmp/Nativ Project'
             export OPENCODE_CONFIG='\(configurationURL.path)'
-            '/tools/opencode' '--model' 'nativ/org/local-model'
+            if '/tools/opencode' --help 2>&1 | /usr/bin/grep -Eq '^[[:space:]]*--standalone([[:space:]]|$)'; then
+                '/tools/opencode' '--standalone'
+            else
+                '/tools/opencode'
+            fi
             """
         )
+    }
+
+    func testOpenCodeLaunchDetectsStandaloneSupportAtExecutionTime() throws {
+        let executable = temporaryRoot.appendingPathComponent("OpenCode's CLI")
+        let scenarios = [
+            ("  --standalone    Run with a private server", "--standalone"),
+            ("  --model    Model to use", ""),
+            ("Use --standalone with newer versions", ""),
+            ("  --standalone-mode    A different flag", ""),
+        ]
+        for usesExec in [false, true] {
+            let command = manager.launchCommand(
+                tool: .openCode, executableURL: executable, selectedModelID: selectedModel.id,
+                workingDirectory: temporaryRoot, usesExec: usesExec
+            )
+            for (help, expectedArgument) in scenarios {
+                let stub = """
+                #!/bin/zsh
+                if [ "$1" = "--help" ]; then
+                    printf '%s\\n' '\(help)' >&2
+                    exit 0
+                fi
+                printf '%s\\n' "$OPENCODE_CONFIG" "$*"
+                """
+                try stub.write(to: executable, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+                let process = Process()
+                let output = Pipe()
+                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+                process.arguments = ["-c", command]
+                process.standardOutput = output
+                process.standardError = output
+                try process.run()
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                XCTAssertEqual(process.terminationStatus, 0)
+                XCTAssertEqual(
+                    String(decoding: data, as: UTF8.self),
+                    "\(manager.configurationURL(for: .openCode).path)\n\(expectedArgument)\n"
+                )
+            }
+        }
     }
 
     func testOpenCodeReservesRoomForOutputAndTheNextTurn() throws {
