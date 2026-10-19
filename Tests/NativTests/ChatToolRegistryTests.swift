@@ -781,7 +781,18 @@ final class ChatToolRegistryTests: XCTestCase {
         let object = try decode(payload)
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "Unknown tool: websearch")
+        XCTAssertEqual(object["error_code"] as? String, "unknown_tool")
+        XCTAssertEqual(object["recovery_hint"] as? String, ChatUnknownToolError.recoveryHint)
+        XCTAssertTrue(ChatUnknownToolError.recoveryHint.contains("chat_work"))
         XCTAssertNil(object["operation"], "must not fall through to the image-tool shape")
+    }
+
+    func testOtherToolFailuresDoNotGetUnknownToolRecovery() throws {
+        let payload = ChatToolDispatcher.failurePayload(toolName: "custom_tool", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertNil(object["error_code"])
+        XCTAssertNil(object["recovery_hint"])
     }
 
     func testDispatcherExecuteThrowsUnknownToolErrorForAnUnrecognizedName() async {

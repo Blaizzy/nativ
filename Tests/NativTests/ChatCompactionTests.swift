@@ -2,6 +2,26 @@ import XCTest
 @testable import NativServerKit
 
 final class ChatCompactionTests: XCTestCase {
+    @MainActor
+    func testUnknownToolCleanupInvalidatesCompactedFailureHistory() throws {
+        let call = MLXChatToolCall(id: "bad-call", function: .init(name: "mcp__update", arguments: "{}"))
+        let transcript = [
+            ChatTranscriptMessage(role: .user, content: "Update the notes"),
+            ChatTranscriptMessage(role: .assistant, content: "", toolCalls: [call]),
+            ChatTranscriptMessage(role: .tool, content: #"{"ok":false,"error":"Unknown tool: mcp__update"}"#,
+                                  toolCallID: call.id, toolName: "mcp__update", toolStatus: .failed),
+        ]
+        let original = request(transcript.compactMap(\.apiMessage))
+        let saved = try ChatCompactionState(item: capsule, request: original, serverURL: server)
+        let cleaned = request(ChatViewModel.completionMessages(
+            systemPrompt: "System", transcript: transcript[...], documentContexts: [:], includesImages: true
+        ))
+        let input = try saved.input(for: cleaned, serverURL: server)
+        XCTAssertEqual(input, try NativResponsesClient.inputItems(NativResponsesClient.conversationMessages(cleaned.messages)))
+        XCTAssertFalse(input.contains(capsule))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(input), as: UTF8.self).contains("mcp__update"))
+    }
+
     private let server = URL(string: "http://127.0.0.1:8080")!
     private let capsule: MLXJSONValue = .object([
         "id": .string("compact-1"), "type": .string("compaction"), "encrypted_content": .string("opaque"),

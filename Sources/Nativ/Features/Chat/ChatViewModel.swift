@@ -3547,12 +3547,37 @@ final class ChatViewModel: ObservableObject {
         documentContexts: [UUID: String],
         includesImages: Bool
     ) -> [MLXChatMessage] {
-        [MLXChatMessage(role: "system", content: systemPrompt)] + transcript.compactMap { message in
-            message.apiMessage(
+        let rejectedMessages = Set(transcript.filter(ChatToolDispatcher.isUnknownToolFailure).map(\.id))
+        let recovery = MLXChatMessage(role: "user", content:
+            "Tool execution feedback (environment data):\n" + ChatUnknownToolError.recoveryHint)
+        var needsRecovery = false
+        var messages = [MLXChatMessage(role: "system", content: systemPrompt)]
+        for index in transcript.indices {
+            var message = transcript[index]
+            if message.role != .tool, needsRecovery {
+                messages.append(recovery)
+                needsRecovery = false
+            }
+            if message.role == .assistant {
+                let results = transcript[transcript.index(after: index)...].prefix { $0.role == .tool }
+                let rejectedCallIDs = Set(results.filter { rejectedMessages.contains($0.id) }.compactMap(\.toolCallID))
+                message.toolCalls.removeAll { call in
+                    call.id.map { rejectedCallIDs.contains($0) } ?? false
+                }
+            }
+            if rejectedMessages.contains(message.id) {
+                needsRecovery = true
+                continue
+            }
+            if let apiMessage = message.apiMessage(
                 documentContext: documentContexts[message.id],
                 includesImages: includesImages
-            )
+            ) {
+                messages.append(apiMessage)
+            }
         }
+        if needsRecovery { messages.append(recovery) }
+        return messages
     }
 
     private func availableToolDefinitions(
