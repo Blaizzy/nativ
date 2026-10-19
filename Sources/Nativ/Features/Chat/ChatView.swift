@@ -1244,6 +1244,16 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                 }
             }
 
+            if message.role == .assistant, !message.isStreaming, let files = message.savedWorkFiles {
+                Label(
+                    files.isEmpty ? "No work-pane save confirmed" : "Saved in work pane: \(files.joined(separator: ", "))",
+                    systemImage: files.isEmpty ? "info.circle" : "checkmark.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("Shows completed document saves through the work pane during this response. Reply text alone does not save a file. Changes made through other tools are not included.")
+            }
+
             if let responseMetrics {
                 ChatResponseMetricsRow(metrics: responseMetrics)
             }
@@ -1701,6 +1711,7 @@ private struct ChatAgentTurnRow: View {
             || !message.content.isEmpty
             || !message.imageAttachments.isEmpty
             || message.responseMetrics != nil
+            || message.savedWorkFiles != nil
             || canForkAssistantResponse
     }
 }
