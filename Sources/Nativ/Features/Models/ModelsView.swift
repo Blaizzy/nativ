@@ -24,6 +24,7 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
     case speech = "Speech"
     case embeddings = "Embeddings"
     case reranking = "Reranking"
+    case decision = "Decisions"
 
     var id: String { rawValue }
 
@@ -32,13 +33,15 @@ private enum ModelsTypeFilter: String, CaseIterable, Identifiable {
         case .all:
             true
         case .language:
-            capabilities.contains(.text) && !capabilities.contains(.reranking)
+            capabilities.contains(.text) && !capabilities.contains(.reranking) && !capabilities.contains(.decision)
         case .image:
             !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing])
         case .speech:
             !capabilities.isDisjoint(with: [.audio, .speechToText, .textToSpeech])
         case .embeddings:
             capabilities.contains(.embeddings)
+        case .decision:
+            capabilities.contains(.decision)
         case .reranking:
             capabilities.contains(.reranking)
         }
@@ -258,6 +261,8 @@ struct ModelsView: View {
     @State private var recentlyCompletedModelIDs = Set<String>()
     @State private var modelCacheErrorMessage = ""
     @State private var showsModelCacheError = false
+    @State private var decisionModel: LocalModel?
+    @StateObject private var decisionRequest = DecisionRequestComposer()
 
     init(
         model: NativModel,
@@ -285,19 +290,28 @@ struct ModelsView: View {
     }
 
     var body: some View {
-        ModelConfigurationLayoutContent(
-            settings: settingsBinding,
-            settingsRequireRestart: model.settingsRequireRestart,
-            isConfigurationVisible: $showsConfiguration,
-            onReset: model.resetSettings
-        ) {
-            VStack(spacing: 0) {
-                pageHeader
-                activeDownloadBanner
-                modelLoadFailureBanner
-                externalModelCacheBanner
+        Group {
+            if let decisionModel {
+                DecisionComposerView(model: model, request: decisionRequest, initialModel: decisionModel) {
+                    self.decisionModel = nil
+                }
+                .background(Color.nativMainContentBackground)
+            } else {
+                ModelConfigurationLayoutContent(
+                    settings: settingsBinding,
+                    settingsRequireRestart: model.settingsRequireRestart,
+                    isConfigurationVisible: $showsConfiguration,
+                    onReset: model.resetSettings
+                ) {
+                    VStack(spacing: 0) {
+                        pageHeader
+                        activeDownloadBanner
+                        modelLoadFailureBanner
+                        externalModelCacheBanner
 
-                modelsPage
+                        modelsPage
+                    }
+                }
             }
         }
         .alert(
@@ -764,6 +778,7 @@ struct ModelsView: View {
                             localSnapshotURL: localModel.snapshotURL
                         )
                     },
+                    onTryModel: { decisionModel = localModel },
                     onToggleSelection: { toggleInstalledModelSelection(localModel) },
                     onTogglePin: { togglePin(for: localModel.repoID) },
                     onDelete: { deleteInstalledModel(localModel) }
@@ -1072,7 +1087,8 @@ struct ModelsView: View {
     private func preloadSlots(for localModel: LocalModel) -> [ModelPreloadSlot] {
         var slots: [ModelPreloadSlot] = []
         if localModel.capabilities.contains(.text)
-            && !localModel.capabilities.contains(.reranking) {
+            && !localModel.capabilities.contains(.reranking)
+            && !localModel.capabilities.contains(.decision) {
             slots.append(.language)
         }
         if localModel.capabilities.contains(.imageGeneration) {
@@ -1083,6 +1099,9 @@ struct ModelsView: View {
         }
         if localModel.capabilities.contains(.speechToText) {
             slots.append(.speechToText)
+        }
+        if localModel.capabilities.contains(.decision) {
+            slots.append(.decision)
         }
         if localModel.capabilities.contains(.embeddings) {
             slots.append(.embeddings)
@@ -1105,6 +1124,8 @@ struct ModelsView: View {
                 nil
             case .embeddings:
                 .embeddings
+            case .decision:
+                .decision
             case .reranking:
                 nil
             }
@@ -1138,6 +1159,9 @@ struct ModelsView: View {
             }
             if settings.speechToTextModelID == repoID {
                 settings.speechToTextModelID = nil
+            }
+            if settings.decisionModelID == repoID {
+                settings.decisionModelID = nil
             }
             settings.pinnedModelIDs.removeAll { $0 == repoID }
             model.settings = settings
@@ -1860,12 +1884,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     let isPinned: Bool
     let onSetPreload: (ModelPreloadSlot, Bool) -> Void
     let onShowReadme: () -> Void
+    let onTryModel: () -> Void
     let onToggleSelection: () -> Void
     let onTogglePin: () -> Void
     let onDelete: () -> Void
 
     @State private var showsDeleteConfirmation = false
     @State private var showsUnsupportedModelInformation = false
+    @State private var showsOnDemandModelInformation = false
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.localModel == rhs.localModel
@@ -1944,12 +1970,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     color: .orange
                                 )
                             }
-                            if localModel.capabilities.contains(.imageEditing)
-                                && !localModel.capabilities.contains(.imageGeneration)
+                            if let capability = localModel.onDemandCapability
                             {
                                 ModelPill(
                                     title: "Loads on demand",
-                                    systemImage: "photo.on.rectangle.angled",
+                                    systemImage: capability.systemImage,
                                     color: .accentColor
                                 )
                             } else if preloadSlots.isEmpty {
@@ -2019,6 +2044,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             .accessibilityLabel("Show details for \(localModel.repoID)")
 
             if !isSelecting {
+                if localModel.capabilities.contains(.decision) {
+                    Button("Try model", action: onTryModel)
+                        .buttonStyle(.bordered)
+                        .disabled(isDeleting)
+                }
                 loadButton
                 pinButton
                 modelActionsMenu
@@ -2040,6 +2070,11 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 systemImage: isPinned ? "pin.slash" : "pin",
                 action: onTogglePin
             )
+        }
+        .alert("Loads on demand", isPresented: $showsOnDemandModelInformation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(localModel.onDemandCapability?.onDemandInstructions ?? "")
         }
         .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
@@ -2149,9 +2184,14 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             .fixedSize()
         } else {
             Button {
-                showsUnsupportedModelInformation = true
+                if localModel.onDemandCapability != nil {
+                    showsOnDemandModelInformation = true
+                } else {
+                    showsUnsupportedModelInformation = true
+                }
             } label: {
-                Label("Unavailable", systemImage: "exclamationmark.triangle")
+                Label(localModel.onDemandCapability != nil ? "On demand" : "Unavailable",
+                      systemImage: localModel.onDemandCapability != nil ? "info.circle" : "exclamationmark.triangle")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -2175,6 +2215,9 @@ private struct InstalledModelRow: View, @MainActor Equatable {
         }
         if let preferredPreloadSlot {
             return "Preload \(localModel.repoID) for \(preferredPreloadSlot.displayName)"
+        }
+        if let instructions = localModel.onDemandCapability?.onDemandInstructions {
+            return instructions
         }
         return "\(localModel.repoID) has no supported preload role"
     }
@@ -3381,6 +3424,13 @@ extension View {
 }
 
 extension LocalModelCapability {
+    var onDemandInstructions: String? {
+        switch self {
+        case .imageEditing: "Select this model for image editing. It loads when you run an image-editing request."
+        default: nil
+        }
+    }
+
     fileprivate static let visibleModelTags = allCases.filter { $0 != .text }
 
     fileprivate static let discoverTaskFilters: [Self] = [
@@ -3414,6 +3464,7 @@ extension LocalModelCapability {
         case .textToSpeech: "speaker.wave.2"
         case .embeddings: "circle.grid.3x3"
         case .reranking: "arrow.up.arrow.down.circle"
+        case .decision: "arrow.triangle.branch"
         case .reasoning: "brain.fill"
         case .tools: "hammer"
         case .drafter: "hare"

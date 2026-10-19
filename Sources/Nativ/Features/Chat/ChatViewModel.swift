@@ -938,6 +938,9 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resolvedWorkRequest(_ request: ChatWorkRequest, in sessionID: UUID) throws -> ChatWorkRequest {
+        if request.action == .upload {
+            _ = try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
+        }
         if request.action.isTerminalMutation {
             guard let state = workState(for: sessionID),
                   let item = state.items.first(where: { $0.id == (request.id ?? state.selectedID) }),
@@ -977,7 +980,7 @@ final class ChatViewModel: ObservableObject {
                 throw ChatWorkError.invalid("update requires id and expected_revision from read. Read the intended item, then copy its id and revision into update. An omitted id can only target the last item read with the same revision and title.")
             }
             resolved.id = read.id
-        } else if request.action == .click || request.action == .type {
+        } else if request.action == .click || request.action == .type || request.action == .upload {
             guard let elementID = request.elementID,
                   let id = workBrowsers.itemID(for: elementID, sessionID: sessionID) else {
                 throw ChatWorkError.invalid("The control is no longer in a current page snapshot. Inspect the intended tab, then use its id and the returned element_id.")
@@ -1002,13 +1005,19 @@ final class ChatViewModel: ObservableObject {
                 + (warnings.isEmpty ? "" : "\n" + warnings.joined(separator: "\n"))
         case .interrupt:
             description = "Interrupt the foreground command in \(target)."
-        case .click, .type:
+        case .click, .type, .upload:
             let label = (item?.id).flatMap { id in
                 request.elementID.flatMap { workBrowsers.elementLabel($0, itemID: id, sessionID: sessionID) }
             } ?? "the specified control"
-            description = request.action == .click
-                ? "Click \(label) in \(target)."
-                : "Enter the text shown below into \(label) in \(target)."
+            if request.action == .upload {
+                let files = try? ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
+                let names = files?.map { "“\($0.filename)”" }.joined(separator: ", ") ?? "the specified files"
+                description = "Upload the original files \(names) to \(label) in \(target). The website will receive their full contents."
+            } else {
+                description = request.action == .click
+                    ? "Click \(label) in \(target)."
+                    : "Enter the text shown below into \(label) in \(target)."
+            }
         case .create:
             description = "Create \(request.title ?? "work")\(request.url.map { " at \($0)" } ?? "") in this chat’s work pane."
         case .navigate:
@@ -1025,6 +1034,10 @@ final class ChatViewModel: ObservableObject {
     }
 
     func executeWorkAction(_ request: ChatWorkRequest, in sessionID: UUID, terminalApprovalGranted: Bool = false) async throws -> String {
+        if request.action == .attachments {
+            guard let messages = sessionMessages(for: sessionID) else { throw ChatWorkError.unavailable }
+            return try ChatWorkAttachments.listJSON(in: messages)
+        }
         if request.action.isTerminalMutation, !terminalApprovalGranted {
             throw ChatTerminalToolError.approvalRequired
         }
@@ -1104,7 +1117,9 @@ final class ChatViewModel: ObservableObject {
     private func executeBrowserAction(_ request: ChatWorkRequest, item: ChatWorkItem, sessionID: UUID) async throws -> String {
         var result: [String: Any]
         do {
-            result = try await workBrowser(for: item, sessionID: sessionID).execute(request)
+            let attachments = request.action == .upload
+                ? try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? []) : []
+            result = try await workBrowser(for: item, sessionID: sessionID).execute(request, attachments: attachments)
         } catch var failure as ChatWorkNavigationFailure {
             failure.itemID = item.id
             throw failure
@@ -2701,7 +2716,9 @@ final class ChatViewModel: ObservableObject {
     private func runChatLoop(_ request: QueuedChatRequest) async throws {
         let client = NativChatClient(
             baseURL: request.settings.serverBaseURL,
-            apiKey: request.settings.serverAPIKey
+            apiKey: request.settings.serverAPIKey,
+            idleTimeout: request.settings.chatResponseTimeout.idleTimeout,
+            resourceTimeout: request.settings.chatResponseTimeout.resourceTimeout
         )
         let firstPrompt = sessionMessages(for: request.sessionID)?.first(where: { $0.role == .user })?.content ?? ""
         try await prepareWorktree(in: request.sessionID, firstPrompt: firstPrompt) { prompt in
@@ -2732,7 +2749,9 @@ final class ChatViewModel: ObservableObject {
         let responsesClient = NativResponsesClient(
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey,
-            tenant: queuedRequest.sessionID.uuidString
+            tenant: queuedRequest.sessionID.uuidString,
+            idleTimeout: queuedRequest.settings.chatResponseTimeout.idleTimeout,
+            resourceTimeout: queuedRequest.settings.chatResponseTimeout.resourceTimeout
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
@@ -3540,15 +3559,40 @@ final class ChatViewModel: ObservableObject {
         transcript: ArraySlice<ChatTranscriptMessage>,
         includesImages: Bool
     ) -> [MLXChatMessage] {
-        [MLXChatMessage(role: "system", content: systemPrompt)] + transcript.compactMap { message in
+        let rejectedMessages = Set(transcript.filter(ChatToolDispatcher.isUnknownToolFailure).map(\.id))
+        let recovery = MLXChatMessage(role: "user", content:
+            "Tool execution feedback (environment data):\n" + ChatUnknownToolError.recoveryHint)
+        var needsRecovery = false
+        var messages = [MLXChatMessage(role: "system", content: systemPrompt)]
+        for index in transcript.indices {
+            var message = transcript[index]
+            if message.role != .tool, needsRecovery {
+                messages.append(recovery)
+                needsRecovery = false
+            }
+            if message.role == .assistant {
+                let results = transcript[transcript.index(after: index)...].prefix { $0.role == .tool }
+                let rejectedCallIDs = Set(results.filter { rejectedMessages.contains($0.id) }.compactMap(\.toolCallID))
+                message.toolCalls.removeAll { call in
+                    call.id.map { rejectedCallIDs.contains($0) } ?? false
+                }
+            }
+            if rejectedMessages.contains(message.id) {
+                needsRecovery = true
+                continue
+            }
             // Fingerprint stable attachment identities, never query-dependent excerpts.
             let documents = message.imageAttachments.filter { $0.chatAttachmentKind.documentFormat != nil }
             let references = documents.map { "\($0.id.uuidString): \($0.filename)" }.joined(separator: "\n")
-            return message.apiMessage(
+            if let apiMessage = message.apiMessage(
                 documentContext: references.isEmpty ? nil : "Attached files:\n" + references,
                 includesImages: includesImages
-            )
+            ) {
+                messages.append(apiMessage)
+            }
         }
+        if needsRecovery { messages.append(recovery) }
+        return messages
     }
 
     static func completionContext(
@@ -3979,7 +4023,11 @@ final class ChatViewModel: ObservableObject {
                 mutate: { message in
                     message.role = .error
                     message.streamingToolCalls = []
-                    message.content = error.localizedDescription
+                    if let urlError = error as? URLError, urlError.code == .timedOut {
+                        message.content = "The response timed out. For large prompts, increase Chat Response Timeout in Settings → Advanced, then try again."
+                    } else {
+                        message.content = error.localizedDescription
+                    }
                     message.isStreaming = false
                     message.isCompacting = false
                     if !message.reasoningContent.isEmpty,

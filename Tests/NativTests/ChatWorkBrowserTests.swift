@@ -394,6 +394,108 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(value as? String, "User edit")
     }
 
+    func testUploadSendsOriginalFilesThroughHiddenInputAndMultipartForm() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let browser = makeBrowser()
+        defer { browser.stop() }
+        browser.load(ChatWorkItem(title: "Upload", kind: .website, content: "", url: base.absoluteString))
+        _ = try await inspect(browser)
+        _ = try await browser.webView.evaluateJavaScript("""
+            document.body.innerHTML = '<form><input type="file" name="documents" aria-label="Attachments" multiple style="display:none"></form>';
+            // Hidden file inputs must still be discoverable on pages with many other controls.
+            for (let i = 0; i < 160; i++) document.body.prepend(document.createElement('button'));
+            window.events = [];
+            const input = document.querySelector('input');
+            input.addEventListener('input', () => events.push('input'));
+            input.addEventListener('change', async () => {
+                events.push('change');
+                window.received = await (await fetch('/upload-echo', {method:'POST', body:new FormData(input.form)})).text();
+            });
+            """)
+        let originals: [(String, String, Data)] = [
+            ("Original.pdf", "application/pdf", Data("%PDF-1.7\nOriginal binary PDF".utf8) + Data([0, 255, 128, 1])),
+            ("Report.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", Data([80, 75, 3, 4, 255, 0, 111])),
+            ("data.csv", "text/csv", Data("name,value\nOriginal,123\n".utf8)),
+            ("image.png", "image/png", Data([137, 80, 78, 71, 13, 10, 26, 10, 255]))
+        ]
+        let attachments = originals.map {
+            ChatImageAttachment(filename: $0.0, mimeType: $0.1, base64Data: $0.2.base64EncodedString())
+        }
+        let snapshot = try await inspect(browser)
+        let fileInput = try element("Attachments", in: snapshot)
+        let controls = try XCTUnwrap(snapshot["elements"] as? [[String: Any]])
+        XCTAssertEqual(controls.last?["hidden"] as? Bool, true)
+        let result = try await browser.execute(ChatWorkRequest(action: .upload, elementID: fileInput,
+            attachmentIDs: attachments.map(\.id)), attachments: attachments)
+        let selected = try XCTUnwrap(result["selected_files"] as? [[String: Any]])
+        XCTAssertEqual(selected.map { $0["filename"] as? String }, originals.map { $0.0 })
+        XCTAssertEqual(selected.map { $0["size"] as? Int }, originals.map { $0.2.count })
+        let files = try await browser.webView.callAsyncJavaScript("""
+            return await Promise.all([...document.querySelector('input').files].map(async file =>
+                ({name:file.name, type:file.type, bytes:[...new Uint8Array(await file.arrayBuffer())]})));
+            """, arguments: [:], in: nil, contentWorld: .page) as? [[String: Any]]
+        for (index, original) in originals.enumerated() {
+            XCTAssertEqual(files?[index]["name"] as? String, original.0)
+            XCTAssertEqual(files?[index]["type"] as? String, original.1)
+            XCTAssertEqual(files?[index]["bytes"] as? [Int], original.2.map(Int.init))
+        }
+        var received: String?
+        for _ in 0..<100 {
+            received = try await browser.webView.evaluateJavaScript("window.received || null") as? String
+            if received != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let body = try XCTUnwrap(Data(base64Encoded: XCTUnwrap(received)))
+        for original in originals {
+            XCTAssertNotNil(body.range(of: original.2), "HTTP multipart body must contain the original bytes")
+            XCTAssertNotNil(body.range(of: Data("filename=\"\(original.0)\"".utf8)))
+        }
+        let events = try await browser.webView.evaluateJavaScript("window.events") as? [String]
+        XCTAssertEqual(events, ["input", "change"])
+        XCTAssertFalse(String(describing: result).contains(attachments[0].base64Data))
+        do {
+            _ = try await browser.execute(ChatWorkRequest(action: .upload, elementID: fileInput,
+                attachmentIDs: attachments.map(\.id)), attachments: attachments)
+            XCTFail("Upload must consume the old snapshot")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("stale")) }
+    }
+
+    func testUploadRejectsChangedOrIncompatibleInputsWithoutReleasingFiles() async throws {
+        let attachment = ChatImageAttachment(filename: "original.pdf", mimeType: "application/pdf",
+                                             base64Data: Data("original".utf8).base64EncodedString())
+        let scenarios: [(String, String, Int)] = [
+            ("<input aria-label='Target'>", "", 1),
+            ("<input type='file' aria-label='Target'>", "", 2),
+            ("<input type='file' accept='image/*' aria-label='Target'>", "", 1),
+            ("<input type='file' aria-label='Target'>", "input.disabled=true", 1),
+            ("<input type='file' aria-label='Target'>", "input.accept='.pdf'", 1),
+            ("<input type='file' aria-label='Target'>", "input.multiple=true", 1),
+            ("<input type='file' aria-label='Target'>", "history.replaceState({}, '', '#changed')", 1),
+            ("<input type='file' aria-label='Target'>", "input.remove()", 1),
+            ("<input type='file' webkitdirectory aria-label='Target'>", "", 1),
+            ("<input type='file' aria-label='Target'>",
+             "const transfer=new DataTransfer(); transfer.items.add(new File(['user'], 'user.pdf')); input.files=transfer.files", 1)
+        ]
+        for (html, mutation, count) in scenarios {
+            let browser = makeBrowser()
+            defer { browser.stop() }
+            browser.webView.loadHTMLString(html, baseURL: nil)
+            let snapshot = try await inspect(browser)
+            _ = try await browser.webView.evaluateJavaScript("const input=document.querySelector('input'); \(mutation)")
+            var attachments = [attachment]
+            if count == 2 { attachments.append(ChatImageAttachment(filename: "second.pdf", mimeType: "application/pdf", base64Data: attachment.base64Data)) }
+            do {
+                _ = try await browser.execute(ChatWorkRequest(action: .upload, elementID: element("Target", in: snapshot),
+                    attachmentIDs: attachments.map(\.id)), attachments: attachments)
+                XCTFail("Upload should reject \(html) / \(mutation)")
+            } catch { XCTAssertTrue(error is ChatWorkError) }
+            let names = try await browser.webView.evaluateJavaScript("[...(document.querySelector('input')?.files || [])].map(file => file.name)") as? [String]
+            XCTAssertFalse(names?.contains("original.pdf") == true)
+        }
+    }
+
     func testBrowserPoolKeepsSessionIsolationAndTabState() {
         let pool = ChatWorkBrowserPool(profile: ChatWorkBrowserProfile(dataStore: .nonPersistent()))
         let item = ChatWorkItem(title: "Page", kind: .website, content: "<h1>Page</h1>")
@@ -586,12 +688,27 @@ final class ChatWorkHTTPFixture {
     nonisolated private static func receive(_ connection: NWConnection, buffered: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, complete, error in
             let request = buffered + (data ?? Data())
-            guard let header = String(data: request, encoding: .utf8), header.contains("\r\n\r\n") else {
+            guard let separator = request.range(of: Data("\r\n\r\n".utf8)),
+                  let header = String(data: request[..<separator.lowerBound], encoding: .utf8) else {
                 if complete || error != nil || request.count > 16_384 { connection.cancel() }
                 else { receive(connection, buffered: request) }
                 return
             }
+            let length = header.components(separatedBy: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+            if request.count - separator.upperBound < length {
+                if complete || error != nil || request.count > 1_048_576 { connection.cancel() }
+                else { receive(connection, buffered: request) }
+                return
+            }
             let path = header.components(separatedBy: " ").dropFirst().first ?? "/"
+            if path == "/upload-echo" {
+                let body = Data(request[separator.upperBound...]).base64EncodedString()
+                let response = Data("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)".utf8)
+                connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+                return
+            }
             let html: String
             if path == "/user-agent" {
                 let agent = header.components(separatedBy: "\r\n")

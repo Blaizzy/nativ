@@ -2,6 +2,67 @@ import XCTest
 @testable import NativServerKit
 
 final class ChatCompactionTests: XCTestCase {
+    @MainActor
+    func testUnknownToolCleanupInvalidatesCompactedFailureHistory() throws {
+        let call = MLXChatToolCall(id: "bad-call", function: .init(name: "mcp__update", arguments: "{}"))
+        let transcript = [
+            ChatTranscriptMessage(role: .user, content: "Update the notes"),
+            ChatTranscriptMessage(role: .assistant, content: "", toolCalls: [call]),
+            ChatTranscriptMessage(role: .tool, content: #"{"ok":false,"error":"Unknown tool: mcp__update"}"#,
+                                  toolCallID: call.id, toolName: "mcp__update", toolStatus: .failed),
+        ]
+        let original = request(transcript.compactMap(\.apiMessage))
+        let saved = try ChatCompactionState(item: capsule, request: original, serverURL: server)
+        let cleaned = request(ChatViewModel.completionMessages(
+            systemPrompt: "System", transcript: transcript[...], includesImages: true
+        ))
+        let input = try saved.input(for: cleaned, serverURL: server)
+        XCTAssertEqual(input, try NativResponsesClient.inputItems(NativResponsesClient.conversationMessages(cleaned.messages)))
+        XCTAssertFalse(input.contains(capsule))
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(input), as: UTF8.self).contains("mcp__update"))
+    }
+
+    @MainActor
+    func testChangedPDFExcerptsPreserveSummaryAfterUnknownToolRecovery() throws {
+        let attachment = ChatImageAttachment(filename: "report.pdf", mimeType: "application/pdf",
+                                             base64Data: Data("original PDF".utf8).base64EncodedString())
+        let document = ChatTranscriptMessage(role: .user, content: "Read this report", imageAttachments: [attachment])
+        let call = MLXChatToolCall(id: "bad-call", function: .init(name: "mcp__update", arguments: "{}"))
+        let transcript = [
+            document,
+            ChatTranscriptMessage(role: .assistant, content: "", toolCalls: [call]),
+            ChatTranscriptMessage(role: .tool, content: ChatToolDispatcher.failurePayload(
+                toolName: "mcp__update", error: ChatUnknownToolError.unknownTool("mcp__update")),
+                toolCallID: call.id, toolName: "mcp__update", toolStatus: .failed),
+        ]
+        func assembled(_ transcript: [ChatTranscriptMessage], excerpt: String?) -> MLXChatCompletionRequest {
+            var chat = request(ChatViewModel.completionMessages(
+                systemPrompt: "System", transcript: transcript[...], includesImages: true
+            ))
+            chat.transientContext = ChatViewModel.completionContext(
+                transcript: transcript[...], documentContexts: excerpt.map { [document.id: $0] } ?? [:]
+            )
+            return chat
+        }
+        let first = assembled(transcript, excerpt: "Page 1 excerpt")
+        XCTAssertEqual(first.messages.map(\.role), ["system", "user", "user"])
+        XCTAssertTrue(first.messages[1].textContent?.contains(attachment.id.uuidString) == true)
+        XCTAssertEqual(first.messages[2].textContent,
+                       "Tool execution feedback (environment data):\n" + ChatUnknownToolError.recoveryHint)
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(first.messages), as: UTF8.self).contains("mcp__update"))
+        let saved = try ChatCompactionState(item: capsule, request: first, serverURL: server)
+        let restored = try JSONDecoder().decode(ChatCompactionState.self, from: JSONEncoder().encode(saved))
+        let followUp = transcript + [ChatTranscriptMessage(role: .user, content: "Explain page 6")]
+        let expected = [capsule] + (try NativResponsesClient.inputItems([.init(role: "user", content: "Explain page 6")]))
+        for excerpt in ["Page 6 excerpt", "Trimmed", nil] {
+            let next = assembled(followUp, excerpt: excerpt)
+            XCTAssertEqual(Array(next.messages.prefix(first.messages.count)), first.messages)
+            XCTAssertEqual(try restored.input(for: next, serverURL: server), expected)
+            if let excerpt { XCTAssertTrue(next.transientContext?.contains(excerpt) == true) }
+            else { XCTAssertNil(next.transientContext) }
+        }
+    }
+
     private let server = URL(string: "http://127.0.0.1:8080")!
     private let capsule: MLXJSONValue = .object([
         "id": .string("compact-1"), "type": .string("compaction"), "encrypted_content": .string("opaque"),
