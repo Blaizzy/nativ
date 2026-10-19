@@ -571,6 +571,34 @@ public struct MLXPromptTokenCount: Decodable, Equatable, Sendable {
     }
 }
 
+public enum NativChatTimeout: Int, CaseIterable, Codable, Identifiable, Sendable {
+    case tenMinutes = 600
+    case twentyMinutes = 1200
+    case thirtyMinutes = 1800
+    case sixtyMinutes = 3600
+    case unlimited = 0
+
+    public var id: Self { self }
+
+    public var displayName: String {
+        switch self {
+        case .tenMinutes: "10 minutes (default)"
+        case .twentyMinutes: "20 minutes"
+        case .thirtyMinutes: "30 minutes"
+        case .sixtyMinutes: "60 minutes"
+        case .unlimited: "No limit"
+        }
+    }
+
+    public var idleTimeout: TimeInterval {
+        self == .unlimited ? .greatestFiniteMagnitude : TimeInterval(rawValue)
+    }
+
+    public var resourceTimeout: TimeInterval {
+        self == .unlimited ? .greatestFiniteMagnitude : max(3600, idleTimeout * 2)
+    }
+}
+
 public final class NativChatClient: @unchecked Sendable {
     private let baseURL: URL
     private let apiKey: String?
@@ -843,7 +871,7 @@ public final class NativChatClient: @unchecked Sendable {
             url: baseURL.appendingPathComponent("v1/responses/input_tokens")
         )
         urlRequest.httpMethod = "POST"
-        urlRequest.timeoutInterval = timeout
+        urlRequest.timeoutInterval = 10
         urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("application/json", forHTTPHeaderField: "Accept")

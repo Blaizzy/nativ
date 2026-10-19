@@ -1,4 +1,5 @@
 import Darwin
+import Network
 import XCTest
 
 @testable import NativServerKit
@@ -1309,6 +1310,184 @@ final class ServerPortProbeTests: XCTestCase {
             throw SocketTestError.operation("connect", error)
         }
         return descriptor
+    }
+}
+
+@MainActor
+final class ChatTimeoutTests: XCTestCase {
+    func testPreferencesMigrateAndRoundTripWithoutChangingServerArguments() throws {
+        for json in ["{}", "{\"chatResponseTimeout\":123}"] {
+            let settings = try JSONDecoder().decode(NativSettings.self, from: Data(json.utf8))
+            XCTAssertEqual(settings.chatResponseTimeout, .tenMinutes)
+        }
+        let defaults = NativSettings()
+        for timeout in NativChatTimeout.allCases {
+            var settings = defaults
+            settings.chatResponseTimeout = timeout
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self, from: PropertyListEncoder().encode(settings)
+            ).normalized()
+            XCTAssertEqual(decoded.chatResponseTimeout, timeout)
+            XCTAssertEqual(decoded.launchArguments, defaults.normalized().launchArguments)
+            if timeout == .unlimited {
+                XCTAssertEqual(timeout.resourceTimeout, .greatestFiniteMagnitude)
+            } else {
+                XCTAssertGreaterThan(timeout.resourceTimeout, timeout.idleTimeout)
+            }
+        }
+    }
+
+    func testSelectedTimeoutReachesBothWireRequests() throws {
+        let url = URL(string: "http://127.0.0.1:8080")!
+        for timeout in NativChatTimeout.allCases {
+            let responses = NativResponsesClient(
+                baseURL: url, tenant: "test", idleTimeout: timeout.idleTimeout,
+                resourceTimeout: timeout.resourceTimeout
+            )
+            let chat = NativChatClient(
+                baseURL: url, idleTimeout: timeout.idleTimeout, resourceTimeout: timeout.resourceTimeout
+            )
+            XCTAssertEqual(try responses.makeResponseRequest(request, input: [], compactThreshold: 1000).timeoutInterval, timeout.idleTimeout)
+            XCTAssertEqual(try chat.makeURLRequest(payload: request, accepts: "text/event-stream").timeoutInterval, timeout.idleTimeout)
+            XCTAssertEqual(try chat.makePromptTokenCountURLRequest(for: request).timeoutInterval, 10)
+        }
+    }
+
+    func testLongerIdleWaitAllowsSilentPrefillOnBothTransports() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [2])
+        let url = try await server.start()
+        defer { server.stop() }
+        for responses in [true, false] {
+            do {
+                _ = try await completion(url: url, responses: responses, idle: 1, resource: 10)
+                XCTFail("A silent prefill should exceed the short idle timeout")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            let result = try await completion(url: url, responses: responses, idle: 4, resource: 10)
+            XCTAssertEqual(result.content, "Done")
+        }
+    }
+
+    func testIncomingDataResetsIdleWaitAndResourceCapIsSeparate() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [0.6, 1.2, 1.8, 2.4])
+        let url = try await server.start()
+        defer { server.stop() }
+        for responses in [true, false] {
+            let result = try await completion(url: url, responses: responses, idle: 1.5, resource: 5)
+            XCTAssertEqual(result.content, "Done")
+            do {
+                _ = try await completion(url: url, responses: responses, idle: 4, resource: 1)
+                XCTFail("The overall resource cap should still be enforced")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+        }
+    }
+
+    func testUnlimitedRequestsCanCompleteAndBeCancelled() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [2])
+        let url = try await server.start()
+        defer { server.stop() }
+        let unlimited = NativChatTimeout.unlimited
+        for responses in [true, false] {
+            let result = try await completion(
+                url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+            )
+            XCTAssertEqual(result.content, "Done")
+            let task = Task {
+                try await completion(
+                    url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+                )
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            task.cancel()
+            do {
+                _ = try await task.value
+                XCTFail("An unlimited request must remain cancellable")
+            } catch is CancellationError {
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .cancelled)
+            }
+        }
+    }
+
+    private var request: MLXChatCompletionRequest {
+        .init(model: "test", messages: [.init(role: "user", content: "Hello")],
+              maxTokens: 16, temperature: 0, topK: 0, topP: 1, minP: 0)
+    }
+
+    private func completion(url: URL, responses: Bool, idle: TimeInterval, resource: TimeInterval) async throws -> MLXChatCompletion {
+        if responses {
+            return try await NativResponsesClient(
+                baseURL: url, tenant: "test", idleTimeout: idle, resourceTimeout: resource
+            ).streamResponse(request, input: [], compactThreshold: 1000, onEvent: { _ in }).completion
+        }
+        return try await NativChatClient(
+            baseURL: url, idleTimeout: idle, resourceTimeout: resource
+        ).streamChat(request, onEvent: { _ in })
+    }
+}
+
+@MainActor
+private final class ChatTimeoutHTTPFixture {
+    private let listener: NWListener
+
+    init(delays: [TimeInterval]) throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            Self.receive(connection, buffered: Data(), delays: delays)
+        }
+    }
+
+    func start() async throws -> URL {
+        listener.start(queue: .global())
+        for _ in 0..<500 {
+            if case .ready = listener.state, let port = listener.port {
+                return URL(string: "http://127.0.0.1:\(port.rawValue)")!
+            }
+            if case .failed(let error) = listener.state { throw error }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw URLError(.timedOut)
+    }
+
+    func stop() { listener.cancel() }
+
+    nonisolated private static func receive(_ connection: NWConnection, buffered: Data, delays: [TimeInterval]) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+            let request = buffered + (data ?? Data())
+            guard let headerRange = request.range(of: Data("\r\n\r\n".utf8)) else {
+                if complete || error != nil { connection.cancel() }
+                else { receive(connection, buffered: request, delays: delays) }
+                return
+            }
+            let headers = String(decoding: request[..<headerRange.lowerBound], as: UTF8.self)
+            let length = headers.components(separatedBy: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces)) } ?? 0
+            guard request.count >= headerRange.upperBound + length else {
+                if complete || error != nil { connection.cancel() }
+                else { receive(connection, buffered: request, delays: delays) }
+                return
+            }
+            let responses = headers.hasPrefix("POST /v1/responses ")
+            let body = responses
+                ? "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done\"}]}]}}\n\n"
+                : "data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            connection.send(content: Data("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".utf8), completion: .contentProcessed { _ in })
+            for (index, delay) in delays.enumerated() {
+                let last = index == delays.count - 1
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    connection.send(content: Data((last ? body : ": keep-alive\n\n").utf8), completion: .contentProcessed { _ in
+                        if last { connection.cancel() }
+                    })
+                }
+            }
+        }
     }
 }
 
