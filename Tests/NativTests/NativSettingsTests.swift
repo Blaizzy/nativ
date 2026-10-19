@@ -1480,3 +1480,73 @@ private final class DecisionURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 }
+
+@MainActor
+final class DecisionRequestComposerTests: XCTestCase {
+    func testValidationRequiresContextQuestionAndDistinctChoices() {
+        let composer = DecisionRequestComposer()
+        XCTAssertNotNil(composer.validationMessage)
+        composer.context = "A customer asks about delivery."
+        composer.question = "Which department?"
+        composer.choices = "Sales\nSales"
+        XCTAssertNotNil(composer.validationMessage)
+        composer.choices = "Sales\nSupport"
+        XCTAssertNil(composer.validationMessage)
+        composer.answerType = .bool
+        composer.choices = ""
+        XCTAssertNil(composer.validationMessage)
+    }
+
+    func testRequestUsesTypedContextAndOrderedScale() async throws {
+        let composer = DecisionRequestComposer()
+        composer.context = "The delivery arrived a day late."
+        composer.question = "Rate the severity."
+        composer.answerType = .score
+        composer.choices = "Low\nMedium\nHigh"
+        let finished = expectation(description: "Request completed")
+        composer.run { state, question in
+            XCTAssertEqual(state, .string(composer.context))
+            XCTAssertEqual(question.type, .score)
+            XCTAssertEqual(question.criteria, .array([.string("Low"), .string("Medium"), .string("High")]))
+            defer { finished.fulfill() }
+            return try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
+                #"{"model":"fixture","answers":{"answer":{"type":"score","value":1}}}"#.utf8))
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(composer.result?.answers["answer"]?.value, .number(1))
+        XCTAssertEqual(composer.resultChoices, ["Low", "Medium", "High"])
+        XCTAssertFalse(composer.isRunning)
+    }
+
+    func testCancellationKeepsBusyUntilWorkerCompletesAndDiscardsResult() async throws {
+        let composer = DecisionRequestComposer()
+        composer.context = "Context"
+        composer.question = "Question?"
+        composer.answerType = .bool
+        let started = expectation(description: "Worker started")
+        var continuation: CheckedContinuation<NativDecisionResponse, Never>?
+        composer.run { _, _ in
+            await withCheckedContinuation {
+                continuation = $0
+                started.fulfill()
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        composer.cancel()
+        XCTAssertTrue(composer.isRunning)
+        XCTAssertTrue(composer.isCancelling)
+        composer.run { _, _ in
+            XCTFail("A second request must remain blocked")
+            throw CancellationError()
+        }
+        let response = try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
+            #"{"model":"fixture","answers":{"answer":{"type":"bool","value":true}}}"#.utf8))
+        continuation?.resume(returning: response)
+        for _ in 0..<10 where composer.isRunning { await Task.yield() }
+        XCTAssertFalse(composer.isRunning)
+        XCTAssertFalse(composer.isCancelling)
+        XCTAssertNil(composer.result)
+        XCTAssertNil(composer.error)
+    }
+}
