@@ -1297,10 +1297,6 @@ final class ServerPortProbeTests: XCTestCase {
     }
 }
 
-private enum SocketTestError: Error {
-    case operation(String, Int32)
-}
-
 @MainActor
 final class ChatTimeoutTests: XCTestCase {
     func testPreferencesMigrateAndRoundTripWithoutChangingServerArguments() throws {
@@ -1477,4 +1473,8 @@ private final class ChatTimeoutHTTPFixture {
             }
         }
     }
+}
+
+private enum SocketTestError: Error {
+    case operation(String, Int32)
 }
