@@ -62,6 +62,31 @@ final class ChatReadFileToolTests: XCTestCase {
         XCTAssertTrue((pastEOF["warnings"] as? [String])?.first?.contains("past") == true)
     }
 
+    func testCSVPreservesLongRowsAndPaginationOffsets() async throws {
+        let row = "1," + String(repeating: "x", count: 5_000)
+        try write("id,description\n\(row)\n2,end\n", to: "wide.csv")
+
+        let result = try await execute(
+            path: "wide.csv", offset: 2, limit: 1, maximumCharacters: 24_000
+        )
+        XCTAssertEqual(result["content"] as? String, "2|\(row)")
+        XCTAssertEqual(result["total_lines"] as? Int, 3)
+        XCTAssertEqual(result["next_offset"] as? Int, 3)
+        XCTAssertEqual(result["extracted_document"] as? Bool, false)
+
+        let next = try await execute(path: "wide.csv", offset: 3, limit: 1)
+        XCTAssertEqual(next["content"] as? String, "3|2,end")
+        XCTAssertEqual(next["truncated"] as? Bool, false)
+    }
+
+    func testEmptyCSVRemainsReadable() async throws {
+        try write("", to: "empty.csv")
+        let result = try await execute(path: "empty.csv")
+        XCTAssertEqual(result["ok"] as? Bool, true)
+        XCTAssertEqual(result["content"] as? String, "")
+        XCTAssertEqual(result["total_lines"] as? Int, 0)
+    }
+
     func testTruncatesHugeLineToMaximumAndAdvances() async throws {
         try write(String(repeating: "x", count: 100) + "\nnext", to: "minified.txt")
         let result = try await execute(

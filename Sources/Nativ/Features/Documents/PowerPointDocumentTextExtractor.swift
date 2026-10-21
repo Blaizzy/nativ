@@ -61,26 +61,9 @@ actor PowerPointDocumentTextExtractor: DocumentTextExtracting {
     }
 
     private static func text(for entry: Entry, in archive: Archive) throws -> String? {
-        var data = Data()
-        data.reserveCapacity(Int(entry.uncompressedSize))
-        do {
-            _ = try archive.extract(entry) { chunk in
-                guard chunk.count <= Int(slideLimit) - data.count else {
-                    throw DocumentTextExtractionError.archiveTooLarge
-                }
-                data.append(chunk)
-            }
-        } catch let error as DocumentTextExtractionError {
-            throw error
-        } catch {
-            throw DocumentTextExtractionError.invalidDocument
-        }
-
+        let data = try OfficeArchive.data(for: entry, in: archive, limit: slideLimit)
         let delegate = SlideTextParser()
-        let parser = XMLParser(data: data)
-        parser.delegate = delegate
-        parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { throw DocumentTextExtractionError.invalidDocument }
+        try XMLTextParsing.parse(data, with: delegate)
         return delegate.text.nilIfEmpty
     }
 }
@@ -104,7 +87,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         qualifiedName qName: String?,
         attributes attributeDict: [String: String] = [:]
     ) {
-        switch Self.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "t": readsText = true
         case "br": paragraph.append("\n")
         case "tab": paragraph.append("\t")
@@ -122,7 +105,7 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         namespaceURI: String?,
         qualifiedName qName: String?
     ) {
-        switch Self.localName(elementName) {
+        switch XMLTextParsing.localName(elementName) {
         case "t":
             readsText = false
         case "p":
@@ -133,9 +116,6 @@ private final class SlideTextParser: NSObject, XMLParserDelegate {
         }
     }
 
-    private static func localName(_ name: String) -> Substring {
-        name.split(separator: ":").last ?? Substring(name)
-    }
 }
 
 private extension String {
