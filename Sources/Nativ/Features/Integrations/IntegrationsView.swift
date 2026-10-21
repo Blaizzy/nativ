@@ -249,12 +249,14 @@ final class IntegrationsViewModel: ObservableObject {
 
     private func configureProfile(tool: IntegrationTool, selectedModelID: String) throws {
         let manager = profiles
+        let settings = serverModel.settings.normalized()
         manager.recordServerOrigin()
         try manager.configure(
             tool: tool,
             selectedModelID: selectedModelID,
             models: eligibleModels,
-            maxOutputTokens: serverModel.settings.normalized().maxTokens
+            maxOutputTokens: settings.maxTokens,
+            contextLimit: settings.maxKVSize
         )
     }
 

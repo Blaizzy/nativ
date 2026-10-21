@@ -150,43 +150,6 @@ extension ControlPanelView {
         }
     }
 
-    func exportFolder(_ folder: ChatFolder) {
-        let chatIDs = sessions(inFolder: folder.id).compactMap(\.chatID)
-        guard !chatIDs.isEmpty else {
-            return
-        }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Export"
-        guard panel.runModal() == .OK, let directory = panel.url else {
-            return
-        }
-        let root = directory.appendingPathComponent(
-            sanitizedFileName(folder.name), isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-
-        var usedNames: Set<String> = []
-        for sessionID in chatIDs {
-            guard let text = chat.conversationText(for: sessionID) else {
-                continue
-            }
-            let title = sidebarState.recents.chatTitle(for: sessionID) ?? sessionID.uuidString
-            let base = sanitizedFileName(title)
-            var candidate = base
-            var suffix = 2
-            while usedNames.contains(candidate.lowercased()) {
-                candidate = "\(base) \(suffix)"
-                suffix += 1
-            }
-            usedNames.insert(candidate.lowercased())
-            let fileURL = root.appendingPathComponent("\(candidate).txt")
-            try? text.write(to: fileURL, atomically: true, encoding: .utf8)
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([root])
-    }
-
     func sanitizedFileName(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         let cleaned = name.components(separatedBy: invalid).joined(separator: "-")
@@ -219,7 +182,7 @@ extension ControlPanelView {
         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
     }
 
-    func deleteRecentSession(_ recent: ControlPanelRecentSession) {
+    func deleteRecentSession(_ recent: ControlPanelRecentSession) async {
         let shouldSelectReplacement = isDisplayedRecent(recent)
         let replacementSelection =
             shouldSelectReplacement
@@ -228,7 +191,7 @@ extension ControlPanelView {
 
         switch recent.selection {
         case .chat(let sessionID):
-            deleteChatSession(sessionID)
+            guard await deleteChatSession(sessionID) else { return }
         case .imageGeneration(let sessionID):
             imageGeneration.deleteSession(sessionID)
         case .tab, .extensionPage:
@@ -251,8 +214,23 @@ extension ControlPanelView {
         }
     }
 
-    func deleteChatSession(_ sessionID: UUID) {
-        chat.deleteSession(sessionID)
+    func deleteChatSession(_ sessionID: UUID) async -> Bool {
+        do {
+            return try await chat.deleteSession(sessionID, confirmDiscard: confirmWorktreeDiscard)
+        } catch {
+            chatDeletionErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func confirmWorktreeDiscard(_ warning: String) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Remove ignored files?"
+        alert.informativeText = warning
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Save Snapshot and Delete")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func adjacentRecentSelection(
@@ -399,16 +377,15 @@ extension ControlPanelView {
     func removeProject(
         _ project: ChatProject,
         disposition: ChatProjectSessionRemovalDisposition
-    ) {
-        guard chat.removeProjectSessions(projectID: project.id, disposition: disposition) else {
-            pendingDeleteProject = nil
-            projectErrorMessage =
-                "One or more project chats are active in another window. Stop them and try again."
-            return
+    ) async {
+        do {
+            guard try await chat.removeProjectSessions(projectID: project.id, disposition: disposition,
+                                                      confirmDiscard: confirmWorktreeDiscard) else { return }
+            projects.removeProject(project.id)
+            showChatWorkspace()
+        } catch {
+            projectErrorMessage = error.localizedDescription
         }
-        projects.removeProject(project.id)
-        pendingDeleteProject = nil
-        showChatWorkspace()
     }
 
     func selectChatWorkspaceMode(_ mode: ChatWorkspaceMode) {

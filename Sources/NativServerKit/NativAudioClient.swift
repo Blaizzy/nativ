@@ -33,6 +33,27 @@ public struct NativAudioTranscription: Decodable, Equatable, Sendable {
     }
 }
 
+public enum NativAudioSpeechError: Error, LocalizedError {
+    case invalidResponse
+    case httpStatus(Int, String)
+    case emptyAudio
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidResponse:
+            "Invalid speech response"
+        case .httpStatus(let statusCode, let body):
+            NativServerErrorMessage.endpointFailure(
+                endpoint: "Speech endpoint",
+                statusCode: statusCode,
+                responseBody: body
+            )
+        case .emptyAudio:
+            "The speech response did not include any audio."
+        }
+    }
+}
+
 public final class NativAudioClient {
     private let baseURL: URL
     private let apiKey: String?
@@ -43,13 +64,14 @@ public final class NativAudioClient {
     public init(
         baseURL: URL,
         apiKey: String? = nil,
-        timeout: TimeInterval = 1_800
+        timeout: TimeInterval = 1_800,
+        sessionConfiguration: URLSessionConfiguration = .ephemeral
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.timeout = timeout
 
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = sessionConfiguration
         configuration.timeoutIntervalForRequest = timeout
         configuration.timeoutIntervalForResource = timeout
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
@@ -99,6 +121,43 @@ public final class NativAudioClient {
             throw NativAudioTranscriptionError.emptyTranscript
         }
         return transcription
+    }
+
+    public func synthesize(text: String, model: String) async throws -> Data {
+        let request = try makeSpeechURLRequest(text: text, model: model)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NativAudioSpeechError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw NativAudioSpeechError.httpStatus(
+                httpResponse.statusCode,
+                String(decoding: data, as: UTF8.self)
+            )
+        }
+        guard !data.isEmpty else {
+            throw NativAudioSpeechError.emptyAudio
+        }
+        return data
+    }
+
+    func makeSpeechURLRequest(text: String, model: String) throws -> URLRequest {
+        var request = URLRequest(url: baseURL.appendingPathComponent("v1/audio/speech"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = timeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("audio/wav", forHTTPHeaderField: "Accept")
+        NativServerAuthorization.authorize(&request, apiKey: apiKey)
+        request.httpBody = try JSONEncoder().encode(SpeechRequest(model: model, input: text))
+        return request
+    }
+
+    private struct SpeechRequest: Encodable {
+        let model: String
+        let input: String
+        let response_format = "wav"
+        let stream = false
     }
 
     func makeURLRequest(

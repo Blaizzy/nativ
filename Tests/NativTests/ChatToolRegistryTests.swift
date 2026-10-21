@@ -91,6 +91,7 @@ final class ChatToolRegistryTests: XCTestCase {
             ChatTerminalToolRegistry.toolName,
             ChatWebSearchToolRegistry.toolName,
             ChatWebReadToolRegistry.toolName,
+            ChatWorkToolRegistry.toolName,
         ])
     }
 
@@ -413,6 +414,45 @@ final class ChatToolRegistryTests: XCTestCase {
             for: .edit,
             installedModels: [model]
         ))
+    }
+
+    func testRecommendationsRecognizeFlux3AndMOSSImageCapabilities() {
+        for modelID in [
+            "black-forest-labs/flux-3-image-klein",
+            "black-forest-labs/flux-3-image-klein-base",
+        ] {
+            XCTAssertEqual(
+                ChatImageModelSelection.downloadableCapabilities(modelID: modelID, tags: []),
+                [.imageGeneration, .imageEditing],
+                modelID
+            )
+        }
+        for modelID in [
+            "OpenMOSS-Team/MOSS-Image-Base",
+            "OpenMOSS-Team/MOSS-Image-SFT",
+            "mlx-community/MOSS-Image-SFT-bf16",
+        ] {
+            XCTAssertEqual(
+                ChatImageModelSelection.downloadableCapabilities(modelID: modelID, tags: []),
+                [.imageGeneration],
+                modelID
+            )
+        }
+    }
+
+    func testRecommendationsRejectUnsupportedFlux3ExportsAndMOSSAdapters() {
+        for modelID in [
+            "black-forest-labs/flux-3-image-klein-comfy",
+            "mlx-community/flux-3-image-klein-pup-4bit",
+            "org/flux-3-image-klein-fp8",
+            "org/MOSS-Image-SFT-LoRA",
+        ] {
+            XCTAssertEqual(
+                ChatImageModelSelection.downloadableCapabilities(modelID: modelID, tags: []),
+                [],
+                modelID
+            )
+        }
     }
 
     func testExploreModelsUsesTheRequestedImageCapability() {
@@ -780,7 +820,18 @@ final class ChatToolRegistryTests: XCTestCase {
         let object = try decode(payload)
         XCTAssertEqual(object["ok"] as? Bool, false)
         XCTAssertEqual(object["error"] as? String, "Unknown tool: websearch")
+        XCTAssertEqual(object["error_code"] as? String, "unknown_tool")
+        XCTAssertEqual(object["recovery_hint"] as? String, ChatUnknownToolError.recoveryHint)
+        XCTAssertTrue(ChatUnknownToolError.recoveryHint.contains("chat_work"))
         XCTAssertNil(object["operation"], "must not fall through to the image-tool shape")
+    }
+
+    func testOtherToolFailuresDoNotGetUnknownToolRecovery() throws {
+        let payload = ChatToolDispatcher.failurePayload(toolName: "custom_tool", error: FakeToolError())
+        let object = try decode(payload)
+        XCTAssertEqual(object["ok"] as? Bool, false)
+        XCTAssertNil(object["error_code"])
+        XCTAssertNil(object["recovery_hint"])
     }
 
     func testDispatcherExecuteThrowsUnknownToolErrorForAnUnrecognizedName() async {

@@ -275,19 +275,6 @@ struct ModelConfigurationView: View {
 
     private var modelContextSection: some View {
         ChatConfigurationSection(title: "Model Context") {
-            ConfigurationIntegerField(
-                title: "Max output",
-                value: $settings.maxTokens,
-                range: 1...262_144
-            )
-
-            ConfigurationIntegerField(
-                title: "Context window",
-                value: modelContextBinding,
-                range: 0...1_048_576
-            )
-            .disabled(isLoadingModelConfiguration)
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("System prompt")
                     .font(.subheadline)
@@ -346,7 +333,55 @@ struct ModelConfigurationView: View {
                     }
                 }
             }
+
+            ConfigurationIntegerField(
+                title: "Max output",
+                value: $settings.maxTokens,
+                range: 1...262_144
+            )
+            .help("Maximum tokens per response. With Auto compact, generation is also limited by the space remaining in the context window.")
+
+            ConfigurationIntegerField(
+                title: "Context window",
+                value: modelContextBinding,
+                range: 0...1_048_576
+            )
+            .disabled(isLoadingModelConfiguration)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Toggle("Auto compact", isOn: $settings.compactionEnabled)
+                        .fixedSize()
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                        .help("Summarize older context before generation when actual context usage reaches the selected percentage. Your full chat history stays visible. Set 20–90% on a 1–100% scale. Requires a server with compaction support.")
+                        .accessibilityLabel("About auto compaction")
+                    Spacer()
+                    Text("\(settings.compactionThresholdPercent)%")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Slider(
+                    value: compactionThresholdBinding,
+                    in: 1...100,
+                    enabledBounds: 20...90
+                ) {
+                    EmptyView()
+                }
+                .controlSize(.small)
+                .disabled(!settings.compactionEnabled)
+                .accessibilityLabel("Compaction threshold")
+                .accessibilityValue("\(settings.compactionThresholdPercent)%")
+            }
         }
+    }
+
+    private var compactionThresholdBinding: Binding<Double> {
+        Binding(
+            get: { Double(settings.compactionThresholdPercent) },
+            set: { settings.compactionThresholdPercent = min(max(Int($0.rounded()), 20), 90) }
+        )
     }
 
     private var modelConfigurationLookupID: String {
@@ -799,6 +834,7 @@ private struct ConfigurationIntegerField: View {
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             TextField("", value: $value, format: .number)
+                .accessibilityLabel(title)
                 .font(.body)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 104)

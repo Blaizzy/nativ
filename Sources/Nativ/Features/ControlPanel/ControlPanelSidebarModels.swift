@@ -11,17 +11,13 @@ struct SidebarRecentsSnapshot: Equatable {
     let recentSessions: [ControlPanelRecentSession]
     let pinnedSessions: [ControlPanelRecentSession]
     let unpinnedSessions: [ControlPanelRecentSession]
-    let ungroupedSessions: [ControlPanelRecentSession]
     let projects: [ChatProject]
-    let folders: [ChatFolder]
-    private let sessionsByFolder: [UUID: [ControlPanelRecentSession]]
     private let sessionsByProject: [UUID: [ControlPanelRecentSession]]
     private let chatSessionIDs: Set<UUID>
     private let imageSessionIDs: Set<UUID>
 
     init(
         chatSessions: [ChatSessionSummary],
-        folders: [ChatFolder],
         imageSessions: [ImageGenerationSessionSummary],
         projects: [ChatProject] = []
     ) {
@@ -42,23 +38,11 @@ struct SidebarRecentsSnapshot: Equatable {
             standaloneSessions
             .filter { !$0.pinned }
             .sorted(by: ControlPanelRecentSession.sessionSort)
-        let folderIDs = Set(folders.map(\.id))
 
         self.recentSessions = recentSessions
         self.pinnedSessions = pinnedSessions
         self.unpinnedSessions = unpinnedSessions
         self.projects = projects.sorted(by: ChatProject.sidebarSort)
-        ungroupedSessions = unpinnedSessions.filter { recent in
-            guard let folderID = recent.folderID else { return true }
-            return !folderIDs.contains(folderID)
-        }
-        self.folders = folders
-        var sessionsByFolder: [UUID: [ControlPanelRecentSession]] = [:]
-        for recent in unpinnedSessions {
-            guard let folderID = recent.folderID else { continue }
-            sessionsByFolder[folderID, default: []].append(recent)
-        }
-        self.sessionsByFolder = sessionsByFolder
         var sessionsByProject: [UUID: [ControlPanelRecentSession]] = [:]
         for recent in recentSessions {
             guard let projectID = recent.projectID else { continue }
@@ -69,10 +53,6 @@ struct SidebarRecentsSnapshot: Equatable {
         }
         chatSessionIDs = Set(chatSessions.map(\.id))
         imageSessionIDs = Set(imageSessions.map(\.id))
-    }
-
-    func sessions(inFolder folderID: UUID) -> [ControlPanelRecentSession] {
-        sessionsByFolder[folderID] ?? []
     }
 
     func sessions(inProject projectID: UUID) -> [ControlPanelRecentSession] {
@@ -109,7 +89,6 @@ final class ChatSidebarState: ObservableObject {
     ) {
         recents = SidebarRecentsSnapshot(
             chatSessions: chat.sessions,
-            folders: chat.folders,
             imageSessions: imageGeneration.sessions,
             projects: projects.projects
         )
@@ -117,16 +96,14 @@ final class ChatSidebarState: ObservableObject {
         currentImageSessionID = imageGeneration.currentSessionID
         isGeneratingImage = imageGeneration.isGenerating
 
-        Publishers.CombineLatest4(
+        Publishers.CombineLatest3(
             chat.$sessions.removeDuplicates(),
-            chat.$folders.removeDuplicates(),
             imageGeneration.$sessions.removeDuplicates(),
             projects.$projects.removeDuplicates()
         )
-        .map { sessions, folders, imageSessions, projects in
+        .map { sessions, imageSessions, projects in
             SidebarRecentsSnapshot(
                 chatSessions: sessions,
-                folders: folders,
                 imageSessions: imageSessions,
                 projects: projects
             )
@@ -165,7 +142,6 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
     let pinned: Bool
     let pinnedOrder: Int?
     let sessionOrder: Int?
-    let folderID: UUID?
     let projectID: UUID?
     let scheduledTaskID: String?
 
@@ -177,7 +153,6 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
         pinned = session.isPinned
         pinnedOrder = session.pinnedOrder
         sessionOrder = session.sessionOrder
-        folderID = session.folderID
         projectID = session.projectID
         scheduledTaskID = session.scheduledTaskID
     }
@@ -190,7 +165,6 @@ struct ControlPanelRecentSession: Identifiable, Equatable {
         pinned = false
         pinnedOrder = nil
         sessionOrder = nil
-        folderID = nil
         projectID = nil
         scheduledTaskID = nil
     }

@@ -35,6 +35,7 @@ final class ChatStreamEventRelay {
             guard state.acceptsEvents else { return }
             state.content.append(contentsOf: event.content ?? "")
             state.reasoning.append(contentsOf: event.reasoningContent ?? "")
+            state.toolCalls.append(contentsOf: event.toolCalls ?? [])
             state.decodeTokensPerSecond = event.decodeTokensPerSecond ?? state.decodeTokensPerSecond
             state.generatedTokens = event.generatedTokens ?? state.generatedTokens
         }
@@ -75,16 +76,18 @@ final class ChatStreamEventRelay {
         var acceptsEvents = true
         var content = ""
         var reasoning = ""
+        var toolCalls: [MLXChatToolCall] = []
         var decodeTokensPerSecond: Double?
         var generatedTokens: Int?
 
         mutating func take() -> MLXChatStreamDelta? {
-            guard !content.isEmpty || !reasoning.isEmpty || decodeTokensPerSecond != nil || generatedTokens != nil
+            guard !content.isEmpty || !reasoning.isEmpty || !toolCalls.isEmpty || decodeTokensPerSecond != nil || generatedTokens != nil
             else { return nil }
 
             let event = MLXChatStreamDelta(
                 content: content.isEmpty ? nil : content,
                 reasoningContent: reasoning.isEmpty ? nil : reasoning,
+                toolCalls: toolCalls.isEmpty ? nil : toolCalls,
                 decodeTokensPerSecond: decodeTokensPerSecond,
                 generatedTokens: generatedTokens
             )

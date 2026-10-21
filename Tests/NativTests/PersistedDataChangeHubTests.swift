@@ -14,7 +14,6 @@ final class PersistedDataChangeHubTests: XCTestCase {
         }
 
         subject.send(.chatSession(chatSessionID), originWindowID: originWindowID)
-        subject.send(.chatFolders, originWindowID: originWindowID)
         subject.send(.imageGenerationSession(imageSessionID), originWindowID: originWindowID)
 
         XCTAssertEqual(receivedChanges, [
@@ -22,7 +21,6 @@ final class PersistedDataChangeHubTests: XCTestCase {
                 originWindowID: originWindowID,
                 kind: .chatSession(chatSessionID)
             ),
-            PersistedDataChange(originWindowID: originWindowID, kind: .chatFolders),
             PersistedDataChange(
                 originWindowID: originWindowID,
                 kind: .imageGenerationSession(imageSessionID)

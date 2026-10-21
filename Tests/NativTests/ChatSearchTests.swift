@@ -510,8 +510,7 @@ private struct SearchNavigationFixture: View {
     var body: some View {
         ChatTranscriptScroller(currentSessionID: nil, revision: revision, submissionID: nil,
                                scrollTargetMessageID: $target, itemIDs: items.map(\.id),
-                               searchNavigation: search.navigationRequest, onSearchNavigation: search.finishNavigation,
-                               topInset: { EmptyView() }) { attached in
+                               searchNavigation: search.navigationRequest, onSearchNavigation: search.finishNavigation) { attached in
             VStack(alignment: .leading, spacing: 20) {
                 ForEach(Array(items[attached])) { item in
                     if case .message(let message) = item {

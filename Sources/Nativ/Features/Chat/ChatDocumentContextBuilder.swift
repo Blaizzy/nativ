@@ -24,14 +24,24 @@ struct ChatDocumentOmission: Equatable, Sendable {
 struct ChatDocumentTokenBudget {
     static let safetyMargin = 256
 
+    static func promptLimit(contextLimit: Int, maximumOutputTokens: Int, compactionEnabled: Bool = false) -> Int {
+        // With compaction, the server caps generation after counting input.
+        let outputReservation = compactionEnabled ? 1 : maximumOutputTokens
+        return max(0, contextLimit - outputReservation - safetyMargin)
+    }
+
     static func characterLimit(
         currentLimit: Int,
         basePromptTokens: Int,
         documentPromptTokens: Int,
         contextLimit: Int,
-        maximumOutputTokens: Int
+        maximumOutputTokens: Int,
+        compactionEnabled: Bool = false
     ) -> Int {
-        let promptLimit = max(0, contextLimit - maximumOutputTokens - safetyMargin)
+        let promptLimit = Self.promptLimit(
+            contextLimit: contextLimit, maximumOutputTokens: maximumOutputTokens,
+            compactionEnabled: compactionEnabled
+        )
         guard documentPromptTokens > promptLimit else { return currentLimit }
         let availableDocumentTokens = max(0, promptLimit - basePromptTokens)
         let currentDocumentTokens = max(1, documentPromptTokens - basePromptTokens)

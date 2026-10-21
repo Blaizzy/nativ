@@ -56,13 +56,6 @@ extension ControlPanelView {
             onTogglePin: {
                 togglePinRecent(recent)
             },
-            folders: sidebarState.recents.folders,
-            onMoveToFolder: { folderID in
-                moveRecentToFolder(recent, folderID: folderID)
-            },
-            onCreateFolderForSession: {
-                createFolderForRecent(recent)
-            },
             renameCommitRequests: sidebarRenameCommitRequests,
             alignsContentWithSectionHeader: alignsContentWithSectionHeader
         )
@@ -102,11 +95,8 @@ extension ControlPanelView {
                 renameRecentSession(recent, to: newTitle)
             },
             onTogglePin: {},
-            folders: [],
-            onMoveToFolder: { _ in },
-            onCreateFolderForSession: {},
             renameCommitRequests: sidebarRenameCommitRequests,
-            allowsFolderOrganization: false,
+            allowsPinning: false,
             alignsContentWithSectionHeader: true
         )
         .padding(.leading, 8)
@@ -118,21 +108,6 @@ extension ControlPanelView {
             return
         }
         chat.setPinned(sessionID, pinned: !recent.pinned)
-    }
-
-    func moveRecentToFolder(_ recent: ControlPanelRecentSession, folderID: UUID?) {
-        guard case .chat(let sessionID) = recent.selection else {
-            return
-        }
-        chat.moveSession(sessionID, toFolder: folderID)
-    }
-
-    func createFolderForRecent(_ recent: ControlPanelRecentSession) {
-        guard case .chat(let sessionID) = recent.selection else {
-            return
-        }
-        let folderID = chat.createFolder(name: "New Folder")
-        chat.moveSession(sessionID, toFolder: folderID)
     }
 
     func draggedChatID(from items: [String]) -> UUID? {
@@ -147,12 +122,6 @@ extension ControlPanelView {
     }
 
     func handlePinnedDrop(_ item: String) {
-        if item.hasPrefix("folder:") {
-            if let id = UUID(uuidString: String(item.dropFirst("folder:".count))) {
-                chat.setFolderPinned(id, pinned: true)
-            }
-            return
-        }
         _ = handlePinDrop([item])
     }
 
@@ -180,34 +149,17 @@ extension ControlPanelView {
         if pinnedSessions.contains(where: { $0.chatID == draggedID }) {
             chat.setPinned(draggedID, pinned: false)
         }
-        chat.moveSession(draggedID, toFolder: nil)
         return true
-    }
-
-    func handleFolderReorder(dragged: UUID, target: UUID) {
-        guard dragged != target else {
-            return
-        }
-        var order = sidebarState.recents.folders.map(\.id)
-        order.removeAll { $0 == dragged }
-        if let index = order.firstIndex(of: target) {
-            order.insert(dragged, at: index)
-        } else {
-            order.append(dragged)
-        }
-        chat.applyFolderOrder(order)
     }
 
     func enterSelectMode() {
         selectedRecentIDs = []
-        selectedFolderIDs = []
         isSelectingRecents = true
     }
 
     func exitSelectMode() {
         isSelectingRecents = false
         selectedRecentIDs = []
-        selectedFolderIDs = []
     }
 
     func toggleRecentSelection(_ recent: ControlPanelRecentSession) {
@@ -218,63 +170,41 @@ extension ControlPanelView {
         }
     }
 
-    func toggleFolderSelection(_ folderID: UUID) {
-        if selectedFolderIDs.contains(folderID) {
-            selectedFolderIDs.remove(folderID)
-        } else {
-            selectedFolderIDs.insert(folderID)
-        }
-    }
-
     var selectedChats: [ControlPanelRecentSession] {
         recentSessions.filter { $0.isChat && selectedRecentIDs.contains($0.id) }
     }
 
     var bulkDeleteDescription: String {
-        let base = "The selected chats are permanently deleted."
-        let folders = "Selected folders are removed but their chats are kept."
+        let base = "The selected chats and their managed worktrees and branches are permanently deleted. You’ll be asked before discarding uncommitted files or unmerged commits."
         let includesScheduledRun = selectedChats.contains { $0.scheduledTaskID != nil }
         guard includesScheduledRun else {
-            return "\(base) \(folders)"
+            return base
         }
-        return "\(base) Linked scheduled tasks and their run records are kept. \(folders)"
+        return "\(base) Linked scheduled tasks and their run records are kept."
     }
 
     var hasSelectedChats: Bool {
         !selectedChats.isEmpty
     }
 
-    var selectedFolders: [ChatFolder] {
-        sidebarState.recents.folders.filter { selectedFolderIDs.contains($0.id) }
-    }
-
-    var hasSelectedPinnable: Bool {
-        !selectedChats.isEmpty || !selectedFolders.isEmpty
-    }
-
     var allSelectedPinned: Bool {
-        hasSelectedPinnable
+        hasSelectedChats
             && selectedChats.allSatisfy(\.pinned)
-            && selectedFolders.allSatisfy(\.isPinned)
     }
 
     var bulkSelectionTitle: String {
-        let count = selectedRecentIDs.count + selectedFolderIDs.count
+        let count = selectedRecentIDs.count
         return count == 0 ? "Select items" : "\(count) selected"
     }
 
     func bulkTogglePinSelected() {
         let shouldPin = !allSelectedPinned
         let chatIDs = selectedChats.compactMap(\.chatID)
-        let folderIDs = selectedFolders.map(\.id)
-        guard !chatIDs.isEmpty || !folderIDs.isEmpty else {
+        guard !chatIDs.isEmpty else {
             return
         }
         for id in chatIDs {
             chat.setPinned(id, pinned: shouldPin)
-        }
-        for id in folderIDs {
-            chat.setFolderPinned(id, pinned: shouldPin)
         }
         exitSelectMode()
     }
@@ -317,31 +247,28 @@ extension ControlPanelView {
         return candidate
     }
 
-    func bulkDeleteSelected() {
+    func bulkDeleteSelected() async {
         let targets = recentSessions.filter { selectedRecentIDs.contains($0.id) }
-        let folderTargets = selectedFolderIDs
-        guard !targets.isEmpty || !folderTargets.isEmpty else {
+        guard !targets.isEmpty else {
             return
         }
-        let affectsDisplayed = targets.contains { isDisplayedRecent($0) }
-        let removedIDs = selectedRecentIDs
+        let displayedIDs = Set(targets.filter { isDisplayedRecent($0) }.map(\.id))
+        var removedIDs: Set<ControlPanelRecentSession.ID> = []
+        for recent in targets {
+            switch recent.selection {
+            case .chat(let sessionID):
+                guard await deleteChatSession(sessionID) else { continue }
+            case .imageGeneration(let sessionID):
+                imageGeneration.deleteSession(sessionID)
+            case .tab, .extensionPage:
+                continue
+            }
+            removedIDs.insert(recent.id)
+        }
         withAnimation(.snappy(duration: 0.2)) {
-            for recent in targets {
-                switch recent.selection {
-                case .chat(let sessionID):
-                    deleteChatSession(sessionID)
-                case .imageGeneration(let sessionID):
-                    imageGeneration.deleteSession(sessionID)
-                case .tab, .extensionPage:
-                    break
-                }
-            }
-            for folderID in folderTargets {
-                chat.deleteFolder(folderID)
-            }
             exitSelectMode()
         }
-        guard affectsDisplayed else {
+        guard !displayedIDs.isDisjoint(with: removedIDs) else {
             return
         }
         if let survivor = recentSessions.first(where: { !removedIDs.contains($0.id) }) {

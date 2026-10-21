@@ -281,6 +281,28 @@ final class MCPFilesystemSafetyTests: XCTestCase {
             "approved")
     }
 
+    func testWorktreeScopeUsesCheckoutInsteadOfStandaloneWriteFolder() async throws {
+        let checkout = ChatGitWorktree(
+            repositoryPath: readRoot.path,
+            commonDirectory: readRoot.appendingPathComponent(".git").path,
+            path: writeRoot.path, projectSubpath: "", branch: "codex/test", baseCommit: "test"
+        )
+        let scope = ChatToolScope(
+            projectID: nil, projectName: "Checkout", rootPath: writeRoot.path,
+            projectToolsEnabled: true, standaloneWriteRootPath: readRoot.path, worktree: checkout
+        )
+        XCTAssertTrue(scope.isProject)
+        XCTAssertEqual(scope.fileWriteRootPath, writeRoot.path)
+        _ = try await call(
+            "write_file", ["path": "checkout.txt", "content": "worktree"], scope: scope
+        )
+        let content = try await call("read_text_file", ["path": "checkout.txt"], scope: scope)
+        XCTAssertEqual(content, "worktree")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: readRoot.appendingPathComponent("checkout.txt").path)
+        )
+    }
+
     private static let serverScript = #"""
         import json, os, pathlib, sys
         tools = ['read_file', 'read_text_file', 'read_media_file', 'read_multiple_files', 'write_file', 'edit_file', 'create_directory', 'list_directory', 'list_directory_with_sizes', 'directory_tree', 'move_file', 'search_files', 'get_file_info', 'list_allowed_directories', 'future_tool']

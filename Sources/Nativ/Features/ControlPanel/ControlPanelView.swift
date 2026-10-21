@@ -41,21 +41,18 @@ struct ControlPanelView: View {
     @State var isModelConfigurationVisible = false
     @State var selectedDevSection: DevHubView.Section = .integrations
     @State var isProjectsHeaderHovering = false
-    @State var isFoldersHeaderHovering = false
     @State var isSessionsHeaderHovering = false
     @State var sidebarRenameCommitRequests = PassthroughSubject<Void, Never>()
     @State var isSelectingRecents = false
     @State var selectedRecentIDs: Set<ControlPanelRecentSession.ID> = []
-    @State var selectedFolderIDs: Set<UUID> = []
     @State var isPinnedDropTargeted = false
     @State var isSessionsDropTargeted = false
     @State var reorderTargetID: ControlPanelRecentSession.ID?
     @State var reorderInsertAfter = false
-    @State var isFoldersDropTargeted = false
     @State var pendingDeleteRecent: ControlPanelRecentSession?
-    @State var pendingDeleteFolder: ChatFolder?
     @State var pendingDeleteProject: ChatProject?
     @State var projectErrorMessage: String?
+    @State var chatDeletionErrorMessage: String?
     @State var isConfirmingBulkDelete = false
     @State var chatImportAlert: ChatImportAlert?
     @State var chatLibrarySearch = ChatLibrarySearchState()
@@ -320,9 +317,18 @@ struct ControlPanelView: View {
                 action: toggleSidebarVisibility
             )
 
-            Spacer(minLength: 0)
+            ChatWorkWindowDragRegion(
+                chat: chat, isChatWorkspace: selectedTab == .chat && chatWorkspaceMode == .chat,
+                height: ControlPanelLayout.topControlSize
+            )
 
-            if showsModelConfigurationToggle {
+            if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
+                ChatWorkWindowControls(
+                    chat: chat,
+                    isConfigurationVisible: isModelConfigurationVisible,
+                    toggleConfiguration: toggleModelConfigurationVisibility
+                )
+            } else if showsModelConfigurationToggle {
                 controlPanelTopButton(
                     systemName: "sidebar.right",
                     help: isModelConfigurationVisible

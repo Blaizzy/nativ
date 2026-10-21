@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import SwiftUI
 
 enum AppAppearance: String, CaseIterable, Identifiable {
@@ -46,11 +47,14 @@ enum AppAppearance: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     var model: NativModel
+    @ObservedObject var chat: ChatViewModel
+    var onOpenChat: (UUID) -> Void
     @ObservedObject var softwareUpdater: SoftwareUpdater
     @ObservedObject var launchAtLogin: LaunchAtLoginController
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @StateObject private var permissions = NativPermissionStore()
     @State private var showsPersonalization = false
+    @State private var showsWorktreeRecovery = false
     @ObservedObject private var notifications = NativNotificationService.shared
 
     var body: some View {
@@ -71,6 +75,9 @@ struct SettingsView: View {
         .background(Color.nativMainContentBackground)
         .sheet(isPresented: $showsPersonalization) {
             PersonalizationView(model: model)
+        }
+        .sheet(isPresented: $showsWorktreeRecovery) {
+            ChatWorktreeRecoveryView(chat: chat, onOpenChat: onOpenChat)
         }
     }
 
@@ -242,6 +249,17 @@ struct SettingsView: View {
 
             VStack(spacing: 0) {
                 settingsRow(
+                    title: "Chat Response Timeout",
+                    description: "How long Nativ waits without receiving response data. Longer waits can help with large prompts.",
+                    systemImage: "clock"
+                ) {
+                    chatResponseTimeoutControl
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
                     title: "Allow Beta Updates",
                     description: softwareUpdater.channelDescription,
                     systemImage: "sun.horizon"
@@ -264,6 +282,19 @@ struct SettingsView: View {
         }
     }
 
+    private var chatResponseTimeoutControl: some View {
+        @Bindable var model = model
+        return Picker("Chat Response Timeout", selection: $model.settings.chatResponseTimeout) {
+            ForEach(NativChatTimeout.allCases) { timeout in
+                Text(timeout.displayName).tag(timeout)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .fixedSize()
+        .accessibilityHint("Applies to new requests. You can still stop a response when No limit is selected.")
+    }
+
     private var projectSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Projects")
@@ -278,6 +309,16 @@ struct SettingsView: View {
                 ) {
                     Toggle("", isOn: projectToolsEnabledBinding)
                         .labelsHidden()
+                }
+                Divider().padding(.leading, 52)
+                settingsRow(
+                    title: "Recently deleted worktrees",
+                    description: "Restore saved work or permanently delete its snapshot.",
+                    systemImage: "archivebox"
+                ) {
+                    Button("Manage…") { showsWorktreeRecovery = true }
+                        .buttonStyle(.bordered)
+                        .accessibilityLabel("Manage recently deleted worktrees")
                 }
             }
             .background(Color(nsColor: .controlBackgroundColor))

@@ -75,6 +75,63 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertFalse(model.capabilities.contains(.text))
     }
 
+    func testDiscoversFlux3RootPackageAsGenerationAndEditingModel() async throws {
+        let repoID = "black-forest-labs/flux-3-image-klein"
+        let snapshot = snapshotURL(repoID: repoID)
+        try writeJSON(
+            [
+                "model": "flux-3-image-klein",
+                "dit": ["in_channels": ["image": 128, "image_cond": 128, "text": 20480]],
+            ],
+            to: snapshot.appendingPathComponent("config.json")
+        )
+        for filename in [
+            "model.safetensors", "ae.safetensors", "text_encoder/config.json",
+            "text_encoder/tokenizer.json", "text_encoder/model.safetensors",
+        ] {
+            try write("{}", to: snapshot.appendingPathComponent(filename))
+        }
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+
+        XCTAssertEqual(model.provider, .blackForestLabs)
+        XCTAssertTrue(model.capabilities.contains(.imageGeneration))
+        XCTAssertTrue(model.capabilities.contains(.imageEditing))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
+    func testDiscoversMOSSImagePipelineAsGenerationOnlyModel() async throws {
+        let repoID = "OpenMOSS-Team/MOSS-Image-SFT"
+        let snapshot = snapshotURL(repoID: repoID)
+        try writeJSON(
+            [
+                "_class_name": "MOSSImagePipeline",
+                "transformer": ["pipeline_moss_image", "MOSSImageTransformer2DModel"],
+                "vae": ["diffusers", "AutoencoderKLFlux2"],
+            ],
+            to: snapshot.appendingPathComponent("model_index.json")
+        )
+        for component in ["transformer", "text_encoder", "vae"] {
+            try writeJSON([:], to: snapshot.appendingPathComponent("\(component)/config.json"))
+            try write("weights", to: snapshot.appendingPathComponent("\(component)/model.safetensors"))
+        }
+        try writeJSON(
+            ["_class_name": "AutoencoderKLFlux2"],
+            to: snapshot.appendingPathComponent("vae/config.json")
+        )
+        try writeJSON([:], to: snapshot.appendingPathComponent("scheduler/scheduler_config.json"))
+        try writeJSON([:], to: snapshot.appendingPathComponent("tokenizer/tokenizer.json"))
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+
+        XCTAssertEqual(model.provider, .openMOSS)
+        XCTAssertTrue(model.capabilities.contains(.imageGeneration))
+        XCTAssertFalse(model.capabilities.contains(.imageEditing))
+        XCTAssertFalse(model.capabilities.contains(.text))
+    }
+
     func testDiscoversModelFromAdditionalSearchFolder() async throws {
         let externalModel = temporaryCache.appendingPathComponent(
             "external/owner/model",
@@ -861,6 +918,33 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let reranker = try XCTUnwrap(models.first)
         XCTAssertTrue(reranker.capabilities.contains(.reranking))
         XCTAssertFalse(reranker.isEligibleForLanguageModelPicker)
+    }
+
+    func testDecisionModelsAreExcludedFromChatIncludingD1Backbone() async throws {
+        for type in ["decider2", "laya", "clef", "d1", "d1_omni"] {
+            try makeDrafterSnapshot(repoID: "test/\(type)", config: ["model_type": type])
+        }
+        try makeDrafterSnapshot(repoID: "test/liquid-decision", config: [
+            "model_type": "lfm2_vl", "vision_config": [:],
+            "architectures": ["Lfm2VlForConditionalGeneration"],
+            "auto_map": ["AutoModel": "modeling_d1.D1Model", "AutoTokenizer": ["CustomTokenizer", NSNull()]],
+        ])
+        try makeDrafterSnapshot(repoID: "test/ordinary-vlm", config: [
+            "model_type": "lfm2_vl", "vision_config": [:],
+            "architectures": ["Lfm2VlForConditionalGeneration"],
+        ])
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        XCTAssertEqual(models.count, 7)
+        for model in models where model.repoID != "test/ordinary-vlm" {
+            XCTAssertTrue(model.capabilities.contains(.decision), model.repoID)
+            XCTAssertFalse(model.capabilities.contains(.text), model.repoID)
+            XCTAssertFalse(model.isEligibleForLanguageModelPicker, model.repoID)
+            XCTAssertNil(model.onDemandCapability)
+        }
+        let ordinary = try XCTUnwrap(models.first { $0.repoID == "test/ordinary-vlm" })
+        XCTAssertFalse(ordinary.capabilities.contains(.decision))
+        XCTAssertTrue(ordinary.isEligibleForLanguageModelPicker)
+        XCTAssertNil(ordinary.onDemandCapability)
     }
 
     private func write(_ string: String, to url: URL) throws {

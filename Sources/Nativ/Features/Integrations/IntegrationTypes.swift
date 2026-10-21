@@ -71,6 +71,13 @@ enum IntegrationTool: String, CaseIterable, Hashable, Identifiable, Sendable {
         }
     }
 
+    var optionalLaunchFlag: String? {
+        switch self {
+        case .openCode: "--standalone"
+        default: nil
+        }
+    }
+
     var logoAssetName: String { "IntegrationLogo-\(rawValue)" }
 
     var summary: String {

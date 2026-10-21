@@ -29,4 +29,25 @@ enum OfficeArchive {
         }
         return archive
     }
+
+    static func data(for entry: Entry, in archive: Archive, limit: UInt64) throws -> Data {
+        guard entry.uncompressedSize <= limit else {
+            throw DocumentTextExtractionError.archiveTooLarge
+        }
+        var data = Data()
+        data.reserveCapacity(Int(entry.uncompressedSize))
+        do {
+            _ = try archive.extract(entry) { chunk in
+                guard chunk.count <= Int(limit) - data.count else {
+                    throw DocumentTextExtractionError.archiveTooLarge
+                }
+                data.append(chunk)
+            }
+        } catch let error as DocumentTextExtractionError {
+            throw error
+        } catch {
+            throw DocumentTextExtractionError.invalidDocument
+        }
+        return data
+    }
 }

@@ -10,6 +10,10 @@ struct ChatPersistenceFailure: Equatable, Sendable {
     let message: String
 }
 
+// Folder migration is intentionally lazy: Codable ignores the legacy `folderID`
+// key, so every existing chat loads without folder membership and appears in the
+// normal sidebar listing. The next save omits that key. Obsolete folders.json
+// files are ignored; migration never depends on their presence or validity.
 struct ChatSession: Identifiable, Equatable, Codable {
     static let newChatTitle = "New chat"
 
@@ -22,13 +26,16 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var pinned: Bool?
     var pinnedOrder: Int?
     var sessionOrder: Int?
-    var folderID: UUID?
     var projectID: UUID?
     var imageGenerationModelID: String?
+    var compaction: ChatCompactionState? = nil
+    var workState: ChatWorkState?
     var scheduledTaskID: String?
     var importedModelRepositoryID: String? = nil
     var importedSystemPrompt: String? = nil
     var personalizationSnapshot: String? = nil
+    var worktree: ChatGitWorktree? = nil
+    var workFilesInWorktree: Bool? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }
@@ -45,9 +52,9 @@ struct ChatSession: Identifiable, Equatable, Codable {
             isPinned: pinned ?? false,
             pinnedOrder: pinnedOrder,
             sessionOrder: sessionOrder,
-            folderID: folderID,
             projectID: projectID,
-            scheduledTaskID: scheduledTaskID
+            scheduledTaskID: scheduledTaskID,
+            worktree: worktree
         )
     }
 
@@ -133,41 +140,15 @@ struct ChatSessionSummary: Identifiable, Equatable {
     let isPinned: Bool
     let pinnedOrder: Int?
     let sessionOrder: Int?
-    let folderID: UUID?
     let projectID: UUID?
     let scheduledTaskID: String?
+    var worktree: ChatGitWorktree? = nil
 
     static func recencySort(_ lhs: ChatSessionSummary, _ rhs: ChatSessionSummary) -> Bool {
         if lhs.updatedAt == rhs.updatedAt {
             return lhs.createdAt > rhs.createdAt
         }
         return lhs.updatedAt > rhs.updatedAt
-    }
-}
-
-struct ChatFolder: Identifiable, Equatable, Codable {
-    let id: UUID
-    var name: String
-    var isCollapsed: Bool
-    var isPinned: Bool
-
-    init(id: UUID = UUID(), name: String, isCollapsed: Bool = false, isPinned: Bool = false) {
-        self.id = id
-        self.name = name
-        self.isCollapsed = isCollapsed
-        self.isPinned = isPinned
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, isCollapsed, isPinned
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        isCollapsed = try container.decodeIfPresent(Bool.self, forKey: .isCollapsed) ?? false
-        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 }
 
@@ -258,7 +239,12 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var thinkingDuration: TimeInterval?
     var imageAttachments: [ChatImageAttachment]
     var responseMetrics: ChatResponseMetrics?
+    var compactionMetrics: ChatCompactionMetrics?
+    var savedWorkFiles: [String]?
+    var isCompacting = false
     var toolCalls: [MLXChatToolCall]
+    // Preview only: unfinished calls must not be persisted or replayed.
+    var streamingToolCalls: [MLXChatToolCall] = []
     var toolCallID: String?
     var toolName: String?
     var toolStatus: ToolStatus?
@@ -314,6 +300,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case thinkingDuration
         case imageAttachments
         case responseMetrics
+        case compactionMetrics
+        case savedWorkFiles
         case toolCalls
         case toolCallID
         case toolName
@@ -342,6 +330,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
             ?? []
         responseMetrics = try container.decodeIfPresent(
             ChatResponseMetrics.self, forKey: .responseMetrics)
+        compactionMetrics = try container.decodeIfPresent(ChatCompactionMetrics.self, forKey: .compactionMetrics)
+        savedWorkFiles = try container.decodeIfPresent([String].self, forKey: .savedWorkFiles)
         toolCalls = try container.decodeIfPresent([MLXChatToolCall].self, forKey: .toolCalls) ?? []
         toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
@@ -375,6 +365,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(thinkingDuration, forKey: .thinkingDuration)
         try container.encode(imageAttachments, forKey: .imageAttachments)
         try container.encodeIfPresent(responseMetrics, forKey: .responseMetrics)
+        try container.encodeIfPresent(compactionMetrics, forKey: .compactionMetrics)
+        try container.encodeIfPresent(savedWorkFiles, forKey: .savedWorkFiles)
         try container.encode(toolCalls, forKey: .toolCalls)
         try container.encodeIfPresent(toolCallID, forKey: .toolCallID)
         try container.encodeIfPresent(toolName, forKey: .toolName)
@@ -442,6 +434,7 @@ struct ChatResponseMetrics: Equatable, Codable {
     let totalTokens: Int?
     let generatedTokens: Int?
     let decodeTokensPerSecond: Double?
+    let prefillTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specAcceptanceRate: Double?
 
@@ -449,6 +442,7 @@ struct ChatResponseMetrics: Equatable, Codable {
         totalTokens != nil
             || generatedTokens != nil
             || decodeTokensPerSecond != nil
+            || prefillTokensPerSecond != nil
             || peakMemoryGB != nil
             || specAcceptanceRate != nil
     }
@@ -457,12 +451,14 @@ struct ChatResponseMetrics: Equatable, Codable {
         totalTokens: Int? = nil,
         generatedTokens: Int? = nil,
         decodeTokensPerSecond: Double? = nil,
+        prefillTokensPerSecond: Double? = nil,
         peakMemoryGB: Double? = nil,
         specAcceptanceRate: Double? = nil
     ) {
         self.totalTokens = totalTokens
         self.generatedTokens = generatedTokens
         self.decodeTokensPerSecond = decodeTokensPerSecond
+        self.prefillTokensPerSecond = prefillTokensPerSecond
         self.peakMemoryGB = peakMemoryGB
         self.specAcceptanceRate = specAcceptanceRate
     }
@@ -472,6 +468,7 @@ struct ChatResponseMetrics: Equatable, Codable {
             totalTokens: completion.usage?.resolvedTotalTokens,
             generatedTokens: completion.usage?.completionTokens,
             decodeTokensPerSecond: completion.resolvedDecodeTokensPerSecond,
+            prefillTokensPerSecond: completion.usage?.promptTokensPerSecond,
             peakMemoryGB: completion.usage?.peakMemoryGB,
             specAcceptanceRate: completion.usage?.specAcceptanceRate
         )
@@ -728,16 +725,24 @@ struct ChatImageAttachment: Identifiable, Equatable, Codable, Sendable {
     }
 
     static func canReadImages(from pasteboard: NSPasteboard) -> Bool {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
-            urls.contains(where: isImageURL)
-        {
+        if fileURLs(from: pasteboard).contains(where: isImageURL) {
             return true
         }
         return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
+    static func canReadAttachments(from pasteboard: NSPasteboard) -> Bool {
+        !fileURLs(from: pasteboard).isEmpty || canReadImages(from: pasteboard)
+    }
+
+    static func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?
+            .filter(\.isFileURL) ?? []
+    }
+
     static func imageAttachments(from pasteboard: NSPasteboard) -> [ChatImageAttachment] {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] {
+        let urls = fileURLs(from: pasteboard)
+        if !urls.isEmpty {
             let fileAttachments =
                 urls
                 .filter(isImageURL)
@@ -813,6 +818,21 @@ struct ChatSessionStore {
     private let legacyChatDirectory: URL?
     private let mediaStore: MediaAssetStore
 
+    var worktrees: ChatGitWorktreeStore {
+        ChatGitWorktreeStore(root: chatDirectory.appendingPathComponent("Worktrees", isDirectory: true))
+    }
+
+    var workFiles: ChatWorkFileStore {
+        ChatWorkFileStore(root: chatDirectory.appendingPathComponent("Files", isDirectory: true))
+    }
+
+    func workFiles(for worktree: ChatGitWorktree?) -> ChatWorkFileStore {
+        // Stage files in chat storage until the first message creates the checkout.
+        guard let worktree, worktree.isReady else { return workFiles }
+        return ChatWorkFileStore(root: URL(fileURLWithPath: worktree.projectPath)
+            .appendingPathComponent("Nativ Files", isDirectory: true), worktree: worktree)
+    }
+
     init(
         chatDirectory: URL? = nil,
         legacyChatDirectory: URL? = nil,
@@ -864,7 +884,7 @@ struct ChatSessionStore {
     }
 
     @discardableResult
-    func saveSession(_ session: ChatSession) -> Bool {
+    func saveSession(_ session: ChatSession, previousWorkState: ChatWorkState? = nil) -> Bool {
         do {
             migrateLegacyStoreIfNeeded()
             try fileManager.createDirectory(
@@ -874,8 +894,32 @@ struct ChatSessionStore {
 
             var persisted = session
             _ = try persisted.externalizeAssets(using: mediaStore)
+            // Callers can supply the prior file state. Worktree saves still read the
+            // persisted migration marker so a stale window cannot migrate twice.
+            var previous = previousWorkState
+            let hasEditableFiles = persisted.workState?.items.contains(where: \.canEdit) == true
+            if persisted.worktree != nil || (hasEditableFiles && previous == nil) {
+                let saved = (try? Data(contentsOf: sessionURL(for: session.id)))
+                    .flatMap { try? makeDecoder().decode(ChatSession.self, from: $0) }
+                previous = previous ?? saved?.workState
+                if persisted.worktree != nil, saved?.workFilesInWorktree == true {
+                    persisted.workFilesInWorktree = true
+                }
+            }
+            let files = workFiles(for: persisted.worktree)
+            if let state = persisted.workState, hasEditableFiles {
+                if persisted.worktree?.isReady == true, persisted.workFilesInWorktree != true {
+                    try files.migrate(state, previous: previous, from: workFiles, sessionID: persisted.id)
+                    persisted.workFilesInWorktree = true
+                } else {
+                    try files.save(state, previous: previous, sessionID: persisted.id, materializeMissing: false)
+                }
+            }
             let data = try makeEncoder().encode(persisted)
             try data.write(to: sessionURL(for: persisted.id), options: .atomic)
+            if let state = persisted.workState {
+                files.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
+            }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
             return true
         } catch {
@@ -884,39 +928,18 @@ struct ChatSessionStore {
         }
     }
 
-    func deleteSession(id: UUID) {
+    @discardableResult
+    func deleteSession(id: UUID) -> Bool {
         do {
             try fileManager.removeItem(at: sessionURL(for: id))
         } catch CocoaError.fileNoSuchFile {
             // Continue so stale ownership and index records are also removed.
         } catch {
             reportFailure("deleteSession", sessionID: id, error: error)
-            return
+            return false
         }
         mediaStore.removeOwner("chat:\(id.uuidString)")
-    }
-
-    func loadFolders() -> [ChatFolder] {
-        guard let data = try? Data(contentsOf: foldersURL) else {
-            return []
-        }
-        return (try? JSONDecoder().decode([ChatFolder].self, from: data)) ?? []
-    }
-
-    func saveFolders(_ folders: [ChatFolder]) {
-        do {
-            try fileManager.createDirectory(
-                at: chatDirectory,
-                withIntermediateDirectories: true
-            )
-
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(folders)
-            try data.write(to: foldersURL, options: .atomic)
-        } catch {
-            reportFailure("saveFolders", error: error)
-        }
+        return true
     }
 
     private func loadSession(from url: URL) -> ChatSession? {
@@ -961,7 +984,7 @@ struct ChatSessionStore {
         else { return }
         do {
             let legacySessions = legacyChatDirectory.appendingPathComponent("Sessions", isDirectory: true)
-            var files = ["folders.json", "current.json"].map {
+            var files = ["current.json"].map {
                 (source: legacyChatDirectory.appendingPathComponent($0), destination: chatDirectory.appendingPathComponent($0))
             }.filter { fileManager.fileExists(atPath: $0.source.path) }
             if fileManager.fileExists(atPath: legacySessions.path) {
@@ -978,7 +1001,6 @@ struct ChatSessionStore {
                     // Existing destination files are authoritative, but must be readable before discarding the fallback.
                     let data = try Data(contentsOf: destination)
                     switch source.lastPathComponent {
-                    case "folders.json": _ = try makeDecoder().decode([ChatFolder].self, from: data)
                     case "current.json": _ = try makeDecoder().decode([ChatTranscriptMessage].self, from: data)
                     default: _ = try makeDecoder().decode(ChatSession.self, from: data)
                     }
@@ -1068,10 +1090,6 @@ struct ChatSessionStore {
 
     private var sessionsDirectory: URL {
         chatDirectory.appendingPathComponent("Sessions", isDirectory: true)
-    }
-
-    private var foldersURL: URL {
-        chatDirectory.appendingPathComponent("folders.json")
     }
 
     private var legacyTranscriptURL: URL {

@@ -7,12 +7,41 @@ enum ChatDocumentFormat: Hashable, Sendable {
     case richText
     case wordProcessing
     case presentation
+    case notebook
+    case openDocument
+    case ebook
+    case spreadsheet
+}
+
+extension ChatDocumentFormat {
+    /// File extensions that resolve to a document format.
+    ///
+    /// CSV maps to plain text extraction; the separate case exists only so the context
+    /// builder can pin a table's header row when it selects sections.
+    static let formatsByFileExtension: [String: ChatDocumentFormat] = [
+        "pdf": .pdf,
+        "csv": .csv,
+        "rtf": .richText,
+        "doc": .wordProcessing,
+        "docx": .wordProcessing,
+        "pptx": .presentation,
+        "ipynb": .notebook,
+        "odt": .openDocument,
+        "ods": .openDocument,
+        "epub": .ebook,
+        "xlsx": .spreadsheet,
+    ]
+
+    static func forFileExtension(_ fileExtension: String) -> ChatDocumentFormat? {
+        formatsByFileExtension[fileExtension.lowercased()]
+    }
 }
 
 enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
     case page(Int)
     case slide(Int)
     case lines(Int, Int)
+    case named(String)
 
     var label: String {
         switch self {
@@ -22,6 +51,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             "Slide \(number)"
         case .lines(let first, let last):
             first == last ? "Line \(first)" : "Lines \(first)–\(last)"
+        case .named(let label):
+            label
         }
     }
 
@@ -33,6 +64,8 @@ enum ExtractedDocumentLocation: Codable, Equatable, Sendable {
             slides.contains(number)
         case .lines(let first, let last):
             lines.contains { first...last ~= $0 }
+        case .named:
+            false
         }
     }
 }
@@ -128,9 +161,12 @@ struct DocumentTextExtractionRouter: Sendable {
         [
             PDFDocumentTextExtractor(),
             PlainTextDocumentTextExtractor(),
-            CSVDocumentTextExtractor(),
             RichTextDocumentTextExtractor(),
             PowerPointDocumentTextExtractor(),
+            NotebookDocumentTextExtractor(),
+            OpenDocumentTextExtractor(),
+            EPUBDocumentTextExtractor(),
+            SpreadsheetDocumentTextExtractor(),
         ]
     }
 }

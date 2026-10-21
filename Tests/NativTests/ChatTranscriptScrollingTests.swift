@@ -5,6 +5,62 @@ import XCTest
 
 @MainActor
 final class ChatTranscriptScrollingTests: XCTestCase {
+    func testTranscriptButtonsReceiveMouseClicks() async throws {
+        var clicks: [String] = []
+        var buttonFrames: [String: CGRect] = [:]
+        let id = UUID()
+        let root = ChatTranscriptScroller(
+            currentSessionID: id, revision: ChatTranscriptRevision(), submissionID: nil,
+            scrollTargetMessageID: .constant(nil), itemIDs: [id]
+        ) { _ in
+            VStack {
+                Button("Worked for 51s") { clicks.append("reasoning") }
+                    .buttonStyle(.plain)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("buttons")) } action: {
+                        buttonFrames["reasoning"] = $0
+                    }
+                Button("Confirm") { clicks.append("confirmation") }
+                    .buttonStyle(.borderedProminent)
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("buttons")) } action: {
+                        buttonFrames["confirmation"] = $0
+                    }
+                ChatMarkdownRenderer(messageID: id, content: "An assistant response.",
+                                     isStreaming: false, fontScale: 1)
+                Color.clear.frame(height: 20).id(ChatTranscriptScrollTarget.bottom)
+            }
+            .padding(20)
+        }
+        .frame(width: 500, height: 300)
+        .coordinateSpace(name: "buttons")
+        let host = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 500, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.orderBack(nil)
+        window.makeKey()
+        try await settle()
+
+        for (index, name) in ["reasoning", "confirmation"].enumerated() {
+            let frame = try XCTUnwrap(buttonFrames[name])
+            XCTAssertTrue(host.bounds.contains(frame), "Click the visible control")
+            let location = host.convert(CGPoint(x: frame.midX, y: frame.midY), to: nil)
+            func event(_ type: NSEvent.EventType) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            }
+            // Mouse input catches a blocked scroll layer that keyboard/AX activation bypasses.
+            let up = try event(.leftMouseUp)
+            NSApp.postEvent(up, atStart: false)
+            window.sendEvent(try event(.leftMouseDown))
+            window.sendEvent(up)
+            try await settle()
+            XCTAssertEqual(clicks, Array(["reasoning", "confirmation"].prefix(index + 1)))
+        }
+    }
+
     func testSendingFirstMessageKeepsContentInViewport() async throws {
         try await exerciseInsertion(historyCount: 0)
     }
@@ -524,8 +580,7 @@ private struct ScrollTestTranscript: View {
             revision: model.revision,
             submissionID: model.submissionID,
             scrollTargetMessageID: $model.target,
-            itemIDs: model.rows.map(\.id),
-            topInset: { EmptyView() }
+            itemIDs: model.rows.map(\.id)
         ) { attachedRange in
             ChatTranscriptStack(items: Array(model.rows[attachedRange])) {
                 Text("Start a conversation").frame(maxWidth: .infinity).padding(.top, 120)

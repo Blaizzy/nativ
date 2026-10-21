@@ -34,6 +34,7 @@ struct ChatToolExecutionContext: Sendable {
     var terminalToolDependencies = ChatTerminalToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
+    var workAction: (@MainActor @Sendable (ChatWorkRequest) async throws -> String)? = nil
 }
 
 struct ChatToolExecutionOutcome: Sendable {
@@ -123,6 +124,8 @@ enum ChatToolRegistry {
         descriptors(canEditImage: canEditImage).map(\.definition)
     }
 
+    static let alwaysOnToolNames: Set<String> = [ChatWorkToolRegistry.toolName]
+
     static func descriptors(canEditImage: Bool) -> [ChatNativeToolDescriptor] {
         var tools = ChatImageToolRegistry.definitions(canEdit: canEditImage).map {
             ChatNativeToolDescriptor(
@@ -199,12 +202,25 @@ enum ChatToolRegistry {
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
             ))
+        tools.append(ChatNativeToolDescriptor(
+            definition: ChatWorkToolRegistry.definition,
+            displayDescription: "Work on documents, code, websites, and shared terminals beside chat.",
+            configuration: nil
+        ))
         return tools
     }
 }
 
 enum ChatUnknownToolError: LocalizedError {
     case unknownTool(String)
+
+    static let recoveryHint = """
+        A tool call was rejected because its name was not registered. That call performed no action. \
+        Choose a tool from the current tool list using its exact name and schema. \
+        For work-pane documents, when chat_work is available, call chat_work with action="read", \
+        then chat_work with action="update" using the returned id and revision as expected_revision. \
+        read and update are action values, not tool names. Do not retry the rejected tool name.
+        """
 
     var errorDescription: String? {
         switch self {
@@ -214,9 +230,17 @@ enum ChatUnknownToolError: LocalizedError {
     }
 }
 
-private struct ChatUnknownToolResultPayload: Encodable {
+private struct ChatUnknownToolResultPayload: Codable {
     let ok: Bool
     let error: String?
+    var errorCode: String?
+    var recoveryHint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case ok, error
+        case errorCode = "error_code"
+        case recoveryHint = "recovery_hint"
+    }
 }
 
 enum ChatToolDispatcher {
@@ -228,6 +252,9 @@ enum ChatToolDispatcher {
     private typealias FailureHandler = @Sendable (String, Error) -> String
 
     private static let handlers: [String: Handler] = [
+        ChatWorkToolRegistry.toolName: { call, context in
+            try await executeWorkTool(call: call, context: context)
+        },
         ChatImageToolRegistry.generateToolName: { call, context in
             try await executeImageTool(call: call, context: context)
         },
@@ -267,6 +294,9 @@ enum ChatToolDispatcher {
     ]
 
     private static let failureHandlers: [String: FailureHandler] = [
+        ChatWorkToolRegistry.toolName: { _, error in
+            ChatWorkToolRegistry.failurePayload(error: error)
+        },
         ChatImageToolRegistry.generateToolName: { name, error in
             failurePayloadForImageTool(name: name, error: error)
         },
@@ -326,8 +356,21 @@ enum ChatToolDispatcher {
     }
 
     private static func unknownToolFailurePayload(error: Error) -> String {
-        let payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        var payload = ChatUnknownToolResultPayload(ok: false, error: error.localizedDescription)
+        if error is ChatUnknownToolError {
+            payload.errorCode = "unknown_tool"
+            payload.recoveryHint = ChatUnknownToolError.recoveryHint
+        }
         return (try? encodedPayload(payload)) ?? #"{"ok":false,"error":"Unknown tool."}"#
+    }
+
+    static func isUnknownToolFailure(_ message: ChatTranscriptMessage) -> Bool {
+        guard message.role == .tool, message.toolStatus == .failed,
+              let payload = try? JSONDecoder().decode(ChatUnknownToolResultPayload.self, from: Data(message.content.utf8)),
+              !payload.ok else { return false }
+        if payload.errorCode == "unknown_tool" { return true }
+        guard let name = message.toolName else { return false }
+        return payload.error == ChatUnknownToolError.unknownTool(name).localizedDescription
     }
 
     private static func encodedPayload(_ payload: ChatUnknownToolResultPayload) throws -> String {
@@ -470,6 +513,17 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeWorkTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        guard let action = context.workAction else { throw ChatWorkError.unavailable }
+        let request = try ChatWorkRequest.decode(call)
+        try Task.checkCancellation()
+        let content = try await action(request)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
         ChatImageToolExecutor().failurePayload(operation: name, error: error)
     }
@@ -565,6 +619,8 @@ enum ChatToolPresentation {
             return serverStatsTitle(status: status)
         case ChatSwitchModelToolRegistry.toolName:
             return switchModelTitle(status: status)
+        case ChatWorkToolRegistry.toolName:
+            return "Work pane"
         case ChatWebSearchToolRegistry.toolName:
             return webSearchTitle(status: status)
         case ChatWebReadToolRegistry.toolName:
@@ -609,6 +665,8 @@ enum ChatToolPresentation {
                 return "chart.line.uptrend.xyaxis"
             case ChatSwitchModelToolRegistry.toolName:
                 return "arrow.triangle.2.circlepath"
+            case ChatWorkToolRegistry.toolName:
+                return "sidebar.right"
             case ChatWebSearchToolRegistry.toolName:
                 return "globe"
             case ChatWebReadToolRegistry.toolName:

@@ -48,16 +48,52 @@ jobs:
 
       - name: Commit history snapshots
         if: github.ref == 'refs/heads/main'
-        run: |
-          if git diff --quiet -- website/data/download-history.json website/data/star-history.json; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add website/data/download-history.json website/data/star-history.json
-          git commit -m "Update download and star history"
-          git pull --rebase origin main
-          git push origin HEAD:main
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execFileSync } = require("node:child_process");
+            const { readFileSync } = require("node:fs");
+            const paths = [
+              "website/data/download-history.json",
+              "website/data/star-history.json",
+            ];
+            const changedPaths = execFileSync(
+              "git", ["diff", "--name-only", "HEAD", "--", ...paths],
+              { encoding: "utf8" }
+            ).trim().split("\n").filter(Boolean);
+            if (changedPaths.length === 0) {
+              core.info("History snapshots are unchanged.");
+              return;
+            }
+
+            // GitHub signs API-authored commits to satisfy branch protection.
+            // Reject a stale checkout rather than overwrite newer history.
+            const expectedHeadOid = execFileSync(
+              "git", ["rev-parse", "HEAD"], { encoding: "utf8" }
+            ).trim();
+            const result = await github.graphql(`
+              mutation($input: CreateCommitOnBranchInput!) {
+                createCommitOnBranch(input: $input) {
+                  commit { url }
+                }
+              }
+            `, {
+              input: {
+                branch: {
+                  repositoryNameWithOwner: `${context.repo.owner}/${context.repo.repo}`,
+                  branchName: "main",
+                },
+                expectedHeadOid,
+                message: { headline: "Update download and star history" },
+                fileChanges: {
+                  additions: changedPaths.map((path) => ({
+                    path,
+                    contents: readFileSync(path).toString("base64"),
+                  })),
+                },
+              },
+            });
+            core.info(`Created signed history snapshot: ${result.createCommitOnBranch.commit.url}`);
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5

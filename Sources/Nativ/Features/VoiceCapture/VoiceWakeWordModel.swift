@@ -65,7 +65,7 @@ struct VoiceWakeWordEnergyGate {
 struct VoiceWakeWordWindow {
     private var samples = [Float](repeating: 0, count: 32_000)
     private var index = 0
-    private var sampleCount: Int64 = 0
+    private(set) var sampleCount: Int64 = 0
     private var frameEnergy = 0.0
     private var gate = VoiceWakeWordEnergyGate()
 
@@ -81,25 +81,41 @@ struct VoiceWakeWordWindow {
     }
 
     func snapshot() -> [Float] {
-        Array(samples[index...]) + Array(samples[..<index])
+        var result = [Float](repeating: 0, count: samples.count)
+        copySamples(into: &result)
+        return result
+    }
+
+    func copySamples(into output: inout [Float]) {
+        precondition(output.count == samples.count)
+        samples.withUnsafeBufferPointer { source in
+            output.withUnsafeMutableBufferPointer { destination in
+                destination.baseAddress!.update(from: source.baseAddress! + index, count: samples.count - index)
+                (destination.baseAddress! + samples.count - index).update(from: source.baseAddress!, count: index)
+            }
+        }
     }
 }
 
 /// Created and used only inside the listener's detached inference task.
 /// The fixed HN-2 model and frontend require no server or third-party runtime.
 final class VoiceWakeWordModel {
-    static let threshold: Float = 0.3
+    let threshold: Float
     private let model: MLModel
     private let features: VoiceWakeWordFeatures
     private let input: MLMultiArray
     private let provider: MLDictionaryFeatureProvider
     private var window = VoiceWakeWordWindow()
+    private var audio = [Float](repeating: 0, count: VoiceWakeWordFeatures.windowSamples)
     private var expectedOffset: Int64 = 0
 
-    init(url: URL) throws {
+    init(url: URL, computeUnits: MLComputeUnits = .cpuAndNeuralEngine) throws {
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = .cpuAndNeuralEngine
+        configuration.computeUnits = computeUnits
         model = try MLModel(contentsOf: url, configuration: configuration)
+        threshold = try Self.detectionThreshold(
+            metadata: model.modelDescription.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
+        )
         features = try VoiceWakeWordFeatures()
         guard let constraint = model.modelDescription.inputDescriptionsByName["mels"]?.multiArrayConstraint,
               constraint.shape.map(\.intValue) == [1, 128, 200],
@@ -112,28 +128,37 @@ final class VoiceWakeWordModel {
     }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Bool {
-        if chunk.offset != expectedOffset { window = VoiceWakeWordWindow() }
+        if chunk.offset != expectedOffset {
+            window = VoiceWakeWordWindow()
+            features.reset()
+        }
         expectedOffset = chunk.offset + Int64(chunk.samples.count)
         var detected = false
         for sample in chunk.samples {
             let shouldScore = window.append(sample)
             guard shouldScore, !detected else { continue }
             try Task.checkCancellation()
-            if try probability(audio: window.snapshot()) >= Self.threshold { detected = true }
+            window.copySamples(into: &audio)
+            if try probability(audio: audio, windowEnd: window.sampleCount) >= threshold { detected = true }
         }
         return detected
     }
 
-    func probability(audio: [Float]) throws -> Float {
-        let mels = try features.compute(audio)
-        let pointer = input.dataPointer.bindMemory(to: Float.self, capacity: mels.count)
-        let melStride = input.strides[1].intValue
-        let frameStride = input.strides[2].intValue
-        for mel in 0..<128 {
-            for frame in 0..<200 {
-                pointer[mel * melStride + frame * frameStride] = mels[mel * 200 + frame]
-            }
+    static func detectionThreshold(metadata: [String: String]) throws -> Float {
+        guard let value = metadata["default_threshold"],
+              let threshold = Float(value), threshold.isFinite, (0...1).contains(threshold)
+        else {
+            throw VoiceWakeWordModelError.invalidModel("The Hey Nativ model has a missing or invalid detection threshold.")
         }
+        return threshold
+    }
+
+    func probability(audio: [Float], windowEnd: Int64? = nil) throws -> Float {
+        try features.compute(
+            audio, windowEnd: windowEnd,
+            into: input.dataPointer.assumingMemoryBound(to: Float.self),
+            melStride: input.strides[1].intValue, frameStride: input.strides[2].intValue
+        )
         let result = try model.prediction(from: provider)
         guard let score = result.featureValue(for: "probability")?.multiArrayValue?[0].floatValue,
               score.isFinite, (0...1).contains(score)

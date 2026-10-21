@@ -37,6 +37,7 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
     case textToSpeech
     case embeddings
     case reranking
+    case decision
     case reasoning
     case tools
     case drafter
@@ -61,6 +62,8 @@ enum LocalModelCapability: String, CaseIterable, Hashable, Sendable {
             "Text-to-Speech"
         case .embeddings:
             "Embeddings"
+        case .decision:
+            "Decisions"
         case .reranking:
             "Reranking"
         case .reasoning:
@@ -122,10 +125,15 @@ struct LocalModel: Identifiable, Equatable, Sendable {
         source == .huggingFaceCache
     }
 
+    var onDemandCapability: LocalModelCapability? {
+        if capabilities.contains(.imageEditing) && !capabilities.contains(.imageGeneration) { return .imageEditing }
+        return nil
+    }
+
     var isEligibleForLanguageModelPicker: Bool {
         // Any text-generative model qualifies (chat + omni), even if it also carries an
         // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking) else {
+        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking), !capabilities.contains(.decision) else {
             return false
         }
         return capabilities.contains(.text)
@@ -257,7 +265,7 @@ enum DrafterModelCompatibility {
         "assistant", "dflash", "dflash2", "draft", "drafter", "draftmodel",
         "dspark", "eagle", "eagle3", "gguf", "mlx", "mtp", "speculator",
         "bf16", "f16", "float16", "fp16", "fp8", "int4", "int8", "mxfp4",
-        "mxfp8", "quantized",
+        "mxfp8", "nvfp4", "quantized",
     ]
 
     private static func pairingKey(for modelID: String) -> String {
@@ -1683,6 +1691,8 @@ enum LocalModelDiscovery {
         }
 
         switch primaryTask {
+        case .decision:
+            capabilities.insert(.decision)
         case .textToSpeech:
             capabilities.formUnion([.audio, .textToSpeech])
         case .speechToText:

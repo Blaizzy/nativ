@@ -66,11 +66,16 @@ extension ControlPanelView {
                 titleLeadingInset: 0,
                 onOpenRun: { applySidebarSelection(.chat($0)) },
                 onDeleteTaskChats: { taskID, sessionIDs, disposition in
-                    chat.handleScheduledTaskDeletion(
-                        taskID: taskID,
-                        linkedSessionIDs: sessionIDs,
-                        disposition: disposition
-                    )
+                    Task {
+                        do {
+                            try await chat.handleScheduledTaskDeletion(
+                                taskID: taskID, linkedSessionIDs: sessionIDs, disposition: disposition,
+                                confirmDiscard: confirmWorktreeDiscard
+                            )
+                        } catch {
+                            chatDeletionErrorMessage = error.localizedDescription
+                        }
+                    }
                 }
             )
         case .artifacts:
@@ -148,6 +153,11 @@ extension ControlPanelView {
         case .settings:
             SettingsView(
                 model: model,
+                chat: chat,
+                onOpenChat: { id in
+                    chat.selectSession(id)
+                    showChatWorkspace()
+                },
                 softwareUpdater: softwareUpdater,
                 launchAtLogin: launchAtLogin
             )

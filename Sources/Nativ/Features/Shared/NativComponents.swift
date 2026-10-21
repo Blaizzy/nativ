@@ -4,6 +4,10 @@ import SwiftUI
 struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     var gap: CGFloat = 8
+    var alignment: HorizontalAlignment = .center
+    var edge: VerticalEdge = .top
+    var cornerRadius: CGFloat = 18
+    var title: String = ""
     var showsBorder: Bool = true
     var isInteractive: Bool = true
     @ViewBuilder let content: () -> Content
@@ -21,6 +25,10 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             anchorView: anchorView,
             isPresented: $isPresented,
             gap: gap,
+            alignment: alignment,
+            edge: edge,
+            cornerRadius: cornerRadius,
+            title: title,
             showsBorder: showsBorder,
             isInteractive: isInteractive,
             content: content
@@ -38,11 +46,17 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
         private weak var anchorView: NSView?
         private var isPresented: Binding<Bool>?
         private var gap: CGFloat = 8
+        private var alignment: HorizontalAlignment = .center
+        private var edge: VerticalEdge = .top
 
         func update(
             anchorView: NSView,
             isPresented: Binding<Bool>,
             gap: CGFloat,
+            alignment: HorizontalAlignment,
+            edge: VerticalEdge,
+            cornerRadius: CGFloat,
+            title: String,
             showsBorder: Bool,
             isInteractive: Bool,
             content: () -> Content
@@ -50,13 +64,15 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             self.anchorView = anchorView
             self.isPresented = isPresented
             self.gap = gap
+            self.alignment = alignment
+            self.edge = edge
 
             guard isPresented.wrappedValue else {
                 dismiss(updateBinding: false)
                 return
             }
 
-            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder)
+            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder, cornerRadius: cornerRadius)
             if let hostingView {
                 hostingView.rootView = surface
             } else {
@@ -66,6 +82,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 self.panel = panel
             }
             panel?.ignoresMouseEvents = !isInteractive
+            panel?.title = title
             showPanel()
         }
 
@@ -153,8 +170,11 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             let screenRect = parentWindow.convertToScreen(windowRect)
             let shadowPadding = ArrowlessPopoverSurface<Content>.shadowPadding
             var origin = NSPoint(
-                x: screenRect.midX - (size.width / 2),
-                y: screenRect.maxY + gap - shadowPadding
+                x: alignment == .leading ? screenRect.minX - shadowPadding
+                    : alignment == .trailing ? screenRect.maxX - size.width + shadowPadding
+                    : screenRect.midX - (size.width / 2),
+                y: edge == .top ? screenRect.maxY + gap - shadowPadding
+                    : screenRect.minY - gap - size.height + shadowPadding
             )
 
             if let visibleFrame = parentWindow.screen?.visibleFrame {
@@ -193,9 +213,10 @@ private struct ArrowlessPopoverSurface<Content: View>: View {
 
     let content: Content
     let showsBorder: Bool
+    let cornerRadius: CGFloat
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
         content
             .clipShape(shape)

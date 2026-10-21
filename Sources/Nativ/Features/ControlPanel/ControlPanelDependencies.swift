@@ -21,6 +21,10 @@ final class ControlPanelSharedDependencies {
             persistedDataChanges.send(kind, originWindowID: artifactChangeOrigin)
         }
     )
+
+    init() {
+        systemMonitor.startDiagnosticHistory()
+    }
 }
 
 @MainActor
