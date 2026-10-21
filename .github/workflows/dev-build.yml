@@ -16,6 +16,8 @@ concurrency:
 jobs:
   build:
     runs-on: macos-26
+    env:
+      XCODE_DERIVED_DATA: build/NativDevelopmentDerivedData
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -36,24 +38,24 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            dist/mlx-vlm-server
+            ${{ env.XCODE_DERIVED_DATA }}/Build/Products/Debug/NativServerKit.framework/Versions/A/Resources/mlx-vlm-server
             .cache/python-build-standalone
           key: mlx-vlm-server-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('PythonDistribution/**') }}
 
       - name: Cache Swift package dependencies
         uses: actions/cache@v4
         with:
-          path: build/XcodeDerivedData/SourcePackages
-          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          path: ${{ env.XCODE_DERIVED_DATA }}/SourcePackages
+          key: spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Nativ.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            spm-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build app (unsigned Debug)
-        run: make xcode-build
-
-      - name: Test software update channels and hardware history
+      - name: Build app and test software update channels and hardware history (unsigned Debug)
         run: |
+          make xcode-generate
           xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
-            -derivedDataPath build/NativDevelopmentDerivedData \
-            CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
+            -derivedDataPath "$XCODE_DERIVED_DATA" -showBuildTimingSummary \
+            CODE_SIGNING_ALLOWED=NO NATIV_PRODUCT_NAME=Nativ COMPILER_INDEX_STORE_ENABLE=NO \
             -only-testing:NativTests/SoftwareUpdaterTests \
             -only-testing:NativTests/SystemTelemetryTests \
             -only-testing:NativTests/SystemMonitorObservationPolicyTests test
