@@ -82,6 +82,7 @@ struct ChatToolScope: Equatable, Sendable {
     let projectName: String?
     let rootPath: String?
     let projectToolsEnabled: Bool
+    var standaloneWriteRootPath: String? = nil
     var worktree: ChatGitWorktree? = nil
 
     var isProject: Bool {
@@ -92,12 +93,22 @@ struct ChatToolScope: Equatable, Sendable {
         isProject && projectToolsEnabled && rootPath != nil
     }
 
+    /// Whether folder-scoped tools have a root to run against: the project folder in a
+    /// project chat, the File Read folder otherwise.
+    var fileToolsAreAvailable: Bool {
+        isProject ? projectToolsAreAvailable : rootPath != nil
+    }
+
+    var fileWriteToolsAreAvailable: Bool {
+        isProject ? projectToolsAreAvailable : standaloneWriteRootPath != nil
+    }
+
     var fileReadRootPath: String? {
         rootPath
     }
 
     var fileWriteRootPath: String? {
-        rootPath
+        isProject ? rootPath : standaloneWriteRootPath
     }
 
     var terminalWorkingDirectory: String? {
@@ -142,8 +153,9 @@ struct ChatToolScope: Equatable, Sendable {
         Self(
             projectID: nil,
             projectName: nil,
-            rootPath: nil,
-            projectToolsEnabled: false
+            rootPath: settings.fileReadRootPath,
+            projectToolsEnabled: false,
+            standaloneWriteRootPath: settings.fileWriteRootPath
         )
     }
 }

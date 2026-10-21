@@ -3061,14 +3061,21 @@ final class ChatViewModel: ObservableObject {
                     }
                 }
 
-                if customTool == nil,
-                    !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false),
-                    ChatFileWriteApprovalPolicy.requiresApproval(
+                let mcpWriteRequiresApproval = toolCall.function?.name.map {
+                    mcpHost?.requiresFileWriteApproval(
+                        named: $0, argumentsJSON: toolCall.function?.arguments,
+                        projectScope: queuedRequest.toolScope
+                    ) ?? false
+                } ?? false
+                let nativeWriteRequiresApproval =
+                    !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false)
+                    && ChatFileWriteApprovalPolicy.requiresApproval(
                         call: toolCall,
                         rootPath: queuedRequest.toolScope.isProject
                             ? queuedRequest.toolScope.fileWriteRootPath
                             : queuedRequest.settings.fileWriteRootPath
                     )
+                if customTool == nil, mcpWriteRequiresApproval || nativeWriteRequiresApproval
                 {
                     updateToolMessage(
                         toolMessageID,
@@ -3307,8 +3314,12 @@ final class ChatViewModel: ObservableObject {
                             argumentsJSON: toolCall.function?.arguments,
                             projectScope: queuedRequest.toolScope,
                             currentProjectScope: { [self] in
-                                toolScope(for: queuedRequest.sessionID, settings: appModel?.settings ?? queuedRequest.settings)
-                            }
+                                toolScope(
+                                    for: queuedRequest.sessionID,
+                                    settings: appModel?.settings ?? queuedRequest.settings
+                                )
+                            },
+                            fileWriteApprovalGranted: fileWriteApprovalGranted
                         )
                         outcome = ChatToolExecutionOutcome(content: result, attachments: [])
                     } else {

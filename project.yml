@@ -285,6 +285,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatTerminalTool.swift
       - path: Sources/Nativ/Features/Files/FileReadAccessPolicy.swift
       - path: Sources/Nativ/Features/Files/SafeLocalFileReader.swift
+      - path: Sources/Nativ/Features/Files/SafeLocalDirectoryReader.swift
       - path: Sources/Nativ/Features/Files/FileSearchEngine.swift
       - path: Sources/Nativ/Features/Files/FileWriteAccessPolicy.swift
       - path: Sources/Nativ/Features/Files/SafeLocalFileWriter.swift
@@ -351,6 +352,7 @@ targets:
       - path: Sources/Nativ/Features/Models/HuggingFaceModelReadme.swift
       - path: Sources/Nativ/Features/Chat/ChatScreenCapture.swift
       - path: Sources/Nativ/Features/MCP/MCPHostManager.swift
+      - path: Sources/Nativ/Features/MCP/MCPFilesystemTools.swift
       - path: Sources/Nativ/Utilities/LaunchAtLoginController.swift
       - path: Sources/Nativ/Features/Routines/Routine.swift
       - path: Sources/Nativ/Features/Routines/RoutineStore.swift

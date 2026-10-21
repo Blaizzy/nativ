@@ -32,6 +32,7 @@ Append an object to `MCPCatalog.json`:
 | `summary` | yes | One line describing what the server does. |
 | `command` | yes | The stdio launcher — usually `npx`, `uvx`, or a binary. |
 | `args` | yes | Arguments passed to `command`. |
+| `requiresFolder` | no | `true` if the server takes its allowed root folder as a trailing argument. Leave the folder out of `args`: Nativ supplies the project folder in project chats or the authorized folder in standalone chats. CI appends a temp dir. |
 | `symbol` | no | SF Symbol shown until a logo asset exists (default `server.rack`). |
 | `tint` | no | Card tint: `blue`, `orange`, `teal`, `purple`, `green`, `red`, `pink`, `yellow`, `indigo`, `mint`, `primary`. |
 | `sourceURL` | no | Link to the server's source. |
@@ -43,11 +44,19 @@ Append an object to `MCPCatalog.json`:
 
 ### CI-only fields
 
+The bundled filesystem tools execute through Nativ's guarded file I/O. Standalone
+reads use **File Read** and mutations use **File Write**; project chats use the
+project folder for both. A read-only folder supports reads. Protected instruction
+files require the same confirmation as native writes. Directory listings and
+recursive searches exclude protected paths and symlinks, and unknown filesystem
+tools remain unavailable until Nativ implements their access policy. Editing a
+server's command or arguments opts out of this integration; Nativ preserves the
+custom launch arguments without adding a folder.
+
 These are read by the verifier, not the app:
 
 | Field | Notes |
 |---|---|
-| `requiresFolder` | `true` if the server takes a working directory as its last argument — CI appends a temp dir. |
 | `requiredEnv` | Env var names the server needs to start; CI supplies placeholder values (a healthy server lists its tools without valid credentials). |
 | `ciSkip` | `true` to opt out of the live check (last resort). |
 | `ciSkipReason` | Why the entry is skipped. |

@@ -50,13 +50,20 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build app and test software update channels and hardware history (unsigned Debug)
+      - name: Build app and test update channels, hardware history, and filesystem safety (unsigned Debug)
         run: |
           make xcode-generate
           xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
             -derivedDataPath "$XCODE_DERIVED_DATA" -showBuildTimingSummary \
             CODE_SIGNING_ALLOWED=NO NATIV_PRODUCT_NAME=Nativ COMPILER_INDEX_STORE_ENABLE=NO \
             -only-testing:NativTests/SoftwareUpdaterTests \
+            -only-testing:NativTests/MCPClientTests \
+            -only-testing:NativTests/MCPProjectFilesystemTests \
+            -only-testing:NativTests/MCPFilesystemSafetyTests \
+            -only-testing:NativTests/MCPServerCatalogTests \
+            -only-testing:NativTests/ChatProjectStoreTests \
+            -only-testing:NativTests/ChatFileWriteToolTests \
+            -only-testing:NativTests/ChatReadFileToolTests \
             -only-testing:NativTests/SystemTelemetryTests \
             -only-testing:NativTests/SystemMonitorIdentityTests \
             -only-testing:NativTests/SystemMonitorObservationPolicyTests test
