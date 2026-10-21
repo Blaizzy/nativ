@@ -1,12 +1,18 @@
 import Foundation
 
+protocol XMLTextParsingErrorReporting: XMLParserDelegate {
+    var error: DocumentTextExtractionError? { get }
+}
+
 enum XMLTextParsing {
     /// Parses with external entities disabled, which must hold for every document we open.
     static func parse(_ data: Data, with delegate: XMLParserDelegate) throws {
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { throw DocumentTextExtractionError.invalidDocument }
+        let parsed = parser.parse()
+        if let error = (delegate as? XMLTextParsingErrorReporting)?.error { throw error }
+        guard parsed else { throw DocumentTextExtractionError.invalidDocument }
     }
 
     static func localName(_ elementName: String) -> String {

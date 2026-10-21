@@ -26,7 +26,6 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
         let package = PackageParser()
         try XMLTextParsing.parse(packageData, with: package)
 
-        let base = (packagePath as NSString).deletingLastPathComponent
         let documents = package.spine.compactMap { package.manifest[$0] }
         guard !documents.isEmpty else {
             throw DocumentTextExtractionError.invalidDocument
@@ -35,10 +34,10 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
         var sections: [ExtractedDocumentSection] = []
         for (index, relativePath) in documents.enumerated() {
             try Task.checkCancellation()
-            let path = base.isEmpty
-                ? relativePath
-                : (base as NSString).appendingPathComponent(relativePath)
-            guard let entry = archive[path] ?? archive[relativePath] else { continue }
+            guard let path = Self.chapterPath(relativePath, relativeTo: packagePath) else {
+                throw DocumentTextExtractionError.invalidDocument
+            }
+            guard let entry = archive[path] else { continue }
             let chapter = try OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit)
             let delegate = ElementTextParser(
                 textElements: ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "span", "a", "td"],
@@ -62,6 +61,30 @@ actor EPUBDocumentTextExtractor: DocumentTextExtracting {
             sourceSectionCount: documents.count,
             sections: sections
         )
+    }
+
+    /// Manifest hrefs are URL references, while ZIP entry names are decoded paths.
+    private static func chapterPath(_ reference: String, relativeTo packagePath: String) -> String? {
+        guard let url = URLComponents(string: reference),
+            url.scheme == nil, url.host == nil,
+            let path = url.percentEncodedPath.removingPercentEncoding,
+            !path.isEmpty
+        else { return nil }
+
+        var components = path.hasPrefix("/")
+            ? []
+            : packagePath.split(separator: "/").dropLast().map(String.init)
+        for component in path.split(separator: "/") {
+            switch component {
+            case ".": continue
+            case "..":
+                guard !components.isEmpty else { return nil }
+                components.removeLast()
+            default:
+                components.append(String(component))
+            }
+        }
+        return components.isEmpty ? nil : components.joined(separator: "/")
     }
 
     private static func packagePath(in archive: Archive) throws -> String {

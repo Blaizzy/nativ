@@ -672,6 +672,9 @@ private enum FileReadContentPolicy {
 
     static func documentFormat(extensionName: String, data: Data) -> ChatDocumentFormat? {
         if extensionName == "pdf" || data.starts(with: Data("%PDF".utf8)) { return .pdf }
+        // CSV is already text. Extraction chunks can split a single row, so joining them
+        // would change source line numbers and pagination offsets.
+        if extensionName == "csv" { return nil }
         return ChatDocumentFormat.forFileExtension(extensionName)
     }
     static let binaryExtensions: Set<String> = [

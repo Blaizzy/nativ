@@ -203,6 +203,177 @@ final class DocumentTextExtractionTests: XCTestCase {
         }
     }
 
+    func testXLSXCombinesInlineRichTextRunsInOneCell() async throws {
+        let data = try spreadsheetData(rows: ["""
+            <row><c r="A1" t="inlineStr"><is>
+              <r><t>Hello </t></r><r><t>world</t></r>
+            </is></c><c r="B1"><v>42</v></c></row>
+            """])
+        let content = try await SpreadsheetDocumentTextExtractor().extract(
+            data: data, filename: "rich.xlsx", mimeType: "application/octet-stream"
+        )
+        XCTAssertEqual(content.text, "Hello world\t42")
+    }
+
+    func testXLSXEmptyCellsRetainTheirColumn() async throws {
+        for row in [
+            "<row><c t=\"inlineStr\"><is><t>A</t></is></c><c/><c><v>3</v></c></row>",
+            "<row><c r=\"A1\" t=\"inlineStr\"><is><t>A</t></is></c><c r=\"B1\"/><c r=\"C1\"><v>3</v></c></row>",
+        ] {
+            let content = try await SpreadsheetDocumentTextExtractor().extract(
+                data: spreadsheetData(rows: [row]),
+                filename: "empty-cell.xlsx", mimeType: "application/octet-stream"
+            )
+            XCTAssertEqual(content.text, "A\t\t3")
+        }
+    }
+
+    func testXLSXStopsBeforeExpandingAnOversizedSharedStringRow() async throws {
+        let data = try spreadsheetData(
+            rows: ["<row>" + String(repeating: "<c t=\"s\"><v>0</v></c>", count: 3) + "</row><malformed"],
+            sharedStrings: [String(repeating: "x", count: 64)]
+        )
+        // The budget must stop parsing at the oversized cell, before the malformed tail.
+        await assertArchiveTooLarge(data, filename: "repeated.xlsx", maximumOutputBytes: 128)
+    }
+
+    func testXLSXBoundsUTF8BytesAcrossSheets() async throws {
+        let data = try spreadsheetData(
+            rows: ["<row><c t=\"inlineStr\"><is><t>ééé</t></is></c></row>"],
+            sheetCount: 2
+        )
+        await assertArchiveTooLarge(data, filename: "unicode.xlsx", maximumOutputBytes: 13)
+        let content = try await SpreadsheetDocumentTextExtractor(maximumOutputBytes: 14).extract(
+            data: data, filename: "unicode.xlsx", mimeType: "application/octet-stream"
+        )
+        XCTAssertEqual(content.sections.map(\.text), ["ééé", "ééé"])
+    }
+
+    func testODSStopsBeforeExpandingAnOversizedRepeatedCell() async throws {
+        let data = try openDocumentData(content: """
+            <root xmlns:table="urn:table" xmlns:text="urn:text">
+              <table:table-row><table:table-cell table:number-columns-repeated="100">
+                <text:p>test</text:p>
+              </table:table-cell></table:table-row><malformed
+            """)
+        await assertArchiveTooLarge(data, filename: "repeated.ods", maximumOutputBytes: 128)
+    }
+
+    func testODSBoundsRepeatedRowsIncludingSeparators() async throws {
+        let data = try openDocumentData(content: """
+            <root xmlns:table="urn:table" xmlns:text="urn:text">
+              <table:table-row table:number-rows-repeated="2">
+                <table:table-cell><text:p>abc</text:p></table:table-cell>
+              </table:table-row>
+            </root>
+            """)
+        await assertArchiveTooLarge(data, filename: "rows.ods", maximumOutputBytes: 6)
+        let content = try await OpenDocumentTextExtractor(maximumOutputBytes: 7).extract(
+            data: data, filename: "rows.ods", mimeType: "application/octet-stream"
+        )
+        XCTAssertEqual(content.text, "abc\nabc")
+    }
+
+    func testODSBoundsCumulativeSpaceExpansionWithinACell() async throws {
+        let data = try openDocumentData(content: """
+            <root xmlns:table="urn:table" xmlns:text="urn:text">
+              <table:table-row><table:table-cell>
+                <text:p>x<text:s text:c="64"/><text:s text:c="65"/>y</text:p>
+              </table:table-cell></table:table-row>
+            </root>
+            """)
+        await assertArchiveTooLarge(data, filename: "spaces.ods", maximumOutputBytes: 128)
+    }
+
+    func testODSBudgetUsesUTF8Bytes() async throws {
+        let data = try openDocumentData(content: """
+            <root xmlns:table="urn:table" xmlns:text="urn:text">
+              <table:table-row><table:table-cell><text:p>éé</text:p></table:table-cell></table:table-row>
+            </root>
+            """)
+        await assertArchiveTooLarge(data, filename: "unicode.ods", maximumOutputBytes: 3)
+        let content = try await OpenDocumentTextExtractor(maximumOutputBytes: 4).extract(
+            data: data, filename: "unicode.ods", mimeType: "application/octet-stream"
+        )
+        XCTAssertEqual(content.text, "éé")
+    }
+
+    func testEPUBResolvesChapterURLsInReadingOrder() async throws {
+        let chapters = [
+            (href: "../Text/chapter%201.xhtml", path: "OPS/Text/chapter 1.xhtml", text: "First"),
+            (href: "../Text/../Text/chapter%232.xhtml#section", path: "OPS/Text/chapter#2.xhtml", text: "Second"),
+            (href: "../Text/%E6%97%A5%E6%9C%AC.xhtml", path: "OPS/Text/日本.xhtml", text: "Third"),
+        ]
+        let content = try await EPUBDocumentTextExtractor().extract(
+            data: epubData(packagePath: "OPS/Package/content.opf", chapters: chapters),
+            filename: "book.epub", mimeType: "application/epub+zip"
+        )
+        XCTAssertEqual(content.sections.map(\.text), ["First", "Second", "Third"])
+        XCTAssertEqual(content.sourceSectionCount, 3)
+    }
+
+    func testEPUBSupportsAPackageAtTheArchiveRoot() async throws {
+        let content = try await EPUBDocumentTextExtractor().extract(
+            data: epubData(
+                packagePath: "content.opf",
+                chapters: [(href: "./chapter.xhtml", path: "chapter.xhtml", text: "Chapter")]
+            ),
+            filename: "root.epub", mimeType: "application/epub+zip"
+        )
+        XCTAssertEqual(content.text, "Chapter")
+    }
+
+    func testEPUBRejectsExternalAndEscapingChapterURLs() async throws {
+        for href in ["https://example.com/chapter.xhtml", "//example.com/chapter.xhtml", "../../../chapter.xhtml"] {
+            let data = try epubData(
+                packagePath: "OPS/Package/content.opf",
+                chapters: [(href: href, path: "chapter.xhtml", text: "Outside")]
+            )
+            do {
+                _ = try await EPUBDocumentTextExtractor().extract(
+                    data: data, filename: "invalid.epub", mimeType: "application/epub+zip"
+                )
+                XCTFail("Expected an invalid document for \(href)")
+            } catch {
+                XCTAssertEqual(error as? DocumentTextExtractionError, .invalidDocument, href)
+            }
+        }
+    }
+
+    private func assertArchiveTooLarge(
+        _ data: Data, filename: String, maximumOutputBytes: Int,
+        file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        let extractor: any DocumentTextExtracting = filename.hasSuffix(".xlsx")
+            ? SpreadsheetDocumentTextExtractor(maximumOutputBytes: maximumOutputBytes)
+            : OpenDocumentTextExtractor(maximumOutputBytes: maximumOutputBytes)
+        do {
+            _ = try await extractor.extract(
+                data: data, filename: filename, mimeType: "application/octet-stream"
+            )
+            XCTFail("Expected the output budget to reject \(filename)", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? DocumentTextExtractionError, .archiveTooLarge, file: file, line: line)
+        }
+    }
+
+    private func epubData(
+        packagePath: String, chapters: [(href: String, path: String, text: String)]
+    ) throws -> Data {
+        var files = [
+            "META-INF/container.xml": "<container><rootfiles><rootfile full-path=\"\(packagePath)\"/></rootfiles></container>"
+        ]
+        let manifest = chapters.enumerated().map {
+            "<item id=\"chapter\($0.offset)\" href=\"\($0.element.href)\" media-type=\"application/xhtml+xml\"/>"
+        }.joined()
+        let spine = chapters.indices.map { "<itemref idref=\"chapter\($0)\"/>" }.joined()
+        files[packagePath] = "<package><manifest>\(manifest)</manifest><spine>\(spine)</spine></package>"
+        for chapter in chapters {
+            files[chapter.path] = "<html><body><p>\(chapter.text)</p></body></html>"
+        }
+        return try archiveData(files: files)
+    }
+
     private func powerpointData(slides: [Int: String]) throws -> Data {
         let url = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
@@ -231,24 +402,37 @@ final class DocumentTextExtractionTests: XCTestCase {
         return try Data(contentsOf: url)
     }
 
-    private func spreadsheetData(rows: [String]) throws -> Data {
+    private func spreadsheetData(
+        rows: [String], sharedStrings: [String] = [], sheetCount: Int = 1
+    ) throws -> Data {
+        let sheets = (1...sheetCount).map { "<sheet name=\"Sheet\($0)\" r:id=\"rId\($0)\"/>" }.joined()
+        let relationships = (1...sheetCount).map {
+            "<Relationship Id=\"rId\($0)\" Target=\"worksheets/sheet\($0).xml\"/>"
+        }.joined()
+        var files = [
+            "xl/workbook.xml": """
+                <workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                  <sheets>\(sheets)</sheets>
+                </workbook>
+                """,
+            "xl/_rels/workbook.xml.rels": "<Relationships>\(relationships)</Relationships>",
+        ]
+        for sheet in 1...sheetCount {
+            files["xl/worksheets/sheet\(sheet).xml"] = "<worksheet><sheetData>\(rows.joined())</sheetData></worksheet>"
+        }
+        if !sharedStrings.isEmpty {
+            files["xl/sharedStrings.xml"] = "<sst>" + sharedStrings.map { "<si><t>\($0)</t></si>" }.joined() + "</sst>"
+        }
+        return try archiveData(files: files)
+    }
+
+    private func archiveData(files: [String: String]) throws -> Data {
         let url = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString)
             .appendingPathExtension("xlsx")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let archive = try Archive(url: url, accessMode: .create)
-        let files = [
-            "xl/workbook.xml": """
-                <workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-                  <sheets><sheet name="Sheet1" r:id="rId1"/></sheets>
-                </workbook>
-                """,
-            "xl/_rels/workbook.xml.rels": """
-                <Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>
-                """,
-            "xl/worksheets/sheet1.xml": "<worksheet><sheetData>\(rows.joined())</sheetData></worksheet>",
-        ]
         for (path, contents) in files {
             let data = Data(contents.utf8)
             try archive.addEntry(

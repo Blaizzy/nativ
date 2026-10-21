@@ -9,6 +9,12 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
     nonisolated let formats: Set<ChatDocumentFormat> = [.spreadsheet]
 
     private static let partLimit: UInt64 = 64 * 1_024 * 1_024
+    private let maximumOutputBytes: Int
+
+    init(maximumOutputBytes: Int = 16 * 1_024 * 1_024) {
+        precondition(maximumOutputBytes > 0)
+        self.maximumOutputBytes = maximumOutputBytes
+    }
 
     func extract(
         data: Data,
@@ -36,17 +42,25 @@ actor SpreadsheetDocumentTextExtractor: DocumentTextExtracting {
         }
 
         var sections: [ExtractedDocumentSection] = []
+        var remainingOutputBytes = maximumOutputBytes
         for sheet in sheets {
             try Task.checkCancellation()
             guard let entry = archive[sheet.path] else { continue }
-            let parser = WorksheetParser(sharedStrings: sharedStrings)
+            let separatorBytes = sections.isEmpty ? 0 : 2
+            guard separatorBytes <= remainingOutputBytes else {
+                throw DocumentTextExtractionError.archiveTooLarge
+            }
+            let parser = WorksheetParser(
+                sharedStrings: sharedStrings,
+                maximumOutputBytes: remainingOutputBytes - separatorBytes
+            )
             try XMLTextParsing.parse(
                 OfficeArchive.data(for: entry, in: archive, limit: Self.partLimit),
                 with: parser
             )
-            if let error = parser.error { throw error }
             let text = parser.text
             guard !text.isEmpty else { continue }
+            remainingOutputBytes -= separatorBytes + parser.outputByteCount
             sections.append(ExtractedDocumentSection(
                 location: .named("Sheet \(sheet.name)"),
                 text: text
@@ -164,21 +178,25 @@ private final class SharedStringsParser: NSObject, XMLParserDelegate {
 }
 
 /// Emits one tab-separated line per row, preserving column gaps so columns stay aligned.
-private final class WorksheetParser: NSObject, XMLParserDelegate {
+private final class WorksheetParser: NSObject, XMLTextParsingErrorReporting {
     private static let maximumColumnCount = 16_384
-    private static let maximumOutputCharacters = 16 * 1_024 * 1_024
 
     private let sharedStrings: [String]
+    private let maximumOutputBytes: Int
     private var rows: [String] = []
-    private var outputCharacterCount = 0
+    private(set) var outputByteCount = 0
     private var cells: [String] = []
+    private var rowByteCount = 0
     private var value = ""
+    private var valueByteCount = 0
     private var readsValue = false
+    private var isReadingCell = false
     private var isSharedString = false
     private(set) var error: DocumentTextExtractionError?
 
-    init(sharedStrings: [String]) {
+    init(sharedStrings: [String], maximumOutputBytes: Int) {
         self.sharedStrings = sharedStrings
+        self.maximumOutputBytes = maximumOutputBytes
     }
 
     var text: String {
@@ -196,25 +214,36 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         switch XMLTextParsing.localName(elementName) {
         case "row":
             cells = []
+            rowByteCount = 0
         case "c":
+            isReadingCell = true
             isSharedString = (attributeDict["t"] ?? "") == "s"
+            value = ""
+            valueByteCount = 0
             if let reference = attributeDict["r"] {
-                guard let target = Self.column(for: reference) else {
-                    error = .invalidDocument
+                guard let target = Self.column(for: reference), target >= cells.count else {
+                    fail(.invalidDocument, parser: parser)
                     return
                 }
-                while cells.count < target { cells.append("") }
+                while cells.count < target, error == nil { appendCell("", parser: parser) }
             }
         case "v", "t":
-            readsValue = true
-            value = ""
+            readsValue = isReadingCell
         default:
             break
         }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if error == nil, readsValue { value.append(string) }
+        guard error == nil, readsValue else { return }
+        let count = string.utf8.count
+        let cellSeparatorBytes = cells.isEmpty ? 0 : 1
+        guard count <= remainingRowBytes - cellSeparatorBytes - valueByteCount else {
+            fail(.archiveTooLarge, parser: parser)
+            return
+        }
+        value.append(string)
+        valueByteCount += count
     }
 
     func parser(
@@ -226,28 +255,52 @@ private final class WorksheetParser: NSObject, XMLParserDelegate {
         guard error == nil else { return }
         switch XMLTextParsing.localName(elementName) {
         case "v", "t":
-            guard readsValue else { return }
             readsValue = false
+        case "c":
             if isSharedString, let index = Int(value), sharedStrings.indices.contains(index) {
-                cells.append(sharedStrings[index])
+                appendCell(sharedStrings[index], parser: parser)
             } else {
-                cells.append(value)
+                appendCell(value, parser: parser)
             }
+            isReadingCell = false
         case "row":
-            while let last = cells.last, last.isEmpty { cells.removeLast() }
-            let row = cells.joined(separator: "\t")
+            while cells.last?.isEmpty == true {
+                cells.removeLast()
+                if !cells.isEmpty { rowByteCount -= 1 }
+            }
             let separatorCount = rows.isEmpty ? 0 : 1
-            guard outputCharacterCount + separatorCount + row.count
-                    <= Self.maximumOutputCharacters
-            else {
-                error = .archiveTooLarge
+            guard separatorCount + rowByteCount <= maximumOutputBytes - outputByteCount else {
+                fail(.archiveTooLarge, parser: parser)
                 return
             }
-            rows.append(row)
-            outputCharacterCount += separatorCount + row.count
+            rows.append(cells.joined(separator: "\t"))
+            outputByteCount += separatorCount + rowByteCount
         default:
             break
         }
+    }
+
+    private var remainingRowBytes: Int {
+        maximumOutputBytes - outputByteCount - (rows.isEmpty ? 0 : 1) - rowByteCount
+    }
+
+    private func appendCell(_ text: String, parser: XMLParser) {
+        let separatorBytes = cells.isEmpty ? 0 : 1
+        let count = text.utf8.count
+        guard cells.count < Self.maximumColumnCount,
+            separatorBytes <= remainingRowBytes,
+            count <= remainingRowBytes - separatorBytes
+        else {
+            fail(.archiveTooLarge, parser: parser)
+            return
+        }
+        rowByteCount += separatorBytes + count
+        cells.append(text)
+    }
+
+    private func fail(_ error: DocumentTextExtractionError, parser: XMLParser) {
+        self.error = error
+        parser.abortParsing()
     }
 
     /// Zero-based column index from a cell reference such as `BC12`.
