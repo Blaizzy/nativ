@@ -1502,7 +1502,10 @@ struct ComposerModelPicker: View {
         .background {
             NativArrowlessPopoverPresenter(
                 isPresented: tooltipPresentation,
-                gap: 10
+                gap: 10,
+                // The tooltip's transparent shadow overlaps the hover target.
+                // Let mouse events pass through so it cannot dismiss itself.
+                isInteractive: false
             ) {
                 ComposerModelPickerTooltip(
                     title: pickerTooltip,
