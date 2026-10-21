@@ -58,4 +58,5 @@ jobs:
             CODE_SIGNING_ALLOWED=NO NATIV_PRODUCT_NAME=Nativ COMPILER_INDEX_STORE_ENABLE=NO \
             -only-testing:NativTests/SoftwareUpdaterTests \
             -only-testing:NativTests/SystemTelemetryTests \
+            -only-testing:NativTests/SystemMonitorIdentityTests \
             -only-testing:NativTests/SystemMonitorObservationPolicyTests test
