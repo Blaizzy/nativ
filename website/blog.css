@@ -71,6 +71,20 @@
 .article-body th:first-child { width: 30%; text-align: left; }
 .article-body tbody th { font-weight: 500; }
 .article-body tbody tr:nth-child(even) { background: #eae9e0; }
+.benchmark-comparison-block { margin: 30px 0; border: 1px solid var(--line); }
+.benchmark-comparison-block .article-table-wrap { margin: 0; border: 0; }
+.benchmark-heading { margin: 0; padding: 14px 18px; color: var(--ink); background: var(--paper-2); font: 500 10px/1.6 var(--mono); text-transform: uppercase; letter-spacing: .02em; }
+.article-body .embedding-comparison { --benchmark-label-width: 190px; min-width: 980px; table-layout: fixed; }
+.article-body .embedding-comparison th:first-child { position: sticky; left: 0; z-index: 1; width: var(--benchmark-label-width); background: var(--paper); box-shadow: 1px 0 var(--line); }
+.article-body .embedding-comparison thead th { padding: 15px 10px; font-size: 11px; }
+.article-body .embedding-comparison thead th:first-child { padding-left: 16px; background: var(--ink); }
+.embedding-comparison thead small { display: block; margin-top: 6px; font-size: 10px; font-weight: 400; }
+.article-body .embedding-comparison th:nth-child(2),
+.article-body .embedding-comparison td:nth-child(2) { position: sticky; left: var(--benchmark-label-width); z-index: 1; color: var(--ink); background: var(--acid); box-shadow: 1px 0 var(--line); }
+.embedding-comparison .benchmark-group-start > * { border-top: 2px solid var(--ink); }
+.benchmark-category { display: block; margin-bottom: 5px; font: 500 9px/1.5 var(--mono); text-transform: uppercase; letter-spacing: .08em; }
+.benchmark-scroll-hint { display: block; margin-top: 4px; color: var(--muted); text-transform: none; }
+.article-body .benchmark-notes { color: var(--muted); font-size: 12px; line-height: 1.8; }
 .article-figure { margin: 36px 0; }
 .article-figure img { width: 100%; height: auto; border: 1px solid #dce2ed; }
 .article-figure figcaption { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.7; }
@@ -78,6 +92,17 @@
 .article-end { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-top: 56px; padding-top: 28px; border-top: 1px solid var(--ink); }
 .article-end .text-link { margin: 0; }
 .article-end > span { color: var(--muted); font: 400 9px/1.5 var(--mono); }
+
+.phonon-pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.phonon-pipeline li { position: relative; display: grid; align-content: center; gap: 8px; padding: 20px 10px; border: 1px solid var(--line); background: var(--paper-2); text-align: center; }
+.phonon-pipeline li:nth-child(3) { background: var(--acid); }
+.phonon-pipeline li + li::before { content: "→"; position: absolute; left: -15px; top: 50%; transform: translateY(-50%); color: var(--ink); }
+.phonon-pipeline strong { font: 500 10px/1.5 var(--mono); text-transform: uppercase; }
+.phonon-pipeline span { font-size: 11px; line-height: 1.5; }
+.article-body .phonon-specs { min-width: 450px; }
+.article-body .phonon-specs th,
+.article-body .phonon-specs td { text-align: left; }
+.article-body .phonon-specs th:first-child { width: 40%; }
 
 @media (max-width: 1000px) {
   .article-layout { grid-template-columns: 170px minmax(0, 1fr); gap: 32px; }
@@ -104,6 +129,11 @@
   .article-source { display: inline-block; padding: 0; border: 0; }
 }
 @media (max-width: 520px) {
+  .phonon-pipeline { grid-template-columns: 1fr; gap: 22px; }
+  .phonon-pipeline li { padding: 16px; }
+  .phonon-pipeline li + li::before { content: "↓"; left: 50%; top: -24px; transform: translateX(-50%); }
+  .article-body .embedding-comparison { --benchmark-label-width: 125px; }
+  .article-body .embedding-comparison th:nth-child(2) { width: 110px; padding-inline: 6px; font-size: 10px; }
   .blog-card h2,
   .blog-card h3 { font-size: 30px; }
   .blog-card-subtitle { font-size: 27px; }

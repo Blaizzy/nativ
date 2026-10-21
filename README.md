@@ -116,6 +116,11 @@ links directly to filtered speech-model discovery. Open **Audio** to inspect dic
 analytics and history, select an installed speech-to-text model, choose the capture
 animation, or change either global shortcut.
 
+In **Audio → Library**, open a recording's **⋯ → Export** menu and choose **PDF**,
+**DOCX**, or **TXT** to save its summary and transcript together. Both must be
+available before exporting. An animated confirmation appears when the file is
+saved. Exports are created locally and do not require the original audio file.
+
 ### Build from source
 
 ```sh

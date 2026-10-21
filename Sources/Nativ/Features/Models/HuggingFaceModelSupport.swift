@@ -9,6 +9,7 @@ enum HuggingFaceModelSupport: Equatable, Sendable {
 
 struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
     let modelType: String?
+    let autoModel: String?
     let speculatorsModelType: String?
     let architectures: [String]
     let hasMalformedMetadata: Bool
@@ -53,6 +54,12 @@ struct HuggingFaceModelSupportConfiguration: Decodable, Equatable, Sendable {
         hasAudioConfig = try container.hasNonNullValue(forKey: .audioConfig)
         hasDFlashConfig = try container.hasNonNullValue(forKey: .dFlashConfig)
         let modelFile = try? container.decode(String.self, forKey: .modelFile)
+        let autoMap = try? container.decode([String: MLXJSONValue].self, forKey: .autoMap)
+        if case .string(let value) = autoMap?["AutoModel"] {
+            autoModel = value
+        } else {
+            autoModel = nil
+        }
         let hasAutoMap = try container.hasNonNullValue(forKey: .autoMap)
         usesCustomCode = modelFile?.isEmpty == false || hasAutoMap
     }
@@ -81,10 +88,15 @@ struct HuggingFaceModelSupportClassifier: Sendable {
             return .supported
         }
 
+        let resolvedType = configuration.modelType.flatMap {
+            registry.resolvedModelType(for: $0, autoModel: configuration.autoModel)
+        }
+        let hasRuntimeOverride = resolvedType != nil && resolvedType != configuration.modelType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
         let normalizedTags = Set(tags.map { $0.lowercased() })
-        if configuration.usesCustomCode
+        if !hasRuntimeOverride && (configuration.usesCustomCode
             || normalizedTags.contains("custom_code")
-            || normalizedTags.contains("trust_remote_code")
+            || normalizedTags.contains("trust_remote_code"))
         {
             return .unknown
         }
@@ -97,7 +109,7 @@ struct HuggingFaceModelSupportClassifier: Sendable {
         // when model_type is absent or empty.
         let modelType: String?
         if let primaryType = configuration.modelType, !primaryType.isEmpty {
-            modelType = primaryType
+            modelType = resolvedType ?? primaryType
         } else {
             modelType = configuration.speculatorsModelType
         }

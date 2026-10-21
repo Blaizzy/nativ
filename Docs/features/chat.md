@@ -11,6 +11,11 @@ exposes host capabilities to the model as consent-gated tools. Source lives in
   it renders in a collapsible panel separate from the final answer.
 - Per-response metrics (time to first token, decode speed, token counts) are recorded and
   surfaced from the analytics store.
+- Hover over a completed response and select **Read aloud** beside **Copy** to send
+  its text to the server's `/v1/audio/speech` endpoint and play the returned audio on
+  your Mac. Choose a text-to-speech model in **Models** first. The control shows
+  generation progress and becomes **Stop reading aloud** during playback;
+  selecting another response or leaving the chat stops the current audio.
 - During prefill, a “Reading prompt” status pill with a circular progress ring and
   percentage appears next to the model's name above the active assistant response,
   including responses that use tools. Hover over the pill for processed/total tokens.
@@ -32,8 +37,15 @@ under **Model Context** to choose when it triggers; hover the info icon for deta
 Its scale runs from 1–100%, with
 the handle limited to 20–90% (default 75%). Changes apply to
 the next message without restarting the server. With a 10,000-token context window,
-50% triggers at 5,000 input tokens. Compaction can happen earlier when needed to
-reserve the configured output budget and 1,024 tokens of summary headroom.
+50% triggers at 5,000 input tokens. **Max output** is an upper bound on generated
+tokens; it does not reserve input space or change the compaction threshold.
+The server counts the rendered input, compacts older history when the threshold
+is reached, then limits generation to the smaller of **Max output** and the
+remaining context capacity. The saved setting stays unchanged. Summary generation
+has its own server-managed budget. Compaction runs before each generation request,
+including subsequent tool rounds, rather than during a streaming response.
+If a response reaches the context limit, it stops with a length finish reason;
+the next request can compact the accumulated history.
 If neither server nor local model metadata gives a limit, Nativ uses an
 8,192-token fallback.
 
@@ -48,10 +60,17 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
-Compaction requires a server that supports the Responses compaction API. Unsupported
-servers return an error. To build against the unreleased compaction API in
-[mlx-vlm PR #2408](https://github.com/Blaizzy/mlx-vlm/pull/2408), point the bundle
-build at a checkout of that branch:
+PDF and other document excerpts are sent as current source context, separately
+from the saved conversation. Selecting different passages or fitting them to the
+remaining space preserves the summary; editing a covered message or replacing
+its attachment still rebuilds the history. Document fitting counts the summary
+and uncovered messages rather than the full pre-compaction transcript.
+
+Compaction requires a server that supports the Responses compaction API and
+budgets output from actual input usage. The bundled requirements pin the server
+revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
+External servers need that change too. To test a different checkout containing
+the fix, override the bundled source:
 
 ```sh
 MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
@@ -199,7 +218,12 @@ the work pane share the right side of chat.
   tabs are not source files.
 - **Websites:** switch generated HTML between source and an interactive preview,
   or browse an HTTP(S) URL, including a local development server. Remote pages have
-  back, forward, reload, and address controls. Cookies and website storage use a
+  back, forward, reload, and address controls. Agents can search Google in the same
+  tab with `chat_work` (`action: search`, `query: ...`) without a search API key.
+  Search requests start with results instead of guessed domains. Connection failures
+  and HTTP errors such as 404 include the failed URL, tab ID, and guidance to search
+  the original subject; the previous page is never returned as the failed destination.
+  Cookies and website storage use a
   persistent profile shared across tabs, chats, and windows, so website sign-ins
   survive closing tabs and restarting the app, until the website expires them.
   This profile is separate from the user's regular browser; Nativ Preview also
@@ -215,6 +239,15 @@ the work pane share the right side of chat.
   into a separate, output-only **Agent terminal** tab without changing the selected
   tab or opening a hidden work pane. Each native `terminal` command
   still runs in its own process and uses the existing command approval flow.
+  After two seconds, a command that is still running returns `running: true` and
+  a `terminal_id`, allowing the agent to continue. It can read output with
+  `chat_work.read` or stop the command with `chat_work.interrupt`. Servers and
+  watchers should use `terminal` with `background: true`; they stay alive until
+  stopped or the terminal closes. Other commands retain their execution timeout
+  (180 seconds by default). Running does not guarantee that a server is ready.
+  New commands use another agent terminal while an existing command is running.
+  Quitting Nativ stops managed commands, interactive shells, and their foreground
+  child processes before the app exits. Closing a window does not quit Nativ.
   Agents can also run commands in an existing interactive tab with `chat_work.run`,
   including in standalone chats. Each command shows its target and arguments for
   approval and passes the terminal command safety checks. Shell input or process
@@ -256,9 +289,9 @@ without requiring a pre-existing item ID; it reuses a saved tab with the same UR
 `navigate` with a `url` changes the selected website, or opens a website if no remote
 page is selected. An explicit `id` always targets that tab. Opening or creating a
 remote website waits for the page and returns its ID, loaded URL, text, and controls.
-`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, and `type` operate on
+`inspect`, `navigate`, `back`, `forward`, `reload`, `click`, `type`, and `upload` operate on
 the same browser instance displayed to the user and return a fresh page snapshot.
-Browser actions can omit `id` to use the selected remote website; `click` and `type`
+Browser actions can omit `id` to use the selected remote website; `click`, `type`, and `upload`
 instead resolve the tab from the supplied element ID, even after selecting another
 tab. The resolved target is shown and fixed before consent. The item list
 includes website URLs so agents can distinguish renamed or navigated tabs.
@@ -266,11 +299,26 @@ Browser element IDs expire after
 the next inspection or action, and changed inputs are rejected. All `chat_work`
 calls use the existing consent UI, showing the action arguments before execution.
 
+To attach an original chat file to an email or another website, the model calls
+`chat_work` with `action: "attachments"`, then `upload` with `attachment_ids` and
+the `element_id` of a file input from the latest page snapshot. The attachment list
+survives compaction and includes PDFs, supported Office/text documents, and images
+saved in this chat. Original bytes go directly from Nativ's media store to the
+website; filenames, MIME types, and IDs go to the model. Excerpts are never used as
+replacement files, and the tool does not accept arbitrary filesystem paths.
+Inspection includes hidden file inputs, their accepted types, and whether they
+allow multiple files. Upload replaces that input's selection, supports up to 20
+files totaling 64 MiB per action, and rejects changed inputs, missing attachments,
+and files from another chat. Consent shows the original filenames and destination.
+`selected_files` confirms the file selection; the model must check the website's
+upload status before sending or submitting. Upload itself does not click Send.
+
 This version supports up to 24 items per chat and 256 KB of text per item. Office
 documents and PDFs are not editable in this pane. Code-file previews do not
 execute code; use a terminal for local commands.
 Browser inspection covers the main document's DOM, not canvas controls, shadow
-roots, or embedded frames. Password and file inputs require direct user interaction.
+roots, or embedded frames. Password inputs require direct user interaction. File
+inputs accept chat attachments through `upload`; folder selection is not supported.
 HTML previews run scripts in a sandboxed frame without native host access.
 
 Sources: [`ChatWorkPane`](../../Sources/Nativ/Features/Chat/ChatWorkPane.swift),

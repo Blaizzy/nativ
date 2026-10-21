@@ -135,7 +135,7 @@ struct ChatWorkState: Codable, Equatable, Sendable {
             throw ChatWorkError.missingItem
         }
         guard items[index].revision == expectedRevision else {
-            throw ChatWorkError.conflict
+            throw ChatWorkError.revisionConflict(items[index])
         }
         guard items[index].canEdit else {
             throw ChatWorkError.invalid("This item has no editable source. Use the terminal tool for commands or create an HTML website to edit webpage source.")
@@ -171,9 +171,18 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         if !text.contains(where: { $0.isWhitespace }), isLocal || host.contains(".") {
             return try webURL("\(isLocal ? "http" : "https")://\(text)")
         }
-        var search = URLComponents(string: "https://www.google.com/search")!
-        search.queryItems = [URLQueryItem(name: "q", value: text)]
-        return try webURL(search.url!.absoluteString)
+        guard let url = searchURL(text) else {
+            throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
+        }
+        return url
+    }
+
+    static func searchURL(_ query: String) -> URL? {
+        guard var search = URLComponents(string: "https://www.google.com/search") else { return nil }
+        search.queryItems = [URLQueryItem(name: "q", value: query)]
+        // Search engines decode a literal + as a space in form-encoded queries.
+        search.percentEncodedQuery = search.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return search.url
     }
 
     private static func validateContent(_ content: String) throws {
@@ -193,12 +202,14 @@ struct ChatWorkState: Codable, Equatable, Sendable {
 
 enum ChatWorkError: LocalizedError {
     case invalid(String), missingItem, conflict, unavailable
+    case revisionConflict(ChatWorkItem)
 
     var errorDescription: String? {
         switch self {
         case .invalid(let message): message
         case .missingItem: "This work item is no longer available in this chat. List the work items again."
         case .conflict: "This item changed since it was read. Read the latest revision before updating it."
+        case .revisionConflict: "This item changed since it was read. Merge your changes with the current content before retrying."
         case .unavailable: "The chat work pane is unavailable in this context."
         }
     }

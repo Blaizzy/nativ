@@ -1,4 +1,5 @@
 import Darwin
+import Network
 import XCTest
 
 @testable import NativServerKit
@@ -265,6 +266,22 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
         XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
+    }
+
+    func testDecisionModelSelectionPersistsSeparatelyFromChat() throws {
+        var settings = NativSettings(languageModelID: "org/chat")
+        settings.setModelID("  org/decision  ", for: .decision)
+        let normalized = settings.normalized()
+        let decoded = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(normalized))
+        XCTAssertEqual(decoded.modelID(for: .decision), "org/decision")
+        XCTAssertEqual(decoded.languageModelID, "org/chat")
+        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--decision-model", "org/decision"))
+        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--model", "org/chat"))
+        XCTAssertFalse(decoded.hasSameLaunchConfiguration(as: NativSettings(languageModelID: "org/chat")))
+        settings.setModelID(" ", for: .decision)
+        XCTAssertFalse(settings.launchArguments.contains("--decision-model"))
+        let legacy = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
+        XCTAssertNil(legacy.decisionModelID)
     }
 
     func testEmbeddingModelSlotRoundTripsAndRequiresRestart() throws {
@@ -1296,6 +1313,419 @@ final class ServerPortProbeTests: XCTestCase {
     }
 }
 
+@MainActor
+final class ChatTimeoutTests: XCTestCase {
+    func testPreferencesMigrateAndRoundTripWithoutChangingServerArguments() throws {
+        for json in ["{}", "{\"chatResponseTimeout\":123}"] {
+            let settings = try JSONDecoder().decode(NativSettings.self, from: Data(json.utf8))
+            XCTAssertEqual(settings.chatResponseTimeout, .tenMinutes)
+        }
+        let defaults = NativSettings()
+        for timeout in NativChatTimeout.allCases {
+            var settings = defaults
+            settings.chatResponseTimeout = timeout
+            let decoded = try PropertyListDecoder().decode(
+                NativSettings.self, from: PropertyListEncoder().encode(settings)
+            ).normalized()
+            XCTAssertEqual(decoded.chatResponseTimeout, timeout)
+            XCTAssertEqual(decoded.launchArguments, defaults.normalized().launchArguments)
+            if timeout == .unlimited {
+                XCTAssertEqual(timeout.resourceTimeout, .greatestFiniteMagnitude)
+            } else {
+                XCTAssertGreaterThan(timeout.resourceTimeout, timeout.idleTimeout)
+            }
+        }
+    }
+
+    func testSelectedTimeoutReachesBothWireRequests() throws {
+        let url = URL(string: "http://127.0.0.1:8080")!
+        for timeout in NativChatTimeout.allCases {
+            let responses = NativResponsesClient(
+                baseURL: url, tenant: "test", idleTimeout: timeout.idleTimeout,
+                resourceTimeout: timeout.resourceTimeout
+            )
+            let chat = NativChatClient(
+                baseURL: url, idleTimeout: timeout.idleTimeout, resourceTimeout: timeout.resourceTimeout
+            )
+            XCTAssertEqual(try responses.makeResponseRequest(request, input: [], compactThreshold: 1000).timeoutInterval, timeout.idleTimeout)
+            XCTAssertEqual(try chat.makeURLRequest(payload: request, accepts: "text/event-stream").timeoutInterval, timeout.idleTimeout)
+            XCTAssertEqual(try chat.makePromptTokenCountURLRequest(for: request).timeoutInterval, 10)
+        }
+    }
+
+    func testLongerIdleWaitAllowsSilentPrefillOnBothTransports() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [2])
+        let url = try await server.start()
+        defer { server.stop() }
+        for responses in [true, false] {
+            do {
+                _ = try await completion(url: url, responses: responses, idle: 1, resource: 10)
+                XCTFail("A silent prefill should exceed the short idle timeout")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+            let result = try await completion(url: url, responses: responses, idle: 4, resource: 10)
+            XCTAssertEqual(result.content, "Done")
+        }
+    }
+
+    func testIncomingDataResetsIdleWaitAndResourceCapIsSeparate() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [0.6, 1.2, 1.8, 2.4])
+        let url = try await server.start()
+        defer { server.stop() }
+        for responses in [true, false] {
+            let result = try await completion(url: url, responses: responses, idle: 1.5, resource: 5)
+            XCTAssertEqual(result.content, "Done")
+            do {
+                _ = try await completion(url: url, responses: responses, idle: 4, resource: 1)
+                XCTFail("The overall resource cap should still be enforced")
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .timedOut)
+            }
+        }
+    }
+
+    func testUnlimitedRequestsCanCompleteAndBeCancelled() async throws {
+        let server = try ChatTimeoutHTTPFixture(delays: [2])
+        let url = try await server.start()
+        defer { server.stop() }
+        let unlimited = NativChatTimeout.unlimited
+        for responses in [true, false] {
+            let result = try await completion(
+                url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+            )
+            XCTAssertEqual(result.content, "Done")
+            let task = Task {
+                try await completion(
+                    url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+                )
+            }
+            try await Task.sleep(for: .milliseconds(200))
+            task.cancel()
+            do {
+                _ = try await task.value
+                XCTFail("An unlimited request must remain cancellable")
+            } catch is CancellationError {
+            } catch let error as URLError {
+                XCTAssertEqual(error.code, .cancelled)
+            }
+        }
+    }
+
+    private var request: MLXChatCompletionRequest {
+        .init(model: "test", messages: [.init(role: "user", content: "Hello")],
+              maxTokens: 16, temperature: 0, topK: 0, topP: 1, minP: 0)
+    }
+
+    private func completion(url: URL, responses: Bool, idle: TimeInterval, resource: TimeInterval) async throws -> MLXChatCompletion {
+        if responses {
+            return try await NativResponsesClient(
+                baseURL: url, tenant: "test", idleTimeout: idle, resourceTimeout: resource
+            ).streamResponse(request, input: [], compactThreshold: 1000, onEvent: { _ in }).completion
+        }
+        return try await NativChatClient(
+            baseURL: url, idleTimeout: idle, resourceTimeout: resource
+        ).streamChat(request, onEvent: { _ in })
+    }
+}
+
+@MainActor
+private final class ChatTimeoutHTTPFixture {
+    private let listener: NWListener
+
+    init(delays: [TimeInterval]) throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            Self.receive(connection, buffered: Data(), delays: delays)
+        }
+    }
+
+    func start() async throws -> URL {
+        listener.start(queue: .global())
+        for _ in 0..<500 {
+            if case .ready = listener.state, let port = listener.port {
+                return URL(string: "http://127.0.0.1:\(port.rawValue)")!
+            }
+            if case .failed(let error) = listener.state { throw error }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw URLError(.timedOut)
+    }
+
+    func stop() { listener.cancel() }
+
+    nonisolated private static func receive(_ connection: NWConnection, buffered: Data, delays: [TimeInterval]) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, complete, error in
+            let request = buffered + (data ?? Data())
+            guard let headerRange = request.range(of: Data("\r\n\r\n".utf8)) else {
+                if complete || error != nil { connection.cancel() }
+                else { receive(connection, buffered: request, delays: delays) }
+                return
+            }
+            let headers = String(decoding: request[..<headerRange.lowerBound], as: UTF8.self)
+            let length = headers.components(separatedBy: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces)) } ?? 0
+            guard request.count >= headerRange.upperBound + length else {
+                if complete || error != nil { connection.cancel() }
+                else { receive(connection, buffered: request, delays: delays) }
+                return
+            }
+            let responses = headers.hasPrefix("POST /v1/responses ")
+            let body = responses
+                ? "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Done\"}]}]}}\n\n"
+                : "data: {\"choices\":[{\"delta\":{\"content\":\"Done\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            connection.send(content: Data("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n".utf8), completion: .contentProcessed { _ in })
+            for (index, delay) in delays.enumerated() {
+                let last = index == delays.count - 1
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    connection.send(content: Data((last ? body : ": keep-alive\n\n").utf8), completion: .contentProcessed { _ in
+                        if last { connection.cancel() }
+                    })
+                }
+            }
+        }
+    }
+}
+
 private enum SocketTestError: Error {
     case operation(String, Int32)
+}
+
+final class NativDecisionClientTests: XCTestCase {
+    private func client(path: String = "") -> NativDecisionClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [DecisionURLProtocol.self]
+        return NativDecisionClient(
+            baseURL: URL(string: "https://decision.test/\(path)")!, apiKey: " test-key ",
+            session: URLSession(configuration: configuration)
+        )
+    }
+
+    func testDecisionRequestAndTypedResponse() async throws {
+        let response = try await client().predict(
+            model: "test/decision", state: .object(["action": .string("Next page")]),
+            questions: ["permission": .init(instructions: "Classify the action", criteria: .array([
+                .string("allow"), .string("ask"), .string("deny"),
+            ]))]
+        )
+        XCTAssertEqual(response.model, "test/decision")
+        XCTAssertEqual(response.answers["permission"]?.value, .string("allow"))
+        XCTAssertEqual(response.answers["permission"]?.probabilities?["allow"], 0.9)
+    }
+
+    func testHTTPAndMissingAnswersAreErrors() async {
+        for path in ["failure", "missing"] {
+            do {
+                _ = try await client(path: path).predict(
+                    state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
+                )
+                XCTFail("Expected an error for \(path)")
+            } catch let error as NativDecisionError {
+                switch (path, error) {
+                case ("failure", .httpStatus(400, _)), ("missing", .invalidResponse): break
+                default: XCTFail("Unexpected error: \(error)")
+                }
+            } catch { XCTFail("Unexpected error: \(error)") }
+        }
+    }
+
+    func testCancelledRequestDoesNotReachTransport() async {
+        let decisionClient = client(path: "cancelled")
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await decisionClient.predict(
+                state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+    }
+
+    func testEmptyRequestIsRejected() async {
+        do {
+            _ = try await client().predict(questions: [:])
+            XCTFail("Expected invalid request")
+        } catch NativDecisionError.invalidRequest {} catch { XCTFail("\(error)") }
+    }
+
+    func testDecisionResponseValidationRejectsInvalidTypesLabelsAndRanges() throws {
+        let choice = NativDecisionQuestion(instructions: "Choose", criteria: .array([.string("A"), .string("B")]))
+        let score = NativDecisionQuestion(type: .score, instructions: "Rate", criteria: .array([.string("Low"), .string("High")]))
+        let boolean = NativDecisionQuestion(type: .bool, instructions: "Yes?")
+        let cases: [(NativDecisionQuestion, String)] = [
+            (choice, #"{"type":"bool","value":true}"#),
+            (choice, #"{"type":"choice","value":"C"}"#),
+            (choice, #"{"type":"choice","value":"A","probabilities":{"A":1.2}}"#),
+            (choice, #"{"type":"choice","value":"A","probabilities":{"C":0.5}}"#),
+            (score, #"{"type":"score","value":2}"#),
+            (score, #"{"type":"score","value":-1}"#),
+            (boolean, #"{"type":"bool","value":"true"}"#),
+            (boolean, #"{"type":"bool","value":true,"probability":-0.2}"#),
+        ]
+        for (question, answer) in cases {
+            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
+            let response = try JSONDecoder().decode(NativDecisionResponse.self, from: data)
+            XCTAssertThrowsError(try response.validate(questions: ["answer": question]))
+        }
+        for (question, answer) in [
+            (score, #"{"type":"score","value":0.75,"probabilities":{"0":0.25,"1":0.75}}"#),
+            (boolean, #"{"type":"bool","value":true,"probability":0.9}"#),
+        ] {
+            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
+            XCTAssertNoThrow(try JSONDecoder().decode(NativDecisionResponse.self, from: data).validate(questions: ["answer": question]))
+        }
+    }
+
+    func testDecisionPreloadReadsRuntimeModelRegistry() throws {
+        let loaded = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_model":null,"loaded_models":{"decision":{"model":"LiquidAI/d1-3B","adapter":null,"model_kind":"decision"},"stt":{"model":"test/speech","adapter":null}},"preload_failures":{}}"#.utf8
+        ))
+        XCTAssertEqual(loaded.loadedDecisionModel, "LiquidAI/d1-3B")
+        XCTAssertNil(loaded.loadedModel)
+        XCTAssertNil(loaded.decisionModelLoadError)
+        let failed = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_models":{},"preload_failures":{"decision":{"model":"test/decision","error":"Out of memory"}}}"#.utf8
+        ))
+        XCTAssertNil(failed.loadedDecisionModel)
+        XCTAssertEqual(failed.decisionModelLoadError, "Out of memory")
+    }
+
+    func testDecisionPreloadMetricsRemainBackwardCompatible() throws {
+        let legacy = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data("{}".utf8))
+        XCTAssertNil(legacy.loadedDecisionModel)
+        XCTAssertNil(legacy.decisionModelLoadError)
+        let failure = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
+            #"{"loaded_model":"test/chat","decision_model_load_error":"Cannot load decisions"}"#.utf8
+        ))
+        XCTAssertEqual(failure.loadedModel, "test/chat")
+        XCTAssertEqual(failure.decisionModelLoadError, "Cannot load decisions")
+    }
+}
+
+private final class DecisionURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let path = request.url!.path
+        let body: String
+        let status: Int
+        if path.hasPrefix("/failure/") {
+            body = #"{"detail":"Unsupported decision type"}"#
+            status = 400
+        } else if path.hasPrefix("/missing/") {
+            body = #"{"model":"test/decision","answers":{}}"#
+            status = 200
+        } else {
+            XCTAssertEqual(path, "/v1/decisions")
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+                let payload = try? JSONDecoder().decode(MLXJSONValue.self, from: data)
+                XCTAssertEqual(payload, .object([
+                    "model": .string("test/decision"), "state": .object(["action": .string("Next page")]),
+                    "questions": .object(["permission": .object([
+                        "type": .string("choice"), "instructions": .string("Classify the action"),
+                        "criteria": .array([.string("allow"), .string("ask"), .string("deny")]),
+                    ])]),
+                ]))
+            } else {
+                XCTFail("Missing request body")
+            }
+            body = #"{"model":"test/decision","answers":{"permission":{"type":"choice","value":"allow","probabilities":{"allow":0.9,"ask":0.08,"deny":0.02}}},"usage":{"input_tokens":42,"output_tokens":0}}"#
+            status = 200
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil
+        )!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+@MainActor
+final class DecisionRequestComposerTests: XCTestCase {
+    func testValidationRequiresContextQuestionAndDistinctChoices() {
+        let composer = DecisionRequestComposer()
+        XCTAssertNotNil(composer.validationMessage)
+        composer.context = "A customer asks about delivery."
+        composer.question = "Which department?"
+        composer.choices = "Sales\nSales"
+        XCTAssertNotNil(composer.validationMessage)
+        composer.choices = "Sales\nSupport"
+        XCTAssertNil(composer.validationMessage)
+        composer.answerType = .bool
+        composer.choices = ""
+        XCTAssertNil(composer.validationMessage)
+    }
+
+    func testRequestUsesTypedContextAndOrderedScale() async throws {
+        let composer = DecisionRequestComposer()
+        composer.context = "The delivery arrived a day late."
+        composer.question = "Rate the severity."
+        composer.answerType = .score
+        composer.choices = "Low\nMedium\nHigh"
+        let finished = expectation(description: "Request completed")
+        composer.run { state, question in
+            XCTAssertEqual(state, .string(composer.context))
+            XCTAssertEqual(question.type, .score)
+            XCTAssertEqual(question.criteria, .array([.string("Low"), .string("Medium"), .string("High")]))
+            defer { finished.fulfill() }
+            return try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
+                #"{"model":"fixture","answers":{"answer":{"type":"score","value":1}}}"#.utf8))
+        }
+        await fulfillment(of: [finished], timeout: 2)
+        await Task.yield()
+        XCTAssertEqual(composer.result?.answers["answer"]?.value, .number(1))
+        XCTAssertEqual(composer.resultChoices, ["Low", "Medium", "High"])
+        XCTAssertFalse(composer.isRunning)
+    }
+
+    func testCancellationKeepsBusyUntilWorkerCompletesAndDiscardsResult() async throws {
+        let composer = DecisionRequestComposer()
+        composer.context = "Context"
+        composer.question = "Question?"
+        composer.answerType = .bool
+        let started = expectation(description: "Worker started")
+        var continuation: CheckedContinuation<NativDecisionResponse, Never>?
+        composer.run { _, _ in
+            await withCheckedContinuation {
+                continuation = $0
+                started.fulfill()
+            }
+        }
+        await fulfillment(of: [started], timeout: 2)
+        composer.cancel()
+        XCTAssertTrue(composer.isRunning)
+        XCTAssertTrue(composer.isCancelling)
+        composer.run { _, _ in
+            XCTFail("A second request must remain blocked")
+            throw CancellationError()
+        }
+        let response = try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
+            #"{"model":"fixture","answers":{"answer":{"type":"bool","value":true}}}"#.utf8))
+        continuation?.resume(returning: response)
+        for _ in 0..<10 where composer.isRunning { await Task.yield() }
+        XCTAssertFalse(composer.isRunning)
+        XCTAssertFalse(composer.isCancelling)
+        XCTAssertNil(composer.result)
+        XCTAssertNil(composer.error)
+    }
 }

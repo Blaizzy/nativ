@@ -11,12 +11,37 @@ public final class NativResponsesClient: @unchecked Sendable {
     private let apiKey: String?
     private let tenant: String
     private let session: URLSession
+    private let idleTimeout: TimeInterval
+    private let ownsSession: Bool
 
-    public init(baseURL: URL, apiKey: String? = nil, tenant: String, session: URLSession = .shared) {
+    public init(
+        baseURL: URL,
+        apiKey: String? = nil,
+        tenant: String,
+        idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout,
+        session: URLSession? = nil
+    ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tenant = tenant
-        self.session = session
+        self.idleTimeout = idleTimeout
+        self.ownsSession = session == nil
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = idleTimeout
+            configuration.timeoutIntervalForResource = resourceTimeout
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
+        }
     }
 
     public func contextLimit(for model: String) async throws -> Int? {
@@ -27,8 +52,15 @@ public final class NativResponsesClient: @unchecked Sendable {
         return health["effective_context_limit"]?.intValue
     }
 
+    /// Count the same capsule, conversation tail, and current context used for generation.
+    public func countInputTokens(
+        for request: MLXChatCompletionRequest, input: [MLXJSONValue]
+    ) async throws -> Int? {
+        try await countInputTokens(makeResponseRequest(request, input: input, compactThreshold: 1))
+    }
+
     public static func inputItems(_ messages: [MLXChatMessage]) throws -> [MLXJSONValue] {
-        try messages.map { message in
+        try conversationMessages(messages).map { message in
             // Preserve the server's chat-message extensions for reasoning and grouped tool calls.
             var item = try JSONDecoder().decode(
                 [String: MLXJSONValue].self, from: JSONEncoder().encode(message)
@@ -36,6 +68,14 @@ public final class NativResponsesClient: @unchecked Sendable {
             item["type"] = .string("message")
             return .object(item)
         }
+    }
+
+    public static func conversationMessages(_ messages: [MLXChatMessage]) -> [MLXChatMessage] {
+        messages.filter { !isInstruction($0) }
+    }
+
+    private static func isInstruction(_ message: MLXChatMessage) -> Bool {
+        message.role == "system" || message.role == "developer"
     }
 
     func makeResponseRequest(
@@ -49,7 +89,12 @@ public final class NativResponsesClient: @unchecked Sendable {
         payload.removeValue(forKey: "messages")
         payload.removeValue(forKey: "stream_options")
         payload["max_output_tokens"] = payload.removeValue(forKey: "max_tokens")
-        payload["input"] = .array(input)
+        let instructions = request.messages.filter(Self.isInstruction)
+            .compactMap(\.textContent).filter { !$0.isEmpty }.joined(separator: "\n\n")
+        if !instructions.isEmpty {
+            payload["instructions"] = .string(instructions)
+        }
+        payload["input"] = .array(input + (try Self.inputItems(request.contextMessages)))
         payload["stream"] = .bool(true)
         payload["store"] = .bool(false)
         payload["context_management"] = .array([.object([
@@ -57,6 +102,7 @@ public final class NativResponsesClient: @unchecked Sendable {
             "compact_threshold": .number(Double(compactThreshold)),
         ])])
         var urlRequest = makeRequest(path: "v1/responses")
+        urlRequest.timeoutInterval = idleTimeout
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -75,12 +121,8 @@ public final class NativResponsesClient: @unchecked Sendable {
         let urlRequest = try makeResponseRequest(request, input: input, compactThreshold: compactThreshold)
         var inputTokens: Int?
         if let onCompaction {
-            var countRequest = urlRequest
-            countRequest.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
-            countRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-            countRequest.timeoutInterval = 10
             // Token counts are presentation data; an unavailable count must not block generation.
-            inputTokens = try? await countInputTokens(countRequest)
+            inputTokens = try? await countInputTokens(urlRequest)
             try Task.checkCancellation()
             if let inputTokens, inputTokens >= compactThreshold {
                 await onCompaction(inputTokens)
@@ -114,6 +156,10 @@ public final class NativResponsesClient: @unchecked Sendable {
     }
 
     private func countInputTokens(_ request: URLRequest) async throws -> Int? {
+        var request = request
+        request.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
         let (data, response) = try await session.data(for: request)
         try validate(response, body: String(decoding: data, as: UTF8.self))
         return try MLXJSONValue(jsonData: data)["input_tokens"]?.intValue
@@ -121,7 +167,7 @@ public final class NativResponsesClient: @unchecked Sendable {
 
     private func makeRequest(path: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.timeoutInterval = 600
+        request.timeoutInterval = 10
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(tenant, forHTTPHeaderField: "X-APC-Tenant")
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
@@ -139,6 +185,7 @@ public final class NativResponsesClient: @unchecked Sendable {
 struct MLXResponseStream {
     private(set) var response: MLXJSONValue?
     private var decodeRate: Double?
+    private var toolCalls = MLXChatToolCallAccumulator()
 
     mutating func consume(_ data: String) throws -> MLXChatStreamDelta? {
         if data == "[DONE]" { return nil }
@@ -157,10 +204,28 @@ struct MLXResponseStream {
             return MLXChatStreamDelta(content: event["delta"]?.stringValue, decodeTokensPerSecond: decodeRate)
         case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
             return MLXChatStreamDelta(reasoningContent: event["delta"]?.stringValue, decodeTokensPerSecond: decodeRate)
-        case "response.output_item.done":
-            if let item = event["item"], let call = Self.toolCall(item) {
-                return MLXChatStreamDelta(toolCalls: [call])
+        case "response.output_item.added", "response.output_item.done":
+            if let item = event["item"], var call = Self.toolCall(item) {
+                call.index = event["output_index"]?.intValue
+                if type == "response.output_item.added", item["arguments"] == nil {
+                    call.function?.arguments = ""
+                }
+                if let previous = toolCalls.toolCalls.first(where: { $0.id == call.id }) {
+                    let arguments = call.function?.arguments ?? ""
+                    let sent = previous.function?.arguments ?? ""
+                    guard arguments.utf8.starts(with: sent.utf8) else { return nil }
+                    call.function?.name = nil
+                    call.function?.arguments = String(decoding: arguments.utf8.dropFirst(sent.utf8.count), as: UTF8.self)
+                }
+                return toolDelta(call)
             }
+        case "response.function_call_arguments.delta":
+            guard let index = event["output_index"]?.intValue,
+                  let arguments = event["delta"]?.stringValue else { return nil }
+            return toolDelta(MLXChatToolCall(
+                index: index, id: nil, type: nil,
+                function: MLXChatFunctionCall(name: nil, arguments: arguments)
+            ))
         case "response.completed", "response.incomplete":
             response = event["response"]
             guard response != nil else { throw NativChatError.invalidResponse }
@@ -168,6 +233,11 @@ struct MLXResponseStream {
             break
         }
         return nil
+    }
+
+    private mutating func toolDelta(_ call: MLXChatToolCall) -> MLXChatStreamDelta {
+        toolCalls.merge([call])
+        return MLXChatStreamDelta(toolCalls: [call], decodeTokensPerSecond: decodeRate)
     }
 
     func result(elapsed: TimeInterval, inputTokensBeforeCompaction: Int? = nil) throws -> MLXResponseCompletion {

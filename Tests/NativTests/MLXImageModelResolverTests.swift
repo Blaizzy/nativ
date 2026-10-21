@@ -7,15 +7,18 @@ final class MLXImageModelResolverTests: XCTestCase {
         "bonsai",
         "ernie_image",
         "flux2",
+        "flux3",
         "ideogram4",
         "llada_image",
         "mage_flow",
+        "moss_image",
         "qwen_image",
         "z_image",
     ]
     private let editingModelTypes: Set<String> = [
         "ernie_image",
         "flux2",
+        "flux3",
         "llada_image",
         "mage_flow",
         "qwen_image",
@@ -109,6 +112,170 @@ final class MLXImageModelResolverTests: XCTestCase {
         XCTAssertFalse(
             resolver().isImageGenerationModel(
                 model: "black-forest-labs/FLUX.1-dev",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testFlux3RootPackageResolvesToGenerationAndEditing() throws {
+        try makeCompleteFlux3Fixture()
+
+        for model in [
+            "black-forest-labs/flux-3-image-klein",
+            "black-forest-labs/flux-3-image-klein-base",
+            "black-forest-labs/FLUX.3-klein",
+            "flux3-klein",
+            "local/renamed-checkpoint",
+        ] {
+            XCTAssertTrue(
+                resolver().isImageGenerationModel(
+                    model: model, at: temporaryRoot, fileManager: .default),
+                model
+            )
+            XCTAssertTrue(
+                resolver().isImageEditingModel(
+                    model: model, at: temporaryRoot, fileManager: .default),
+                model
+            )
+        }
+    }
+
+    func testFlux3RequiresCompleteRootPackage() throws {
+        for missingFile in [
+            "config.json", "model.safetensors", "ae.safetensors",
+            "text_encoder/config.json", "text_encoder/tokenizer.json",
+            "text_encoder/model-00001-of-00001.safetensors",
+        ] {
+            try makeCompleteFlux3Fixture()
+            try FileManager.default.removeItem(
+                at: temporaryRoot.appendingPathComponent(missingFile))
+
+            XCTAssertFalse(
+                resolver().isSupportedImageModel(
+                    model: "black-forest-labs/flux-3-image-klein",
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                missingFile
+            )
+        }
+    }
+
+    func testFlux3RejectsUnsupportedQuantizedPackage() throws {
+        try makeCompleteFlux3Fixture()
+        let configURL = temporaryRoot.appendingPathComponent("config.json")
+        var metadata = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: configURL)) as? [String: Any]
+        )
+        metadata["quantization"] = ["mode": "nvfp4"]
+        try writeJSON(metadata, to: "config.json")
+
+        XCTAssertFalse(
+            resolver().isSupportedImageModel(
+                model: "black-forest-labs/flux-3-image-klein",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testFlux3DiffusersLayoutIsNotAcceptedByFlux2Backend() throws {
+        try makeCompleteFlux2Fixture()
+        try writeJSON(
+            [
+                "_class_name": "Flux3ModularPipeline",
+                "transformer": ["diffusers", "Flux3Transformer2DModel"],
+                "vae": ["diffusers", "AutoencoderKLFlux2"],
+            ],
+            to: "model_index.json"
+        )
+        try writeJSON(["_class_name": "AutoencoderKLFlux2"], to: "vae/config.json")
+
+        XCTAssertFalse(
+            resolver().isSupportedImageModel(
+                model: "black-forest-labs/flux-3-image-klein",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testMOSSImagePipelineResolvesToGenerationOnly() throws {
+        try makeCompleteMOSSImageFixture()
+
+        for model in [
+            "OpenMOSS-Team/MOSS-Image-Base",
+            "OpenMOSS-Team/MOSS-Image-SFT",
+            "mlx-community/MOSS-Image-SFT-bf16",
+            "local/renamed-checkpoint",
+        ] {
+            XCTAssertTrue(
+                resolver().isImageGenerationModel(
+                    model: model, at: temporaryRoot, fileManager: .default),
+                model
+            )
+            XCTAssertFalse(
+                resolver().isImageEditingModel(
+                    model: model, at: temporaryRoot, fileManager: .default),
+                model
+            )
+        }
+    }
+
+    func testMOSSImageRequiresCompleteComponentLayout() throws {
+        for missingFile in [
+            "model_index.json", "scheduler/scheduler_config.json", "tokenizer/tokenizer.json",
+            "transformer/config.json", "transformer/model.safetensors",
+            "text_encoder/config.json", "text_encoder/model.safetensors",
+            "vae/config.json", "vae/model.safetensors",
+        ] {
+            try makeCompleteMOSSImageFixture()
+            try FileManager.default.removeItem(
+                at: temporaryRoot.appendingPathComponent(missingFile))
+
+            XCTAssertFalse(
+                resolver().isSupportedImageModel(
+                    model: "OpenMOSS-Team/MOSS-Image-SFT",
+                    at: temporaryRoot,
+                    fileManager: .default
+                ),
+                missingFile
+            )
+        }
+    }
+
+    func testMOSSImageNameDoesNotAcceptLanguageModelLayout() throws {
+        try writeJSON(["model_type": "moss"], to: "config.json")
+        try touch("model.safetensors")
+
+        XCTAssertFalse(
+            resolver().isSupportedImageModel(
+                model: "OpenMOSS-Team/MOSS-Image-SFT",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+    }
+
+    func testBundledManifestGatesNewImageBackends() throws {
+        let resolver = MLXImageModelResolver(
+            generationModelTypes: ["flux2"],
+            editingModelTypes: ["flux2"]
+        )
+        try makeCompleteFlux3Fixture()
+        XCTAssertFalse(
+            resolver.isSupportedImageModel(
+                model: "black-forest-labs/flux-3-image-klein",
+                at: temporaryRoot,
+                fileManager: .default
+            )
+        )
+        try FileManager.default.removeItem(at: temporaryRoot)
+        try makeCompleteMOSSImageFixture()
+        XCTAssertFalse(
+            resolver.isSupportedImageModel(
+                model: "OpenMOSS-Team/MOSS-Image-SFT",
                 at: temporaryRoot,
                 fileManager: .default
             )
@@ -335,7 +502,7 @@ final class MLXImageModelResolverTests: XCTestCase {
         let modelTypes = try Nativ.imageGenerationModelTypes()
         let bundledEditingTypes = try Nativ.imageEditingModelTypes()
 
-        XCTAssertTrue(editingModelTypes.isSubset(of: modelTypes))
+        XCTAssertTrue(generationModelTypes.isSubset(of: modelTypes))
         XCTAssertFalse(modelTypes.contains("diffusion_gemma"))
         XCTAssertTrue(editingModelTypes.isSubset(of: bundledEditingTypes))
     }
@@ -365,6 +532,41 @@ final class MLXImageModelResolverTests: XCTestCase {
         try touch("text_encoder/model.safetensors")
         try touch("vae/model.safetensors")
         try touch("tokenizer/tokenizer.json")
+    }
+
+    private func makeCompleteFlux3Fixture() throws {
+        try writeJSON(
+            [
+                "model": "flux-3-image-klein",
+                "dit": ["in_channels": ["image": 128, "image_cond": 128, "text": 20480]],
+                "text_encoder": ["layers": [4, 8, 12, 16, 20, 24, 28, 32]],
+            ],
+            to: "config.json"
+        )
+        try touch("model.safetensors")
+        try touch("ae.safetensors")
+        try writeJSON(["model_type": "qwen3_vl"], to: "text_encoder/config.json")
+        try touch("text_encoder/model-00001-of-00001.safetensors")
+        try touch("text_encoder/tokenizer.json")
+    }
+
+    private func makeCompleteMOSSImageFixture() throws {
+        try writeJSON(
+            [
+                "_class_name": "MOSSImagePipeline",
+                "transformer": ["pipeline_moss_image", "MOSSImageTransformer2DModel"],
+                "text_encoder": ["transformers", "Qwen3_5Model"],
+                "vae": ["diffusers", "AutoencoderKLFlux2"],
+            ],
+            to: "model_index.json"
+        )
+        try writeJSON([:], to: "scheduler/scheduler_config.json")
+        try touch("tokenizer/tokenizer.json")
+        for component in ["transformer", "text_encoder", "vae"] {
+            try writeJSON([:], to: "\(component)/config.json")
+            try touch("\(component)/model.safetensors")
+        }
+        try writeJSON(["_class_name": "AutoencoderKLFlux2"], to: "vae/config.json")
     }
 
     private func makeCompleteMageFlowFixture() throws {

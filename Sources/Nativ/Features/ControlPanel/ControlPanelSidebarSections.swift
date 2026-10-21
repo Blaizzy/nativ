@@ -7,14 +7,14 @@ import UniformTypeIdentifiers
 
 extension ControlPanelView {
     var projectsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             sidebarProjectsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
                 .padding(.bottom, 4)
 
             if !chromeState.sidebarProjectsCollapsed {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     if sidebarState.recents.projects.isEmpty {
                         emptyProjectsHint
                     } else {
@@ -44,7 +44,7 @@ extension ControlPanelView {
     @ViewBuilder
     func projectView(_ project: ChatProject) -> some View {
         let projectSessions = sessions(inProject: project.id)
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             ControlPanelProjectHeaderView(
                 project: project,
                 isAvailable: projects.isRootAvailable(for: project),
@@ -73,7 +73,7 @@ extension ControlPanelView {
             .padding(.trailing, 10)
 
             if !project.isCollapsed {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(projectSessions) { recent in
                         projectSessionRow(recent, project: project)
                     }
@@ -85,7 +85,7 @@ extension ControlPanelView {
     }
 
     var pinnedChats: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             sidebarSectionHeader(
                 title: "Pinned",
                 isCollapsed: chromeState.sidebarPinnedCollapsed,
@@ -125,7 +125,7 @@ extension ControlPanelView {
     }
 
     var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0) {
             sidebarRecentsHeader
                 .padding(.leading, 8)
                 .padding(.trailing, 10)
@@ -137,7 +137,7 @@ extension ControlPanelView {
             }
 
             if !chromeState.sidebarSessionsCollapsed {
-                VStack(alignment: .leading, spacing: 0) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(unpinnedSessions) { recent in
                         draggableRow(recent, isPinnedRow: false)
                             .overlay(alignment: .top) {

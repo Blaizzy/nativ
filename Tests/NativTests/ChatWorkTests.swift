@@ -3,6 +3,77 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testSearchPreservesLiteralPlusesWhenFormDecoded() throws {
+        for query in ["C++ template", "C%2B%2B template", "C++ & C# + 100% 日本語"] {
+            let urls = [
+                try XCTUnwrap(ChatWorkState.searchURL(query)),
+                try ChatWorkState.addressURL(query),
+                try XCTUnwrap(ChatWorkRequest(action: .search, query: query).navigationURL)
+            ]
+            for url in urls {
+                let encodedQuery = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery)
+                let decodedQuery = encodedQuery.replacingOccurrences(of: "+", with: " ").removingPercentEncoding
+                XCTAssertEqual(decodedQuery, "q=\(query)")
+            }
+        }
+        XCTAssertEqual(ChatWorkState.searchURL("C++ template")?.absoluteString,
+                       "https://www.google.com/search?q=C%2B%2B%20template")
+    }
+
+    func testSearchEncodesTheSubjectAndReusesTheFailedTab() throws {
+        let subject = "Example organization & founders + funding #2026?"
+        let arguments = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "action": "search", "query": subject
+        ]), as: UTF8.self)
+        let request = try ChatWorkRequest.decode(MLXChatToolCall(id: "search", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments)))
+        let url = try XCTUnwrap(request.navigationURL)
+        XCTAssertEqual(url.host, "www.google.com")
+        XCTAssertEqual(url.path, "/search")
+        XCTAssertEqual(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+                       [URLQueryItem(name: "q", value: subject)])
+        XCTAssertTrue(request.action.isBrowserAction)
+
+        var state = ChatWorkState()
+        let failed = try state.browserItem(for: ChatWorkRequest(action: .open, url: "https://missing.invalid"))
+        XCTAssertEqual(try state.browserItem(for: request).id, failed.id)
+        let document = try state.create(title: "Notes", kind: .document, content: "Keep this")
+        XCTAssertEqual(try state.browserItem(for: ChatWorkRequest(action: .search, id: failed.id, query: subject)).id, failed.id)
+        XCTAssertEqual(state.items.count, 2)
+        state.open(document.id)
+        let search = try state.browserItem(for: request)
+        XCTAssertEqual(search.url, url.absoluteString)
+        XCTAssertNotEqual(search.id, document.id)
+        XCTAssertEqual(state.items.first { $0.id == document.id }?.content, "Keep this")
+        let before = state
+        for query in [nil, "", " \n ", String(repeating: "x", count: 301)] as [String?] {
+            XCTAssertThrowsError(try state.browserItem(for: ChatWorkRequest(action: .search, query: query)))
+        }
+        XCTAssertThrowsError(try state.browserItem(for: ChatWorkRequest(action: .search, id: document.id, query: subject)))
+        XCTAssertEqual(state, before)
+    }
+
+    func testNavigationFailurePayloadProvidesRecoveryWithoutChangingOtherErrors() throws {
+        let id = UUID()
+        let failure = ChatWorkNavigationFailure(url: "https://missing.invalid", message: "Host not found", itemID: id)
+        let result = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: failure))
+        XCTAssertEqual(result["ok"] as? Bool, false)
+        XCTAssertEqual(result["loaded"] as? Bool, false)
+        XCTAssertEqual(result["id"] as? String, id.uuidString)
+        XCTAssertEqual(result["url"] as? String, failure.url)
+        XCTAssertEqual(result["error_code"] as? String, "navigation_failed")
+        XCTAssertNotNil(result["recovery_hint"])
+        XCTAssertNil(result["text"])
+        XCTAssertNil(result["elements"])
+
+        let invalid = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: ChatWorkError.conflict))
+        XCTAssertEqual(invalid["error"] as? String, ChatWorkError.conflict.localizedDescription)
+        XCTAssertNil(invalid["recovery_hint"], "Invalid arguments and edit conflicts must not trigger web searches")
+        XCTAssertNil(invalid["id"])
+        XCTAssertNil(invalid["revision"])
+        XCTAssertNil(invalid["content"])
+    }
+
     func testBrowserRequestsResolveURLsAndSelectedTabsWithoutGuessing() throws {
         var state = ChatWorkState()
         let url = "https://example.com/"
@@ -128,16 +199,32 @@ final class ChatWorkTests: XCTestCase {
         var state = ChatWorkState()
         let item = try state.create(title: "Notes", kind: .document, content: "Original")
         try state.update(id: item.id, content: "User edit", expectedRevision: 1, author: "You")
-        XCTAssertThrowsError(try state.execute(ChatWorkRequest(
-            action: .update, id: item.id, content: "Stale agent edit", expectedRevision: 1
-        ))) { XCTAssertTrue($0 is ChatWorkError) }
-        XCTAssertEqual(state.selectedItem?.content, "User edit")
-        XCTAssertEqual(state.selectedItem?.revision, 2)
-        let read = try json(state.execute(ChatWorkRequest(action: .read, id: item.id)))
-        XCTAssertEqual(read["revision"] as? Int, 2)
-        try state.execute(ChatWorkRequest(action: .update, id: item.id, content: "Merged edit", expectedRevision: 2))
+        let other = try state.create(title: "Other", kind: .document, content: "Unrelated content")
+        let before = state
+        var payload: [String: Any]?
+        do {
+            _ = try state.execute(ChatWorkRequest(action: .update, id: item.id,
+                                                  content: "Stale agent edit", expectedRevision: 1))
+            XCTFail("Expected a revision conflict")
+        } catch {
+            payload = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+        }
+        XCTAssertEqual(state, before)
+        let conflict = try XCTUnwrap(payload)
+        XCTAssertEqual(conflict["ok"] as? Bool, false)
+        XCTAssertEqual(conflict["error_code"] as? String, "revision_conflict")
+        XCTAssertEqual(conflict["id"] as? String, item.id.uuidString)
+        XCTAssertEqual(conflict["revision"] as? Int, 2)
+        XCTAssertEqual(conflict["content"] as? String, "User edit")
+        XCTAssertNotNil(conflict["recovery_hint"])
+        let id = try XCTUnwrap(UUID(uuidString: XCTUnwrap(conflict["id"] as? String)))
+        let content = try XCTUnwrap(conflict["content"] as? String) + "\nAgent addition"
+        let revision = try XCTUnwrap(conflict["revision"] as? Int)
+        try state.execute(ChatWorkRequest(action: .update, id: id, content: content, expectedRevision: revision))
+        XCTAssertEqual(state.selectedItem?.content, "User edit\nAgent addition")
         XCTAssertEqual(state.selectedItem?.revision, 3)
         XCTAssertEqual(state.selectedItem?.updatedBy, "Agent")
+        XCTAssertEqual(state.items.first { $0.id == other.id }?.content, "Unrelated content")
     }
 
     func testFailedUpdatesAreAtomic() throws {
@@ -264,6 +351,77 @@ final class ChatWorkTests: XCTestCase {
 
 @MainActor
 final class ChatWorkSessionTests: XCTestCase {
+    func testOriginalAttachmentsRemainDiscoverableAfterReloadAndUploadOnlyFromTheirSession() async throws {
+        let (root, store, original) = try fixture()
+        let bytes = Data("%PDF-1.7\nFull original document, beyond any excerpt.\n".utf8) + Data([0, 255, 128])
+        let id = UUID()
+        let asset = try MediaAssetStore.shared.store(bytes, id: id, mimeType: "application/pdf", filename: "Original.pdf")
+        defer {
+            if let url = MediaAssetStore.shared.fileURL(for: asset) { try? FileManager.default.removeItem(at: url) }
+        }
+        let attachment = ChatImageAttachment(id: id, filename: "Original.pdf", mimeType: "application/pdf", asset: asset)
+        var session = original
+        session.messages = [ChatTranscriptMessage(role: .user, content: "Attach this original", imageAttachments: [attachment])]
+        XCTAssertTrue(store.saveSession(session))
+        let chat = subject(root)
+        try await loaded(chat)
+        chat.selectSession(session.id)
+        let listed = try await chat.executeWorkAction(ChatWorkRequest(action: .attachments), in: session.id)
+        let entries = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(listed.utf8)) as? [[String: String]])
+        XCTAssertEqual(entries, [["attachment_id": id.uuidString, "filename": "Original.pdf", "mime_type": "application/pdf"]])
+        XCTAssertFalse(listed.contains(bytes.base64EncodedString()))
+        XCTAssertFalse(listed.contains(asset.relativePath))
+
+        let opened = try json(await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Upload fixture",
+            kind: .website, content: "<input type='file' aria-label='Attach' style='display:none'>"), in: session.id))
+        let controls = try XCTUnwrap(opened["elements"] as? [[String: Any]])
+        let element = try XCTUnwrap(controls.first?["id"] as? String)
+        let request = ChatWorkRequest(action: .upload, elementID: element, attachmentIDs: [id])
+        let approved = try chat.resolvedWorkRequest(request, in: session.id)
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        XCTAssertEqual(approved.id, item.id)
+        let browser = chat.workBrowser(for: item, sessionID: session.id)
+        chat.createSession()
+        let otherID = try XCTUnwrap(chat.currentSessionID)
+        let otherFiles = try await chat.executeWorkAction(ChatWorkRequest(action: .attachments), in: otherID)
+        XCTAssertEqual(otherFiles, "[]")
+        XCTAssertThrowsError(try chat.resolvedWorkRequest(approved, in: otherID))
+        let result = try json(await chat.executeWorkAction(approved, in: session.id))
+        XCTAssertEqual((result["selected_files"] as? [[String: Any]])?.first?["attachment_id"] as? String, id.uuidString)
+        let uploaded = try await browser.webView.callAsyncJavaScript("""
+            return [...new Uint8Array(await document.querySelector('input').files[0].arrayBuffer())];
+            """, arguments: [:], in: nil, contentWorld: .page) as? [Int]
+        XCTAssertEqual(uploaded, bytes.map(Int.init))
+        chat.selectSession(session.id)
+        XCTAssertTrue(chat.removeAttachment(sessionID: session.id, messageID: session.messages[0].id, attachmentID: id))
+        XCTAssertThrowsError(try chat.resolvedWorkRequest(approved, in: session.id))
+        browser.stop()
+    }
+
+    func testUploadIDsRejectMissingDuplicateUnsupportedAndUnreadableFiles() async throws {
+        let attachment = ChatImageAttachment(filename: "Original.txt", mimeType: "text/plain", base64Data: "b3JpZ2luYWw=")
+        let unsupported = ChatImageAttachment(filename: "Program.exe", mimeType: "application/octet-stream", base64Data: "AA==")
+        let messages = [ChatTranscriptMessage(role: .user, content: "Files", imageAttachments: [attachment, unsupported])]
+        for ids: [UUID]? in [nil, [], [UUID()], [attachment.id, attachment.id], [unsupported.id], (0..<21).map { _ in UUID() }] {
+            XCTAssertThrowsError(try ChatWorkAttachments.resolve(ids, in: messages))
+        }
+        let missing = ChatImageAttachment(id: UUID(), filename: "Missing.pdf", mimeType: "application/pdf",
+            asset: MediaAssetReference(relativePath: "Objects/\(UUID()).pdf", byteCount: 100))
+        do {
+            _ = try await ChatWorkAttachments.load([missing])
+            XCTFail("Missing original files must fail, never upload an excerpt or empty substitute")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("could not be read")) }
+        let arguments = """
+            {"action":"upload","element_id":"snapshot:0","attachment_ids":["\(attachment.id.uuidString)"]}
+            """
+        let decoded = try ChatWorkRequest.decode(MLXChatToolCall(id: "upload", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments)))
+        XCTAssertTrue(decoded.action.isBrowserAction)
+        XCTAssertEqual(decoded.attachmentIDs, [attachment.id])
+        XCTAssertThrowsError(try ChatWorkRequest.decode(MLXChatToolCall(id: "upload", function:
+            MLXChatFunctionCall(name: "chat_work", arguments: arguments.replacingOccurrences(of: attachment.id.uuidString, with: "/etc/passwd")))))
+    }
+
     func testTabReorderingPreservesSelectionContentsAndSavedOrder() async throws {
         let (root, store, session) = try fixture()
         let chat = subject(root)
@@ -301,6 +459,91 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertTrue(try reopened.moveWorkTab(ids[0], to: ids[1], in: session.id))
         XCTAssertNil(reopened.workState.selectedID)
         XCTAssertEqual(reopened.workState.openIDs, [ids[0], ids[1]])
+    }
+
+    func testSaveConfirmationRequiresAPersistedWrite() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        var receipts: [ChatWorkItem] = []
+        let record: (ChatWorkItem) -> Void = { item in
+            receipts.append(item)
+            let file = chat.workFileURL(for: item)
+            XCTAssertEqual(file.flatMap { try? String(contentsOf: $0, encoding: .utf8) }, item.content)
+            XCTAssertEqual(store.loadSession(id: session.id)?.workState?.items.first { $0.id == item.id }, item)
+        }
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .create, title: "Notes.md",
+            kind: .document, content: "Original"), in: session.id, onSave: record)
+        let item = try XCTUnwrap(receipts.first)
+        XCTAssertEqual(receipts.count, 1)
+        receipts.removeAll()
+
+        for action in [ChatWorkRequest.Action.read, .list, .open] {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: action, id: item.id),
+                                                in: session.id, onSave: record)
+        }
+        XCTAssertTrue(receipts.isEmpty)
+        try chat.createWorkItem(title: "Other.md", kind: .document, content: "Unrelated")
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+            content: "Updated", expectedRevision: 1), in: session.id, onSave: record)
+        XCTAssertEqual(receipts.map(\.id), [item.id])
+        XCTAssertEqual(receipts.first?.revision, 2)
+        receipts.removeAll()
+
+        do {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                content: "Stale", expectedRevision: 1), in: session.id, onSave: record)
+            XCTFail("A stale update must fail")
+        } catch ChatWorkError.revisionConflict { }
+        XCTAssertTrue(receipts.isEmpty)
+
+        let sessionURL = store.sessionURL(for: session.id)
+        let saved = try Data(contentsOf: sessionURL)
+        try FileManager.default.removeItem(at: sessionURL)
+        try FileManager.default.createDirectory(at: sessionURL, withIntermediateDirectories: false)
+        do {
+            _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                content: "Cannot persist", expectedRevision: 2), in: session.id, onSave: record)
+            XCTFail("A persistence failure must not confirm a save")
+        } catch { }
+        XCTAssertTrue(receipts.isEmpty)
+        try FileManager.default.removeItem(at: sessionURL)
+        try saved.write(to: sessionURL)
+    }
+
+    func testConflictPayloadTracksExternalEditsAndSupportsRetryWithoutReadingAgain() async throws {
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        try chat.createWorkItem(title: "Notes.md", kind: .document, content: "Original")
+        let item = try XCTUnwrap(chat.workState.selectedItem)
+        let url = try XCTUnwrap(chat.workFileURL(for: item))
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id)
+        var revision = 1
+        var currentContent = "Original"
+        for newContent in ["First external edit", "Second external edit 📝"] {
+            try newContent.write(to: url, atomically: true, encoding: .utf8)
+            do {
+                _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+                    content: currentContent + "\nAgent addition", expectedRevision: revision), in: session.id)
+                XCTFail("A stale update must not overwrite an external edit")
+            } catch {
+                let conflict = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+                XCTAssertEqual(conflict["error_code"] as? String, "revision_conflict")
+                XCTAssertEqual(conflict["id"] as? String, item.id.uuidString)
+                XCTAssertEqual(conflict["revision"] as? Int, revision + 1)
+                XCTAssertEqual(conflict["content"] as? String, newContent)
+                revision = try XCTUnwrap(conflict["revision"] as? Int)
+                currentContent = try XCTUnwrap(conflict["content"] as? String)
+            }
+            XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), newContent)
+        }
+        let merged = currentContent + "\nAgent addition"
+        _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
+            content: merged, expectedRevision: revision), in: session.id)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), merged)
+        XCTAssertEqual(chat.workState.selectedItem?.revision, 4)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem?.content, merged)
     }
 
     func testSharedTerminalRunsInTheExistingShellAndKeepsConsentBoundToItsTarget() async throws {
@@ -426,6 +669,50 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertFalse(terminal.isRunning)
         XCTAssertFalse(chat.workState.openIDs.contains(item.id))
         XCTAssertNil(chat.workTerminals.existing(itemID: item.id, sessionID: original.id))
+    }
+
+    func testAgentCommandsYieldKeepSeparateTerminalsAndStopOnClose() async throws {
+        let (root, store, original) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let environment = ChatTerminalToolExecutor.scrubbedEnvironment(resolvedPath: "/usr/bin:/bin")
+        let background = TerminalProcessRequest(command: "printf ready; sleep 60", currentDirectoryURL: root,
+                                                timeout: 0.1, environment: environment, background: true)
+        let result = try await chat.runWorkTerminalCommand(background, in: original.id, yieldAfter: 0.3)
+        let id = try XCTUnwrap(result.terminalID)
+        let terminal = try XCTUnwrap(chat.workTerminals.existing(itemID: id, sessionID: original.id))
+        defer { terminal.stop() }
+        XCTAssertTrue(result.isRunning)
+        XCTAssertTrue(result.stdout.contains("ready"))
+        XCTAssertFalse(chat.workState.isVisible)
+        let next = try await chat.runWorkTerminalCommand(.init(command: "printf next", currentDirectoryURL: root,
+                                                              timeout: 5, environment: environment), in: original.id)
+        XCTAssertEqual(next.exitCode, 0)
+        XCTAssertEqual(next.stdout, "next")
+        XCTAssertTrue(terminal.isRunning, "A later tool call must not replace the server or its stop handler")
+        XCTAssertEqual(chat.workState.items.filter { $0.terminalCommand != nil }.count, 2)
+        let snapshot = try json(await chat.executeWorkAction(.init(action: .read, id: id), in: original.id))
+        XCTAssertEqual(snapshot["running"] as? Bool, true)
+        // After yielding, closing the tab still owns cancellation and persists final output.
+        chat.closeWorkItem(id)
+        for _ in 0..<200 {
+            if !terminal.isRunning { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(terminal.isRunning)
+        XCTAssertFalse(chat.workState.openIDs.contains(id))
+        XCTAssertTrue(store.loadSession(id: original.id)?.workState?.items.first { $0.id == id }?.content.contains("Stopped") == true)
+        let foreground = try await chat.runWorkTerminalCommand(.init(command: "sleep 5", currentDirectoryURL: root,
+            timeout: 0.3, environment: environment), in: original.id, yieldAfter: 0.1)
+        let foregroundID = try XCTUnwrap(foreground.terminalID)
+        let foregroundTerminal = try XCTUnwrap(chat.workTerminals.existing(itemID: foregroundID, sessionID: original.id))
+        defer { foregroundTerminal.stop() }
+        for _ in 0..<200 {
+            if !foregroundTerminal.isRunning { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(foregroundTerminal.isRunning)
+        XCTAssertEqual(foregroundTerminal.status, "Timed out", "Yielding must preserve foreground execution limits")
     }
 
     func testAgentTerminalStreamsAndPersistsInItsOriginatingChat() async throws {
@@ -640,7 +927,7 @@ final class ChatWorkSessionTests: XCTestCase {
             _ = try await chat.executeWorkAction(stale, in: session.id)
             XCTFail("An omitted ID must not bypass an intervening user edit")
         } catch {
-            guard case ChatWorkError.conflict = error else { return XCTFail("Expected a revision conflict: \(error)") }
+            guard case ChatWorkError.revisionConflict = error else { return XCTFail("Expected a revision conflict: \(error)") }
         }
         XCTAssertEqual(chat.workState.items.first { $0.id == first.id }?.content, "User edit")
         var missingID = ChatWorkState()
@@ -823,6 +1110,38 @@ final class ChatWorkSessionTests: XCTestCase {
         XCTAssertEqual(chat.workState.items.count, 1)
     }
 
+    func testAgentCanRecoverFromAnUnavailableWebsiteInTheSameTab() async throws {
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { server.stop() }
+        let (root, store, session) = try fixture()
+        let chat = subject(root)
+        try await loaded(chat)
+        let run = dispatcher(chat, sessionID: session.id, baseURL: base)
+        let unavailable = "http://127.0.0.1:1/unavailable"
+        var failedID: String?
+        // Opening the same failed URL must retain the recovery context and reuse its tab.
+        for _ in 0..<2 {
+            do {
+                _ = try await run(["action": "open", "url": unavailable])
+                XCTFail("An unavailable website must not be reported as loaded")
+            } catch {
+                let payload = try json(ChatToolDispatcher.failurePayload(toolName: "chat_work", error: error))
+                let id = try XCTUnwrap(payload["id"] as? String)
+                if let failedID { XCTAssertEqual(id, failedID) }
+                failedID = id
+                XCTAssertEqual(payload["url"] as? String, unavailable)
+                XCTAssertEqual(payload["loaded"] as? Bool, false)
+                XCTAssertNotNil(payload["recovery_hint"])
+            }
+        }
+        let recovered = try await run(["action": "navigate", "id": XCTUnwrap(failedID), "url": base.absoluteString])
+        XCTAssertEqual(recovered["title"] as? String, "Browser fixture")
+        XCTAssertEqual(recovered["id"] as? String, failedID)
+        XCTAssertEqual(chat.workState.items.count, 1)
+        XCTAssertEqual(store.loadSession(id: session.id)?.workState?.selectedItem?.url, base.absoluteString)
+    }
+
     private func dispatcher(_ chat: ChatViewModel, sessionID: UUID, baseURL: URL)
         -> ([String: Any]) async throws -> [String: Any] {
         var context = ChatToolExecutionContext(imageGenerationModelID: nil, baseURL: baseURL, apiKey: nil,
@@ -886,7 +1205,7 @@ final class ChatWorkSessionTests: XCTestCase {
             _ = try await chat.executeWorkAction(ChatWorkRequest(action: .update, id: item.id,
                 content: "Stale", expectedRevision: 2), in: session.id)
             XCTFail("A stale revision must not overwrite an external edit")
-        } catch ChatWorkError.conflict {
+        } catch ChatWorkError.revisionConflict {
             // The disk edit increments the revision before the agent update is applied.
         } catch { XCTFail("Unexpected error: \(error)") }
         let read = try json(await chat.executeWorkAction(ChatWorkRequest(action: .read, id: item.id), in: session.id))

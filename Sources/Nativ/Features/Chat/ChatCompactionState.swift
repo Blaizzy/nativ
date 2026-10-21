@@ -13,32 +13,35 @@ struct ChatCompactionState: Codable, Equatable {
     let messageCount: Int
     let prefixDigest: String
     let item: MLXJSONValue
+    private let formatVersion: Int?
 
     init(item: MLXJSONValue, request: MLXChatCompletionRequest, serverURL: URL) throws {
         self.model = request.model
         self.serverURL = serverURL
-        self.messageCount = request.messages.count
-        self.prefixDigest = try Self.digest(request.messages)
+        let messages = NativResponsesClient.conversationMessages(request.messages)
+        self.messageCount = messages.count
+        self.prefixDigest = try Self.digest(messages)
         self.item = item
+        self.formatVersion = 1
     }
 
     func input(for request: MLXChatCompletionRequest, serverURL: URL) throws -> [MLXJSONValue] {
-        guard model == request.model, self.serverURL == serverURL,
-              messageCount >= 0, messageCount <= request.messages.count,
-              prefixDigest == (try Self.digest(Array(request.messages.prefix(messageCount)))) else {
-            return try NativResponsesClient.inputItems(request.messages)
+        let messages = NativResponsesClient.conversationMessages(request.messages)
+        // Older capsules may carry instructions, so rebuild them once from the transcript.
+        guard formatVersion == 1, model == request.model, self.serverURL == serverURL,
+              messageCount >= 0, messageCount <= messages.count,
+              prefixDigest == (try Self.digest(Array(messages.prefix(messageCount)))) else {
+            return try NativResponsesClient.inputItems(messages)
         }
-        return [item] + (try NativResponsesClient.inputItems(Array(request.messages.dropFirst(messageCount))))
+        return [item] + (try NativResponsesClient.inputItems(Array(messages.dropFirst(messageCount))))
     }
 
-    static func threshold(modelContext: Int?, configuredContext: Int, maxOutput: Int, percent: Int = 75) throws -> Int {
+    static func threshold(modelContext: Int?, configuredContext: Int, percent: Int = 75) -> Int {
         let context = [modelContext, configuredContext].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
         let percent = min(max(percent, 20), 90)
-        let threshold = min(context * percent / 100, context - maxOutput - 1024)
-        guard threshold > 0 else {
-            throw NativChatError.serverError("Lower Max output to leave room for conversation compaction.")
-        }
-        return threshold
+        // The server counts actual input and bounds generation by the remaining
+        // context. Unused Max output tokens do not advance compaction.
+        return max(1, context * percent / 100)
     }
 
     private static func digest(_ messages: [MLXChatMessage]) throws -> String {

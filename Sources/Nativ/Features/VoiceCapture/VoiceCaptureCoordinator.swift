@@ -36,7 +36,6 @@ final class VoiceCaptureCoordinator {
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
-    private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
     private var isHandsFreeMode = false
@@ -63,15 +62,22 @@ final class VoiceCaptureCoordinator {
         recorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.recordingInterrupted(error, savedURL: savedURL)
         }
-        wakeWordMonitor.onCandidate = { [weak self] in
-            self?.wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
-        }
         wakeWordMonitor.confirm = { [weak self] audio in
             guard let self else { throw CancellationError() }
             return try await self.confirmWakeWord(audio)
         }
         wakeWordMonitor.onConfirmed = { [weak self] in
             guard let self, self.canListenForWakeWord else { return }
+            guard (try? AudioInputDeviceResolver.captureDeviceID(
+                preferredID: AudioInputDevicePreferences.shared.selectedDeviceID, passive: true
+            )) != nil else {
+                AudioInputDevicePreferences.shared.refresh()
+                self.updateWakeWordListening()
+                if AudioInputDevicePreferences.shared.effectiveDeviceID == nil {
+                    self.overlay.showMicrophoneUnavailable()
+                }
+                return
+            }
             self.isWakeWordCapture = true
             self.isHandsFreeMode = true
             self.isShortcutHeld = true
@@ -103,7 +109,7 @@ final class VoiceCaptureCoordinator {
             .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
         AudioInputDevicePreferences.shared.$selectedDeviceID
-            .combineLatest(AudioInputDevicePreferences.shared.$devices)
+            .combineLatest(AudioInputDevicePreferences.shared.$devices, AudioInputDevicePreferences.shared.$exclusions)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
@@ -155,7 +161,6 @@ final class VoiceCaptureCoordinator {
         }
         overlay.hide()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
     }
@@ -183,8 +188,9 @@ final class VoiceCaptureCoordinator {
         wakeWordMonitor.configure(
             enabled: enabled,
             suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
-            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID,
-            powerSavingPaused: wakeWordPowerMonitor.isPaused
+            deviceID: AudioInputDevicePreferences.shared.selectedDeviceID,
+            powerSavingPaused: wakeWordPowerMonitor.isPaused,
+            inputUnavailable: AudioInputDevicePreferences.shared.passiveDeviceID == nil
         )
     }
 
@@ -231,7 +237,14 @@ final class VoiceCaptureCoordinator {
         updateWakeWordListening()
         permissionTask?.cancel()
         activeOverlayTranscriptionID = nil
-        insertionTarget = VoiceTranscriptInserter.captureTarget()
+        guard (try? AudioInputDeviceResolver.captureDeviceID(
+            preferredID: AudioInputDevicePreferences.shared.selectedDeviceID
+        )) != nil else {
+            clearFailedCaptureState()
+            overlay.showMicrophoneUnavailable()
+            updateWakeWordListening()
+            return
+        }
         overlay.show(at: NSEvent.mouseLocation)
         permissionTask = Task { [weak self] in
             guard let self else {
@@ -251,7 +264,7 @@ final class VoiceCaptureCoordinator {
 
             do {
                 try await self.recorder.start(
-                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
+                    deviceUniqueID: AudioInputDevicePreferences.shared.selectedDeviceID
                 )
                 guard !Task.isCancelled, self.isShortcutHeld else { return }
                 self.overlay.didStartRecording()
@@ -261,7 +274,11 @@ final class VoiceCaptureCoordinator {
                 guard !Task.isCancelled else { return }
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.clearFailedCaptureState()
-                self.overlay.showFailure()
+                if case VoiceAudioRecorderError.noAllowedMicrophone = error {
+                    self.overlay.showMicrophoneUnavailable()
+                } else {
+                    self.overlay.showFailure()
+                }
                 self.updateWakeWordListening()
             }
         }
@@ -271,7 +288,6 @@ final class VoiceCaptureCoordinator {
         isWakeWordCapture = false
         isShortcutHeld = false
         isHandsFreeMode = false
-        insertionTarget = nil
         activeOverlayTranscriptionID = nil
     }
 
@@ -285,14 +301,17 @@ final class VoiceCaptureCoordinator {
 
     private func endCapture() {
         if isWakeWordCapture {
+            // Freeze the destination before asynchronous wake-word finalization.
+            if wakeWordInsertionTarget == nil {
+                wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
+            }
             wakeWordMonitor.finishCapture()
             return
         }
         defer { updateWakeWordListening() }
         permissionTask?.cancel()
         permissionTask = nil
-        let target = insertionTarget
-        insertionTarget = nil
+        let target = VoiceTranscriptInserter.captureTarget()
         let savedURL = recorder.stop()
         if let error = recorder.lastRecordingError {
             recordingInterrupted(error, savedURL: savedURL)
@@ -324,7 +343,6 @@ final class VoiceCaptureCoordinator {
         permissionTask = nil
         recorder.discard()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
         overlay.hide()
@@ -385,7 +403,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func finishWakeWordCapture(_ result: VoiceWakeWordCapture.Result) {
-        let target = wakeWordInsertionTarget
+        let target = wakeWordInsertionTarget ?? VoiceTranscriptInserter.captureTarget()
         wakeWordInsertionTarget = nil
         isWakeWordCapture = false
         isShortcutHeld = false

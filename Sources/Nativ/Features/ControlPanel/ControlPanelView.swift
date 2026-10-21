@@ -317,7 +317,10 @@ struct ControlPanelView: View {
                 action: toggleSidebarVisibility
             )
 
-            Spacer(minLength: 0)
+            ChatWorkWindowDragRegion(
+                chat: chat, isChatWorkspace: selectedTab == .chat && chatWorkspaceMode == .chat,
+                height: ControlPanelLayout.topControlSize
+            )
 
             if showsModelConfigurationToggle && selectedTab == .chat && chatWorkspaceMode == .chat {
                 ChatWorkWindowControls(
