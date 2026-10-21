@@ -121,7 +121,8 @@ struct IntegrationProfileManager {
         tool: IntegrationTool,
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int = 0
     ) throws {
         switch tool {
         case .pi:
@@ -142,7 +143,8 @@ struct IntegrationProfileManager {
                 openCodeConfiguration(
                     selectedModelID: selectedModelID,
                     models: models,
-                    maxOutputTokens: maxOutputTokens
+                    maxOutputTokens: maxOutputTokens,
+                    contextLimit: contextLimit
                 ),
                 to: configurationURL(for: tool)
             )
@@ -213,7 +215,20 @@ struct IntegrationProfileManager {
             .map { "export \($0.key)=\(shellQuote($0.value))" }
         let arguments = launch.arguments.map(shellQuote).joined(separator: " ")
         let executable = shellQuote(executableURL.path)
-        let invocation = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
+        let command = "\(usesExec ? "exec " : "")\(executable)\(arguments.isEmpty ? "" : " \(arguments)")"
+        let invocation: String
+        if let flag = tool.optionalLaunchFlag {
+            let pattern = shellQuote("^[[:space:]]*\(NSRegularExpression.escapedPattern(for: flag))([[:space:]]|$)")
+            invocation = """
+            if \(executable) --help 2>&1 | /usr/bin/grep -Eq \(pattern); then
+                \(command) \(shellQuote(flag))
+            else
+                \(command)
+            fi
+            """
+        } else {
+            invocation = command
+        }
         return (["cd \(shellQuote(workingDirectory.path))"] + exports + [invocation])
             .joined(separator: "\n")
     }
@@ -491,9 +506,11 @@ struct IntegrationProfileManager {
     private func openCodeConfiguration(
         selectedModelID: String,
         models: [IntegrationModelDescriptor],
-        maxOutputTokens: Int
+        maxOutputTokens: Int,
+        contextLimit: Int
     ) -> [String: Any] {
         var modelCatalog: [String: Any] = [:]
+        var smallestContext = 131_072
         for model in models {
             var entry: [String: Any] = [
                 "name": model.displayName,
@@ -506,10 +523,14 @@ struct IntegrationProfileManager {
                     "output": ["text"]
                 ]
             ]
-            let contextWindow = model.contextWindow ?? 131_072
+            let contextWindow = max(2, min(model.contextWindow ?? 131_072, contextLimit > 0 ? contextLimit : Int.max))
+            let outputTokens = min(max(maxOutputTokens, 1), contextWindow / 2)
+            smallestContext = min(smallestContext, contextWindow)
+            // OpenCode applies compaction.reserved only when an input limit is present.
             entry["limit"] = [
                 "context": contextWindow,
-                "output": min(max(maxOutputTokens, 1), contextWindow)
+                "input": contextWindow - outputTokens,
+                "output": outputTokens
             ]
             if model.supportsReasoning {
                 entry["interleaved"] = ["field": "reasoning_content"]
@@ -520,6 +541,7 @@ struct IntegrationProfileManager {
         return [
             "$schema": "https://opencode.ai/config.json",
             "model": "\(Self.providerID)/\(selectedModelID)",
+            "compaction": ["auto": true, "reserved": min(20_000, smallestContext / 5)],
             "provider": [
                 Self.providerID: [
                     "npm": "@ai-sdk/openai-compatible",
@@ -711,7 +733,7 @@ struct IntegrationProfileManager {
             return (["-p", Self.providerID, "chat", "--provider", "custom", "--model", selectedModelID], [:])
         case .openCode:
             return (
-                ["--model", "\(Self.providerID)/\(selectedModelID)"],
+                [],
                 ["OPENCODE_CONFIG": configurationURL(for: tool).path]
             )
         case .aider:

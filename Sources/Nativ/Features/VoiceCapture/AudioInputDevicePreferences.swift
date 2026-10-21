@@ -6,6 +6,21 @@ struct NativAudioInputDevice: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let isSystemDefault: Bool
+    var isVirtual: Bool = false
+}
+
+struct AudioInputDeviceExclusion: Codable, Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    var allUses: Bool
+
+    static let storageKey = "audio.input.exclusions"
+    static let didChange = Notification.Name("NativAudioInputExclusionsDidChange")
+
+    static func load(from defaults: UserDefaults = .standard) -> [Self] {
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
+        return (try? JSONDecoder().decode([Self].self, from: data)) ?? []
+    }
 }
 
 @MainActor
@@ -21,14 +36,38 @@ final class AudioInputDevicePreferences: ObservableObject {
         }
     }
 
+    @Published private(set) var exclusions: [AudioInputDeviceExclusion] {
+        didSet {
+            if let data = try? JSONEncoder().encode(exclusions) {
+                defaults.set(data, forKey: AudioInputDeviceExclusion.storageKey)
+            }
+            NotificationCenter.default.post(name: AudioInputDeviceExclusion.didChange, object: nil)
+        }
+    }
+
+    private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var defaultInputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain
+    )
+
     private static let selectionKey = "audio.input.selected-device-id"
     private let defaults: UserDefaults
     private var observers: [NSObjectProtocol] = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        exclusions = AudioInputDeviceExclusion.load(from: defaults)
         selectedDeviceID = defaults.string(forKey: Self.selectionKey) ?? Self.systemDefaultID
         refresh()
+
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+        if AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &defaultInputAddress, nil, listener
+        ) == noErr { defaultInputListener = listener }
 
         let center = NotificationCenter.default
         observers = [
@@ -54,61 +93,94 @@ final class AudioInputDevicePreferences: ObservableObject {
     }
 
     isolated deinit {
+        if let defaultInputListener {
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &defaultInputAddress, nil, defaultInputListener
+            )
+        }
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
         }
     }
 
     var effectiveDeviceID: String? {
-        guard !selectedDeviceID.isEmpty,
-              devices.contains(where: { $0.id == selectedDeviceID })
-        else {
-            return nil
-        }
-        return selectedDeviceID
+        resolvedDeviceID(passive: false)
+    }
+
+    var passiveDeviceID: String? { resolvedDeviceID(passive: true) }
+
+    var recordingDevices: [NativAudioInputDevice] {
+        devices.filter { device in !exclusions.contains { $0.id == device.id && $0.allUses } }
     }
 
     var selectionTitle: String {
-        if selectedDeviceID.isEmpty {
-            return defaultDevice.map { "System Default — \($0.name)" } ?? "System Default"
-        }
-        return devices.first(where: { $0.id == selectedDeviceID })?.name
-            ?? "Unavailable — using System Default"
+        guard let id = resolvedDeviceID(passive: false), let device = devices.first(where: { $0.id == id })
+        else { return "No allowed microphone" }
+        if selectedDeviceID == id { return device.name }
+        if selectedDeviceID.isEmpty, device.isSystemDefault { return "System Default — \(device.name)" }
+        return "Using \(device.name)"
     }
 
     var selectionIsUnavailable: Bool {
-        !selectedDeviceID.isEmpty && effectiveDeviceID == nil
+        !selectedDeviceID.isEmpty && !recordingDevices.contains { $0.id == selectedDeviceID }
     }
 
-    func refresh() {
-        let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
-        let discoverySession = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.microphone, .external],
-            mediaType: .audio,
-            position: .unspecified
+    func exclude(_ device: NativAudioInputDevice) {
+        guard !device.id.isEmpty, !exclusions.contains(where: { $0.id == device.id }) else { return }
+        exclusions.append(.init(id: device.id, name: device.name, allUses: false))
+    }
+
+    func removeExclusion(id: String) { exclusions.removeAll { $0.id == id } }
+
+    func setExcludedFromAllUses(_ excluded: Bool, id: String) {
+        guard let index = exclusions.firstIndex(where: { $0.id == id }) else { return }
+        exclusions[index].allUses = excluded
+    }
+
+    func refresh() { devices = AudioInputDeviceResolver.availableDevices() }
+
+    private func resolvedDeviceID(passive: Bool) -> String? {
+        AudioInputDeviceResolver.resolve(
+            preferredID: selectedDeviceID, devices: devices, exclusions: exclusions, passive: passive
         )
-        devices = discoverySession.devices
-            .map {
-                NativAudioInputDevice(
-                    id: $0.uniqueID,
-                    name: $0.localizedName,
-                    isSystemDefault: $0.uniqueID == defaultID
-                )
-            }
-            .sorted { lhs, rhs in
-                if lhs.isSystemDefault != rhs.isSystemDefault {
-                    return lhs.isSystemDefault
-                }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
-    }
-
-    private var defaultDevice: NativAudioInputDevice? {
-        devices.first(where: \.isSystemDefault)
     }
 }
 
 enum AudioInputDeviceResolver {
+    static func availableDevices() -> [NativAudioInputDevice] {
+        let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
+        return AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified
+        ).devices.map {
+            NativAudioInputDevice(
+                id: $0.uniqueID, name: $0.localizedName, isSystemDefault: $0.uniqueID == defaultID,
+                isVirtual: UInt32(bitPattern: $0.transportType) == kAudioDeviceTransportTypeVirtual
+            )
+        }.sorted {
+            if $0.isSystemDefault != $1.isSystemDefault { return $0.isSystemDefault }
+            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+    }
+
+    static func resolve(
+        preferredID: String?, devices: [NativAudioInputDevice],
+        exclusions: [AudioInputDeviceExclusion], passive: Bool
+    ) -> String? {
+        let excluded = Set(exclusions.filter { passive || $0.allUses }.map(\.id))
+        let allowed = devices.filter { !excluded.contains($0.id) }
+        let physical = allowed.filter { !$0.isVirtual }
+        return allowed.first { $0.id == preferredID }?.id
+            ?? physical.first(where: \.isSystemDefault)?.id ?? physical.first?.id
+    }
+
+    static func captureDeviceID(preferredID: String?, passive: Bool = false) throws -> String {
+        guard let id = resolve(
+            preferredID: preferredID, devices: availableDevices(),
+            exclusions: AudioInputDeviceExclusion.load(), passive: passive
+        ) else { throw VoiceAudioRecorderError.noAllowedMicrophone }
+        return id
+    }
+
     static func defaultInputDeviceID() -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultInputDevice,

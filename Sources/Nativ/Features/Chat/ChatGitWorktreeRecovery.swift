@@ -130,7 +130,7 @@ extension ChatGitWorktreeStore {
         let id = sessionID.uuidString.lowercased()
         return ChatGitWorktree(repositoryPath: record.worktree.repositoryPath, commonDirectory: record.worktree.commonDirectory,
             path: storage.appendingPathComponent(id).path, projectSubpath: record.worktree.projectSubpath,
-            branch: "nativ/\(id)", baseCommit: record.head)
+            branch: "nativ/\(id)", baseCommit: record.head, baseReference: record.worktree.baseReference)
     }
 
     func restore(_ id: UUID, to plan: ChatGitWorktree) throws -> ChatGitWorktree {

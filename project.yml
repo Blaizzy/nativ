@@ -12,6 +12,9 @@ settings:
     ARCHS: arm64
     ENABLE_HARDENED_RUNTIME: YES
 packages:
+  swift-xet:
+    url: https://github.com/huggingface/swift-xet
+    exactVersion: 1.1.0
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: 1.18.0
@@ -137,6 +140,8 @@ targets:
         product: ZIPFoundation
       - package: SwiftTerm
         product: SwiftTerm
+      - package: swift-xet
+        product: Xet
     postBuildScripts:
       - name: Install GitHub OAuth MCP server
         basedOnDependencyAnalysis: false
@@ -158,9 +163,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.3.12
-        NATIV_RELEASE_VERSION: 0.3.12rc1
-        CURRENT_PROJECT_VERSION: 19
+        MARKETING_VERSION: 0.4.3
+        NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
+        CURRENT_PROJECT_VERSION: 22
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -181,8 +186,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.3.12
-        CURRENT_PROJECT_VERSION: 19
+        MARKETING_VERSION: 0.4.3
+        CURRENT_PROJECT_VERSION: 22
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -192,6 +197,7 @@ targets:
       - path: Tests/NativTests
       - path: Sources/Nativ/NativSettings.swift
       - path: Sources/Nativ/ReleaseVersion.swift
+      - path: Sources/Nativ/LaunchSplashPreferences.swift
       - path: Sources/Nativ/SoftwareUpdater.swift
       - path: Sources/Nativ/Features/Extensions/NativSkill.swift
       - path: Sources/Nativ/Features/Extensions/NativKit.swift
@@ -211,6 +217,7 @@ targets:
       - path: Sources/Nativ/Features/Models/HuggingFaceDownloadPreflight.swift
       - path: Sources/Nativ/Features/Models/HuggingFaceDownloadCapacity.swift
       - path: Sources/Nativ/Features/Models/LocalModelDiscovery.swift
+      - path: Sources/Nativ/Features/Models/DecisionRequestComposer.swift
       - path: Sources/Nativ/Features/Models/LocalModelProvider.swift
       - path: Sources/Nativ/Features/Models/MLXImageModelResolver.swift
       - path: Sources/Nativ/Features/Models/ModelPrimaryTaskResolver.swift
@@ -222,13 +229,16 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAudioRecorder.swift
       - path: Sources/Nativ/Features/VoiceCapture/FnControlShortcutMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceShortcut.swift
+      - path: Sources/Nativ/Features/VoiceCapture/Parakeet
       - path: Sources/Nativ/Features/VoiceCapture/VoiceDictationTranscript.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordDetection.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordModel.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordFeatures.swift
+      - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordPowerPolicy.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioRecordExport.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioCaptureSleepMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/SystemAudioMeetingRecorder.swift
       - path: Sources/Nativ/Utilities/NativSystemPermissionController.swift
@@ -250,6 +260,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatWorkPreviewServer.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWorkTool.swift
       - path: Sources/Nativ/Features/Chat/ChatProjectStore.swift
+      - path: Sources/Nativ/Features/Chat/ChatGitHubPullRequest.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktree.swift
       - path: Sources/Nativ/Features/Chat/ChatGitWorktreeRecovery.swift
       - path: Sources/Nativ/Features/Chat/ChatViewModel.swift
@@ -257,6 +268,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatFontScale.swift
       - path: Sources/Nativ/Features/Chat/Rendering
       - path: Sources/Nativ/Features/Chat/ChatTranscriptPresentation.swift
+      - path: Sources/Nativ/Features/Chat/ChatResponseSpeech.swift
       - path: Sources/Nativ/Features/Chat/ChatConversationBranch.swift
       - path: Sources/Nativ/Features/Chat/ChatPromptRevision.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatImageTool.swift
@@ -313,9 +325,11 @@ targets:
       - path: Sources/Nativ/Features/Chat/ChatSearch.swift
       - path: Sources/Nativ/Features/Chat/ChatSearchStore.swift
       - path: Sources/Nativ/Features/Chat/ChatLibrarySearch.swift
+      - path: Sources/Nativ/Features/Chat/ChatCompactionState.swift
       - path: Sources/Nativ/Features/ImageGeneration/ImageGenerationViewModel.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelDependencies.swift
       - path: Sources/Nativ/Features/ControlPanel/ControlPanelNavigation.swift
+      - path: Sources/Nativ/Features/ControlPanel/ControlPanelSidebarModels.swift
       - path: Sources/Nativ/Features/Windowing/WindowIntent.swift
       - path: Sources/Nativ/Features/Windowing/NativWindowState.swift
       - path: Sources/Nativ/Features/Windowing/NativWindowRegistry.swift
@@ -324,6 +338,7 @@ targets:
       - path: Sources/Nativ/Features/Dashboard/DashboardViewModel.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemMonitorStore.swift
       - path: Sources/Nativ/Features/SystemMonitor/SystemSensorSampler.swift
+      - path: Sources/Nativ/Features/SystemMonitor/SystemTelemetry.swift
       - path: Sources/Nativ/Features/Dashboard/NativAnalyticsStore.swift
       - path: Sources/Nativ/NativModel.swift
       - path: Sources/Nativ/Utilities/ServerPortProbe.swift
@@ -356,6 +371,8 @@ targets:
         product: Highlightr
       - package: SwaTex
         product: SwaTexRender
+      - package: swift-xet
+        product: Xet
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.local.NativTests

@@ -1,4 +1,5 @@
 import AppKit
+import NativServerKit
 import SwiftUI
 
 enum AppAppearance: String, CaseIterable, Identifiable {
@@ -248,6 +249,17 @@ struct SettingsView: View {
 
             VStack(spacing: 0) {
                 settingsRow(
+                    title: "Chat Response Timeout",
+                    description: "How long Nativ waits without receiving response data. Longer waits can help with large prompts.",
+                    systemImage: "clock"
+                ) {
+                    chatResponseTimeoutControl
+                }
+
+                Divider()
+                    .padding(.leading, 52)
+
+                settingsRow(
                     title: "Allow Beta Updates",
                     description: softwareUpdater.channelDescription,
                     systemImage: "sun.horizon"
@@ -268,6 +280,19 @@ struct SettingsView: View {
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
             )
         }
+    }
+
+    private var chatResponseTimeoutControl: some View {
+        @Bindable var model = model
+        return Picker("Chat Response Timeout", selection: $model.settings.chatResponseTimeout) {
+            ForEach(NativChatTimeout.allCases) { timeout in
+                Text(timeout.displayName).tag(timeout)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .fixedSize()
+        .accessibilityHint("Applies to new requests. You can still stop a response when No limit is selected.")
     }
 
     private var projectSettings: some View {

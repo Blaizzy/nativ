@@ -67,12 +67,14 @@ const productScreens = {
   }
 };
 
-Object.values(productScreens).forEach(({ src }) => {
-  const image = new Image();
-  image.src = src;
-});
-
 const productScreenshot = document.querySelector('[data-product-screenshot]');
+if (productScreenshot) {
+  Object.values(productScreens).forEach(({ src }) => {
+    const image = new Image();
+    image.src = src;
+  });
+}
+
 const screenLabel = document.querySelector('[data-screen-label]');
 const screenCaption = document.querySelector('[data-screen-caption]');
 

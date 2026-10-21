@@ -6,13 +6,15 @@ import Foundation
 @MainActor
 final class VoiceWakeWordMonitor: ObservableObject {
     enum State: Equatable {
-        case off, paused, preparing, listening, confirming, capturing
+        case off, paused, pausedForInactivity, pausedForMicrophone, preparing, listening, confirming, capturing
         case unavailable(String)
 
         var description: String {
             switch self {
             case .off: "Wake word is off."
             case .paused: "Wake word is paused while audio is busy."
+            case .pausedForInactivity: "Paused to save power. Move the mouse or press a key to resume."
+            case .pausedForMicrophone: "No allowed microphone for passive listening. Connect one or update microphone exclusions."
             case .preparing: "Preparing on-device wake word…"
             case .listening: "Listening for “hey nativ”."
             case .confirming: "Confirming “hey nativ”…"
@@ -34,11 +36,17 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private struct Configuration: Equatable {
         var enabled: Bool
         var suspended: Bool
+        var inputUnavailable = false
+        var powerSavingPaused = false
+        // Requested selection, not the resolved hardware ID. Empty/nil follows System Default.
         var deviceID: String?
     }
 
     private var configuration = Configuration(enabled: false, suspended: false)
-    private let inputSession = AudioInputEngineSession()
+    private let inputSession: AudioInputCaptureSession
+    private let requestMicrophone: () async -> Bool
+    private let makeProcessor: @Sendable () throws -> VoiceWakeWordProcessor
+    private var isFinishingCapture = false
     private var sessionID = UUID()
     private var task: Task<Void, Never>?
     private var inferenceTask: Task<Void, Never>?
@@ -46,17 +54,39 @@ final class VoiceWakeWordMonitor: ObservableObject {
     private var processor: VoiceWakeWordProcessor?
     private var continuation: AsyncStream<VoiceWakeWordAudioChunk>.Continuation?
 
-    func configure(enabled: Bool, suspended: Bool, deviceID: String?) {
-        let next = Configuration(enabled: enabled, suspended: suspended, deviceID: deviceID)
+    init(
+        inputSession: AudioInputCaptureSession = AudioInputCaptureSession(passive: true),
+        requestMicrophone: @escaping () async -> Bool = { await NativSystemPermissionController.requestMicrophone() },
+        makeProcessor: @escaping @Sendable () throws -> VoiceWakeWordProcessor = {
+            guard let url = Bundle.main.url(forResource: "HeyNativ", withExtension: "mlmodelc")
+            else { throw VoiceWakeWordModelError.missingModel }
+            return try VoiceWakeWordProcessor(url: url)
+        }
+    ) {
+        self.inputSession = inputSession
+        self.requestMicrophone = requestMicrophone
+        self.makeProcessor = makeProcessor
+    }
+
+    func configure(enabled: Bool, suspended: Bool, deviceID: String?, powerSavingPaused: Bool = false, inputUnavailable: Bool = false) {
+        let next = Configuration(enabled: enabled, suspended: suspended, inputUnavailable: inputUnavailable, powerSavingPaused: powerSavingPaused, deviceID: deviceID)
         guard next != configuration else { return }
+        let needsRestart = next.enabled != configuration.enabled
+            || next.suspended != configuration.suspended || next.deviceID != configuration.deviceID
+            || next.inputUnavailable != configuration.inputUnavailable
+        let inputChanged = next.deviceID != configuration.deviceID
+            || next.inputUnavailable != configuration.inputUnavailable
         configuration = next
-        restart()
+        if inputChanged, next.enabled, !next.suspended, finishCaptureBeforeRestart() { return }
+        if needsRestart { restart() } else { applyPowerSavingPause() }
     }
 
     func restart() {
         stopSession()
         guard configuration.enabled else { state = .off; return }
         guard !configuration.suspended else { state = .paused; return }
+        guard !configuration.inputUnavailable else { state = .pausedForMicrophone; return }
+        guard !configuration.powerSavingPaused else { state = .pausedForInactivity; return }
         state = .preparing
         let id = sessionID
         let deviceID = configuration.deviceID
@@ -68,16 +98,28 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
+    private func applyPowerSavingPause() {
+        guard configuration.enabled, !configuration.suspended else { return }
+        switch state {
+        case .confirming, .capturing:
+            // Keep the new policy in configuration and apply it after the candidate
+            // resolves. An inactivity deadline must never truncate live dictation.
+            return
+        case .pausedForInactivity:
+            if !configuration.powerSavingPaused { restart() }
+        default:
+            if configuration.powerSavingPaused { restart() }
+        }
+    }
+
     private func listen(id: UUID, deviceID: String?) async {
         do {
-            let granted = await NativSystemPermissionController.requestMicrophone()
+            let granted = await requestMicrophone()
             guard isCurrent(id) else { return }
             guard granted else {
                 fail("Allow microphone access in System Settings, then try again.", id: id, retry: false)
                 return
             }
-            guard let modelURL = Bundle.main.url(forResource: "HeyNativ", withExtension: "mlmodelc")
-            else { throw VoiceWakeWordModelError.missingModel }
             guard let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
             else { throw VoiceAudioRecorderError.couldNotConvert }
             let (stream, continuation) = AsyncStream<VoiceWakeWordAudioChunk>.makeStream(
@@ -90,9 +132,10 @@ final class VoiceWakeWordMonitor: ObservableObject {
                     self?.fail("Could not read microphone audio. Retrying…", id: id)
                 }
             }
+            let makeProcessor = makeProcessor
             inferenceTask = Task.detached(priority: .utility) { [weak self] in
                 do {
-                    let processor = try VoiceWakeWordProcessor(url: modelURL)
+                    let processor = try makeProcessor()
                     try Task.checkCancellation()
                     guard try await self?.startInput(bridge: bridge, processor: processor, deviceID: deviceID, id: id) == true
                     else { return }
@@ -114,14 +157,15 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
-    private func startInput(bridge: VoiceWakeWordAudioBridge, processor: VoiceWakeWordProcessor, deviceID: String?, id: UUID) throws -> Bool {
+    private func startInput(bridge: VoiceWakeWordAudioBridge, processor: VoiceWakeWordProcessor, deviceID: String?, id: UUID) async throws -> Bool {
         guard isCurrent(id) else { return false }
         self.processor = processor
-        try inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
+        try await inputSession.start(deviceUniqueID: deviceID, tap: { buffer, _ in
             bridge.append(buffer)
         }) { [weak self] error in
             self?.fail(error.localizedDescription, id: id)
         }
+        guard isCurrent(id) else { return false }
         state = .listening
         return true
     }
@@ -148,7 +192,12 @@ final class VoiceWakeWordMonitor: ObservableObject {
                           self.isCurrent(id) else { return }
                     self.confirmationTask = nil
                     self.state = accepted ? .capturing : .listening
-                    if accepted { self.onConfirmed?() } else { self.onCancelled?() }
+                    if accepted {
+                        self.onConfirmed?()
+                    } else {
+                        self.onCancelled?()
+                        self.applyPowerSavingPause()
+                    }
                 } catch {
                     guard let self, self.isCurrent(id) else { return }
                     self.fail("Wake-word confirmation failed: \(error.localizedDescription)", id: id)
@@ -169,6 +218,30 @@ final class VoiceWakeWordMonitor: ObservableObject {
         }
     }
 
+    /// Stop delivery and drain queued audio before a routing change tears down the processor.
+    /// Keep the session ID valid until the result has reached the coordinator.
+    private func finishCaptureBeforeRestart() -> Bool {
+        guard state == .capturing, let processor else { return false }
+        guard !isFinishingCapture else { return true }
+        isFinishingCapture = true
+        inputSession.stop()
+        continuation?.finish()
+        let id = sessionID
+        let inferenceTask = inferenceTask
+        Task { [weak self] in
+            await inferenceTask?.value
+            guard let self, self.isCurrent(id) else { return }
+            let result = await processor.finish()
+            guard self.isCurrent(id) else { return }
+            if let result {
+                self.complete(result, id: id)
+            } else {
+                self.restart()
+            }
+        }
+        return true
+    }
+
     private func complete(_ result: VoiceWakeWordCapture.Result, id: UUID) {
         guard isCurrent(id) else { return }
         stopSession(notify: false)
@@ -181,9 +254,14 @@ final class VoiceWakeWordMonitor: ObservableObject {
     }
 
     private func fail(_ message: String, id: UUID, retry: Bool = true) {
-        guard isCurrent(id) else { return }
+        guard isCurrent(id), !isFinishingCapture else { return }
+        if finishCaptureBeforeRestart() { return }
         stopSession()
         state = .unavailable(message)
+        if configuration.enabled, !configuration.suspended, configuration.powerSavingPaused {
+            state = .pausedForInactivity
+            return
+        }
         guard retry else { return }
         let retryID = sessionID
         task = Task { [weak self] in
@@ -196,6 +274,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
 
     private func stopSession(notify: Bool = true) {
         sessionID = UUID()
+        isFinishingCapture = false
         inputSession.stop()
         continuation?.finish()
         continuation = nil
@@ -211,7 +290,7 @@ final class VoiceWakeWordMonitor: ObservableObject {
 }
 
 /// Serializes audio and confirmation results without blocking capture on network ASR.
-private actor VoiceWakeWordProcessor {
+actor VoiceWakeWordProcessor {
     struct Output: Sendable {
         let event: VoiceWakeWordCapture.Event?
         let isConfirmed: Bool
@@ -219,13 +298,20 @@ private actor VoiceWakeWordProcessor {
         let elapsed: TimeInterval
     }
 
-    private let detector: VoiceWakeWordModel
+    private let detect: (VoiceWakeWordAudioChunk) throws -> Bool
     private var capture = VoiceWakeWordCapture()
 
-    init(url: URL) throws { detector = try VoiceWakeWordModel(url: url) }
+    init(url: URL) throws {
+        let detector = try VoiceWakeWordModel(url: url)
+        detect = { try detector.consume($0) }
+    }
+
+    init(detect: @escaping @Sendable (VoiceWakeWordAudioChunk) throws -> Bool) {
+        self.detect = detect
+    }
 
     func consume(_ chunk: VoiceWakeWordAudioChunk) throws -> Output {
-        let detected = capture.canDetect ? try detector.consume(chunk) : false
+        let detected = capture.canDetect ? try detect(chunk) : false
         let event = try capture.append(chunk, detected: detected)
         return Output(event: event, isConfirmed: capture.isConfirmed, level: capture.level, elapsed: capture.elapsed)
     }
@@ -246,6 +332,7 @@ final class VoiceWakeWordAudioBridge: @unchecked Sendable {
     private let onFailure: @Sendable () -> Void
     private var converter: AVAudioConverter?
     private var pendingBuffer: AVAudioPCMBuffer?
+    private var outputBuffer: AVAudioPCMBuffer?
     private var failed = false
     private var sampleOffset: Int64 = 0
 
@@ -270,9 +357,12 @@ final class VoiceWakeWordAudioBridge: @unchecked Sendable {
                 guard let converter else { throw VoiceAudioRecorderError.couldNotConvert }
                 pendingBuffer = buffer
                 defer { pendingBuffer = nil }
+                if outputBuffer == nil {
+                    outputBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096)
+                }
+                guard let output = outputBuffer else { throw VoiceAudioRecorderError.couldNotConvert }
                 while true {
-                    guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_096)
-                    else { throw VoiceAudioRecorderError.couldNotConvert }
+                    output.frameLength = 0
                     var error: NSError?
                     let status = converter.convert(to: output, error: &error) { [self] _, status in
                         if let buffer = pendingBuffer {

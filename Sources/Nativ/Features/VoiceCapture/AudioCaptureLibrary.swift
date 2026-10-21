@@ -379,6 +379,12 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         clearLastError()
+        guard (try? AudioInputDeviceResolver.captureDeviceID(
+            preferredID: AudioInputDevicePreferences.shared.selectedDeviceID
+        )) != nil else {
+            fail(VoiceAudioRecorderError.noAllowedMicrophone)
+            return
+        }
         activeKind = kind
         phase = .preparing
         shouldSummarizeCurrentCapture = automaticallySummarize
@@ -404,10 +410,10 @@ final class AudioCaptureLibrary: ObservableObject {
                 for: kind,
                 includeSystemAudio: activeIncludesSystemAudio
             )
-            let microphoneDeviceID = AudioInputDevicePreferences.shared.effectiveDeviceID
+            let microphoneDeviceID = AudioInputDevicePreferences.shared.selectedDeviceID
             switch kind {
             case .voiceNote:
-                try voiceRecorder.start(
+                try await voiceRecorder.start(
                     outputURL: outputURL,
                     deviceUniqueID: microphoneDeviceID
                 )
@@ -420,7 +426,7 @@ final class AudioCaptureLibrary: ObservableObject {
                     )
                     activeBackend = .systemAndMicrophone
                 } else {
-                    try voiceRecorder.start(
+                    try await voiceRecorder.start(
                         outputURL: outputURL,
                         deviceUniqueID: microphoneDeviceID
                     )
@@ -854,6 +860,13 @@ final class AudioCaptureLibrary: ObservableObject {
         guard let configuration = transcriptionConfigurationProvider?() else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
+        if #available(macOS 27.0, *),
+           DefaultSpeechModel.isPreferred(selectedModelID: configuration.selectedModelID) {
+            let result = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL)
+            try Task.checkCancellation()
+            guard !result.text.isEmpty else { throw AudioCaptureLibraryError.emptyTranscript }
+            return (result.text, DefaultSpeechModel.identifier)
+        }
         guard configuration.serverIsRunning else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
@@ -1012,6 +1025,12 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        if case VoiceAudioRecorderError.noAllowedMicrophone = error {
+            clearLastError()
+            resetCaptureState()
+            recordingOverlay.showMicrophoneUnavailable()
+            return
+        }
         lastErrorMessage = error.localizedDescription
         permissionRequiringSettings = nil
         if let captureError = error as? AudioCaptureLibraryError {

@@ -3,6 +3,25 @@ import Foundation
 import Testing
 
 struct VoiceWakeWordTests {
+    @Test func testDetectionThresholdUsesModelMetadata() throws {
+        for threshold in [Float(0), 0.25, 0.5901581, 1] {
+            #expect(try VoiceWakeWordModel.detectionThreshold(
+                metadata: ["default_threshold": String(threshold)]
+            ) == threshold)
+        }
+    }
+
+    @Test func testDetectionThresholdRejectsMissingOrInvalidMetadata() {
+        #expect(throws: VoiceWakeWordModelError.self) {
+            try VoiceWakeWordModel.detectionThreshold(metadata: [:])
+        }
+        for value in ["", "invalid", "nan", "inf", "-inf", "-0.1", "1.1"] {
+            #expect(throws: VoiceWakeWordModelError.self) {
+                try VoiceWakeWordModel.detectionThreshold(metadata: ["default_threshold": value])
+            }
+        }
+    }
+
     @Test func testWindowSkipsSilenceAndExpiresSpeechAfterHangover() {
         var window = VoiceWakeWordWindow()
         var scoringBoundaries = 0
@@ -84,6 +103,91 @@ struct VoiceWakeWordTests {
         #expect(throws: VoiceWakeWordModelError.self) { try features.compute([0]) }
         #expect(throws: VoiceWakeWordModelError.self) {
             try features.compute([Float](repeating: .nan, count: 32_000))
+        }
+    }
+
+    private func featureTestAudio(count: Int) -> [Float] {
+        var state: UInt64 = 42
+        return (0..<count).map { index in
+            state = state &* 6_364_136_223_846_793_005 &+ 1
+            // Include silence, abrupt transitions, and nonzero samples at window edges.
+            return (index / 16_000) % 4 == 0 ? 0 : Float(Int(state >> 40) - 8_388_608) / 83_886_080
+        }
+    }
+
+    @Test func testCachedFeaturesMatchFullWindowsAcrossWrapsAndGaps() throws {
+        let cached = try VoiceWakeWordFeatures()
+        let reference = try VoiceWakeWordFeatures()
+        let stream = featureTestAudio(count: 200_000)
+        var output = [Float](repeating: 0, count: 128 * 200)
+        // More than a full cache revolution, followed by gate closures, unaligned
+        // windows, repeated offsets, and a rewind. All must match fresh extraction.
+        let ends = Array(stride(from: 32_000, through: 100_000, by: 320))
+            + [103_200, 135_200, 170_400, 170_560, 170_561, 170_881, 170_881, 32_000]
+        for end in ends {
+            let audio = Array(stream[(end - 32_000)..<end])
+            try output.withUnsafeMutableBufferPointer {
+                try cached.compute(audio, windowEnd: Int64(end), into: $0.baseAddress!)
+            }
+            let expected = try reference.compute(audio)
+            #expect(output == expected, "Window ending at \(end)")
+        }
+        cached.reset()
+        let unrelated = [Float](repeating: 0, count: 32_000)
+        try output.withUnsafeMutableBufferPointer {
+            try cached.compute(unrelated, windowEnd: 32_320, into: $0.baseAddress!)
+        }
+        #expect(output.allSatisfy { $0 == 0 })
+    }
+
+    @Test func testCachedFeaturesWriteStridedModelInputs() throws {
+        let cached = try VoiceWakeWordFeatures()
+        let reference = try VoiceWakeWordFeatures()
+        let stream = featureTestAudio(count: 33_000)
+        var output = [Float](repeating: -999, count: 128 * 403)
+        for end in [32_000, 32_320, 32_640] {
+            let audio = Array(stream[(end - 32_000)..<end])
+            try output.withUnsafeMutableBufferPointer {
+                try cached.compute(audio, windowEnd: Int64(end), into: $0.baseAddress!, melStride: 403, frameStride: 2)
+            }
+            let expected = try reference.compute(audio)
+            var maximumError: Float = 0
+            for mel in 0..<128 {
+                for frame in 0..<200 {
+                    maximumError = max(maximumError, abs(output[mel * 403 + frame * 2] - expected[mel * 200 + frame]))
+                    #expect(output[mel * 403 + frame * 2 + 1] == -999)
+                }
+                #expect(output[mel * 403 + 402] == -999)
+            }
+            #expect(maximumError < 0.00001)
+        }
+    }
+
+    @Test func testInvalidAudioInvalidatesFeatureCache() throws {
+        let cached = try VoiceWakeWordFeatures()
+        var output = [Float](repeating: 0, count: 128 * 200)
+        try output.withUnsafeMutableBufferPointer { destination in
+            try cached.compute(featureTestAudio(count: 32_000), windowEnd: 32_000, into: destination.baseAddress!)
+            #expect(throws: VoiceWakeWordModelError.self) {
+                try cached.compute([.nan], windowEnd: 32_320, into: destination.baseAddress!)
+            }
+            try cached.compute([Float](repeating: 0, count: 32_000), windowEnd: 32_640, into: destination.baseAddress!)
+        }
+        #expect(output.allSatisfy { $0 == 0 })
+    }
+
+    @Test func testWindowCopiesIntoReusableStorageAcrossWraps() {
+        var window = VoiceWakeWordWindow()
+        var output = [Float](repeating: 0, count: 32_000)
+        let stream = featureTestAudio(count: 70_001)
+        for index in stream.indices {
+            _ = window.append(stream[index])
+            if index % 7_000 == 0 {
+                window.copySamples(into: &output)
+                let suffix = Array(stream.prefix(index + 1).suffix(32_000))
+                #expect(output == [Float](repeating: 0, count: 32_000 - suffix.count) + suffix)
+                #expect(window.sampleCount == Int64(index + 1))
+            }
         }
     }
 
@@ -247,6 +351,21 @@ struct VoiceWakeWordPreferencesTests {
         #expect(!preferences.isHandsFreeEnabled)
     }
 
+    @Test func testUnavailableMicrophonePausesUntilAnAllowedInputReturns() async throws {
+        let monitor = VoiceWakeWordMonitor()
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.restart()
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: true, suspended: false, deviceID: "allowed-input")
+        #expect(monitor.state == .preparing)
+        monitor.configure(enabled: true, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: false, suspended: false, deviceID: nil, inputUnavailable: true)
+        #expect(monitor.state == .off)
+    }
+
     @Test func testDisablingOrSuspendingCancelsPendingListenerStartup() async throws {
         let monitor = VoiceWakeWordMonitor()
         monitor.configure(enabled: true, suspended: false, deviceID: nil)
@@ -256,5 +375,132 @@ struct VoiceWakeWordPreferencesTests {
         monitor.configure(enabled: false, suspended: false, deviceID: nil)
         try await Task.sleep(for: .milliseconds(800))
         #expect(monitor.state == .off)
+    }
+}
+
+@MainActor
+struct VoiceWakeWordMicrophoneRoutingTests {
+    @Test func testDefaultInputChangeKeepsDictationAndAcceptsNewAudioFormat() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        monitor.onFinished = { results.append($0) }
+
+        // The system default resolves to a different device, but the user's policy stays empty.
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        #expect(monitor.state == .capturing)
+        #expect(capture.starts == 1)
+        #expect(capture.deviceUniqueID == "")
+        try capture.deliver(sampleRate: 48_000, value: 0.5)
+        try await Task.sleep(for: .milliseconds(50))
+        monitor.finishCapture()
+        try await waitUntil { results.count == 1 }
+        #expect(results[0].audio.samples.contains { abs($0 - 0.25) < 0.01 })
+        #expect(results[0].audio.samples.contains { abs($0 - 0.5) < 0.01 })
+    }
+
+    @Test func testNoAllowedInputDrainsSpeechAndFinishesOnceBeforePausing() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        var cancelledBeforeResult = false
+        monitor.onFinished = { results.append($0) }
+        monitor.onCancelled = { if results.isEmpty { cancelledBeforeResult = true } }
+
+        // Queue speech immediately before losing the input; finalization must drain it.
+        try capture.deliver(value: 0.5)
+        monitor.configure(enabled: true, suspended: false, deviceID: "", inputUnavailable: true)
+        capture.fail()
+        capture.fail()
+        try await waitUntil { results.count == 1 }
+        #expect(!cancelledBeforeResult)
+        #expect(results[0].audio.samples.contains { abs($0 - 0.5) < 0.01 })
+        #expect(monitor.state == .paused)
+        monitor.restart()
+        #expect(monitor.state == .pausedForMicrophone)
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        #expect(monitor.state == .preparing)
+        #expect(results.count == 1)
+    }
+
+    @Test func testCaptureFailurePreservesConfirmedSpeech() async throws {
+        let (monitor, capture) = try await capturingMonitor()
+        defer { monitor.configure(enabled: false, suspended: false, deviceID: "") }
+        var results: [VoiceWakeWordCapture.Result] = []
+        monitor.onFinished = { results.append($0) }
+        capture.fail()
+        capture.fail()
+        try await waitUntil { results.count == 1 }
+        #expect(!results[0].audio.samples.isEmpty)
+        #expect(monitor.state == .paused)
+    }
+
+    @Test func testExplicitCancellationWhileFinishingDoesNotSubmitDictation() async throws {
+        let (monitor, _) = try await capturingMonitor()
+        var finishes = 0
+        monitor.onFinished = { _ in finishes += 1 }
+        monitor.configure(enabled: true, suspended: false, deviceID: "", inputUnavailable: true)
+        monitor.configure(enabled: false, suspended: false, deviceID: "", inputUnavailable: true)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(monitor.state == .off)
+        #expect(finishes == 0)
+    }
+
+    private func capturingMonitor() async throws -> (VoiceWakeWordMonitor, WakeWordInputProbe) {
+        let capture = WakeWordInputProbe()
+        let monitor = VoiceWakeWordMonitor(
+            inputSession: AudioInputCaptureSession { capture },
+            requestMicrophone: { true },
+            makeProcessor: { VoiceWakeWordProcessor(detect: { _ in true }) }
+        )
+        monitor.confirm = { _ in VoiceWakeWordTranscription(text: "Hey Nativ keep this speech", modelID: "test") }
+        monitor.configure(enabled: true, suspended: false, deviceID: "")
+        try await waitUntil { monitor.state == .listening }
+        for _ in 0..<8 {
+            try capture.deliver()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await waitUntil { monitor.state == .capturing }
+        return (monitor, capture)
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(condition())
+    }
+}
+
+@MainActor
+private final class WakeWordInputProbe: AudioInputCaptureDriving {
+    private var delivery: AudioInputCaptureDelivery?
+    private var onFailure: (@Sendable (Error) -> Void)?
+    private(set) var deviceUniqueID: String?
+    private(set) var starts = 0
+
+    func start(
+        deviceUniqueID: String?, delivery: AudioInputCaptureDelivery,
+        onFailure: @escaping @Sendable (Error) -> Void
+    ) async throws {
+        self.deviceUniqueID = deviceUniqueID
+        self.delivery = delivery
+        self.onFailure = onFailure
+        starts += 1
+    }
+
+    func select(deviceUniqueID: String?) async throws { self.deviceUniqueID = deviceUniqueID }
+    func stop() async { delivery = nil }
+    func fail() { onFailure?(VoiceAudioRecorderError.noAllowedMicrophone) }
+
+    func deliver(sampleRate: Double = 16_000, value: Float = 0.25) throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1))
+        let count = AVAudioFrameCount(sampleRate / 10)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count))
+        buffer.frameLength = count
+        let channel = try #require(buffer.floatChannelData?[0])
+        for frame in 0..<Int(count) { channel[frame] = value }
+        delivery?.submit(buffer, at: AVAudioTime(hostTime: 0))
     }
 }

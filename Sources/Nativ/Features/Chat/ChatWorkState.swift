@@ -72,11 +72,13 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         isVisible = true
     }
 
-    mutating func open(_ id: UUID) {
+    mutating func open(_ id: UUID, activate: Bool = true) {
         guard items.contains(where: { $0.id == id }) else { return }
         if !openIDs.contains(id) { openIDs.append(id) }
-        selectedID = id
-        isVisible = true
+        if activate {
+            selectedID = id
+            isVisible = true
+        }
     }
 
     mutating func close(_ id: UUID) {
@@ -88,9 +90,18 @@ struct ChatWorkState: Codable, Equatable, Sendable {
     }
 
     @discardableResult
+    mutating func moveTab(_ id: UUID, to targetID: UUID) -> Bool {
+        guard let source = openIDs.firstIndex(of: id), let target = openIDs.firstIndex(of: targetID),
+              source != target else { return false }
+        openIDs.insert(openIDs.remove(at: source), at: target)
+        return true
+    }
+
+    @discardableResult
     mutating func create(
         title: String, kind: ChatWorkItem.Kind, content: String = "",
-        url: String? = nil, language: String? = nil, sourceURL: String? = nil, author: String = "You"
+        url: String? = nil, language: String? = nil, sourceURL: String? = nil, author: String = "You",
+        activate: Bool = true
     ) throws -> ChatWorkItem {
         guard items.count < Self.maximumItems else {
             throw ChatWorkError.invalid("This chat already has \(Self.maximumItems) work items.")
@@ -111,7 +122,7 @@ struct ChatWorkState: Codable, Equatable, Sendable {
             language: language, sourceURL: sourceURL, updatedBy: author
         )
         items.append(item)
-        open(item.id)
+        open(item.id, activate: activate)
         return item
     }
 
@@ -124,7 +135,7 @@ struct ChatWorkState: Codable, Equatable, Sendable {
             throw ChatWorkError.missingItem
         }
         guard items[index].revision == expectedRevision else {
-            throw ChatWorkError.conflict
+            throw ChatWorkError.revisionConflict(items[index])
         }
         guard items[index].canEdit else {
             throw ChatWorkError.invalid("This item has no editable source. Use the terminal tool for commands or create an HTML website to edit webpage source.")
@@ -160,9 +171,18 @@ struct ChatWorkState: Codable, Equatable, Sendable {
         if !text.contains(where: { $0.isWhitespace }), isLocal || host.contains(".") {
             return try webURL("\(isLocal ? "http" : "https")://\(text)")
         }
-        var search = URLComponents(string: "https://www.google.com/search")!
-        search.queryItems = [URLQueryItem(name: "q", value: text)]
-        return try webURL(search.url!.absoluteString)
+        guard let url = searchURL(text) else {
+            throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
+        }
+        return url
+    }
+
+    static func searchURL(_ query: String) -> URL? {
+        guard var search = URLComponents(string: "https://www.google.com/search") else { return nil }
+        search.queryItems = [URLQueryItem(name: "q", value: query)]
+        // Search engines decode a literal + as a space in form-encoded queries.
+        search.percentEncodedQuery = search.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return search.url
     }
 
     private static func validateContent(_ content: String) throws {
@@ -182,12 +202,14 @@ struct ChatWorkState: Codable, Equatable, Sendable {
 
 enum ChatWorkError: LocalizedError {
     case invalid(String), missingItem, conflict, unavailable
+    case revisionConflict(ChatWorkItem)
 
     var errorDescription: String? {
         switch self {
         case .invalid(let message): message
         case .missingItem: "This work item is no longer available in this chat. List the work items again."
         case .conflict: "This item changed since it was read. Read the latest revision before updating it."
+        case .revisionConflict: "This item changed since it was read. Merge your changes with the current content before retrying."
         case .unavailable: "The chat work pane is unavailable in this context."
         }
     }

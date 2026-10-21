@@ -24,17 +24,18 @@ final class VoiceCaptureCoordinator {
     private let overlay = VoiceCaptureOverlayController()
     private let analytics = AudioAnalyticsStore.shared
     private let wakeWordMonitor = VoiceWakeWordMonitor.shared
+    private let wakeWordPowerMonitor = VoiceWakeWordPowerMonitor()
     private var isWakeWordCapture = false
     private var wakeWordInsertionTarget: VoiceTranscriptInsertionTarget?
     private var observations = Set<AnyCancellable>()
     private var isActive = false
     private var isOtherAudioBusy = false
     private var isSystemSleeping = false
+    private var isDisplaySleeping = false
     private var isSessionInactive = false
     private var permissionTask: Task<Void, Never>?
     private var transcriptionTasks: [UUID: Task<Void, Never>] = [:]
     private var audioDeletionTasks: [URL: Task<Void, Never>] = [:]
-    private var insertionTarget: VoiceTranscriptInsertionTarget?
     private var activeOverlayTranscriptionID: UUID?
     private var isShortcutHeld = false
     private var isHandsFreeMode = false
@@ -44,6 +45,7 @@ final class VoiceCaptureCoordinator {
     private var hasShownInsertionPermissionAlert = false
 
     init() {
+        wakeWordPowerMonitor.onChange = { [weak self] in self?.updateWakeWordListening() }
         shortcutMonitor.onChange = { [weak self] isHeld in
             self?.handleShortcutChange(isHeld)
         }
@@ -60,15 +62,22 @@ final class VoiceCaptureCoordinator {
         recorder.onRecordingFailure = { [weak self] error, savedURL in
             self?.recordingInterrupted(error, savedURL: savedURL)
         }
-        wakeWordMonitor.onCandidate = { [weak self] in
-            self?.wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
-        }
         wakeWordMonitor.confirm = { [weak self] audio in
             guard let self else { throw CancellationError() }
             return try await self.confirmWakeWord(audio)
         }
         wakeWordMonitor.onConfirmed = { [weak self] in
             guard let self, self.canListenForWakeWord else { return }
+            guard (try? AudioInputDeviceResolver.captureDeviceID(
+                preferredID: AudioInputDevicePreferences.shared.selectedDeviceID, passive: true
+            )) != nil else {
+                AudioInputDevicePreferences.shared.refresh()
+                self.updateWakeWordListening()
+                if AudioInputDevicePreferences.shared.effectiveDeviceID == nil {
+                    self.overlay.showMicrophoneUnavailable()
+                }
+                return
+            }
             self.isWakeWordCapture = true
             self.isHandsFreeMode = true
             self.isShortcutHeld = true
@@ -93,20 +102,22 @@ final class VoiceCaptureCoordinator {
             }
         }
         VoiceShortcutPreferences.shared.$isWakeWordEnabled
-            .removeDuplicates()
-            .sink { [weak self] enabled in
-                // @Published emits before the stored preference changes.
-                self?.updateWakeWordListening(enabled: enabled)
-            }
+            .combineLatest(VoiceShortcutPreferences.shared.$wakeWordListeningMode)
+            .removeDuplicates { $0 == $1 }
+            // Read both stored values after @Published has delivered its change.
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
         AudioInputDevicePreferences.shared.$selectedDeviceID
-            .combineLatest(AudioInputDevicePreferences.shared.$devices)
+            .combineLatest(AudioInputDevicePreferences.shared.$devices, AudioInputDevicePreferences.shared.$exclusions)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateWakeWordListening() }
             .store(in: &observations)
         let sessionEvents: [(Notification.Name, ReferenceWritableKeyPath<VoiceCaptureCoordinator, Bool>, Bool)] = [
             (NSWorkspace.willSleepNotification, \.isSystemSleeping, true),
             (NSWorkspace.didWakeNotification, \.isSystemSleeping, false),
+            (NSWorkspace.screensDidSleepNotification, \.isDisplaySleeping, true),
+            (NSWorkspace.screensDidWakeNotification, \.isDisplaySleeping, false),
             (NSWorkspace.sessionDidResignActiveNotification, \.isSessionInactive, true),
             (NSWorkspace.sessionDidBecomeActiveNotification, \.isSessionInactive, false),
         ]
@@ -150,7 +161,6 @@ final class VoiceCaptureCoordinator {
         }
         overlay.hide()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
     }
@@ -162,18 +172,25 @@ final class VoiceCaptureCoordinator {
     }
 
     private var canUseWakeWordAudio: Bool {
-        isActive && !isSystemSleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
+        isActive && !isSystemSleeping && !isDisplaySleeping && !isSessionInactive && !isOtherAudioBusy && !isPresentingAlert
     }
 
     private var canListenForWakeWord: Bool {
         canUseWakeWordAudio && !isShortcutHeld && !recorder.isRecording && transcriptionTasks.isEmpty
     }
 
-    private func updateWakeWordListening(enabled: Bool? = nil) {
+    private func updateWakeWordListening() {
+        let enabled = isActive && VoiceShortcutPreferences.shared.isWakeWordEnabled
+        wakeWordPowerMonitor.configure(
+            enabled: enabled && !isSystemSleeping && !isDisplaySleeping && !isSessionInactive,
+            mode: VoiceShortcutPreferences.shared.wakeWordListeningMode
+        )
         wakeWordMonitor.configure(
-            enabled: isActive && (enabled ?? VoiceShortcutPreferences.shared.isWakeWordEnabled),
+            enabled: enabled,
             suspended: !canUseWakeWordAudio || (!canListenForWakeWord && !isWakeWordCapture),
-            deviceID: AudioInputDevicePreferences.shared.effectiveDeviceID
+            deviceID: AudioInputDevicePreferences.shared.selectedDeviceID,
+            powerSavingPaused: wakeWordPowerMonitor.isPaused,
+            inputUnavailable: AudioInputDevicePreferences.shared.passiveDeviceID == nil
         )
     }
 
@@ -216,10 +233,18 @@ final class VoiceCaptureCoordinator {
     }
 
     private func beginCapture() {
+        wakeWordPowerMonitor.recordActivity()
         updateWakeWordListening()
         permissionTask?.cancel()
         activeOverlayTranscriptionID = nil
-        insertionTarget = VoiceTranscriptInserter.captureTarget()
+        guard (try? AudioInputDeviceResolver.captureDeviceID(
+            preferredID: AudioInputDevicePreferences.shared.selectedDeviceID
+        )) != nil else {
+            clearFailedCaptureState()
+            overlay.showMicrophoneUnavailable()
+            updateWakeWordListening()
+            return
+        }
         overlay.show(at: NSEvent.mouseLocation)
         permissionTask = Task { [weak self] in
             guard let self else {
@@ -238,14 +263,22 @@ final class VoiceCaptureCoordinator {
             }
 
             do {
-                try self.recorder.start(
-                    deviceUniqueID: AudioInputDevicePreferences.shared.effectiveDeviceID
+                try await self.recorder.start(
+                    deviceUniqueID: AudioInputDevicePreferences.shared.selectedDeviceID
                 )
+                guard !Task.isCancelled, self.isShortcutHeld else { return }
                 self.overlay.didStartRecording()
+            } catch is CancellationError {
+                return
             } catch {
+                guard !Task.isCancelled else { return }
                 NSLog("Nativ voice recording failed to start: %@", error.localizedDescription)
                 self.clearFailedCaptureState()
-                self.overlay.showFailure()
+                if case VoiceAudioRecorderError.noAllowedMicrophone = error {
+                    self.overlay.showMicrophoneUnavailable()
+                } else {
+                    self.overlay.showFailure()
+                }
                 self.updateWakeWordListening()
             }
         }
@@ -255,7 +288,6 @@ final class VoiceCaptureCoordinator {
         isWakeWordCapture = false
         isShortcutHeld = false
         isHandsFreeMode = false
-        insertionTarget = nil
         activeOverlayTranscriptionID = nil
     }
 
@@ -269,14 +301,17 @@ final class VoiceCaptureCoordinator {
 
     private func endCapture() {
         if isWakeWordCapture {
+            // Freeze the destination before asynchronous wake-word finalization.
+            if wakeWordInsertionTarget == nil {
+                wakeWordInsertionTarget = VoiceTranscriptInserter.captureTarget()
+            }
             wakeWordMonitor.finishCapture()
             return
         }
         defer { updateWakeWordListening() }
         permissionTask?.cancel()
         permissionTask = nil
-        let target = insertionTarget
-        insertionTarget = nil
+        let target = VoiceTranscriptInserter.captureTarget()
         let savedURL = recorder.stop()
         if let error = recorder.lastRecordingError {
             recordingInterrupted(error, savedURL: savedURL)
@@ -308,7 +343,6 @@ final class VoiceCaptureCoordinator {
         permissionTask = nil
         recorder.discard()
         activeOverlayTranscriptionID = nil
-        insertionTarget = nil
         isShortcutHeld = false
         isHandsFreeMode = false
         overlay.hide()
@@ -337,6 +371,14 @@ final class VoiceCaptureCoordinator {
     }
 
     private func confirmWakeWord(_ audio: Data) async throws -> VoiceWakeWordTranscription {
+        if #available(macOS 27.0, *),
+           DefaultSpeechModel.isPreferred(selectedModelID: transcriptionConfigurationProvider?()?.selectedModelID) {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("nativ-wake-\(UUID().uuidString).wav")
+            try audio.write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            let result = try await ParakeetTranscriber.shared.transcribe(contentsOf: url)
+            return VoiceWakeWordTranscription(text: result.text, modelID: DefaultSpeechModel.identifier)
+        }
         guard let configuration = transcriptionConfigurationProvider?(), configuration.serverIsRunning else {
             throw VoiceWakeWordModelError.invalidModel("Start the Nativ server to confirm wake words.")
         }
@@ -361,7 +403,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private func finishWakeWordCapture(_ result: VoiceWakeWordCapture.Result) {
-        let target = wakeWordInsertionTarget
+        let target = wakeWordInsertionTarget ?? VoiceTranscriptInserter.captureTarget()
         wakeWordInsertionTarget = nil
         isWakeWordCapture = false
         isShortcutHeld = false
@@ -428,15 +470,6 @@ final class VoiceCaptureCoordinator {
         confirmation: VoiceWakeWordTranscription? = nil,
         wakeWordModelID: String? = nil
     ) {
-        let audioData: Data
-        do {
-            audioData = try Data(contentsOf: recordingURL)
-        } catch {
-            finishOverlayTranscription(overlayTranscriptionID)
-            showRecentRecordingUnavailable()
-            return
-        }
-
         let taskID = UUID()
         let task = Task { [weak self] in
             guard let self else {
@@ -451,63 +484,42 @@ final class VoiceCaptureCoordinator {
                 return
             }
 
-            let installedModels: [LocalModel]
             do {
-                installedModels = try await LocalModelDiscovery.scan(
-                    searchPaths: LocalModelSearchPaths(
-                        primary: configuration.modelSearchPath,
-                        additional: configuration.additionalModelSearchPaths
-                    )
-                )
-            } catch {
-                guard !Task.isCancelled else {
-                    return
-                }
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                self.showMissingSpeechModelAlert()
-                return
-            }
-
-            guard !Task.isCancelled else {
-                return
-            }
-            guard let requestConfiguration = self.transcriptionConfigurationProvider?() else {
-                self.finishOverlayTranscription(overlayTranscriptionID)
-                return
-            }
-            // Both of these are dead ends for the server path. Rather than discarding the
-            // recording, hand it to the on-device system recognizer when that is possible;
-            // the alert is only shown when there is genuinely nothing that can transcribe.
-            let modelID = wakeWordModelID ?? LocalModelDiscovery.speechToTextModelID(
-                in: installedModels,
-                selectedModelID: requestConfiguration.selectedModelID
-            )
-            guard let modelID, requestConfiguration.serverIsRunning || confirmation != nil else {
-                await self.transcribeWithSystemRecognizer(
-                    recordingURL,
-                    target: target,
-                    durationSeconds: durationSeconds,
-                    overlayTranscriptionID: overlayTranscriptionID,
-                    unavailableReason: modelID == nil ? .noSpeechModel : .serverStopped,
-                    wakeWord: wakeWord
-                )
-                return
-            }
-
-            do {
-                let client = NativAudioClient(
-                    baseURL: requestConfiguration.serverBaseURL,
-                    apiKey: requestConfiguration.serverAPIKey
-                )
+                let modelID: String
                 let result: NativAudioTranscription
                 if let confirmation {
+                    modelID = confirmation.modelID
                     result = NativAudioTranscription(text: confirmation.text)
+                } else if #available(macOS 27.0, *),
+                          DefaultSpeechModel.isPreferred(selectedModelID: wakeWordModelID ?? configuration.selectedModelID) {
+                    modelID = DefaultSpeechModel.identifier
+                    let transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL)
+                    result = NativAudioTranscription(text: transcript.text)
                 } else {
-                    result = try await client.transcribe(
-                        audioData: audioData,
-                        fileName: recordingURL.lastPathComponent,
-                        model: modelID
+                    let installedModels = try await LocalModelDiscovery.scan(
+                        searchPaths: LocalModelSearchPaths(
+                            primary: configuration.modelSearchPath,
+                            additional: configuration.additionalModelSearchPaths
+                        )
                     )
+                    try Task.checkCancellation()
+                    let selected = wakeWordModelID ?? LocalModelDiscovery.speechToTextModelID(
+                        in: installedModels, selectedModelID: configuration.selectedModelID
+                    )
+                    guard let selected, configuration.serverIsRunning else {
+                        // Parakeet can cover an unavailable server model on macOS 27+.
+                        // Earlier systems require a running server and an STT model.
+                        await self.transcribeWithOnDeviceModel(
+                            recordingURL, target: target, durationSeconds: durationSeconds,
+                            overlayTranscriptionID: overlayTranscriptionID,
+                            unavailableReason: selected == nil ? .noSpeechModel : .serverStopped,
+                            wakeWord: wakeWord
+                        )
+                        return
+                    }
+                    modelID = selected
+                    let client = NativAudioClient(baseURL: configuration.serverBaseURL, apiKey: configuration.serverAPIKey)
+                    result = try await client.transcribe(fileURL: recordingURL, model: modelID)
                 }
                 guard !Task.isCancelled else {
                     return
@@ -526,6 +538,7 @@ final class VoiceCaptureCoordinator {
                     return
                 }
                 let transcript = dictation.text
+                self.wakeWordPowerMonitor.recordSuccessfulDictation()
                 let transcriptURL = recordingURL
                     .deletingPathExtension()
                     .appendingPathExtension("txt")
@@ -583,13 +596,9 @@ final class VoiceCaptureCoordinator {
         case serverStopped
     }
 
-    /// Last-resort transcription through macOS's on-device recognizer.
-    ///
-    /// Mirrors the server path exactly — same transcript file, same analytics row, same
-    /// cursor insertion — so a fallback transcript behaves like any other. If the system
-    /// recognizer cannot help either, the original alert is shown, leaving the previous
-    /// behaviour intact for anyone it does not cover.
-    private func transcribeWithSystemRecognizer(
+    /// Offline fallback when a manually selected server model is unavailable.
+    /// Uses cached Parakeet on macOS 27; older systems report the server requirement.
+    private func transcribeWithOnDeviceModel(
         _ recordingURL: URL,
         target: VoiceTranscriptInsertionTarget?,
         durationSeconds: TimeInterval?,
@@ -597,30 +606,18 @@ final class VoiceCaptureCoordinator {
         unavailableReason: ServerUnavailableReason,
         wakeWord: Bool
     ) async {
-        guard await AppleSpeechTranscriber.isAvailable else {
+        guard #available(macOS 27.0, *), DefaultSpeechModel.isSupported else {
             finishOverlayTranscription(overlayTranscriptionID)
             showServerUnavailableAlert(unavailableReason)
             return
         }
 
         let transcript: String
+        let modelID = DefaultSpeechModel.identifier
         do {
-            transcript = try await AppleSpeechTranscriber.transcribe(contentsOf: recordingURL)
-        } catch AppleSpeechTranscriber.Failure.empty {
+            transcript = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL).text
+        } catch ParakeetError.tooShort {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
-            return
-        } catch let AppleSpeechTranscriber.Failure.modelInstalling(language) {
-            // The one failure worth its own message: macOS has the language but not the
-            // model yet, and is now fetching it. Saying so beats an alert about a server
-            // the user may not have been trying to use.
-            finishOverlayTranscription(overlayTranscriptionID)
-            showTranscriptionError(
-                title: "Preparing on-device dictation",
-                message: """
-                macOS is downloading its \(language) speech model. Your recording is saved \
-                in Audio — dictate again once it has finished.
-                """
-            )
             return
         } catch {
             NSLog(
@@ -628,8 +625,9 @@ final class VoiceCaptureCoordinator {
                 recordingURL.lastPathComponent,
                 error.localizedDescription
             )
+            guard !Task.isCancelled else { return }
             finishOverlayTranscription(overlayTranscriptionID)
-            showServerUnavailableAlert(unavailableReason)
+            showTranscriptionError(title: "Transcription failed", message: error.localizedDescription)
             return
         }
 
@@ -645,6 +643,7 @@ final class VoiceCaptureCoordinator {
             handleEmptyTranscription(recordingURL, overlayTranscriptionID: overlayTranscriptionID)
             return
         }
+        wakeWordPowerMonitor.recordSuccessfulDictation()
         let transcriptURL = recordingURL
             .deletingPathExtension()
             .appendingPathExtension("txt")
@@ -653,7 +652,7 @@ final class VoiceCaptureCoordinator {
             recordingURL: recordingURL,
             transcript: dictation.text,
             durationSeconds: durationSeconds,
-            modelID: AppleSpeechTranscriber.modelIdentifier,
+            modelID: modelID,
             applicationName: target?.applicationName
         )
 
@@ -666,8 +665,8 @@ final class VoiceCaptureCoordinator {
             return
         }
         NSLog(
-            "Nativ saved voice transcript to %@ using the on-device system recognizer",
-            transcriptURL.path
+            "Nativ saved voice transcript to %@ using %@",
+            transcriptURL.path, modelID
         )
         finishOverlayTranscription(overlayTranscriptionID)
         if !insertedAtCursor {
@@ -718,6 +717,7 @@ final class VoiceCaptureCoordinator {
     }
 
     private static func isEmptyTranscriptionError(_ error: Error) -> Bool {
+        if case ParakeetError.tooShort = error { return true }
         if case NativAudioTranscriptionError.emptyTranscript = error {
             return true
         }

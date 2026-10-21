@@ -216,6 +216,7 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
     case textToSpeech
     case speechToText
     case embeddings
+    case decision
 
     var id: Self { self }
 
@@ -229,6 +230,8 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "Text-to-Speech"
         case .speechToText:
             "Speech-to-Text"
+        case .decision:
+            "Decisions"
         case .embeddings:
             "Embeddings"
         }
@@ -244,6 +247,8 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "speaker.wave.2"
         case .speechToText:
             "waveform"
+        case .decision:
+            "arrow.triangle.branch"
         case .embeddings:
             "square.stack.3d.up"
         }
@@ -648,6 +653,7 @@ struct NativSettings: Codable, Equatable {
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
+    var decisionModelID: String?
     var embeddingModelID: String?
     var serverAPIKey: String?
     var huggingFaceToken: String?
@@ -655,6 +661,8 @@ struct NativSettings: Codable, Equatable {
     var serverPort: Int
     var maxTokens: Int
     var maxKVSize: Int
+    var compactionEnabled: Bool
+    var compactionThresholdPercent: Int
     var systemPrompt: String
     var personalization: NativPersonalization
     var temperature: Double
@@ -686,9 +694,9 @@ struct NativSettings: Codable, Equatable {
     /// Set once the Up-arrow recall has been used, which retires its hint.
     var hasUsedPromptRecall: Bool
     var chatFontScale: Double
+    var chatResponseTimeout: NativChatTimeout
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
-    var sidebarFoldersCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
     var modelConfigs: [String: ModelConfigProfile]
 
@@ -708,6 +716,7 @@ struct NativSettings: Codable, Equatable {
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
+        decisionModelID: String? = nil,
         embeddingModelID: String? = nil,
         serverAPIKey: String? = nil,
         huggingFaceToken: String? = nil,
@@ -715,6 +724,8 @@ struct NativSettings: Codable, Equatable {
         serverPort: Int = 8080,
         maxTokens: Int = 2048,
         maxKVSize: Int = 0,
+        compactionEnabled: Bool = true,
+        compactionThresholdPercent: Int = 75,
         systemPrompt: String = "",
         personalization: NativPersonalization = NativPersonalization(),
         temperature: Double = 0,
@@ -745,9 +756,9 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize: Int = 16,
         hasUsedPromptRecall: Bool = false,
         chatFontScale: Double = Self.defaultChatFontScale,
+        chatResponseTimeout: NativChatTimeout = .tenMinutes,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
-        sidebarFoldersCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
         modelConfigs: [String: ModelConfigProfile] = [:]
     ) {
@@ -766,6 +777,7 @@ struct NativSettings: Codable, Equatable {
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
+        self.decisionModelID = decisionModelID
         self.embeddingModelID = embeddingModelID
         self.serverAPIKey = serverAPIKey
         self.huggingFaceToken = huggingFaceToken
@@ -773,6 +785,8 @@ struct NativSettings: Codable, Equatable {
         self.serverPort = serverPort
         self.maxTokens = maxTokens
         self.maxKVSize = maxKVSize
+        self.compactionEnabled = compactionEnabled
+        self.compactionThresholdPercent = compactionThresholdPercent
         self.systemPrompt = systemPrompt
         self.personalization = personalization
         self.temperature = temperature
@@ -803,9 +817,9 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.hasUsedPromptRecall = hasUsedPromptRecall
         self.chatFontScale = chatFontScale
+        self.chatResponseTimeout = chatResponseTimeout
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
-        self.sidebarFoldersCollapsed = sidebarFoldersCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
         self.modelConfigs = modelConfigs
     }
@@ -826,6 +840,7 @@ struct NativSettings: Codable, Equatable {
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
+        case decisionModelID
         case embeddingModelID
         case serverAPIKey
         case huggingFaceToken
@@ -834,6 +849,8 @@ struct NativSettings: Codable, Equatable {
         case selectedModelID
         case maxTokens
         case maxKVSize
+        case compactionEnabled
+        case compactionThresholdPercent
         case systemPrompt
         case personalization
         case temperature
@@ -864,9 +881,9 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlockSize
         case hasUsedPromptRecall
         case chatFontScale
+        case chatResponseTimeout
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
-        case sidebarFoldersCollapsed
         case sidebarSessionsCollapsed
         case modelConfigs
     }
@@ -921,6 +938,7 @@ struct NativSettings: Codable, Equatable {
         speechToTextModelID =
             try container.decodeIfPresent(String.self, forKey: .speechToTextModelID)
             ?? defaults.speechToTextModelID
+        decisionModelID = try container.decodeIfPresent(String.self, forKey: .decisionModelID)
         embeddingModelID =
             try container.decodeIfPresent(String.self, forKey: .embeddingModelID)
             ?? defaults.embeddingModelID
@@ -938,6 +956,12 @@ struct NativSettings: Codable, Equatable {
             try container.decodeIfPresent(Int.self, forKey: .maxTokens) ?? defaults.maxTokens
         maxKVSize =
             try container.decodeIfPresent(Int.self, forKey: .maxKVSize) ?? defaults.maxKVSize
+        compactionEnabled =
+            try container.decodeIfPresent(Bool.self, forKey: .compactionEnabled)
+            ?? defaults.compactionEnabled
+        compactionThresholdPercent =
+            try container.decodeIfPresent(Int.self, forKey: .compactionThresholdPercent)
+            ?? defaults.compactionThresholdPercent
         systemPrompt =
             try container.decodeIfPresent(String.self, forKey: .systemPrompt)
             ?? defaults.systemPrompt
@@ -1016,15 +1040,14 @@ struct NativSettings: Codable, Equatable {
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
+        chatResponseTimeout = (try container.decodeIfPresent(Int.self, forKey: .chatResponseTimeout))
+            .flatMap(NativChatTimeout.init(rawValue:)) ?? defaults.chatResponseTimeout
         sidebarPinnedCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed)
             ?? defaults.sidebarPinnedCollapsed
         sidebarProjectsCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarProjectsCollapsed)
             ?? defaults.sidebarProjectsCollapsed
-        sidebarFoldersCollapsed =
-            try container.decodeIfPresent(Bool.self, forKey: .sidebarFoldersCollapsed)
-            ?? defaults.sidebarFoldersCollapsed
         sidebarSessionsCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarSessionsCollapsed)
             ?? defaults.sidebarSessionsCollapsed
@@ -1050,11 +1073,14 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
+        try container.encodeIfPresent(decisionModelID, forKey: .decisionModelID)
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(maxKVSize, forKey: .maxKVSize)
+        try container.encode(compactionEnabled, forKey: .compactionEnabled)
+        try container.encode(compactionThresholdPercent, forKey: .compactionThresholdPercent)
         try container.encode(systemPrompt, forKey: .systemPrompt)
         try container.encode(personalization, forKey: .personalization)
         try container.encode(temperature, forKey: .temperature)
@@ -1085,9 +1111,9 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(hasUsedPromptRecall, forKey: .hasUsedPromptRecall)
         try container.encode(chatFontScale, forKey: .chatFontScale)
+        try container.encode(chatResponseTimeout, forKey: .chatResponseTimeout)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
-        try container.encode(sidebarFoldersCollapsed, forKey: .sidebarFoldersCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
         try container.encode(modelConfigs, forKey: .modelConfigs)
     }
@@ -1258,6 +1284,7 @@ struct NativSettings: Codable, Equatable {
         }
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
+        settings.decisionModelID = Self.normalizedModelID(settings.decisionModelID)
         settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(
@@ -1266,6 +1293,7 @@ struct NativSettings: Codable, Equatable {
         settings.serverPort = min(max(settings.serverPort, 1), 65_535)
         settings.maxTokens = min(max(settings.maxTokens, 1), 262_144)
         settings.maxKVSize = min(max(settings.maxKVSize, 0), 1_048_576)
+        settings.compactionThresholdPercent = min(max(settings.compactionThresholdPercent, 20), 90)
         settings.systemPrompt = settings.systemPrompt.trimmingCharacters(
             in: .whitespacesAndNewlines)
         settings.temperature = min(max(settings.temperature, 0), 2)
@@ -1314,14 +1342,13 @@ struct NativSettings: Codable, Equatable {
     }
 
     var allSidebarSectionsCollapsed: Bool {
-        sidebarPinnedCollapsed && sidebarProjectsCollapsed && sidebarFoldersCollapsed
+        sidebarPinnedCollapsed && sidebarProjectsCollapsed
             && sidebarSessionsCollapsed
     }
 
     mutating func setAllSidebarSectionsCollapsed(_ collapsed: Bool) {
         sidebarPinnedCollapsed = collapsed
         sidebarProjectsCollapsed = collapsed
-        sidebarFoldersCollapsed = collapsed
         sidebarSessionsCollapsed = collapsed
     }
 
@@ -1355,6 +1382,7 @@ struct NativSettings: Codable, Equatable {
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
+            && lhs.decisionModelID == rhs.decisionModelID
             && lhs.embeddingModelID == rhs.embeddingModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
@@ -1443,6 +1471,9 @@ struct NativSettings: Codable, Equatable {
         if let speechToTextModelID = settings.speechToTextModelID {
             arguments.append(contentsOf: ["--stt-model", speechToTextModelID])
         }
+        if let decisionModelID = settings.decisionModelID {
+            arguments.append(contentsOf: ["--decision-model", decisionModelID])
+        }
         if Self.serverSupportsEmbeddingModelArgument,
             let embeddingModelID = settings.embeddingModelID
         {
@@ -1485,6 +1516,8 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID
         case .speechToText:
             speechToTextModelID
+        case .decision:
+            decisionModelID
         case .embeddings:
             embeddingModelID
         }
@@ -1500,6 +1533,8 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID = modelID
         case .speechToText:
             speechToTextModelID = modelID
+        case .decision:
+            decisionModelID = modelID
         case .embeddings:
             embeddingModelID = modelID
         }

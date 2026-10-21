@@ -83,17 +83,6 @@ final class ArtifactRefreshTests: XCTestCase {
         XCTAssertEqual(source.state.withLock { $0.scans }, 2)
     }
 
-    func testFolderChangesDoNotScanArtifacts() {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let hub = PersistedDataChangeHub()
-        let source = Source()
-        let store = makeStore(directory: directory, hub: hub, source: source)
-        hub.send(.chatFolders, originWindowID: UUID())
-        XCTAssertFalse(store.isRefreshing)
-        XCTAssertEqual(source.state.withLock { $0.scans }, 0)
-    }
-
     func testRenamePersistsAndSearchIncludesNamesOutsideSemanticResults() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

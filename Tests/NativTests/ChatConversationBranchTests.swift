@@ -122,7 +122,6 @@ final class ChatConversationBranchTests: XCTestCase {
         let secondAssistant = ChatTranscriptMessage(role: .assistant, content: "Second response")
         let sourceID = UUID()
         let branchID = UUID()
-        let folderID = UUID()
         let projectID = UUID()
         let sourceDate = Date(timeIntervalSince1970: 100)
         let branchDate = Date(timeIntervalSince1970: 200)
@@ -136,7 +135,6 @@ final class ChatConversationBranchTests: XCTestCase {
             pinned: true,
             pinnedOrder: 3,
             sessionOrder: 4,
-            folderID: folderID,
             projectID: projectID,
             imageGenerationModelID: "image-model"
         )
@@ -156,7 +154,6 @@ final class ChatConversationBranchTests: XCTestCase {
         XCTAssertNil(branch.customTitle)
         XCTAssertEqual(branch.createdAt, branchDate)
         XCTAssertEqual(branch.updatedAt, branchDate)
-        XCTAssertEqual(branch.folderID, folderID)
         XCTAssertEqual(branch.projectID, projectID)
         XCTAssertEqual(branch.imageGenerationModelID, "image-model")
         XCTAssertEqual(branch.pinned, false)

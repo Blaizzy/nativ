@@ -67,6 +67,8 @@ TRACKED_PATHS = {
     "/v1/chat/completions",
     "/responses",
     "/v1/responses",
+    "/responses/compact",
+    "/v1/responses/compact",
 }
 METRICS_PATHS = {"/metrics", "/v1/metrics"}
 MODEL_LOAD_PROGRESS_PREFIX = "__NATIV_MODEL_LOAD_PROGRESS__:"
@@ -897,7 +899,7 @@ def parse_request_observation(request: Request, payload: dict[str, Any]) -> Requ
     audio_count = 0
     if request.url.path.endswith("chat/completions"):
         image_count, audio_count = iter_message_media(payload.get("messages") or [])
-    elif request.url.path.endswith("responses"):
+    elif request.url.path.endswith(("responses", "responses/compact")):
         input_items = payload.get("input")
         if isinstance(input_items, list):
             image_count, audio_count = iter_message_media(input_items)

@@ -214,12 +214,10 @@ struct AudioView: View {
         }
         .onChange(of: inputDevices.selectedDeviceID) { _, _ in
             inputVolume.refresh(deviceUniqueID: inputDevices.effectiveDeviceID)
-            Task {
-                await inputLevelMonitor.start(
-                    deviceUniqueID: inputDevices.effectiveDeviceID
-                )
-            }
+            startInputMonitoringIfNeeded()
         }
+        .onChange(of: inputDevices.exclusions) { startInputMonitoringIfNeeded() }
+        .onChange(of: inputDevices.devices) { startInputMonitoringIfNeeded() }
         .onChange(of: captureLibrary.phase) { _, phase in
             if phase == .idle {
                 startInputMonitoringIfNeeded()
@@ -419,8 +417,8 @@ struct AudioView: View {
             }
         case .model:
             AudioPage(
-                title: "Speech-to-Text Model",
-                subtitle: "Choose which installed model handles voice transcription"
+                title: "Transcription Model",
+                subtitle: "Choose which installed model handles voice dictation"
             ) {
                 modelConfigurationPanel
                     .frame(maxWidth: 760)
@@ -440,6 +438,8 @@ struct AudioView: View {
                 shortcutConfigurationPanel
                     .frame(maxWidth: 760)
                 wakeWordConfigurationPanel
+                    .frame(maxWidth: 760)
+                excludedMicrophonesPanel
                     .frame(maxWidth: 760)
                 spokenReturnConfigurationPanel
                     .frame(maxWidth: 760)
@@ -1118,10 +1118,16 @@ struct AudioView: View {
                     }
 
                     ForEach(inputDevices.devices) { device in
+                        let exclusion = inputDevices.exclusions.first { $0.id == device.id }
+                        let exclusionDescription = exclusion.map {
+                            $0.allUses ? "Excluded from all microphone use" : "Excluded from passive listening"
+                        } ?? ""
                         Button {
                             inputDevices.selectedDeviceID = device.id
                         } label: {
-                            if inputDevices.selectedDeviceID == device.id {
+                            if exclusion != nil {
+                                Label(device.isSystemDefault ? "\(device.name) (Default)" : device.name, systemImage: "mic.slash")
+                            } else if inputDevices.selectedDeviceID == device.id {
                                 Label(device.name, systemImage: "checkmark")
                             } else if device.isSystemDefault {
                                 Text("\(device.name) (Default)")
@@ -1129,6 +1135,9 @@ struct AudioView: View {
                                 Text(device.name)
                             }
                         }
+                        .disabled(exclusion?.allUses == true)
+                        .help(exclusionDescription)
+                        .accessibilityHint(exclusionDescription)
                     }
                 } label: {
                     HStack(spacing: 8) {
@@ -1211,7 +1220,7 @@ struct AudioView: View {
                     Spacer(minLength: 0)
                 }
 
-                if let errorMessage = inputLevelMonitor.errorMessage {
+                if let errorMessage = audioInputErrorMessage {
                     Text(errorMessage)
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -1576,8 +1585,10 @@ struct AudioView: View {
         case .processing:
             "Processing"
         case .idle:
-            if inputLevelMonitor.errorMessage != nil {
+            if audioInputErrorMessage != nil {
                 "Unavailable"
+            } else if inputDevices.passiveDeviceID == nil {
+                "Preview off"
             } else if inputLevelMonitor.isMonitoring {
                 "Input active"
             } else {
@@ -1586,11 +1597,18 @@ struct AudioView: View {
         }
     }
 
+    private var audioInputErrorMessage: String? {
+        guard inputDevices.effectiveDeviceID != nil else {
+            return VoiceAudioRecorderError.noAllowedMicrophone.localizedDescription
+        }
+        return inputDevices.passiveDeviceID == nil ? nil : inputLevelMonitor.errorMessage
+    }
+
     private var audioInputStatusColor: Color {
         if captureLibrary.phase == .recording {
             return .red
         }
-        if inputLevelMonitor.errorMessage != nil {
+        if audioInputErrorMessage != nil {
             return .orange
         }
         return inputLevelMonitor.isMonitoring ? .green : .secondary
@@ -1684,36 +1702,14 @@ struct AudioView: View {
 
     private var modelConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "waveform.badge.mic")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Color.accentColor.opacity(0.12),
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Transcription Model")
-                        .font(.headline)
-                    Text("This model handles voice dictation everywhere you use Nativ.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Divider()
-                .padding(.vertical, 18)
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("Model selection")
                     .font(.subheadline.weight(.semibold))
-                Text("Choose a specific installed model, or let Nativ pick the first compatible one.")
+                Text("Choose an installed model, or use Automatic for built-in transcription on macOS 27 and later.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if localLibrary.isScanning && speechModels.isEmpty {
+                if localLibrary.isScanning && speechModels.isEmpty && !DefaultSpeechModel.isSupported {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small)
                         Text("Scanning installed models…")
@@ -1771,10 +1767,6 @@ struct AudioView: View {
                 if model.modelSwitchInProgress {
                     ProgressView()
                         .controlSize(.small)
-                } else {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 4)
@@ -1788,7 +1780,17 @@ struct AudioView: View {
 
     @ViewBuilder
     private var speechModelStatus: some View {
-        if speechModels.isEmpty && !localLibrary.isScanning {
+        if DefaultSpeechModel.isPreferred(selectedModelID: selectedModelID) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Parakeet Redux", systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                Text("Built into Nativ and transcribes in the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if speechModels.isEmpty && !localLibrary.isScanning {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
@@ -2581,10 +2583,23 @@ struct AudioView: View {
             Text("Say “hey nativ” and continue speaking. Pause for two seconds to transcribe, or use your dictation shortcut to finish.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase, so the Nativ server must be running.")
+            Text("Keeps your selected microphone active and a short audio history in memory. Your local speech model confirms the wake phrase.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if shortcuts.isWakeWordEnabled {
+                Picker("Listening mode", selection: $shortcuts.wakeWordListeningMode) {
+                    ForEach(VoiceWakeWordListeningMode.allCases, id: \.self) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                if shortcuts.wakeWordListeningMode == .automatic {
+                    Text("On battery, pauses after 5 minutes without keyboard, mouse, or dictation activity—or 1 minute in Low Power Mode. A successful dictation keeps listening available for at least 10 minutes. Stays ready while plugged in.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("While paused, move the mouse, press a key, or use your dictation shortcut to resume. Saying “hey nativ” cannot resume a paused microphone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     Text(wakeWordMonitor.state.description)
                         .font(.caption)
@@ -2599,6 +2614,59 @@ struct AudioView: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(18)
         .audioPanelStyle()
+    }
+
+    private var excludedMicrophonesPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Excluded Microphones", systemImage: "mic.slash")
+                    .font(.headline)
+                Spacer()
+                Menu("Add Microphone") {
+                    ForEach(excludableDevices) { device in
+                        Button(device.name) { inputDevices.exclude(device) }
+                    }
+                }
+                .fixedSize()
+                .disabled(excludableDevices.isEmpty)
+            }
+            Text("These microphones are skipped for Hey Nativ and input previews. Nativ uses another available microphone, or pauses passive listening if none are allowed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(inputDevices.exclusions) { exclusion in
+                let device = inputDevices.devices.first { $0.id == exclusion.id }
+                Divider()
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(device?.name ?? exclusion.name)
+                            .font(.callout.weight(.medium))
+                        if device == nil {
+                            Text("Disconnected")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Toggle("Exclude from all microphone use", isOn: Binding(
+                            get: { exclusion.allUses },
+                            set: { inputDevices.setExcludedFromAllUses($0, id: exclusion.id) }
+                        ))
+                        .toggleStyle(.checkbox)
+                    }
+                    Spacer()
+                    Button("Remove") { inputDevices.removeExclusion(id: exclusion.id) }
+                        .accessibilityLabel("Remove exclusion for \(device?.name ?? exclusion.name)")
+                }
+            }
+            Text("Exclusions are remembered when a microphone reconnects and only apply within Nativ.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .disabled(captureLibrary.isBusy)
+        .padding(18)
+        .audioPanelStyle()
+    }
+
+    private var excludableDevices: [NativAudioInputDevice] {
+        inputDevices.devices.filter { device in !inputDevices.exclusions.contains { $0.id == device.id } }
     }
 
     private var spokenReturnConfigurationPanel: some View {
@@ -3000,9 +3068,13 @@ struct AudioView: View {
         guard destination == .record, captureLibrary.phase == .idle else {
             return
         }
+        guard inputDevices.passiveDeviceID != nil else {
+            inputLevelMonitor.stop()
+            return
+        }
         Task {
             await inputLevelMonitor.start(
-                deviceUniqueID: inputDevices.effectiveDeviceID
+                deviceUniqueID: inputDevices.selectedDeviceID
             )
         }
     }
@@ -3420,7 +3492,8 @@ private struct AudioTranscriptRow: View {
 }
 
 private func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
-    modelID.split(separator: "/").last.map(String.init) ?? modelID
+    if modelID == DefaultSpeechModel.identifier { return "Parakeet Redux" }
+    return modelID.split(separator: "/").last.map(String.init) ?? modelID
 }
 
 private struct AudioTranscriptionModelProviderBadge: View {
@@ -3505,6 +3578,10 @@ private struct AudioCaptureRecordRow: View {
     @State private var selectedDetail: DetailSection?
     @State private var copiedDetail: DetailSection?
     @State private var hoveredDetail: DetailSection?
+    @State private var isExporting = false
+    @State private var exportedFormat: AudioRecordExportFormat?
+    @State private var exportError: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum DetailSection: Hashable {
         case summary
@@ -3611,7 +3688,19 @@ private struct AudioCaptureRecordRow: View {
                         .disabled(!audioIsAvailable)
                 }
 
+                exportStatus
+
                 Menu {
+                    Menu {
+                        ForEach(AudioRecordExportFormat.allCases, id: \.self) { format in
+                            Button(format.title) { export(as: format) }
+                        }
+                    } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(isExporting || !AudioRecordExport(record: record).isAvailable)
+                    .help("Export the summary and transcript together")
+                    Divider()
                     if !record.transcript.isEmpty {
                         Menu {
                             Button(action: onTranscribe) {
@@ -3686,6 +3775,48 @@ private struct AudioCaptureRecordRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.07), lineWidth: 1)
         }
+        .alert("Export Failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "The document could not be saved.")
+        }
+        .task(id: exportedFormat) {
+            guard exportedFormat != nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(3))
+            } catch {
+                return
+            }
+            withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        }
+    }
+
+    @ViewBuilder
+    private var exportStatus: some View {
+        if isExporting {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Exporting…")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .transition(.opacity)
+        } else if let exportedFormat {
+            Label("\(exportedFormat.title) exported", systemImage: "checkmark.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .background(Color.green.opacity(0.1), in: Capsule())
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+        }
+    }
+
+    private var exportFeedbackAnimation: Animation {
+        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.7)
     }
 
     private var processingLabel: String {
@@ -3867,6 +3998,36 @@ private struct AudioCaptureRecordRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
+        }
+    }
+
+    private func export(as format: AudioRecordExportFormat) {
+        let document = AudioRecordExport(record: record)
+        guard document.isAvailable, !isExporting else { return }
+        withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
+        let panel = NSSavePanel()
+        panel.title = "Export Summary and Transcript"
+        panel.prompt = "Export"
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = document.filename(for: format)
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            withAnimation(exportFeedbackAnimation) { isExporting = true }
+            Task { @MainActor in
+                do {
+                    try await Task.detached(priority: .userInitiated) {
+                        try document.write(to: url, format: format)
+                    }.value
+                    withAnimation(exportFeedbackAnimation) {
+                        isExporting = false
+                        exportedFormat = format
+                    }
+                } catch {
+                    withAnimation(exportFeedbackAnimation) { isExporting = false }
+                    exportError = error.localizedDescription
+                }
+            }
         }
     }
 

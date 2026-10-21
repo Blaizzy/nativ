@@ -150,43 +150,6 @@ extension ControlPanelView {
         }
     }
 
-    func exportFolder(_ folder: ChatFolder) {
-        let chatIDs = sessions(inFolder: folder.id).compactMap(\.chatID)
-        guard !chatIDs.isEmpty else {
-            return
-        }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Export"
-        guard panel.runModal() == .OK, let directory = panel.url else {
-            return
-        }
-        let root = directory.appendingPathComponent(
-            sanitizedFileName(folder.name), isDirectory: true)
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-
-        var usedNames: Set<String> = []
-        for sessionID in chatIDs {
-            guard let text = chat.conversationText(for: sessionID) else {
-                continue
-            }
-            let title = sidebarState.recents.chatTitle(for: sessionID) ?? sessionID.uuidString
-            let base = sanitizedFileName(title)
-            var candidate = base
-            var suffix = 2
-            while usedNames.contains(candidate.lowercased()) {
-                candidate = "\(base) \(suffix)"
-                suffix += 1
-            }
-            usedNames.insert(candidate.lowercased())
-            let fileURL = root.appendingPathComponent("\(candidate).txt")
-            try? text.write(to: fileURL, atomically: true, encoding: .utf8)
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([root])
-    }
-
     func sanitizedFileName(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:?%*|\"<>")
         let cleaned = name.components(separatedBy: invalid).joined(separator: "-")

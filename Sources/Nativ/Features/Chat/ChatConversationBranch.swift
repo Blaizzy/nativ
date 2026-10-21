@@ -149,7 +149,6 @@ enum ChatConversationBranch {
             pinned: false,
             pinnedOrder: nil,
             sessionOrder: nil,
-            folderID: source.folderID,
             projectID: source.projectID,
             imageGenerationModelID: source.imageGenerationModelID,
             workState: source.workState,

@@ -72,7 +72,9 @@ final class SystemAudioMeetingRecorder: NSObject {
         let configuration = SCStreamConfiguration()
         configuration.capturesAudio = true
         configuration.captureMicrophone = true
-        configuration.microphoneCaptureDeviceID = microphoneDeviceID
+        configuration.microphoneCaptureDeviceID = try AudioInputDeviceResolver.captureDeviceID(
+            preferredID: microphoneDeviceID
+        )
         configuration.excludesCurrentProcessAudio = true
 
         let stream = SCStream(

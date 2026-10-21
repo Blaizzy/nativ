@@ -1580,6 +1580,7 @@ private struct ServerEndpoint: Identifiable {
     static let supported: [ServerEndpoint] = [
         .init(method: .post, path: "/v1/chat/completions", category: .openAI),
         .init(method: .post, path: "/v1/responses", category: .openAI),
+        .init(method: .post, path: "/v1/responses/compact", category: .openAI),
         .init(method: .post, path: "/v1/responses/input_tokens", category: .openAI),
         .init(method: .get, path: "/v1/responses/{response_id}", category: .openAI),
         .init(method: .delete, path: "/v1/responses/{response_id}", category: .openAI),

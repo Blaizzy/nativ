@@ -35,6 +35,7 @@ struct WelcomeGateView: View {
                     softwareUpdater: softwareUpdater,
                     dependencies: controlPanelDependencies
                 )
+                .modifier(LaunchSplashModifier())
             } else {
                 WelcomeView(model: model) { modelID, serverAPIKey in
                     onComplete(modelID, serverAPIKey)
