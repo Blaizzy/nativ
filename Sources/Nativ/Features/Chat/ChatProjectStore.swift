@@ -82,6 +82,7 @@ struct ChatToolScope: Equatable, Sendable {
     let projectName: String?
     let rootPath: String?
     let projectToolsEnabled: Bool
+    var standaloneWriteRootPath: String? = nil
 
     var isProject: Bool {
         projectID != nil
@@ -97,12 +98,16 @@ struct ChatToolScope: Equatable, Sendable {
         isProject ? projectToolsAreAvailable : rootPath != nil
     }
 
+    var fileWriteToolsAreAvailable: Bool {
+        isProject ? projectToolsAreAvailable : standaloneWriteRootPath != nil
+    }
+
     var fileReadRootPath: String? {
         rootPath
     }
 
     var fileWriteRootPath: String? {
-        rootPath
+        isProject ? rootPath : standaloneWriteRootPath
     }
 
     var terminalWorkingDirectory: String? {
@@ -138,7 +143,8 @@ struct ChatToolScope: Equatable, Sendable {
             projectID: nil,
             projectName: nil,
             rootPath: settings.fileReadRootPath,
-            projectToolsEnabled: false
+            projectToolsEnabled: false,
+            standaloneWriteRootPath: settings.fileWriteRootPath
         )
     }
 }

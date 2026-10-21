@@ -46,9 +46,16 @@ jobs:
       - name: Build app (unsigned Debug)
         run: make xcode-build
 
-      - name: Test software update channels
+      - name: Test update channels and filesystem safety
         run: |
           xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
             -derivedDataPath build/NativDevelopmentDerivedData \
             CODE_SIGNING_ALLOWED=NO NATIV_SKIP_PYTHON_RESOURCE_BUILD=YES \
-            -only-testing:NativTests/SoftwareUpdaterTests test
+            -only-testing:NativTests/SoftwareUpdaterTests \
+            -only-testing:NativTests/MCPClientTests \
+            -only-testing:NativTests/MCPProjectFilesystemTests \
+            -only-testing:NativTests/MCPFilesystemSafetyTests \
+            -only-testing:NativTests/MCPServerCatalogTests \
+            -only-testing:NativTests/ChatProjectStoreTests \
+            -only-testing:NativTests/ChatFileWriteToolTests \
+            -only-testing:NativTests/ChatReadFileToolTests test

@@ -20,6 +20,14 @@ struct SafeLocalFileWriter: Sendable {
         self.maximumBytes = maximumBytes
     }
 
+    func createDirectory(at url: URL) throws {
+        try Task.checkCancellation()
+        let (directory, _) = try openParent(
+            of: url.appendingPathComponent(".nativ-directory-probe"), createMissing: true
+        )
+        Darwin.close(directory)
+    }
+
     func write(data: Data, to url: URL, overwrite: Bool = true) throws -> FileReadFileStamp {
         guard data.count <= maximumBytes else {
             throw SafeLocalFileWriterError.contentTooLarge(maximumBytes: maximumBytes)

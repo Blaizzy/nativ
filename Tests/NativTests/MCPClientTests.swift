@@ -73,13 +73,17 @@ final class MCPProjectFilesystemTests: XCTestCase {
             .resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: temporaryRoot, withIntermediateDirectories: true)
         let entry = MCPCatalogEntry(
-            id: "filesystem", name: "filesystem", summary: "Test filesystem",
+            id: "fixture", name: "filesystem", summary: "Test filesystem",
             command: "/usr/bin/python3", arguments: ["-u", "-c", Self.serverScript],
             requiresFolder: true
         )
         config = entry.makeConfiguration()
         config.environment["TEST_CALL_LOG"] = temporaryRoot.appendingPathComponent("calls").path
-        host = MCPHostManager(githubOAuth: nil, catalog: try MCPServerCatalog(entries: [entry]))
+        let managedRoot = temporaryRoot.appendingPathComponent("managed")
+        host = MCPHostManager(
+            githubOAuth: nil, catalog: try MCPServerCatalog(entries: [entry]),
+            connectionDirectory: { managedRoot.appendingPathComponent($0) }
+        )
         await host.prepare(servers: [config])
         XCTAssertEqual(host.states[config.id], .connected(toolCount: 1))
     }

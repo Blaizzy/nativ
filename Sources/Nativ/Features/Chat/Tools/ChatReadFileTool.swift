@@ -632,7 +632,7 @@ private struct ReadFileFailure: Encodable {
     let hint: String?
 }
 
-private enum FileReadContentPolicy {
+enum FileReadContentPolicy {
     static let unsupportedDocumentExtensions: Set<String> = [
         "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "rtf", "epub",
     ]

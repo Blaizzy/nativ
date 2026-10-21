@@ -25,6 +25,7 @@ final class MCPHostManager: ObservableObject {
     private var connections: [UUID: Connection] = [:]
     private var projectCalls: [UUID: (config: MCPServerConfig, client: MCPClient)] = [:]
     private let catalog: MCPServerCatalog
+    private let connectionDirectory: (String) -> URL?
     private var appliedServers: [MCPServerConfig] = []
     private var reloadTask: Task<Void, Never>?
     private var reloadGeneration = 0
@@ -32,14 +33,26 @@ final class MCPHostManager: ObservableObject {
 
     init(
         githubOAuth: (any GitHubOAuthAuthorizing)? = GitHubOAuthManager.configured(),
-        catalog: MCPServerCatalog = .bundled
+        catalog: MCPServerCatalog = .bundled,
+        connectionDirectory: ((String) -> URL?)? = nil
     ) {
         self.githubOAuth = githubOAuth
         self.catalog = catalog
+        self.connectionDirectory = connectionDirectory ?? Self.workingDirectory(for:)
     }
 
     func toolDefinitions(projectScope: ChatToolScope? = nil) -> [MLXChatToolDefinition] {
         connections.values.flatMap { connection -> [MLXChatToolDefinition] in
+            if usesNativeFilesystem(connection.config) {
+                guard let projectScope else { return [] }
+                return Self.toolDefinitions(for: connection).filter { definition in
+                    let name = String(definition.function.name.dropFirst("mcp__\(connection.slug)__".count))
+                    guard let tool = MCPFilesystemTools.Tool(rawValue: name) else { return false }
+                    return tool.writesFiles
+                        ? projectScope.fileWriteToolsAreAvailable
+                        : projectScope.fileToolsAreAvailable
+                }
+            }
             if let projectScope, !projectScope.fileToolsAreAvailable,
                 requiresFolder(connection.config) {
                 return []
@@ -64,14 +77,47 @@ final class MCPHostManager: ObservableObject {
         route(for: name) != nil
     }
 
+    func requiresFileWriteApproval(
+        named name: String, argumentsJSON: String?, projectScope: ChatToolScope
+    ) -> Bool {
+        guard let route = route(for: name), usesNativeFilesystem(route.connection.config),
+            let tool = MCPFilesystemTools.Tool(rawValue: route.toolName) else { return false }
+        return MCPFilesystemTools.requiresApproval(
+            tool: tool, argumentsJSON: argumentsJSON, rootPath: projectScope.fileWriteRootPath
+        )
+    }
+
     func callTool(
         named name: String,
         argumentsJSON: String?,
         projectScope: ChatToolScope? = nil,
-        currentProjectScope: (() -> ChatToolScope)? = nil
+        currentProjectScope: (() -> ChatToolScope)? = nil,
+        fileWriteApprovalGranted: Bool = false
     ) async throws -> String {
         guard let route = route(for: name) else {
             throw MCPClientError.notConnected
+        }
+        if usesNativeFilesystem(route.connection.config) {
+            guard let projectScope, let tool = MCPFilesystemTools.Tool(rawValue: route.toolName) else {
+                throw MCPClientError.toolFailed("An authorized folder is required for this filesystem tool.")
+            }
+            let directory = try Self.scopedDirectory(
+                expected: projectScope, current: currentProjectScope?() ?? projectScope,
+                forWriting: tool.writesFiles
+            )
+            return try await MCPFilesystemTools.execute(
+                tool: tool, argumentsJSON: argumentsJSON, root: directory,
+                approvalGranted: fileWriteApprovalGranted,
+                validateScope: {
+                    try Task.checkCancellation()
+                    guard self.connections[route.connection.config.id] != nil,
+                        self.isEnabled(route.connection.config) else { throw MCPClientError.notConnected }
+                    _ = try Self.scopedDirectory(
+                        expected: projectScope, current: currentProjectScope?() ?? projectScope,
+                        forWriting: tool.writesFiles
+                    )
+                }
+            )
         }
         guard requiresFolder(route.connection.config), let projectScope else {
             return try await route.connection.client.callTool(
@@ -104,6 +150,7 @@ final class MCPHostManager: ObservableObject {
                 _ = try Self.scopedDirectory(
                     expected: projectScope, current: currentProjectScope?() ?? projectScope
                 )
+                try Self.validatePathArguments(argumentsJSON, root: directory)
                 let result = try await client.callTool(
                     name: route.toolName, argumentsJSON: argumentsJSON
                 )
@@ -133,10 +180,20 @@ final class MCPHostManager: ObservableObject {
         return config.command == entry.command && config.arguments == entry.arguments
     }
 
-    static func scopedDirectory(expected: ChatToolScope, current: ChatToolScope) throws -> URL {
-        guard expected.fileToolsAreAvailable, current.fileToolsAreAvailable,
-            expected.projectID == current.projectID, expected.rootPath == current.rootPath,
-            let path = expected.rootPath, path.hasPrefix("/") else {
+    private func usesNativeFilesystem(_ config: MCPServerConfig) -> Bool {
+        catalog.entry(matching: config)?.id == "filesystem" && requiresFolder(config)
+    }
+
+    static func scopedDirectory(
+        expected: ChatToolScope, current: ChatToolScope, forWriting: Bool = false
+    ) throws -> URL {
+        let expectedRoot = forWriting ? expected.fileWriteRootPath : expected.fileReadRootPath
+        let currentRoot = forWriting ? current.fileWriteRootPath : current.fileReadRootPath
+        let expectedAvailable = forWriting ? expected.fileWriteToolsAreAvailable : expected.fileToolsAreAvailable
+        let currentAvailable = forWriting ? current.fileWriteToolsAreAvailable : current.fileToolsAreAvailable
+        guard expectedAvailable, currentAvailable,
+            expected.projectID == current.projectID, expectedRoot == currentRoot,
+            let path = expectedRoot, path.hasPrefix("/") else {
             throw MCPClientError.toolFailed(
                 "File access is disabled or the folder has changed or is unavailable."
             )
@@ -146,7 +203,8 @@ final class MCPHostManager: ObservableObject {
         guard directory.resolvingSymlinksInPath().path == directory.path,
             FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory),
             isDirectory.boolValue,
-            FileWriteAccessPolicy.isConfigured(rootPath: directory.path) else {
+            FileReadAccessPolicy.isConfigured(rootPath: directory.path),
+            !forWriting || FileWriteAccessPolicy.isConfigured(rootPath: directory.path) else {
             throw MCPClientError.toolFailed("The folder is no longer available.")
         }
         return directory
@@ -154,8 +212,8 @@ final class MCPHostManager: ObservableObject {
 
     private static let pathArgumentKeys = ["path", "paths", "source", "destination"]
 
-    /// Holds a folder-scoped server to the blocklist the native file tools use,
-    /// rather than trusting it to police its own sandbox.
+    /// Preflights known path arguments for other folder-scoped servers. The
+    /// bundled filesystem tools enforce their policies at the native I/O layer.
     static func validatePathArguments(_ argumentsJSON: String?, root: URL) throws {
         guard let argumentsJSON,
             let arguments = try? JSONSerialization.jsonObject(with: Data(argumentsJSON.utf8))
@@ -279,7 +337,7 @@ final class MCPHostManager: ObservableObject {
                 githubPending.append((config, executable))
                 continue
             }
-            let workingDirectory = Self.workingDirectory(for: config.id.uuidString)
+            let workingDirectory = connectionDirectory(config.id.uuidString)
             let client = MCPClient(
                 executableURL: executable,
                 arguments: Self.launchArguments(
@@ -427,9 +485,7 @@ final class MCPHostManager: ObservableObject {
                 executableURL: executable,
                 arguments: config.arguments,
                 environment: environment,
-                workingDirectory: Self.workingDirectory(
-                    for: config.id.uuidString
-                )
+                workingDirectory: connectionDirectory(config.id.uuidString)
             )
             do {
                 let tools = try await client.connectAndListTools()
@@ -564,7 +620,9 @@ final class MCPHostManager: ObservableObject {
         entry: MCPCatalogEntry?,
         in workingDirectory: URL?
     ) -> [String] {
-        guard entry?.requiresFolder == true, let workingDirectory else {
+        guard let entry, entry.requiresFolder,
+            config.command == entry.command, config.arguments == entry.arguments,
+            let workingDirectory else {
             return config.arguments
         }
         return config.arguments + [workingDirectory.path]
