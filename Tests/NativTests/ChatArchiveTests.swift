@@ -3,6 +3,25 @@ import NativServerKit
 import XCTest
 
 final class ChatArchiveTests: XCTestCase {
+    func testWorkSaveEvidenceSurvivesPersistenceAndArchiveImport() throws {
+        for files: [String]? in [nil, [], ["Notes.md", "Plan.md"]] {
+            var message = ChatTranscriptMessage(role: .assistant, content: "Updated the notes")
+            message.savedWorkFiles = files
+            let data = try JSONEncoder().encode(message)
+            let decoded = try JSONDecoder().decode(ChatTranscriptMessage.self, from: data)
+            XCTAssertEqual(decoded.savedWorkFiles, files)
+            XCTAssertEqual(decoded.apiMessage, message.apiMessage)
+            if files == nil {
+                XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("savedWorkFiles"))
+            }
+            var session = makeSession()
+            session.messages = [message]
+            let archive = ChatArchive(chat: session, modelRepositoryID: "model", systemPrompt: "")
+            let imported = try ChatArchiveCodec.importedSession(from: ChatArchiveCodec.decode(ChatArchiveCodec.encode(archive)))
+            XCTAssertEqual(imported.messages.first?.savedWorkFiles, files)
+        }
+    }
+
     func testArchiveRoundTripWithPersonalizationExplicitlyIncluded() throws {
         let date = Date(timeIntervalSince1970: 1_700_000_000)
         var session = makeSession(date: date)

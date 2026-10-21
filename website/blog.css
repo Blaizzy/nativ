@@ -93,6 +93,17 @@
 .article-end .text-link { margin: 0; }
 .article-end > span { color: var(--muted); font: 400 9px/1.5 var(--mono); }
 
+.phonon-pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.phonon-pipeline li { position: relative; display: grid; align-content: center; gap: 8px; padding: 20px 10px; border: 1px solid var(--line); background: var(--paper-2); text-align: center; }
+.phonon-pipeline li:nth-child(3) { background: var(--acid); }
+.phonon-pipeline li + li::before { content: "→"; position: absolute; left: -15px; top: 50%; transform: translateY(-50%); color: var(--ink); }
+.phonon-pipeline strong { font: 500 10px/1.5 var(--mono); text-transform: uppercase; }
+.phonon-pipeline span { font-size: 11px; line-height: 1.5; }
+.article-body .phonon-specs { min-width: 450px; }
+.article-body .phonon-specs th,
+.article-body .phonon-specs td { text-align: left; }
+.article-body .phonon-specs th:first-child { width: 40%; }
+
 @media (max-width: 1000px) {
   .article-layout { grid-template-columns: 170px minmax(0, 1fr); gap: 32px; }
   .blog-card { grid-template-columns: 1fr 1fr; }
@@ -118,6 +129,9 @@
   .article-source { display: inline-block; padding: 0; border: 0; }
 }
 @media (max-width: 520px) {
+  .phonon-pipeline { grid-template-columns: 1fr; gap: 22px; }
+  .phonon-pipeline li { padding: 16px; }
+  .phonon-pipeline li + li::before { content: "↓"; left: 50%; top: -24px; transform: translateX(-50%); }
   .article-body .embedding-comparison { --benchmark-label-width: 125px; }
   .article-body .embedding-comparison th:nth-child(2) { width: 110px; padding-inline: 6px; font-size: 10px; }
   .blog-card h2,

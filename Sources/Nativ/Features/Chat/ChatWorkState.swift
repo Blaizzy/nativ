@@ -135,7 +135,7 @@ struct ChatWorkState: Codable, Equatable, Sendable {
             throw ChatWorkError.missingItem
         }
         guard items[index].revision == expectedRevision else {
-            throw ChatWorkError.conflict
+            throw ChatWorkError.revisionConflict(items[index])
         }
         guard items[index].canEdit else {
             throw ChatWorkError.invalid("This item has no editable source. Use the terminal tool for commands or create an HTML website to edit webpage source.")
@@ -202,12 +202,14 @@ struct ChatWorkState: Codable, Equatable, Sendable {
 
 enum ChatWorkError: LocalizedError {
     case invalid(String), missingItem, conflict, unavailable
+    case revisionConflict(ChatWorkItem)
 
     var errorDescription: String? {
         switch self {
         case .invalid(let message): message
         case .missingItem: "This work item is no longer available in this chat. List the work items again."
         case .conflict: "This item changed since it was read. Read the latest revision before updating it."
+        case .revisionConflict: "This item changed since it was read. Merge your changes with the current content before retrying."
         case .unavailable: "The chat work pane is unavailable in this context."
         }
     }

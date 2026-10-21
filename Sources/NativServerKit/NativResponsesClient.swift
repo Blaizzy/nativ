@@ -11,12 +11,37 @@ public final class NativResponsesClient: @unchecked Sendable {
     private let apiKey: String?
     private let tenant: String
     private let session: URLSession
+    private let idleTimeout: TimeInterval
+    private let ownsSession: Bool
 
-    public init(baseURL: URL, apiKey: String? = nil, tenant: String, session: URLSession = .shared) {
+    public init(
+        baseURL: URL,
+        apiKey: String? = nil,
+        tenant: String,
+        idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout,
+        session: URLSession? = nil
+    ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tenant = tenant
-        self.session = session
+        self.idleTimeout = idleTimeout
+        self.ownsSession = session == nil
+        if let session {
+            self.session = session
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = idleTimeout
+            configuration.timeoutIntervalForResource = resourceTimeout
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+
+    deinit {
+        if ownsSession {
+            session.finishTasksAndInvalidate()
+        }
     }
 
     public func contextLimit(for model: String) async throws -> Int? {
@@ -25,6 +50,13 @@ public final class NativResponsesClient: @unchecked Sendable {
         let health = try MLXJSONValue(jsonData: data)
         guard health["loaded_model"]?.stringValue == model else { return nil }
         return health["effective_context_limit"]?.intValue
+    }
+
+    /// Count the same capsule, conversation tail, and current context used for generation.
+    public func countInputTokens(
+        for request: MLXChatCompletionRequest, input: [MLXJSONValue]
+    ) async throws -> Int? {
+        try await countInputTokens(makeResponseRequest(request, input: input, compactThreshold: 1))
     }
 
     public static func inputItems(_ messages: [MLXChatMessage]) throws -> [MLXJSONValue] {
@@ -70,6 +102,7 @@ public final class NativResponsesClient: @unchecked Sendable {
             "compact_threshold": .number(Double(compactThreshold)),
         ])])
         var urlRequest = makeRequest(path: "v1/responses")
+        urlRequest.timeoutInterval = idleTimeout
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -88,12 +121,8 @@ public final class NativResponsesClient: @unchecked Sendable {
         let urlRequest = try makeResponseRequest(request, input: input, compactThreshold: compactThreshold)
         var inputTokens: Int?
         if let onCompaction {
-            var countRequest = urlRequest
-            countRequest.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
-            countRequest.setValue("application/json", forHTTPHeaderField: "Accept")
-            countRequest.timeoutInterval = 10
             // Token counts are presentation data; an unavailable count must not block generation.
-            inputTokens = try? await countInputTokens(countRequest)
+            inputTokens = try? await countInputTokens(urlRequest)
             try Task.checkCancellation()
             if let inputTokens, inputTokens >= compactThreshold {
                 await onCompaction(inputTokens)
@@ -127,6 +156,10 @@ public final class NativResponsesClient: @unchecked Sendable {
     }
 
     private func countInputTokens(_ request: URLRequest) async throws -> Int? {
+        var request = request
+        request.url = baseURL.appendingPathComponent("v1/responses/input_tokens")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 10
         let (data, response) = try await session.data(for: request)
         try validate(response, body: String(decoding: data, as: UTF8.self))
         return try MLXJSONValue(jsonData: data)["input_tokens"]?.intValue
@@ -134,7 +167,7 @@ public final class NativResponsesClient: @unchecked Sendable {
 
     private func makeRequest(path: String) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.timeoutInterval = 600
+        request.timeoutInterval = 10
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue(tenant, forHTTPHeaderField: "X-APC-Tenant")
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
