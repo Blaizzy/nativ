@@ -34,6 +34,14 @@ struct ChatToolExecutionContext: Sendable {
     var terminalToolDependencies = ChatTerminalToolDependencies.live
     var imageModelSelection: ChatImageModelSelectionHandler? = nil
     var imageExecutionWillStart: (@MainActor @Sendable (String) -> Void)? = nil
+    var mcpHost: MCPHostManager? = nil
+    var settings: NativSettings? = nil
+    var spawnAgentParentMessages: [ChatTranscriptMessage] = []
+    var spawnAgentUpdate: (@MainActor @Sendable ([ChatTranscriptMessage]) -> Void)? = nil
+    var agentRegistry: ChatAgentRegistry? = nil
+    var subAgentToolDefinitions: [MLXChatToolDefinition]? = nil
+    var subAgentSystemPrompt: String? = nil
+    var projectScope: ChatToolScope? = nil
     var workAction: (@MainActor @Sendable (ChatWorkRequest) async throws -> String)? = nil
 }
 
@@ -202,6 +210,34 @@ enum ChatToolRegistry {
                 displayDescription: "Read and find relevant information on public web pages.",
                 configuration: .webRead
             ))
+        tools += ChatSpawnAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Delegate a focused sub-task to a separate agent.",
+                configuration: nil
+            )
+        }
+        tools += ChatListAgentsToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "See every spawned sub-agent and its status.",
+                configuration: nil
+            )
+        }
+        tools += ChatCheckAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Check a spawned sub-agent's status and result.",
+                configuration: nil
+            )
+        }
+        tools += ChatSteerAgentToolRegistry.definitions().map {
+            ChatNativeToolDescriptor(
+                definition: $0,
+                displayDescription: "Send a running sub-agent an additional message.",
+                configuration: nil
+            )
+        }
         tools.append(ChatNativeToolDescriptor(
             definition: ChatWorkToolRegistry.definition,
             displayDescription: "Work on documents, code, websites, and shared terminals beside chat.",
@@ -288,6 +324,21 @@ enum ChatToolDispatcher {
         ChatFileWriteToolRegistry.patchToolName: { call, context in
             try await executeFileWriteTool(call: call, context: context)
         },
+        ChatSpawnAgentToolRegistry.toolName: { call, context in
+            try await executeSpawnAgentTool(call: call, context: context)
+        },
+        ChatListAgentsToolRegistry.toolName: { _, context in
+            let content = await ChatListAgentsToolExecutor().execute(registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
+        ChatCheckAgentToolRegistry.toolName: { call, context in
+            let content = try await ChatCheckAgentToolExecutor().execute(call: call, registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
+        ChatSteerAgentToolRegistry.toolName: { call, context in
+            let content = try await ChatSteerAgentToolExecutor().execute(call: call, registry: context.agentRegistry)
+            return ChatToolExecutionOutcome(content: content, attachments: [])
+        },
         ChatTerminalToolRegistry.toolName: { call, context in
             try await executeTerminalTool(call: call, context: context)
         },
@@ -332,6 +383,18 @@ enum ChatToolDispatcher {
         },
         ChatFileWriteToolRegistry.patchToolName: { _, error in
             ChatFileWriteToolExecutor().failurePayload(error: error)
+        },
+        ChatSpawnAgentToolRegistry.toolName: { _, error in
+            ChatSpawnAgentToolExecutor().failurePayload(error: error)
+        },
+        ChatListAgentsToolRegistry.toolName: { _, error in
+            ChatListAgentsToolExecutor().failurePayload(error: error)
+        },
+        ChatCheckAgentToolRegistry.toolName: { _, error in
+            ChatCheckAgentToolExecutor().failurePayload(error: error)
+        },
+        ChatSteerAgentToolRegistry.toolName: { _, error in
+            ChatSteerAgentToolExecutor().failurePayload(error: error)
         },
         ChatTerminalToolRegistry.toolName: { _, error in
             ChatTerminalToolExecutor().failurePayload(error: error)
@@ -503,6 +566,14 @@ enum ChatToolDispatcher {
         return ChatToolExecutionOutcome(content: content, attachments: [])
     }
 
+    private static func executeSpawnAgentTool(
+        call: MLXChatToolCall,
+        context: ChatToolExecutionContext
+    ) async throws -> ChatToolExecutionOutcome {
+        let content = try await ChatSpawnAgentToolExecutor().execute(call: call, context: context)
+        return ChatToolExecutionOutcome(content: content, attachments: [])
+    }
+
     private static func executeTerminalTool(
         call: MLXChatToolCall,
         context: ChatToolExecutionContext
@@ -633,6 +704,14 @@ enum ChatToolPresentation {
             return fileWriteTitle(isPatch: false, status: status)
         case ChatFileWriteToolRegistry.patchToolName:
             return fileWriteTitle(isPatch: true, status: status)
+        case ChatSpawnAgentToolRegistry.toolName:
+            return spawnAgentTitle(status: status)
+        case ChatListAgentsToolRegistry.toolName:
+            return listAgentsTitle(status: status)
+        case ChatCheckAgentToolRegistry.toolName:
+            return checkAgentTitle(status: status)
+        case ChatSteerAgentToolRegistry.toolName:
+            return steerAgentTitle(status: status)
         case ChatTerminalToolRegistry.toolName:
             return terminalTitle(status: status)
         default:
@@ -678,6 +757,14 @@ enum ChatToolPresentation {
             case ChatFileWriteToolRegistry.writeToolName,
                 ChatFileWriteToolRegistry.patchToolName:
                 return "square.and.pencil"
+            case ChatSpawnAgentToolRegistry.toolName:
+                return "person.2.wave.2"
+            case ChatListAgentsToolRegistry.toolName:
+                return "list.bullet"
+            case ChatCheckAgentToolRegistry.toolName:
+                return "checkmark.circle"
+            case ChatSteerAgentToolRegistry.toolName:
+                return "arrow.turn.up.right"
             case ChatTerminalToolRegistry.toolName:
                 return "terminal"
             default:
@@ -832,6 +919,58 @@ enum ChatToolPresentation {
             return isPatch ? "File patch" : "File write"
         case nil:
             return isPatch ? "File patch" : "File write"
+        }
+    }
+
+    private static func spawnAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Sub-agent working…"
+        case .succeeded:
+            return "Sub-agent finished"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Sub-agent"
+        case nil:
+            return "Sub-agent tool"
+        }
+    }
+
+    private static func listAgentsTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Listing sub-agents…"
+        case .succeeded:
+            return "Listed sub-agents"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "List sub-agents"
+        case nil:
+            return "List sub-agents tool"
+        }
+    }
+
+    private static func checkAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Checking sub-agent…"
+        case .succeeded:
+            return "Checked sub-agent"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Check sub-agent"
+        case nil:
+            return "Check sub-agent tool"
+        }
+    }
+
+    private static func steerAgentTitle(status: ChatTranscriptMessage.ToolStatus?) -> String {
+        switch status {
+        case .preparing, .running:
+            return "Steering sub-agent…"
+        case .succeeded:
+            return "Steered sub-agent"
+        case .failed, .cancelled, .awaitingConsent, .awaitingImageModelSelection, .declined:
+            return "Steer sub-agent"
+        case nil:
+            return "Steer sub-agent tool"
         }
     }
 

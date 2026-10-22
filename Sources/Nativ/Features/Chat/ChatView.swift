@@ -960,6 +960,7 @@ private struct ChatTranscriptView: View {
                 onDenyToolConsent: chat.denyToolConsent,
                 onSelectImageModel: chat.selectImageModel,
                 onCancelImageModelSelection: chat.cancelImageModelSelection,
+                onCancelAgent: chat.cancelSpawnedAgent,
                 onExploreImageModels: onExploreImageModels,
                 onPreviewAttachment: onPreviewAttachment
             )
@@ -991,6 +992,7 @@ private struct ChatTranscriptView: View {
             onDenyToolConsent: chat.denyToolConsent,
             onSelectImageModel: chat.selectImageModel,
             onCancelImageModelSelection: chat.cancelImageModelSelection,
+            onCancelAgent: chat.cancelSpawnedAgent,
             onExploreImageModels: onExploreImageModels,
             onPreviewAttachment: onPreviewAttachment,
             prefillProgress: message.role == .assistant && message.isStreaming
@@ -1158,6 +1160,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
     var displaysModelTitle = true
@@ -1203,6 +1206,7 @@ private struct ChatMessageRow: View, @MainActor Equatable {
                     onDeny: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
                     onCancelImageModelSelection: onCancelImageModelSelection,
+                    onCancelAgent: onCancelAgent,
                     onExploreImageModels: onExploreImageModels
                 )
             }
@@ -1615,6 +1619,7 @@ private struct ChatAgentTurnRow: View {
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     let onPreviewAttachment: (ChatImageAttachment) -> Void
 
@@ -1650,6 +1655,7 @@ private struct ChatAgentTurnRow: View {
                     onDenyToolConsent: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
                     onCancelImageModelSelection: onCancelImageModelSelection,
+                    onCancelAgent: onCancelAgent,
                     onExploreImageModels: onExploreImageModels
                 )
             }
@@ -1680,6 +1686,7 @@ private struct ChatAgentTurnRow: View {
                     onDenyToolConsent: onDenyToolConsent,
                     onSelectImageModel: onSelectImageModel,
                     onCancelImageModelSelection: onCancelImageModelSelection,
+                    onCancelAgent: onCancelAgent,
                     onExploreImageModels: onExploreImageModels,
                     onPreviewAttachment: onPreviewAttachment,
                     displaysModelTitle: false,
@@ -1723,6 +1730,7 @@ private struct ChatToolUsageSummaryRow: View {
     let onDenyToolConsent: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     @State private var isExpanded = false
 
@@ -1766,6 +1774,7 @@ private struct ChatToolUsageSummaryRow: View {
                                 onDeny: onDenyToolConsent,
                                 onSelectImageModel: onSelectImageModel,
                                 onCancelImageModelSelection: onCancelImageModelSelection,
+                                onCancelAgent: onCancelAgent,
                                 onExploreImageModels: onExploreImageModels
                             )
                         } else if !message.content.isEmpty {
@@ -1873,6 +1882,7 @@ private struct ChatAgentStepCell: View {
     let onDeny: (UUID) -> Void
     let onSelectImageModel: (UUID, String) -> Void
     let onCancelImageModelSelection: (UUID) -> Void
+    let onCancelAgent: (String) -> Void
     let onExploreImageModels: (ChatImageOperation) -> Void
     var isReceivingArguments = false
     @State private var isExpanded: Bool?
@@ -1885,9 +1895,44 @@ private struct ChatAgentStepCell: View {
         message.toolStatus == .awaitingConsent
     }
 
+    /// Non-nil only for spawn_agent's own cell while it's actually running --
+    /// parsed from the tool result JSON since that's the only place agent_id
+    /// lives on this message.
+    private var runningSpawnAgentID: String? {
+        guard message.toolName == ChatSpawnAgentToolRegistry.toolName,
+              message.toolStatus == .running,
+              let data = message.content.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let agentID = object["agent_id"] as? String
+        else {
+            return nil
+        }
+        return agentID
+    }
+
     private var isAwaitingImageModelSelection: Bool {
         message.toolStatus == .awaitingImageModelSelection
             && imageModelSelectionRequest != nil
+    }
+
+    private var spawnAgentAccumulatedMetrics: ChatResponseMetrics? {
+        guard message.toolName == ChatSpawnAgentToolRegistry.toolName else { return nil }
+        return accumulatedResponseMetrics(from: message.subMessages)
+    }
+
+    @ViewBuilder
+    private var spawnAgentMetricsWidget: some View {
+        if let metrics = spawnAgentAccumulatedMetrics, metrics.hasVisibleValues {
+            Group {
+                if isAnyRoundStreaming(in: message.subMessages) {
+                    ChatLiveDecodeMetricsBadge(metrics: metrics)
+                        .equatable()
+                } else {
+                    ChatResponseMetricsRow(metrics: metrics)
+                }
+            }
+            .padding(.top, 4)
+        }
     }
 
     var body: some View {
@@ -1903,6 +1948,10 @@ private struct ChatAgentStepCell: View {
             .help(showsDetails ? "Hide call details" : "Show call details")
             .disabled(isAwaitingConsent || isAwaitingImageModelSelection)
 
+            if !showsDetails {
+                spawnAgentMetricsWidget
+            }
+
             if isAwaitingImageModelSelection {
                 Divider()
                     .padding(.top, 7)
@@ -1915,6 +1964,7 @@ private struct ChatAgentStepCell: View {
                 Divider()
                     .padding(.top, 7)
                 details
+                spawnAgentMetricsWidget
             }
         }
         .padding(.horizontal, 10)
@@ -1948,6 +1998,18 @@ private struct ChatAgentStepCell: View {
                 statusBadge
 
                 Spacer(minLength: 12)
+
+                if let runningSpawnAgentID {
+                    Button {
+                        onCancelAgent(runningSpawnAgentID)
+                    } label: {
+                        Image(systemName: "stop.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop this agent")
+                }
 
                 if !isAwaitingConsent && !isAwaitingImageModelSelection {
                     Image(systemName: "chevron.right")
@@ -2181,6 +2243,14 @@ private struct ChatAgentStepCell: View {
                     NativCodeBlock(raw: formattedArguments)
                 }
             }
+            if !message.subMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sub-agent")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    ChatSpawnAgentSubTranscriptView(subMessages: message.subMessages, onCancelAgent: onCancelAgent)
+                }
+            }
             if !message.content.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Result")
@@ -2275,6 +2345,70 @@ private struct ChatAgentStepCell: View {
     }
 }
 
+private func accumulatedResponseMetrics(from subMessages: [ChatTranscriptMessage]) -> ChatResponseMetrics? {
+    let allMetrics = subMessages
+        .filter { $0.role == .assistant }
+        .compactMap(\.responseMetrics)
+    guard !allMetrics.isEmpty else { return nil }
+
+    let totalTokens = allMetrics.compactMap(\.totalTokens).reduce(0, +)
+    let generatedTokens = allMetrics.compactMap(\.generatedTokens).reduce(0, +)
+    return ChatResponseMetrics(
+        totalTokens: totalTokens > 0 ? totalTokens : nil,
+        generatedTokens: generatedTokens > 0 ? generatedTokens : nil,
+        decodeTokensPerSecond: allMetrics.last?.decodeTokensPerSecond,
+        peakMemoryGB: allMetrics.compactMap(\.peakMemoryGB).max(),
+        specAcceptanceRate: allMetrics.last?.specAcceptanceRate
+    )
+}
+
+private func isAnyRoundStreaming(in subMessages: [ChatTranscriptMessage]) -> Bool {
+    subMessages.contains { $0.role == .assistant && $0.isStreaming }
+}
+
+private struct ChatSpawnAgentSubTranscriptView: View {
+    let subMessages: [ChatTranscriptMessage]
+    let onCancelAgent: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(subMessages) { subMessage in
+                switch subMessage.role {
+                case .user:
+                    Text("Steered: \(subMessage.content)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                case .assistant:
+                    if !subMessage.content.isEmpty {
+                        Text(subMessage.content)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    } else if subMessage.isStreaming {
+                        Text(subMessage.reasoningContent.isEmpty ? "Thinking…" : subMessage.reasoningContent)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .italic()
+                    }
+                case .tool:
+                    ChatAgentStepCell(
+                        message: subMessage,
+                        imageModelSelectionRequest: nil,
+                        onConfirm: { _ in },
+                        onDeny: { _ in },
+                        onSelectImageModel: { _, _ in },
+                        onCancelImageModelSelection: { _ in },
+                        onCancelAgent: onCancelAgent,
+                        onExploreImageModels: { _ in }
+                    )
+                default:
+                    EmptyView()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private extension ChatAgentStepCell {
     init(streamingCall: MLXChatToolCall) {
         self.init(
@@ -2291,6 +2425,7 @@ private extension ChatAgentStepCell {
             onDeny: { _ in },
             onSelectImageModel: { _, _ in },
             onCancelImageModelSelection: { _ in },
+            onCancelAgent: { _ in },
             onExploreImageModels: { _ in },
             isReceivingArguments: true
         )
@@ -3108,6 +3243,7 @@ private struct ChatAgentTurnPreviewRow: View {
             onDenyToolConsent: { _ in },
             onSelectImageModel: { _, _ in },
             onCancelImageModelSelection: { _ in },
+            onCancelAgent: { _ in },
             onExploreImageModels: { _ in },
             onPreviewAttachment: { _ in }
         )
