@@ -282,7 +282,11 @@ struct ChatSpawnAgentToolExecutor {
             subAgentContext: subAgentContext,
             onUpdate: context.spawnAgentUpdate,
             registry: context.agentRegistry,
-            limits: arguments.resourceLimits
+            limits: ChatSpawnAgentResourceLimits(
+                maxTurns: arguments.resourceLimits.maxTurns,
+                maxTokens: settings.maxTokens,
+                maxWallTimeSeconds: arguments.resourceLimits.maxWallTimeSeconds
+            )
         )
     }
 

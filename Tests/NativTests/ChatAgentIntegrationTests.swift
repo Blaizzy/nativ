@@ -11,11 +11,11 @@ final class ChatAgentIntegrationTests: XCTestCase {
         )
     }
 
-    private func completion(finish: String = "stop", calls: [MLXChatToolCall] = [], tokens: Int = 1) -> MLXChatCompletion {
+    private func completion(finish: String = "stop", calls: [MLXChatToolCall] = [], tokens: Int = 1, promptTokens: Int = 0) -> MLXChatCompletion {
         MLXChatCompletion(
             model: "worker", content: "worker result", reasoningContent: nil,
             toolCalls: calls, finishReason: finish,
-            usage: MLXChatUsage(promptTokens: 0, completionTokens: tokens, totalTokens: tokens,
+            usage: MLXChatUsage(promptTokens: promptTokens, completionTokens: tokens, totalTokens: promptTokens + tokens,
                                promptTokensPerSecond: nil, decodeTokensPerSecond: nil, peakMemoryGB: nil),
             requestElapsedSeconds: nil
         )
@@ -23,7 +23,7 @@ final class ChatAgentIntegrationTests: XCTestCase {
 
     func testPreparationInheritsScopeButNotApprovals() async throws {
         var context = context()
-        context.settings = NativSettings(languageModelID: "parent")
+        context.settings = NativSettings(languageModelID: "parent", maxTokens: 32768)
         context.fileReadRootPath = "/project"
         context.fileWriteRootPath = "/project"
         context.fileReadTracker = ChatReadFileTracker()
@@ -36,6 +36,7 @@ final class ChatAgentIntegrationTests: XCTestCase {
             call: MLXChatToolCall(id: "spawn", function: MLXChatFunctionCall(
                 name: "spawn_agent", arguments: #"{"task":"inspect"}"#)), context: context)
         XCTAssertEqual(prepared.modelID, "parent")
+        XCTAssertEqual(prepared.limits.maxTokens, 32768)
         XCTAssertEqual(prepared.subAgentContext.fileReadRootPath, "/project")
         XCTAssertEqual(prepared.subAgentContext.fileWriteRootPath, "/project")
         XCTAssertTrue(prepared.subAgentContext.fileReadTracker === context.fileReadTracker)
@@ -97,6 +98,22 @@ final class ChatAgentIntegrationTests: XCTestCase {
                 return self.completion()
             })
         XCTAssertEqual(result.completion.content, "worker result")
+        XCTAssertNil(result.stopReason)
+    }
+
+    func testInputTokensDoNotConsumeInheritedOutputBudget() async throws {
+        var calls = 0
+        let tool = MLXChatToolCall(id: "invalid", function: MLXChatFunctionCall(name: "not_advertised", arguments: "{}"))
+        let result = try await ChatAgentLoop.run(
+            messages: [], modelID: "worker", settings: NativSettings(maxTokens: 100), canEditImage: false,
+            context: context(), limits: .init(maxTurns: 3, maxTokens: 100, maxWallTimeSeconds: 10),
+            completionHandler: { request in
+                calls += 1
+                XCTAssertEqual(request.maxTokens, calls == 1 ? 100 : 90)
+                return self.completion(finish: calls == 1 ? "tool_calls" : "stop",
+                                       calls: calls == 1 ? [tool] : [], tokens: 10, promptTokens: 9000)
+            })
+        XCTAssertEqual(calls, 2)
         XCTAssertNil(result.stopReason)
     }
 

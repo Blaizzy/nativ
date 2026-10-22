@@ -1807,7 +1807,8 @@ final class ChatSpawnAgentToolTests: XCTestCase {
         XCTAssertEqual(handle["ok"] as? Bool, true)
         XCTAssertEqual(handle["agent_id"] as? String, prepared.agentID)
         XCTAssertEqual(handle["status"] as? String, "queued")
-        XCTAssertEqual(prepared.limits, .default)
+        XCTAssertEqual(prepared.limits, ChatSpawnAgentResourceLimits(
+            maxTurns: 50, maxTokens: context.settings!.maxTokens, maxWallTimeSeconds: 600))
     }
 
     func testPrepareCarriesFileReadConfigurationToTheSubAgent() async throws {

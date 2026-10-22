@@ -62,7 +62,7 @@ enum ChatAgentLoop {
         }
 
         var round = 0
-        var totalTokensUsed = 0
+        var generatedTokensUsed = 0
         var lastCompletion: MLXChatCompletion?
         while true {
             try Task.checkCancellation()
@@ -77,7 +77,7 @@ enum ChatAgentLoop {
 
             let stopReason: ChatSpawnedAgentStopReason? =
                 if round >= limits.maxTurns { .turnLimit }
-                else if totalTokensUsed >= limits.maxTokens { .tokenLimit }
+                else if generatedTokensUsed >= limits.maxTokens { .tokenLimit }
                 else if Date().timeIntervalSince(startedAt) >= limits.maxWallTimeSeconds { .timeout }
                 else { nil }
             if let stopReason, let lastCompletion {
@@ -88,7 +88,7 @@ enum ChatAgentLoop {
             let request = MLXChatCompletionRequest(
                 model: modelID,
                 messages: messages,
-                maxTokens: min(settings.maxTokens, max(1, limits.maxTokens - totalTokensUsed)),
+                maxTokens: min(settings.maxTokens, max(1, limits.maxTokens - generatedTokensUsed)),
                 temperature: settings.temperature,
                 topK: settings.topK,
                 topP: settings.topP,
@@ -125,7 +125,8 @@ enum ChatAgentLoop {
             try Task.checkCancellation()
             lastCompletion = completion
             transcript.finishAssistant(assistantDisplayID, completion: completion)
-            totalTokensUsed += completion.usage?.totalTokens ?? 0
+            // The inherited model budget limits output, not the input prompt.
+            generatedTokensUsed += completion.usage?.completionTokens ?? 0
 
             if completion.finishReason == "length" {
                 return ChatAgentLoopResult(completion: completion, stopReason: .tokenLimit)
