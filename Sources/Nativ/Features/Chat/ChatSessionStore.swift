@@ -945,6 +945,10 @@ struct ChatSessionStore {
                 files.removeRenamedFiles(previous: previous, current: state, sessionID: persisted.id)
             }
             mediaStore.updateOwner("chat:\(persisted.id.uuidString)", assets: persisted.assetReferences)
+            if let stamp = ArtifactFileIndexer.stamp(sessionURL(for: persisted.id)) {
+                NotificationCenter.default.post(name: ArtifactFileManifest.changed,
+                    object: ArtifactFileManifest(root: chatDirectory, session: persisted, stamp: stamp))
+            }
             return true
         } catch {
             reportFailure("saveSession", sessionID: session.id, error: error)
