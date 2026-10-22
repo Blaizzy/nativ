@@ -28,6 +28,49 @@ final class ArtifactFileIndexTests: XCTestCase {
         return Fixture(root: root)
     }
 
+    @MainActor
+    func testSearchStateUsesIndexWithoutReadingFilesAndRejectsStaleQueries() async throws {
+        let fixture = try fixture(), session = fixture.session()
+        XCTAssertTrue(fixture.chats.saveSession(session))
+        let worker = fixture.worker()
+        try await worker.discover()
+        try await worker.drain()
+        let state = ArtifactFileSearch()
+        await state.update("quokka", using: worker)
+        XCTAssertEqual(state.matches(for: "quokka").count, 1)
+        XCTAssertTrue(state.matches(for: "wombat").isEmpty)
+        let obsolete = Task { await state.update("quokka", using: worker) }
+        await Task.yield()
+        obsolete.cancel()
+        await state.update("wombat", using: worker)
+        await obsolete.value
+        XCTAssertEqual(state.matches(for: "wombat"),
+            [ArtifactFileManifest.artifactID(session: session.id, item: session.workState!.items[1].id)])
+        XCTAssertTrue(state.matches(for: "quokka").isEmpty)
+        await state.update("   ", using: worker)
+        XCTAssertTrue(state.matches.isEmpty)
+        XCTAssertFalse(state.isSearching)
+        let reads = await worker.contentReads
+        XCTAssertEqual(reads, 2)
+    }
+
+    func testSearchReturnsAllMatchesAndTreatsQueryAsLiteralText() throws {
+        let fixture = try fixture()
+        let database = try ArtifactFileIndexStore(url: fixture.database)
+        let files = (0..<150).map { index in
+            ArtifactFileIndexStore.File(id: UUID().uuidString, session: "session", path: "/file/\(index)",
+                name: "notes-\(index).md", title: "Project", revision: "0")
+        }
+        try database.synchronize(session: "session", stamp: "stamp", files: files)
+        for file in files {
+            try database.finish(file.id, stamp: "stamp", hash: "hash", body: "quokka café")
+        }
+        XCTAssertEqual(try database.search("quokka").count, 150)
+        XCTAssertEqual(try database.search("café").count, 150)
+        XCTAssertTrue(try database.search("quokka OR missing").isEmpty)
+        XCTAssertTrue(try database.search("\"").isEmpty)
+    }
+
     func testBackfillAndUnchangedRestartPerformNoContentRereads() async throws {
         let fixture = try fixture(), session = fixture.session()
         XCTAssertTrue(fixture.chats.saveSession(session))
