@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import UniformTypeIdentifiers
 
 enum ArtifactCatalog {
@@ -94,10 +93,7 @@ enum ArtifactCatalog {
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .creationDateKey]),
                   values.isRegularFile == true else { return nil }
             // Forked chats can retain item IDs but own different files.
-            let digest = Array(SHA256.hash(data: Data("work:\(session.id):\(item.id)".utf8)))
-            let id = UUID(uuid: (digest[0], digest[1], digest[2], digest[3], digest[4], digest[5],
-                                digest[6], digest[7], digest[8], digest[9], digest[10], digest[11],
-                                digest[12], digest[13], digest[14], digest[15]))
+            let id = ArtifactFileManifest.artifactID(session: session.id, item: item.id)
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "text/plain"
             return Artifact(
                 id: id, kind: .document, source: .unknown,
