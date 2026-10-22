@@ -440,6 +440,14 @@ Artifacts trash and recovery apply to attachments.
 only after that model is installed; until then, search falls back to plain text matching over
 artifact metadata.
 
+Saved work-pane files are indexed silently in the background on launch. The persistent
+SQLite index backfills older chats, resumes pending files after interruption, and
+updates after saves or filesystem changes. Unchanged launches check metadata without
+reading file contents again. Extraction uses one worker with bounded reads and pauses
+between files; binary or oversized replacements are indexed by metadata only. The
+index is local and rebuildable. Connecting its results to Artifacts and app-wide
+search is a separate integration step.
+
 
 ## Tool access modes
 
