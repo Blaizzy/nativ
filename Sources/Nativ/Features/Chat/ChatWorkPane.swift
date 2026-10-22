@@ -762,9 +762,7 @@ struct ChatWorkPane: View {
 
     private func previewMarkdown(_ item: ChatWorkItem) -> String {
         guard item.resolvedKind == .code else { return ChatWorkDocument.renderedMarkdown(item.content) }
-        let fence = String(repeating: "`", count: max(3, (item.content.components(separatedBy: .newlines)
-            .map { $0.prefix(while: { $0 == "`" }).count }.max() ?? 0) + 1))
-        return "\(fence)\(item.language ?? "")\n\(item.content)\n\(fence)"
+        return ChatWorkDocument.sourcePreview(item.content, language: item.language ?? "")
     }
 
     private func addFeedback(for item: ChatWorkItem, annotation: ChatWorkPageAnnotation? = nil,

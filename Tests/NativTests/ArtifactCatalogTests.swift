@@ -319,6 +319,26 @@ final class ArtifactCatalogTests: XCTestCase {
         XCTAssertEqual(ArtifactCatalog.artifacts(chats: [first, second], images: [], chatStore: fixture.chats).count, 1)
     }
 
+    func testWorkCatalogIncludesAllSavedFileTypesIncludingWebsites() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        var session = fixture.chat(messages: [])
+        session.workState = ChatWorkState(items: [
+            ChatWorkItem(title: "Notes.md", kind: .document, content: "Notes"),
+            ChatWorkItem(title: "main.py", kind: .code, content: "print(1)"),
+            ChatWorkItem(title: "data.json", kind: .code, content: "{}"),
+            ChatWorkItem(title: "style.css", kind: .code, content: "body {}"),
+            ChatWorkItem(title: "app.js", kind: .code, content: "const n = 1;"),
+            ChatWorkItem(title: "Site", kind: .website, content: "<html></html>"),
+            ChatWorkItem(title: "Page.html", kind: .document, content: "Page"),
+            ChatWorkItem(title: "Mislabelled", kind: .code, content: "<html><body>Page</body></html>")
+        ])
+        try fixture.chats.workFiles.save(session.workState!, previous: nil, sessionID: session.id)
+        let artifacts = ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats)
+        XCTAssertEqual(Set(artifacts.map(\.filename)), ["Notes.md", "main.py", "data.json", "style.css", "app.js",
+                                                               "Site.html", "Page.html", "Mislabelled.html"])
+    }
+
     private struct Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var media: MediaAssetStore { MediaAssetStore(rootDirectory: root.appendingPathComponent("Media")) }

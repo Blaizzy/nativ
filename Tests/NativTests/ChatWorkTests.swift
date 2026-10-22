@@ -3,6 +3,15 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testFilePreviewsRenderMarkdownAndFenceSourceWithoutExecutingIt() {
+        XCTAssertEqual(ChatWorkDocument.filePreview("# Title", filename: "Notes.MD"), "# Title")
+        XCTAssertEqual(ChatWorkDocument.filePreview("let n = 1", filename: "main.swift"), "```swift\nlet n = 1\n```")
+        XCTAssertEqual(ChatWorkDocument.filePreview("a { color: red; }", filename: "main.css"),
+                       "```css\na { color: red; }\n```")
+        XCTAssertEqual(ChatWorkDocument.sourcePreview("```\nexample", language: "text"),
+                       "````text\n```\nexample\n````")
+    }
+
     func testSearchPreservesLiteralPlusesWhenFormDecoded() throws {
         for query in ["C++ template", "C%2B%2B template", "C++ & C# + 100% 日本語"] {
             let urls = [

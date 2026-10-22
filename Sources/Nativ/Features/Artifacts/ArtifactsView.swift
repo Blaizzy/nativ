@@ -1228,7 +1228,7 @@ struct ArtifactTile: View {
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .bottom) {
-                if isHovering, !isSelecting {
+                if (isHovering || artifact.kind == .document), !isSelecting {
                     Text(store.displayName(for: artifact))
                         .legacyTextStyle(.supportingEmphasized)
                         .foregroundStyle(.white)
@@ -1345,25 +1345,9 @@ private struct ArtifactThumbnail: View {
     let size: CGSize
 
     @State private var image: NSImage?
-    @State private var textPreview: String?
-
-    static let textPreviewExtensions: Set<String> = [
-        "md", "markdown", "mdown", "mkd", "txt", "text", "log", "json", "csv", "tsv",
-        "py", "js", "ts", "jsx", "tsx", "swift", "java", "kt", "c", "cpp", "cc", "h",
-        "hpp", "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css",
-        "scss", "xml", "yaml", "yml", "toml",
-    ]
-
-    private var isTextDocument: Bool {
-        artifact.kind == .document
-            && Self.textPreviewExtensions.contains(artifact.fileExtension.lowercased())
-    }
-
     var body: some View {
         Group {
-            if isTextDocument, let textPreview {
-                textCard(textPreview)
-            } else if let image {
+            if let image {
                 Color.clear
                     .overlay {
                         Image(nsImage: image)
@@ -1376,35 +1360,13 @@ private struct ArtifactThumbnail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .textSelection(.disabled)
+        .allowsHitTesting(false)
         .task(id: artifact.id) {
-            if isTextDocument {
-                textPreview = await store.textPreview(for: artifact)
-            } else {
-                image = await store.thumbnail(for: artifact, size: size)
-            }
-        }
-    }
-
-    private func textCard(_ text: String) -> some View {
-        ZStack(alignment: .bottom) {
-            Color(nsColor: .textBackgroundColor)
-            Text(text)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.leading)
-                .lineSpacing(1)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(8)
-            LinearGradient(
-                colors: [Color(nsColor: .textBackgroundColor).opacity(0), Color(nsColor: .textBackgroundColor)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 44)
-            .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            FileTypeIcon(fileExtension: artifact.fileExtension, size: 20).padding(6)
+            guard artifact.kind != .document else { return }
+            let thumbnail = await store.thumbnail(for: artifact, size: size)
+            guard !Task.isCancelled else { return }
+            image = thumbnail
         }
     }
 
