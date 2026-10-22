@@ -160,17 +160,19 @@ final class ArtifactStore: ObservableObject {
         }
     }
 
-    func searchResults(in artifacts: [Artifact], query: String, semanticMatches: [UUID]?) -> [Artifact] {
+    func searchResults(in artifacts: [Artifact], query: String, semanticMatches: [UUID]?, contentMatches: [UUID] = []) -> [Artifact] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return artifacts }
         let directMatches = artifacts.filter {
             displayName(for: $0).lowercased().contains(query) || $0.searchText.contains(query)
         }
-        guard let semanticMatches else { return directMatches }
+
+        let indexedMatches = contentMatches + (semanticMatches ?? [])
+        guard !indexedMatches.isEmpty else { return directMatches }
         let directIDs = Set(directMatches.map(\.id))
         let candidates = Dictionary(artifacts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var seen = directIDs
-        return directMatches + semanticMatches.compactMap { id in
+        return directMatches + indexedMatches.compactMap { id in
             guard seen.insert(id).inserted else { return nil }
             return candidates[id]
         }

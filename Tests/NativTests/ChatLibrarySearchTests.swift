@@ -5,6 +5,21 @@ import XCTest
 
 @MainActor
 final class ChatLibrarySearchTests: XCTestCase {
+    func testKeyboardNavigationIncludesFileResults() {
+        let state = ChatLibrarySearchState()
+        state.move(1, count: 3)
+        XCTAssertEqual(state.selectedIndex, 1)
+        state.move(1, count: 3)
+        XCTAssertEqual(state.selectedIndex, 2)
+        state.move(1, count: 3)
+        XCTAssertEqual(state.selectedIndex, 0)
+        state.move(-1, count: 3)
+        XCTAssertEqual(state.selectedIndex, 2)
+        state.dismiss()
+        state.move(1, count: 0)
+        XCTAssertEqual(state.selectedIndex, 0)
+    }
+
     func testSearchesMessagesAcrossChatsWithTyposAndWordForms() async throws {
         let first = session("One", messages: [message("Notification permissions were updated.")])
         let second = session("Two", messages: [message("A notification permission was requested.")])

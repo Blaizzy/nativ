@@ -160,7 +160,16 @@ struct ControlPanelView: View {
         .frame(minWidth: 1040, minHeight: 600)
         .environment(\.chatLibrarySearch, chatLibrarySearch)
         .sheet(isPresented: $chatLibrarySearch.isPresented) {
-            ChatLibrarySearchPopup(search: chatLibrarySearch, chat: chat, onSelect: openChatSearchResult)
+            ChatLibrarySearchPopup(search: chatLibrarySearch, chat: chat, artifacts: artifacts,
+                fileIndex: dependencies.fileIndex, onSelect: openChatSearchResult) { files, selection in
+                ArtifactPreview(artifacts: files, selectedID: selection,
+                    fileURL: artifacts.fileURL, displayName: artifacts.displayName,
+                    onClose: { selection.wrappedValue = nil },
+                    onOpenChat: { artifact in
+                        chatLibrarySearch.dismiss()
+                        applySidebarSelection(.chat(artifact.sessionID))
+                    })
+            }
         }
         .environment(\.controlPanelIsFullScreen, isFullScreen)
         .environment(\.controlPanelIsSidebarVisible, isSidebarVisible)

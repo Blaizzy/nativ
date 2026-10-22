@@ -4,9 +4,11 @@ import CryptoKit
 import Darwin
 import Foundation
 import OSLog
+import Observation
 
 @MainActor
-final class ArtifactFileIndexCoordinator {
+final class ArtifactFileIndexCoordinator: ObservableObject {
+    @Published private(set) var revision = 0
     let worker: ArtifactFileIndexer
     private let root: URL
     private var changes: AnyCancellable?
@@ -44,6 +46,7 @@ final class ArtifactFileIndexCoordinator {
                             || $0.contains("/Nativ Files/")
                     })
                     self.reconcile = self.reconcile || reconcile
+                    guard !self.paths.isEmpty || self.reconcile else { return }
                     self.schedule()
                 }
             }
@@ -67,6 +70,7 @@ final class ArtifactFileIndexCoordinator {
             for manifest in snapshots { try await worker.receive(manifest) }
             try await worker.changed(paths: changedPaths, reconcile: needsScan)
             try await worker.drain()
+            revision &+= 1
             if try await worker.hasPending() { scheduleRetry() }
             if watcher == nil { scheduleRetry(reconcile: true) }
         } catch {
@@ -280,4 +284,43 @@ final class ArtifactFileWatcher {
         self.stream = nil
     }
     deinit { stop() }
+}
+
+@MainActor @Observable
+final class ArtifactFileSearch {
+    struct Request: Equatable {
+        let query: String
+        let revision: Int
+    }
+
+    private(set) var query = ""
+    private(set) var matches: [UUID] = []
+    private(set) var error: String?
+    private(set) var isSearching = false
+
+    func matches(for query: String) -> [UUID] { self.query == query ? matches : [] }
+
+    func update(_ query: String, using worker: ArtifactFileIndexer) async {
+        guard !Task.isCancelled else { return }
+        if self.query != query { matches = [] }
+        self.query = query
+        error = nil
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            isSearching = false
+            return
+        }
+        isSearching = true
+        do {
+            try await Task.sleep(for: .milliseconds(150))
+            let ids = try await worker.search(query)
+            try Task.checkCancellation()
+            matches = ids.compactMap(UUID.init(uuidString:))
+            isSearching = false
+        } catch is CancellationError {
+        } catch {
+            guard !Task.isCancelled else { return }
+            self.error = "File search is unavailable. Try again."
+            isSearching = false
+        }
+    }
 }

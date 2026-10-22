@@ -445,9 +445,10 @@ SQLite index backfills older chats, resumes pending files after interruption, an
 updates after saves or filesystem changes. Unchanged launches check metadata without
 reading file contents again. Extraction uses one worker with bounded reads and pauses
 between files; binary or oversized replacements are indexed by metadata only. The
-index is local and rebuildable. Connecting its results to Artifacts and app-wide
-search is a separate integration step.
-
+index is local and rebuildable. Artifacts search includes indexed file contents
+alongside metadata and optional semantic matches. App-wide search shows saved files
+alongside matching messages; selecting a file opens its preview. File queries are
+debounced and use the index without rereading file contents or requiring an embedding model.
 
 ## Tool access modes
 

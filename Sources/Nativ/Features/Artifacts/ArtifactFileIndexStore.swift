@@ -148,12 +148,12 @@ final class ArtifactFileIndexStore {
         guard try !hasPending() else { return }
         try execute("INSERT OR IGNORE INTO metadata VALUES('backfill_complete','1')")
     }
-    func search(_ query: String, limit: Int = 30) throws -> [String] {
+    func search(_ query: String) throws -> [String] {
         let words = query.split(whereSeparator: \.isWhitespace)
         guard !words.isEmpty else { return [] }
         let expression = words.map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }.joined(separator: " AND ")
-        return try rows("SELECT files.id FROM file_text JOIN files ON files.rowid=file_text.rowid WHERE file_text MATCH ? AND files.available=1 ORDER BY rank LIMIT ?",
-                        [expression, String(max(1, min(100, limit)))]).map { $0[0] }
+        return try rows("SELECT files.id FROM file_text JOIN files ON files.rowid=file_text.rowid WHERE file_text MATCH ? AND files.available=1 ORDER BY rank",
+                        [expression]).map { $0[0] }
     }
     private func transaction(_ work: () throws -> Void) throws {
         try execute("BEGIN IMMEDIATE")

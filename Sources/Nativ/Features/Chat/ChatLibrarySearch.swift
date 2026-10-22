@@ -335,9 +335,10 @@ final class ChatLibrarySearchState {
         error = nil
     }
 
-    func move(_ offset: Int) {
-        guard !results.isEmpty else { return }
-        selectedIndex = (selectedIndex + offset + results.count) % results.count
+    func move(_ offset: Int, count: Int? = nil) {
+        let count = count ?? results.count
+        guard count > 0 else { return }
+        selectedIndex = (selectedIndex + offset + count) % count
     }
 
     func select(_ result: ChatLibrarySearchResult) {
@@ -411,25 +412,40 @@ extension EnvironmentValues {
     @Entry var chatLibrarySearch: ChatLibrarySearchState? = nil
 }
 
-struct ChatLibrarySearchPopup: View {
+struct ChatLibrarySearchPopup<Preview: View>: View {
     @Bindable var search: ChatLibrarySearchState
     @ObservedObject var chat: ChatViewModel
+    @ObservedObject var artifacts: ArtifactStore
+    @ObservedObject var fileIndex: ArtifactFileIndexCoordinator
     let onSelect: (ChatLibrarySearchResult) -> Void
+    let filePreview: ([Artifact], Binding<UUID?>) -> Preview
+    @State private var fileSearch = ArtifactFileSearch()
+    @State private var previewID: UUID?
+    @State private var previewFiles: [Artifact] = []
+
+    private var fileResults: [Artifact] {
+        guard !search.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return artifacts.searchResults(in: artifacts.artifacts.filter { $0.workFileURL != nil },
+            query: search.query, semanticMatches: nil, contentMatches: fileSearch.matches(for: search.query))
+    }
+
+    private var visibleFiles: [Artifact] { Array(fileResults.prefix(200)) }
+    private var resultCount: Int { search.results.count + visibleFiles.count }
     @FocusState private var isFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search chats", text: $search.query)
+                TextField("Search chats and files", text: $search.query)
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($isFocused)
                     .onSubmit(openSelected)
-                    .onKeyPress(.downArrow) { search.move(1); return .handled }
-                    .onKeyPress(.upArrow) { search.move(-1); return .handled }
+                    .onKeyPress(.downArrow) { search.move(1, count: resultCount); return .handled }
+                    .onKeyPress(.upArrow) { search.move(-1, count: resultCount); return .handled }
                     .onExitCommand { search.dismiss() }
-                    .accessibilityLabel("Search all chats")
+                    .accessibilityLabel("Search all chats and files")
                 Button("Close search", systemImage: "xmark") { search.dismiss() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
@@ -438,13 +454,13 @@ struct ChatLibrarySearchPopup: View {
             }
             .padding(20)
             Divider()
-            if search.isSearching && search.results.isEmpty {
+            if (search.isSearching || fileSearch.isSearching) && resultCount == 0 {
                 ChatLibrarySearchLoadingRows()
-            } else if search.results.isEmpty {
+            } else if resultCount == 0 {
                 VStack(spacing: 10) {
                     Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(.tertiary)
                     Text(emptyTitle).font(.headline)
-                    Text(search.query.isEmpty ? "Find messages from any conversation." : "Try another word or phrase.")
+                    Text(search.query.isEmpty ? "Find messages and saved files from any conversation." : "Try another word or phrase.")
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -452,6 +468,10 @@ struct ChatLibrarySearchPopup: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 2) {
+                            if !search.results.isEmpty {
+                                Text("Messages").font(.caption).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            }
                             ForEach(Array(search.results.enumerated()), id: \.element.id) { index, result in
                                 Button { onSelect(result) } label: {
                                     resultRow(result)
@@ -466,18 +486,46 @@ struct ChatLibrarySearchPopup: View {
                                 .id(result.id)
                                 .accessibilityHint("Open this chat at the matching message")
                             }
+                            if !visibleFiles.isEmpty {
+                                Text("Files").font(.caption).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                            }
+                            ForEach(Array(visibleFiles.enumerated()), id: \.element.id) { index, artifact in
+                                Button { openFile(artifact) } label: {
+                                    HStack(spacing: 12) {
+                                        Image(systemName: "doc.text").font(.title2).foregroundStyle(.secondary)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(artifacts.displayName(for: artifact)).fontWeight(.medium).lineLimit(1)
+                                            Text(artifact.sessionTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(search.selectedIndex == search.results.count + index
+                                                ? Color.primary.opacity(0.07) : .clear, in: .rect(cornerRadius: 8))
+                                    .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                                .onHover { if $0 { search.selectedIndex = search.results.count + index } }
+                                .id(artifact.id)
+                                .accessibilityHint("Open file preview")
+                            }
                         }
                         .padding(8)
                     }
                     .onChange(of: search.selectedIndex) { _, index in
                         if search.results.indices.contains(index) { proxy.scrollTo(search.results[index].id) }
+                        else if visibleFiles.indices.contains(index - search.results.count) {
+                            proxy.scrollTo(visibleFiles[index - search.results.count].id)
+                        }
                     }
                 }
             }
             Divider()
             HStack {
-                Text(search.isSearching ? "Searching…" : search.hasMore
-                     ? "Showing the first 200 matching messages" : "\(search.results.count) matching messages")
+                Text(search.isSearching || fileSearch.isSearching ? "Searching…"
+                     : "\(search.results.count)\(search.hasMore ? "+" : "") messages · \(visibleFiles.count)\(fileResults.count > 200 ? "+" : "") files")
                 Spacer()
                 Text("↑↓ Navigate   ↵ Open   Esc Close")
             }
@@ -486,17 +534,33 @@ struct ChatLibrarySearchPopup: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .frame(width: 640, height: 480)
+        .frame(width: previewID == nil ? 640 : 900, height: previewID == nil ? 480 : 640)
         .background(Color(nsColor: .windowBackgroundColor))
-        .task { isFocused = true; search.refresh(from: chat) }
+        .disabled(previewID != nil)
+        .overlay {
+            if previewID != nil {
+                filePreview(previewFiles, $previewID)
+            }
+        }
+        .task { isFocused = true; artifacts.rescan(); search.refresh(from: chat) }
+        .task(id: ArtifactFileSearch.Request(query: search.query, revision: fileIndex.revision)) {
+            await fileSearch.update(search.query, using: fileIndex.worker)
+        }
+        .onChange(of: previewID) { _, id in
+            isFocused = id == nil
+            if id == nil { previewFiles = [] }
+        }
+        .onChange(of: resultCount) { _, count in
+            search.selectedIndex = min(search.selectedIndex, max(0, count - 1))
+        }
         .onChange(of: search.query) { _, _ in search.refresh(from: chat, queryChanged: true) }
         .onChange(of: chat.searchLibrary.revision) { _, _ in search.refresh(from: chat) }
         .onDisappear { search.dismiss() }
     }
 
     private var emptyTitle: String {
-        if let error = search.error { return error }
-        return search.query.isEmpty ? "Search all chats" : "No matching messages"
+        if let error = search.error ?? fileSearch.error { return error }
+        return search.query.isEmpty ? "Search chats and files" : "No matching results"
     }
 
     private func resultRow(_ result: ChatLibrarySearchResult) -> some View {
@@ -513,9 +577,18 @@ struct ChatLibrarySearchPopup: View {
         .font(.body)
     }
 
+    private func openFile(_ artifact: Artifact) {
+        previewFiles = visibleFiles
+        previewID = artifact.id
+        isFocused = false
+    }
+
     private func openSelected() {
-        guard search.results.indices.contains(search.selectedIndex) else { return }
-        onSelect(search.results[search.selectedIndex])
+        if search.results.indices.contains(search.selectedIndex) {
+            onSelect(search.results[search.selectedIndex])
+        } else if visibleFiles.indices.contains(search.selectedIndex - search.results.count) {
+            openFile(visibleFiles[search.selectedIndex - search.results.count])
+        }
     }
 }
 

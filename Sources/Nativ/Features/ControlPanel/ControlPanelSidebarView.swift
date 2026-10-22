@@ -28,13 +28,13 @@ extension ControlPanelView {
                     .legacyTextStyle(.brandTitle)
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
-                Button("Search chats", systemImage: "magnifyingglass") { chatLibrarySearch.present() }
+                Button("Search chats and files", systemImage: "magnifyingglass") { chatLibrarySearch.present() }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.plain)
                     .font(.system(size: 15))
                     .frame(width: 28, height: 28)
                     .contentShape(.rect)
-                    .help("Search all chats")
+                    .help("Search all chats and files")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: ControlPanelLayout.sidebarBrandHeight)

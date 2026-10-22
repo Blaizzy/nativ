@@ -69,6 +69,8 @@ struct ArtifactsView: View {
     private static let pdfTextExtractor = PDFDocumentTextExtractor()
 
     @ObservedObject var store: ArtifactStore
+    @ObservedObject var fileIndex: ArtifactFileIndexCoordinator
+    @State private var fileSearch = ArtifactFileSearch()
     let semanticSearch: ArtifactSemanticSearchConfig?
     var titleLeadingInset: CGFloat = 0
     let onOpenChat: (Artifact) -> Void
@@ -155,7 +157,8 @@ struct ArtifactsView: View {
         return store.searchResults(
             in: sorted,
             query: search,
-            semanticMatches: smartSearchActive ? semanticMatches : nil
+            semanticMatches: smartSearchActive ? semanticMatches : nil,
+            contentMatches: fileSearch.matches(for: search)
         )
     }
 
@@ -465,6 +468,9 @@ struct ArtifactsView: View {
                 }
             semanticBanner
             filterBar
+            if let error = fileSearch.error {
+                Text(error).font(.caption).foregroundStyle(.secondary).padding(8)
+            }
             Divider()
             if artifactSelection.isActive {
                 selectionBar
@@ -478,6 +484,9 @@ struct ArtifactsView: View {
         .task {
             store.rescan()
             warmSemanticIndex()
+        }
+        .task(id: ArtifactFileSearch.Request(query: search, revision: fileIndex.revision)) {
+            await fileSearch.update(search, using: fileIndex.worker)
         }
         .onChange(of: search) { _, _ in
             scheduleSemanticSearch()

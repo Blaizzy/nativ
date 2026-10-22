@@ -113,6 +113,16 @@ final class ArtifactRefreshTests: XCTestCase {
             ).map(\.id),
             [renamed.id, semantic.id]
         )
+        XCTAssertEqual(
+            reloaded.searchResults(in: [semantic, renamed], query: "amber",
+                semanticMatches: [semantic.id], contentMatches: [excluded.id, semantic.id, renamed.id]).map(\.id),
+            [renamed.id, semantic.id]
+        )
+        XCTAssertEqual(
+            reloaded.searchResults(in: [semantic, renamed], query: "body-only",
+                semanticMatches: nil, contentMatches: [semantic.id, semantic.id]).map(\.id),
+            [semantic.id]
+        )
         reloaded.rename(renamed, to: " ")
         XCTAssertEqual(reloaded.displayName(for: renamed), renamed.filename)
         XCTAssertTrue(reloaded.searchResults(in: [renamed], query: "amber", semanticMatches: []).isEmpty)

@@ -37,6 +37,7 @@ final class ControlPanelDependencies: ObservableObject {
     let persistedDataChanges: PersistedDataChangeHub
     let inferenceActivity: InferenceActivityCoordinator
     let projects: ChatProjectStore
+    let fileIndex: ArtifactFileIndexCoordinator
     let chatSearch: ChatSearchLibrary
     let artifactTrash: ArtifactTrash
 
@@ -69,6 +70,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges = shared.persistedDataChanges
         inferenceActivity = shared.inferenceActivity
         projects = shared.projects
+        fileIndex = shared.fileIndex
         chatSearch = shared.chatSearch
         artifactTrash = shared.artifactTrash
     }
