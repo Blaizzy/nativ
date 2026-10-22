@@ -412,7 +412,11 @@ reference image and a model that supports it. See [Models](models.md) for capabi
 Every image and document generated or uploaded across chats is collected in the **Artifacts**
 gallery ([`Sources/Nativ/Features/Artifacts/`](../../Sources/Nativ/Features/Artifacts/)). It
 supports filtering by kind, source (uploaded vs generated), date, and favorites; sorting; and
-grouping by chat. Rendered files are cached under Application Support.
+grouping by chat. Saved work-pane documents, code, and local HTML files also appear here,
+with previews, export, Reveal in Finder, and Go to Chat. They reference the original file
+in chat storage or its checkout, without creating another copy. Missing files, remote
+web tabs, and terminals are excluded. Delete work-pane files from their chat for now;
+Artifacts trash and recovery apply to attachments.
 
 **Smart search** ranks artifacts semantically using an on-device embedding model. It activates
 only after that model is installed; until then, search falls back to plain text matching over

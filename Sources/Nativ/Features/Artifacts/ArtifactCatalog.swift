@@ -1,9 +1,13 @@
 import Foundation
+import CryptoKit
+import UniformTypeIdentifiers
 
 enum ArtifactCatalog {
-    static func artifacts(chats: [ChatSession], images: [ImageGenerationSession]) -> [Artifact] {
+    static func artifacts(chats: [ChatSession], images: [ImageGenerationSession],
+                          chatStore: ChatSessionStore = .init()) -> [Artifact] {
         var entries: [Artifact] = []
         for session in chats {
+            entries += workDocuments(in: session, store: chatStore)
             for message in session.messages {
                 for attachment in message.imageAttachments {
                     let generation = message.artifactGeneration(for: attachment)
@@ -77,6 +81,33 @@ enum ArtifactCatalog {
         }.sorted {
             if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
+        }
+    }
+
+    private static func workDocuments(in session: ChatSession, store: ChatSessionStore) -> [Artifact] {
+        if session.workFilesInWorktree == true, session.worktree?.isReady != true { return [] }
+        let files = session.workFilesInWorktree == true
+            ? store.workFiles(for: session.worktree) : store.workFiles
+        return (session.workState?.items ?? []).compactMap { item in
+            guard item.canEdit,
+                  let url = files.fileURL(for: item, sessionID: session.id),
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .creationDateKey]),
+                  values.isRegularFile == true else { return nil }
+            // Forked chats can retain item IDs but own different files.
+            let digest = Array(SHA256.hash(data: Data("work:\(session.id):\(item.id)".utf8)))
+            let id = UUID(uuid: (digest[0], digest[1], digest[2], digest[3], digest[4], digest[5],
+                                digest[6], digest[7], digest[8], digest[9], digest[10], digest[11],
+                                digest[12], digest[13], digest[14], digest[15]))
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "text/plain"
+            return Artifact(
+                id: id, kind: .document, source: .unknown,
+                sessionID: session.id, messageID: session.id,
+                filename: url.lastPathComponent, mimeType: mime, relativePath: "",
+                byteSize: values.fileSize ?? 0, createdAt: values.creationDate ?? session.createdAt,
+                prompt: nil, sessionTitle: session.displayTitle, workFileURL: url,
+                usages: [ArtifactUsage(workspace: .chat, sessionID: session.id,
+                                       messageID: nil, attachmentID: item.id)]
+            )
         }
     }
 

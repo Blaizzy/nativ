@@ -91,7 +91,7 @@ extension ControlPanelView {
                     switch artifact.workspace {
                     case .chat:
                         applySidebarSelection(.chat(artifact.sessionID))
-                        chat.scrollTargetMessageID = artifact.messageID
+                        chat.scrollTargetMessageID = artifact.workFileURL == nil ? artifact.messageID : nil
                     case .imageGeneration:
                         applySidebarSelection(.imageGeneration(artifact.sessionID))
                     }

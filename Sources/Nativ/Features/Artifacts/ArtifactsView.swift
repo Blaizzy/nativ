@@ -90,6 +90,7 @@ struct ArtifactsView: View {
     @State private var layout: ArtifactLayout = .grid
     @State private var previewID: Artifact.ID?
     @State private var artifactSelection = NativBulkSelection<Artifact.ID>()
+    @State private var showsWorkFileDeletionNotice = false
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var showsDeletionFailure = false
@@ -457,6 +458,11 @@ struct ArtifactsView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+                .alert("Delete from the work pane", isPresented: $showsWorkFileDeletionNotice) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("This selection includes work-pane files. Open their chat to delete them from the work pane.")
+                }
             semanticBanner
             filterBar
             Divider()
@@ -750,8 +756,7 @@ struct ArtifactsView: View {
                 artifactSelection.toggleAll(visibleArtifactIDs)
             },
             onDelete: {
-                pendingDelete = artifacts
-                isConfirmingDelete = true
+                requestDeletion(artifacts)
             }
         ) {
             Button {
@@ -976,9 +981,17 @@ struct ArtifactsView: View {
         Button("Copy") { store.copyToPasteboard(artifact) }
         Divider()
         Button("Delete", role: .destructive) {
-            pendingDelete = [artifact]
-            isConfirmingDelete = true
+            requestDeletion([artifact])
         }
+    }
+
+    private func requestDeletion(_ artifacts: [Artifact]) {
+        guard artifacts.allSatisfy({ $0.workFileURL == nil }) else {
+            showsWorkFileDeletionNotice = true
+            return
+        }
+        pendingDelete = artifacts
+        isConfirmingDelete = true
     }
 
     private func selectedFileURLs(including artifact: Artifact) -> [URL] {
@@ -1015,8 +1028,7 @@ struct ArtifactsView: View {
             return .handled
         case .delete:
             if let index {
-                pendingDelete = [items[index]]
-                isConfirmingDelete = true
+                requestDeletion([items[index]])
             }
             return .handled
         default:
