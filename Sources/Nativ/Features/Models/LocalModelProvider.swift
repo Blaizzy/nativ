@@ -1,6 +1,7 @@
 import AppKit
 
 enum LocalModelProvider: String, Hashable, Sendable {
+    case recursiveSI
     case google
     case openAI
     case meta
@@ -33,6 +34,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
 
     var displayName: String {
         switch self {
+        case .recursiveSI: "Recursive Superintelligence"
         case .google: "Google"
         case .openAI: "OpenAI"
         case .meta: "Meta"
@@ -67,6 +69,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
 
     var iconResourceName: String? {
         switch self {
+        case .recursiveSI: "ModelProviderIcon-recursive"
         case .google: "ModelProviderIcon-google"
         case .openAI: "ModelProviderIcon-openai"
         case .meta: "ModelProviderIcon-meta"
@@ -101,6 +104,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
 
     var monogram: String {
         switch self {
+        case .recursiveSI: "R"
         case .google: "G"
         case .openAI: "AI"
         case .meta: "M"
@@ -150,7 +154,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
 
     var iconTintColor: NSColor {
         switch self {
-        case .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI,
+        case .recursiveSI, .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI,
              .inclusionAI, .miniMax, .baidu, .moonshotAI, .stabilityAI,
              .thinkingMachines, .meituanLongCat, .huggingFace, .stepFun, .internLM:
             .labelColor
@@ -183,6 +187,7 @@ enum LocalModelProviderResolver {
     // Recognized first-party organizations are authoritative. Family mappings handle
     // converted and quantized models republished by mlx-community or another account.
     private static let modelFamilyMappings: [ModelFamilyMapping] = [
+        ModelFamilyMapping(provider: .recursiveSI, identifiers: ["flint"]),
         ModelFamilyMapping(
             provider: .google,
             identifiers: ["gemma", "paligemma", "shieldgemma", "recurrentgemma", "diffusiongemma"]
@@ -223,6 +228,7 @@ enum LocalModelProviderResolver {
     ]
 
     private static let organizationMappings: [String: LocalModelProvider] = [
+        "recursivesi": .recursiveSI,
         "google": .google,
         "googledeepmind": .google,
         "openai": .openAI,
