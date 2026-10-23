@@ -127,9 +127,6 @@ private final class ModelMenuRowView: NSView {
             let symbolName: String
             let description: String
             switch capability {
-            case .decision:
-                symbolName = "arrow.triangle.branch"
-                description = capability.displayName
             case .text:
                 continue
             case .vision:

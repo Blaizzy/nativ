@@ -173,11 +173,6 @@ enum HuggingFaceCapabilityFilter {
             tags: ["embedding", "embeddings", "sentence-transformers"]
         ),
         Rule(
-            capability: .decision,
-            pipelineTags: [],
-            tags: ["decision", "decision-model"]
-        ),
-        Rule(
             capability: .reranking,
             pipelineTags: ["text-ranking"],
             tags: ["reranker", "reranking"],
@@ -253,8 +248,7 @@ enum HuggingFaceCapabilityFilter {
     static func resolveCapabilities(
         pipelineTag: String?,
         tags: [String],
-        configIdentifiesDrafter: Bool,
-        runtimeCapabilities: Set<NativModelCapability> = []
+        configIdentifiesDrafter: Bool
     ) -> Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let normalizedTags = tags.map { $0.lowercased() }
@@ -269,12 +263,6 @@ enum HuggingFaceCapabilityFilter {
                 )
             }.map(\.capability)
         )
-        if runtimeCapabilities.contains(.decision) {
-            capabilities.insert(.decision)
-        }
-        if capabilities.contains(.decision) {
-            capabilities.subtract([.text, .reasoning, .tools])
-        }
         if configIdentifiesDrafter {
             capabilities.insert(.drafter)
         }
@@ -396,11 +384,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         capabilities = HuggingFaceCapabilityFilter.resolveCapabilities(
             pipelineTag: pipelineTag,
             tags: tags,
-            configIdentifiesDrafter: drafterKind != nil,
-            runtimeCapabilities: ModelPrimaryTaskResolver.runtimeCapabilities(
-                modelType: supportConfiguration?.modelType,
-                autoModel: supportConfiguration?.autoModel
-            )
+            configIdentifiesDrafter: drafterKind != nil
         )
     }
 }
