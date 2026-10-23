@@ -1236,28 +1236,6 @@ def install_base_metrics_capture() -> None:
         return envelope
 
     base_openai._build_metrics_envelope = capturing_build_metrics_envelope
-
-    original_response_sse_event = getattr(base_openai, "_response_sse_event", None)
-    if original_response_sse_event is not None:
-        def response_sse_event(event_type: str, payload: dict[str, Any]) -> str:
-            # The pinned runtime records these measurements before emitting its
-            # terminal event, but omits them from the Responses wire format.
-            capture = _BASE_METRICS_CAPTURE.get()
-            envelope = capture.get("envelope") if capture else None
-            if event_type in {"response.completed", "response.incomplete"} and envelope:
-                timings = dict(payload.get("timings") or {})
-                for field, metric in (
-                    ("prompt_per_second", "prefill_tok_s"),
-                    ("predicted_per_second", "decode_tok_s"),
-                    ("peak_memory", "peak_memory_gb"),
-                ):
-                    if timings.get(field) is None and envelope.get(metric) is not None:
-                        timings[field] = envelope[metric]
-                if timings:
-                    payload = {**payload, "timings": timings}
-            return original_response_sse_event(event_type, payload)
-
-        base_openai._response_sse_event = response_sse_event
     base_openai._nativ_metrics_capture_installed = True
 
 
