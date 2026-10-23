@@ -110,13 +110,21 @@ final class ChatResponseSpeechTests: XCTestCase {
     func testStoppingPendingSynthesisNeverStartsPlayback() async {
         let started = expectation(description: "Synthesis started")
         let returned = expectation(description: "Synthesis returned")
+        let retried = expectation(description: "Retry played")
         var continuation: CheckedContinuation<Data, Never>?
         var playbackCount = 0
+        var synthesisCount = 0
         let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            if synthesisCount > 1 { return Data([2]) }
             let data = await withCheckedContinuation { continuation = $0; started.fulfill() }
             defer { returned.fulfill() }
             return data
-        }, makePlayback: { _ in playbackCount += 1; return TestSpeechPlayback() })
+        }, makePlayback: { data in
+            playbackCount += 1
+            XCTAssertEqual(data, Data([2]))
+            return TestSpeechPlayback(onPlay: { retried.fulfill() })
+        })
         let id = UUID()
         speech.toggle(messageID: id, text: "Response", settings: settings)
         await fulfillment(of: [started], timeout: 2)
@@ -126,6 +134,10 @@ final class ChatResponseSpeechTests: XCTestCase {
         XCTAssertEqual(playbackCount, 0)
         XCTAssertEqual(speech.phase, .idle)
         XCTAssertNil(speech.errorMessage)
+        speech.toggle(messageID: id, text: "Response", settings: settings)
+        await fulfillment(of: [retried], timeout: 2)
+        XCTAssertEqual(synthesisCount, 2)
+        speech.stop()
     }
 
     func testSelectingAnotherResponseDiscardsOlderSynthesis() async {
@@ -239,12 +251,161 @@ final class ChatResponseSpeechTests: XCTestCase {
         XCTAssertNil(speech.errorMessage)
         XCTAssertEqual(speech.phase, .idle)
     }
+
+    func testReplayAfterCompletionAndStopReusesAudio() async {
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1, 2, 3])
+        }, makePlayback: { data in
+            XCTAssertEqual(data, Data([1, 2, 3]))
+            return playback
+        })
+        let id = UUID()
+        await playResponse(speech, playback: playback, id: id)
+        playback.onFinish?(nil)
+        await playResponse(speech, playback: playback, id: id)
+        speech.stop()
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 1)
+        speech.stop()
+    }
+
+    func testReplayExpiresFiveMinutesAfterGenerationWithoutExtendingOnCacheHit() async {
+        var time = ContinuousClock.now
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1])
+        }, makePlayback: { _ in playback }, now: { time })
+        let id = UUID()
+        await playResponse(speech, playback: playback, id: id)
+        time = time.advanced(by: .seconds(299))
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 1)
+        time = time.advanced(by: .seconds(1))
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 2)
+        speech.stop()
+    }
+
+    func testExpiredAudioIsReleasedWithoutAnotherPlaybackRequest() async {
+        let released = expectation(description: "Expired audio buffer released")
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1024, alignment: 1)
+            buffer.initializeMemory(as: UInt8.self, repeating: 0, count: 1024)
+            return Data(bytesNoCopy: buffer, count: 1024, deallocator: .custom { buffer, _ in
+                buffer.deallocate()
+                released.fulfill()
+            })
+        }, makePlayback: { _ in playback }, cacheLifetime: .milliseconds(100))
+        await playResponse(speech, playback: playback, id: UUID())
+        speech.stop()
+        await fulfillment(of: [released], timeout: 2)
+        // Keep the controller alive throughout expiry, as it is while the transcript is visible.
+        XCTAssertEqual(speech.phase, .idle)
+    }
+
+    func testCacheSeparatesResponseTextModelServerAndCredentials() async {
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1])
+        }, makePlayback: { _ in playback })
+        let id = UUID()
+        var otherModel = settings
+        otherModel.textToSpeechModelID = "local-owner/other-tts"
+        var otherServer = settings
+        otherServer.serverPort += 1
+        var otherCredentials = settings
+        otherCredentials.serverAPIKey = "another-token"
+        let requests: [(UUID, String, NativSettings)] = [
+            (id, "Response", settings),
+            (UUID(), "Response", settings),
+            (id, "Edited response", settings),
+            (id, "Response", otherModel),
+            (id, "Response", otherServer),
+            (id, "Response", otherCredentials),
+        ]
+        for (index, request) in requests.enumerated() {
+            await playResponse(speech, playback: playback, id: request.0, text: request.1, settings: request.2)
+            XCTAssertEqual(synthesisCount, index + 1)
+        }
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, requests.count)
+        speech.stop()
+    }
+
+    func testCacheEvictsLeastRecentlyPlayedAudioToStayWithinByteLimit() async {
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1, 2])
+        }, makePlayback: { _ in playback }, cacheByteLimit: 4)
+        let first = UUID(), second = UUID(), third = UUID()
+        for id in [first, second, first, third, first] {
+            await playResponse(speech, playback: playback, id: id)
+        }
+        XCTAssertEqual(synthesisCount, 3)
+        await playResponse(speech, playback: playback, id: second)
+        XCTAssertEqual(synthesisCount, 4)
+        speech.stop()
+    }
+
+    func testOversizedAudioPlaysWithoutBeingCached() async {
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1, 2, 3])
+        }, makePlayback: { _ in playback }, cacheByteLimit: 2)
+        let id = UUID()
+        await playResponse(speech, playback: playback, id: id)
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 2)
+        speech.stop()
+    }
+
+    func testPlaybackErrorEvictsCachedAudio() async {
+        var synthesisCount = 0
+        let playback = TestSpeechPlayback()
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            synthesisCount += 1
+            return Data([1])
+        }, makePlayback: { _ in playback })
+        let id = UUID()
+        await playResponse(speech, playback: playback, id: id)
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 1)
+        playback.onFinish?("Audio decoding failed")
+        await playResponse(speech, playback: playback, id: id)
+        XCTAssertEqual(synthesisCount, 2)
+        XCTAssertNil(speech.errorMessage)
+        speech.stop()
+    }
+
+    private func playResponse(
+        _ speech: ChatResponseSpeech, playback: TestSpeechPlayback, id: UUID,
+        text: String = "Response", settings: NativSettings? = nil
+    ) async {
+        let played = expectation(description: "Response played")
+        playback.onPlay = { played.fulfill() }
+        speech.stop()
+        speech.toggle(messageID: id, text: text, settings: settings ?? self.settings)
+        await fulfillment(of: [played], timeout: 2)
+        XCTAssertEqual(speech.phase, .playing)
+    }
 }
 
 @MainActor
 private final class TestSpeechPlayback: ChatSpeechPlayback {
     var onFinish: ((String?) -> Void)?
-    private let onPlay: () -> Void
+    var onPlay: () -> Void
     private let canPlay: Bool
     private(set) var stopCount = 0
 

@@ -31,6 +31,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
     case huggingFace
     case stepFun
     case internLM
+    case gradium
 
     var displayName: String {
         switch self {
@@ -64,6 +65,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .huggingFace: "Hugging Face"
         case .stepFun: "StepFun"
         case .internLM: "InternLM"
+        case .gradium: "Gradium"
         }
     }
 
@@ -99,6 +101,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .huggingFace: "ModelProviderIcon-huggingface"
         case .stepFun: "ModelProviderIcon-stepfun"
         case .internLM: "ModelProviderIcon-internlm"
+        case .gradium: "ModelProviderIcon-gradium"
         }
     }
 
@@ -134,6 +137,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         case .huggingFace: "HF"
         case .stepFun: "S"
         case .internLM: "IL"
+        case .gradium: "Gr"
         }
     }
 
@@ -156,7 +160,7 @@ enum LocalModelProvider: String, Hashable, Sendable {
         switch self {
         case .recursiveSI, .google, .openAI, .mistral, .microsoft, .cohere, .apple, .liquidAI, .zAI,
              .inclusionAI, .miniMax, .baidu, .moonshotAI, .stabilityAI,
-             .thinkingMachines, .meituanLongCat, .huggingFace, .stepFun, .internLM:
+             .thinkingMachines, .meituanLongCat, .huggingFace, .stepFun, .internLM, .gradium:
             .labelColor
         case .meta:
             NSColor(srgbRed: 0 / 255, green: 129 / 255, blue: 251 / 255, alpha: 1)
@@ -224,7 +228,9 @@ enum LocalModelProviderResolver {
         ModelFamilyMapping(provider: .meituanLongCat, identifiers: ["longcat"]),
         ModelFamilyMapping(provider: .huggingFace, identifiers: ["smol", "idefics"]),
         ModelFamilyMapping(provider: .stepFun, identifiers: ["step3", "stepaudio"]),
-        ModelFamilyMapping(provider: .internLM, identifiers: ["internvl", "internlm"])
+        ModelFamilyMapping(provider: .internLM, identifiers: ["internvl", "internlm"]),
+        // Bare "phonon" also names an unrelated speech-recognition family.
+        ModelFamilyMapping(provider: .gradium, identifiers: ["gradium", "phonon31m", "phonon40m"])
     ]
 
     private static let organizationMappings: [String: LocalModelProvider] = [
@@ -280,7 +286,9 @@ enum LocalModelProviderResolver {
         "stepfunai": .stepFun,
         "internlm": .internLM,
         "opengvlab": .internLM,
-        "shanghaiailab": .internLM
+        "shanghaiailab": .internLM,
+        "gradium": .gradium,
+        "gradiumai": .gradium
     ]
 
     static func resolve(
