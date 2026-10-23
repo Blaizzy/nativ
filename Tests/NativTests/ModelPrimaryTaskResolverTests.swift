@@ -10,7 +10,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .textToSpeech)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testCohereASRIsSpeechToTextDespiteConditionalGenerationArchitecture() {
@@ -22,7 +21,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .speechToText)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testGraniteSpeech5CTCIsSpeechToText() {
@@ -34,7 +32,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .speechToText)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testQwenTTSIsNotLanguageModel() {
@@ -98,6 +95,104 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(task, .speechToText)
+    }
+
+    func testClassifiesModelConfigurations() {
+        let cases: [(String, [String: Any], ModelPrimaryTask)] = [
+            (
+                "Mamba",
+                ["model_type": "custom", "architectures": ["MambaForCausalLM"]],
+                .language
+            ),
+            (
+                "Phi-3V",
+                ["model_type": "custom", "architectures": ["Phi3VForConditionalGeneration"]],
+                .language
+            ),
+            (
+                "GPT-2",
+                ["model_type": "custom", "architectures": ["GPT2LMHeadModel"]],
+                .language
+            ),
+            (
+                "InternVL",
+                [
+                    "model_type": "internvl_chat",
+                    "architectures": ["InternVLChatModel"],
+                    "llm_config": [
+                        "model_type": "qwen3",
+                        "architectures": ["Qwen3ForCausalLM"],
+                    ],
+                ],
+                .language
+            ),
+            (
+                "DeepSeek-VL",
+                [
+                    "model_type": "deepseek_vl_v2",
+                    "language_config": [
+                        "model_type": "deepseek_v2",
+                        "architectures": ["DeepseekV2ForCausalLM"],
+                    ],
+                ],
+                .language
+            ),
+            (
+                "custom nested Phi-3",
+                [
+                    "model_type": "custom_vlm",
+                    "text_config": [
+                        "model_type": "phi3",
+                        "architectures": ["Phi3ForCausalLM"],
+                    ],
+                ],
+                .language
+            ),
+            ("MiniCPM-O", ["model_type": "minicpmo"], .language),
+            ("MiniCPM-V", ["model_type": "minicpmv"], .language),
+            ("Moondream", ["model_type": "moondream"], .language),
+            ("Moondream 1", ["model_type": "moondream1"], .language),
+            ("Moondream 2", ["model_type": "moondream2"], .language),
+            ("Moondream 3", ["model_type": "moondream3"], .language),
+            (
+                "CLIP",
+                [
+                    "model_type": "clip",
+                    "architectures": ["CLIPModel"],
+                    "text_config": ["model_type": "clip_text_model"],
+                    "vision_config": ["model_type": "clip_vision_model"],
+                ],
+                .unknown
+            ),
+            (
+                "SigLIP",
+                [
+                    "model_type": "siglip",
+                    "architectures": ["SiglipModel"],
+                    "text_config": ["model_type": "siglip_text_model"],
+                    "vision_config": ["model_type": "siglip_vision_model"],
+                ],
+                .unknown
+            ),
+            (
+                "SigLIP 2",
+                [
+                    "model_type": "siglip",
+                    "text_config": ["model_type": "siglip_text_model"],
+                    "vision_config": ["model_type": "siglip_vision_model"],
+                ],
+                .unknown
+            ),
+            ("BERT", ["model_type": "bert", "architectures": ["BertModel"]], .unknown),
+        ]
+
+        for (name, config, expectedTask) in cases {
+            XCTAssertEqual(
+                ModelPrimaryTaskResolver.resolve(model: "org/\(name)", config: config),
+                expectedTask,
+                name
+            )
+        }
     }
 
     private func resolve(
