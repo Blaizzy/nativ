@@ -80,6 +80,7 @@ extension ControlPanelView {
             )
         case .artifacts:
             ArtifactsPageHost(
+                fileIndex: dependencies.fileIndex,
                 store: artifacts,
                 model: model,
                 downloads: downloads,
@@ -293,6 +294,7 @@ struct ArtifactsPageHost: View {
     private static let embeddingModelID = "mlx-community/Qwen3-VL-Embedding-2B-bf16"
     private static let embeddingModelSize: Int64 = 4_300_000_000
 
+    let fileIndex: ArtifactFileIndexCoordinator
     let store: ArtifactStore
     let model: NativModel
     @ObservedObject var downloads: HuggingFaceDownloadManager
@@ -344,6 +346,7 @@ struct ArtifactsPageHost: View {
     var body: some View {
         ArtifactsView(
             store: store,
+            fileIndex: fileIndex,
             semanticSearch: semanticSearch,
             titleLeadingInset: titleLeadingInset,
             onOpenChat: onOpenChat,

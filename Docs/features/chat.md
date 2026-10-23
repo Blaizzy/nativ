@@ -423,3 +423,13 @@ Artifacts trash and recovery apply to attachments.
 **Smart search** ranks artifacts semantically using an on-device embedding model. It activates
 only after that model is installed; until then, search falls back to plain text matching over
 artifact metadata.
+
+Saved work-pane files are indexed silently in the background on launch. The persistent
+SQLite index backfills older chats, resumes pending files after interruption, and
+updates after saves or filesystem changes. Unchanged launches check metadata without
+reading file contents again. Extraction uses one worker with bounded reads and pauses
+between files; binary or oversized replacements are indexed by metadata only. The
+index is local and rebuildable. Artifacts search includes indexed file contents
+alongside metadata and optional semantic matches. App-wide search shows saved files
+alongside matching messages; selecting a file opens its preview. File queries are
+debounced and use the index without rereading file contents or requiring an embedding model.
