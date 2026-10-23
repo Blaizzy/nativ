@@ -21,6 +21,7 @@ public enum NativModelTypeRegistryError: Error, Equatable, Sendable {
     case invalidAlias(String, String, NativModelCapability)
     case invalidModelKinds(NativModelCapability)
     case invalidModelKind(String, String, NativModelCapability)
+    case invalidGenerationModelTypes
 }
 
 /// A validated view of the loaders shipped inside Nativ's bundled MLX runtime.
@@ -119,10 +120,22 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
                 kinds[normalizedModelType] = normalizedKind
             }
 
+            let generationTypes = manifestEntry.generationModelTypes.map(Set.init)
+            if let generationTypes {
+                guard capability == .language,
+                      !generationTypes.isEmpty,
+                      generationTypes.count == manifestEntry.generationModelTypes?.count,
+                      generationTypes.isSubset(of: modelTypes)
+                else {
+                    throw NativModelTypeRegistryError.invalidGenerationModelTypes
+                }
+            }
+
             validatedEntries[capability] = Entry(
                 modelTypes: modelTypes,
                 aliases: aliases,
-                kinds: kinds
+                kinds: kinds,
+                generationModelTypes: generationTypes
             )
         }
 
@@ -158,6 +171,16 @@ public struct NativModelTypeRegistry: Equatable, Sendable {
         )
     }
 
+    /// Nil means the type or generation metadata is unknown, not non-generative.
+    public func supportsTextGeneration(for modelType: String) -> Bool? {
+        guard let loader = loader(for: modelType, capability: .language),
+              let generationTypes = entries[.language]?.generationModelTypes
+        else {
+            return nil
+        }
+        return generationTypes.contains(loader)
+    }
+
     /// The speculative round-loop kind assigned by the bundled mlx-vlm
     /// runtime. Aliases are resolved through the same loader table first.
     public func drafterKind(for modelType: String) -> String? {
@@ -186,6 +209,7 @@ private extension NativModelTypeRegistry {
         let modelTypes: Set<String>
         let aliases: [String: String]
         let kinds: [String: String]
+        let generationModelTypes: Set<String>?
     }
 
     struct Manifest: Decodable {
@@ -204,11 +228,13 @@ private extension NativModelTypeRegistry {
         let modelTypes: [String]
         let aliases: [String: String]
         let kinds: [String: String]?
+        let generationModelTypes: [String]?
 
         enum CodingKeys: String, CodingKey {
             case modelTypes = "model_types"
             case aliases
             case kinds
+            case generationModelTypes = "generation_model_types"
         }
     }
 }

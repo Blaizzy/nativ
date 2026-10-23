@@ -34,6 +34,9 @@ jobs:
       - name: Test request diagnostics
         run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
 
+      - name: Test runtime model capability detection
+        run: python3 -m unittest discover -s scripts/tests -p 'test_model_capabilities.py' -v
+
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4
         with:
@@ -50,7 +53,7 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build app and test update channels, hardware history, and filesystem safety (unsigned Debug)
+      - name: Build app and run targeted regression tests (unsigned Debug)
         run: |
           make xcode-generate
           xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
@@ -64,6 +67,11 @@ jobs:
             -only-testing:NativTests/ChatProjectStoreTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
+            -only-testing:NativTests/ModelPrimaryTaskResolverTests \
+            -only-testing:NativTests/LocalModelDiscoveryTests \
+            -only-testing:NativTests/HuggingFaceModelSupportTests \
+            -only-testing:NativTests/MLXImageModelResolverTests \
+            -only-testing:NativTests/NativModelTypeRegistryDrafterTests \
             -only-testing:NativTests/SystemTelemetryTests \
             -only-testing:NativTests/SystemMonitorIdentityTests \
             -only-testing:NativTests/SystemMonitorObservationPolicyTests test

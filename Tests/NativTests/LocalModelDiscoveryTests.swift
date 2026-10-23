@@ -155,6 +155,51 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertTrue(model.capabilities.contains(.text))
     }
 
+    func testNemotronOmniModelsAreSelectableAndNotRejectedAtStartup() async throws {
+        let repoIDs = [
+            "nativ-community/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-NVFP4",
+            "nativ-community/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4",
+        ]
+        for repoID in repoIDs {
+            try makeTextModelSnapshot(
+                repoID: repoID,
+                modelType: "nemotron_h_omni",
+                architectures: ["NemotronH_Omni_Reasoning_V3"],
+                sentenceTransformer: false
+            )
+        }
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        XCTAssertEqual(models.count, repoIDs.count)
+        for model in models {
+            XCTAssertTrue(model.capabilities.contains(.text), model.repoID)
+            XCTAssertTrue(model.isEligibleForLanguageModelPicker, model.repoID)
+            XCTAssertFalse(LocalModelDiscovery.isKnownNonLanguageModel(
+                repoID: model.repoID, searchPaths: searchPaths.all
+            ))
+        }
+    }
+
+    func testStartupRejectsEncoderFromAdditionalRootAndDirectPath() async throws {
+        try makeTextModelSnapshot(
+            repoID: "org/encoder", modelType: "bert",
+            architectures: ["BertModel"], sentenceTransformer: false
+        )
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first)
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
+        XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
+        let snapshot = try XCTUnwrap(model.snapshotURL)
+        for repoID in [model.repoID, snapshot.path] {
+            XCTAssertTrue(LocalModelDiscovery.isKnownNonLanguageModel(
+                repoID: repoID, searchPaths: [temporaryCache.appendingPathComponent("missing").path, temporaryCache.path]
+            ))
+        }
+        XCTAssertFalse(LocalModelDiscovery.isKnownNonLanguageModel(
+            repoID: "org/missing", searchPaths: searchPaths.all
+        ))
+    }
+
     func testClassifiesEncoderWithPoolingAsEmbeddingModel() async throws {
         try makeTextModelSnapshot(
             repoID: "org/xlm-roberta-embed",
@@ -166,6 +211,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
     }
 
     func testDoesNotClassifyCausalLanguageModelAsEmbeddingModel() async throws {
@@ -209,6 +255,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
     }
 
     func testClassifiesStampedModelAsEmbeddingModel() async throws {
@@ -223,6 +270,7 @@ final class LocalModelDiscoveryTests: XCTestCase {
         let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
         let model = try XCTUnwrap(models.first)
         XCTAssertTrue(model.capabilities.contains(.embeddings))
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
     }
 
     func testRequiresEveryShardReferencedBySafetensorsIndex() async throws {

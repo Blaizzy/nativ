@@ -1,3 +1,4 @@
+import NativServerKit
 import XCTest
 
 final class ModelPrimaryTaskResolverTests: XCTestCase {
@@ -10,7 +11,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .textToSpeech)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testCohereASRIsSpeechToTextDespiteConditionalGenerationArchitecture() {
@@ -22,7 +22,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .speechToText)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testGraniteSpeech5CTCIsSpeechToText() {
@@ -34,7 +33,6 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
 
         XCTAssertEqual(task, .speechToText)
         XCTAssertFalse(task.isLanguageCapable)
-        XCTAssertFalse(task.includesLanguageCapability(fallbackMatch: true))
     }
 
     func testQwenTTSIsNotLanguageModel() {
@@ -47,15 +45,15 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
         XCTAssertEqual(task, .textToSpeech)
     }
 
-    func testQwenAudioRemainsLanguageCapable() {
+    func testQwenAudioUsesBundledSpeechLoader() {
         let task = resolve(
             model: "Qwen/Qwen2-Audio-7B-Instruct",
             modelType: "qwen2_audio",
             architecture: "Qwen2AudioForConditionalGeneration"
         )
 
-        XCTAssertEqual(task, .audioLanguage)
-        XCTAssertTrue(task.isLanguageCapable)
+        XCTAssertEqual(task, .speechToText)
+        XCTAssertFalse(task.isLanguageCapable)
     }
 
     func testQwenOmniRemainsLanguageCapable() {
@@ -65,7 +63,7 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
             architecture: "Qwen3OmniMoeForConditionalGeneration"
         )
 
-        XCTAssertEqual(task, .audioLanguage)
+        XCTAssertEqual(task, .language)
         XCTAssertTrue(task.isLanguageCapable)
     }
 
@@ -98,6 +96,80 @@ final class ModelPrimaryTaskResolverTests: XCTestCase {
         )
 
         XCTAssertEqual(task, .speechToText)
+    }
+
+    func testNewRuntimeTypesAndAliasesNeedNoArchitectureNameHeuristic() throws {
+        let registry = try makeRegistry()
+        for modelType in ["future_chat", "future-alias", " FUTURE-ALIAS "] {
+            let task = ModelPrimaryTaskResolver.resolve(
+                model: "org/new-checkpoint",
+                config: ["model_type": modelType, "architectures": ["UnfamiliarArchitecture"]],
+                registry: registry
+            )
+            XCTAssertEqual(task, .language, modelType)
+            XCTAssertFalse(task.isKnownNonLanguage)
+        }
+    }
+
+    func testEncoderIsExcludedEvenWhenRuntimeCanImportIt() throws {
+        let task = ModelPrimaryTaskResolver.resolve(
+            model: "org/encoder",
+            config: ["model_type": "future_encoder"],
+            registry: try makeRegistry()
+        )
+        XCTAssertEqual(task, .embeddings)
+        XCTAssertTrue(task.isKnownNonLanguage)
+    }
+
+    func testMissingRegistryAndUnknownTypesDoNotClaimSupportOrBlockStartup() throws {
+        let config: [String: Any] = ["model_type": "unregistered", "architectures": ["Qwen3ForCausalLM"]]
+        for registry in [nil, try makeRegistry()] {
+            let task = ModelPrimaryTaskResolver.resolve(model: "org/model", config: config, registry: registry)
+            XCTAssertEqual(task, .unknown)
+            XCTAssertFalse(task.isKnownNonLanguage)
+        }
+    }
+
+    func testSpeechAliasesAndSharedBackbonesUseRuntimeCapabilities() throws {
+        let registry = try makeRegistry()
+        let cases: [(String, String, ModelPrimaryTask)] = [
+            ("org/model", "future-speech-alias", .textToSpeech),
+            ("org/chat", "future_chat", .language),
+            ("org/converted-tts", "future_chat", .textToSpeech),
+        ]
+        for (model, modelType, expected) in cases {
+            XCTAssertEqual(ModelPrimaryTaskResolver.resolve(
+                model: model, config: ["model_type": modelType], registry: registry
+            ), expected)
+        }
+    }
+
+    func testGenerationMetadataMustReferenceCanonicalLanguageLoaders() throws {
+        XCTAssertThrowsError(try makeRegistry(generationTypes: ["future-alias"]))
+        XCTAssertThrowsError(try makeRegistry(generationTypes: ["future_chat", "future_chat"]))
+    }
+
+    private func makeRegistry(generationTypes: [String] = ["future_chat"]) throws -> NativModelTypeRegistry {
+        var capabilities: [String: Any] = [:]
+        for capability in NativModelCapability.allCases {
+            capabilities[capability.rawValue] = ["model_types": ["test_\(capability.rawValue)"], "aliases": [:]]
+        }
+        capabilities["language"] = [
+            "model_types": ["future_chat", "future_encoder"],
+            "aliases": ["future-alias": "future_chat"],
+            "generation_model_types": generationTypes,
+        ]
+        capabilities["embeddings"] = ["model_types": ["future_encoder"], "aliases": [:]]
+        capabilities["text_to_speech"] = [
+            "model_types": ["future_speech", "future_chat"],
+            "aliases": ["future-speech-alias": "future_speech"],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1,
+            "package_versions": ["mlx-vlm": "test", "mlx-audio": "test"],
+            "capabilities": capabilities,
+        ])
+        return try NativModelTypeRegistry(data: data)
     }
 
     private func resolve(
