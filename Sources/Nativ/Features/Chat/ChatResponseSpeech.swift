@@ -15,11 +15,13 @@ protocol ChatSpeechPlayback: AnyObject {
 @Observable
 final class ChatResponseSpeech {
     enum Phase: Equatable {
-        case idle, generating, playing
+        case idle, preparing, downloading, startingServer, generating, playing
     }
 
     private(set) var messageID: UUID?
     private(set) var phase: Phase = .idle
+    private(set) var preparingModelID: String?
+    private(set) var downloadProgress: Double?
     var errorMessage: String?
 
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -76,7 +78,10 @@ final class ChatResponseSpeech {
         cacheExpiryTask?.cancel()
     }
 
-    func toggle(messageID: UUID, text: String, settings: NativSettings) {
+    func toggle(
+        messageID: UUID, text: String, settings: NativSettings,
+        preparation: ChatSpeechPreparation? = nil
+    ) {
         if self.messageID == messageID {
             stop()
             return
@@ -85,27 +90,55 @@ final class ChatResponseSpeech {
         stop()
         errorMessage = nil
         let settings = settings.normalized()
-        guard let modelID = settings.textToSpeechModelID else {
+        guard settings.textToSpeechModelID != nil || preparation != nil else {
             errorMessage = ChatResponseSpeechError.modelNotSelected.localizedDescription
             return
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
-        let cacheKey = CacheKey(
-            messageID: messageID, text: text, modelID: modelID,
-            serverURL: settings.serverBaseURL, apiKey: settings.serverAPIKey
-        )
-        let cachedData = cachedAudio(for: cacheKey)
         let requestID = UUID()
         self.requestID = requestID
         self.messageID = messageID
-        phase = .generating
+        phase = preparation == nil ? .generating : .preparing
         task = Task { [weak self, synthesize] in
+            var cacheKey: CacheKey?
             do {
+                var settings = settings
+                var selectedModel: ChatSpeechPreparation.Model?
+                if let preparation {
+                    let selected = try await preparation.resolveModel(settings)
+                    try Task.checkCancellation()
+                    guard self?.requestID == requestID else { return }
+                    selectedModel = selected
+                    settings.textToSpeechModelID = selected.id
+                    self?.preparingModelID = selected.id
+                }
+                guard let modelID = settings.textToSpeechModelID else {
+                    throw ChatResponseSpeechError.modelNotSelected
+                }
+                let key = CacheKey(
+                    messageID: messageID, text: text, modelID: modelID,
+                    serverURL: settings.serverBaseURL, apiKey: settings.serverAPIKey
+                )
+                cacheKey = key
+                let cachedData = self?.cachedAudio(for: key)
                 let data: Data
                 if let cachedData {
                     data = cachedData
                 } else {
+                    if let preparation, let selectedModel {
+                        if !selectedModel.isInstalled {
+                            self?.phase = .downloading
+                            try await preparation.downloadModel(selectedModel, settings)
+                            try Task.checkCancellation()
+                            guard self?.requestID == requestID else { return }
+                        }
+                        self?.phase = .startingServer
+                        try await preparation.prepareServer(settings)
+                        try Task.checkCancellation()
+                        guard self?.requestID == requestID else { return }
+                    }
+                    self?.phase = .generating
                     data = try await synthesize(text, settings)
                 }
                 try Task.checkCancellation()
@@ -113,7 +146,7 @@ final class ChatResponseSpeech {
                 let playback = try self.makePlayback(data)
                 playback.onFinish = { [weak self] error in
                     guard let self, self.requestID == requestID else { return }
-                    if error != nil { self.audioCache.removeValue(forKey: cacheKey) }
+                    if error != nil { self.audioCache.removeValue(forKey: key) }
                     self.stop()
                     self.errorMessage = error
                 }
@@ -121,7 +154,7 @@ final class ChatResponseSpeech {
                 guard playback.play() else {
                     throw ChatResponseSpeechError.playbackUnavailable
                 }
-                if cachedData == nil { self.cacheAudio(data, for: cacheKey) }
+                if cachedData == nil { self.cacheAudio(data, for: key) }
                 self.phase = .playing
                 self.task = nil
             } catch {
@@ -130,7 +163,7 @@ final class ChatResponseSpeech {
                     || (error as? URLError)?.code == .cancelled
                 self.stop()
                 if !cancelled {
-                    self.audioCache.removeValue(forKey: cacheKey)
+                    if let cacheKey { self.audioCache.removeValue(forKey: cacheKey) }
                     self.errorMessage = error.localizedDescription
                 }
             }
@@ -145,7 +178,28 @@ final class ChatResponseSpeech {
         playback?.stop()
         playback = nil
         messageID = nil
+        preparingModelID = nil
+        downloadProgress = nil
         phase = .idle
+    }
+
+    func updateDownloadProgress(_ progress: Double) {
+        guard phase == .downloading else { return }
+        downloadProgress = progress
+    }
+
+    var statusText: String? {
+        switch phase {
+        case .preparing, .startingServer: "Preparing voice…"
+        case .downloading:
+            if let downloadProgress, downloadProgress > 0 {
+                "Downloading voice… \(Int(downloadProgress * 100))%"
+            } else {
+                "Downloading voice…"
+            }
+        case .generating: "Generating audio…"
+        case .idle, .playing: nil
+        }
     }
 
     private func cachedAudio(for key: CacheKey) -> Data? {

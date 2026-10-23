@@ -389,14 +389,161 @@ final class ChatResponseSpeechTests: XCTestCase {
         speech.stop()
     }
 
+    func testAutomaticSpeechDownloadsPhononAndReplaysWithoutPreparingServerAgain() async {
+        let playback = TestSpeechPlayback()
+        var steps: [String] = []
+        var speech: ChatResponseSpeech!
+        let preparation = ChatSpeechPreparation(
+            resolveModel: { settings in
+                XCTAssertNil(settings.textToSpeechModelID)
+                steps.append("resolve")
+                return .init(id: ChatSpeechPreparation.defaultModelID, isInstalled: false)
+            },
+            downloadModel: { selected, settings in
+                XCTAssertEqual(selected.id, "nativ-community/phonon")
+                XCTAssertEqual(settings.textToSpeechModelID, selected.id)
+                XCTAssertEqual(speech.phase, .downloading)
+                speech.updateDownloadProgress(0.5)
+                XCTAssertEqual(speech.statusText, "Downloading voice… 50%")
+                steps.append("download")
+            },
+            prepareServer: { _ in
+                XCTAssertEqual(speech.phase, .startingServer)
+                steps.append("server")
+            }
+        )
+        speech = ChatResponseSpeech(synthesize: { _, settings in
+            XCTAssertEqual(settings.textToSpeechModelID, "nativ-community/phonon")
+            steps.append("synthesize")
+            return Data([1])
+        }, makePlayback: { _ in steps.append("play"); return playback })
+        let id = UUID()
+        await playResponse(speech, playback: playback, id: id, settings: NativSettings(), preparation: preparation)
+        XCTAssertEqual(steps, ["resolve", "download", "server", "synthesize", "play"])
+        steps.removeAll()
+        // Cached playback does not need a server or even a model still present on disk.
+        await playResponse(speech, playback: playback, id: id, settings: NativSettings(), preparation: preparation)
+        XCTAssertEqual(steps, ["resolve", "play"])
+        speech.stop()
+        XCTAssertNil(speech.preparingModelID)
+        XCTAssertNil(speech.downloadProgress)
+    }
+
+    func testAutomaticSpeechUsesInstalledModelWithoutDownloadingFallback() async {
+        let playback = TestSpeechPlayback()
+        let preparation = ChatSpeechPreparation(
+            resolveModel: { _ in .init(id: "local-owner/installed-tts", isInstalled: true) },
+            downloadModel: { _, _ in XCTFail("Installed voices should not download") },
+            prepareServer: { _ in }
+        )
+        let speech = ChatResponseSpeech(synthesize: { _, settings in
+            XCTAssertEqual(settings.textToSpeechModelID, "local-owner/installed-tts")
+            return Data([1])
+        }, makePlayback: { _ in playback })
+        await playResponse(speech, playback: playback, id: UUID(), settings: NativSettings(), preparation: preparation)
+        speech.stop()
+    }
+
+    func testCancellingDownloadPreventsServerStartupAndPlayback() async {
+        let started = expectation(description: "Download started")
+        let returned = expectation(description: "Download returned after cancellation")
+        var continuation: CheckedContinuation<Void, Never>?
+        let preparation = ChatSpeechPreparation(
+            resolveModel: { _ in .init(id: ChatSpeechPreparation.defaultModelID, isInstalled: false) },
+            downloadModel: { _, _ in
+                await withCheckedContinuation { continuation = $0; started.fulfill() }
+                returned.fulfill()
+            },
+            prepareServer: { _ in XCTFail("Cancelled requests must not start a server") }
+        )
+        let speech = ChatResponseSpeech(synthesize: { _, _ in
+            XCTFail("Cancelled download must not generate speech")
+            return Data()
+        })
+        let id = UUID()
+        speech.toggle(messageID: id, text: "Response", settings: NativSettings(), preparation: preparation)
+        await fulfillment(of: [started], timeout: 2)
+        XCTAssertEqual(speech.phase, .downloading)
+        speech.toggle(messageID: id, text: "Response", settings: NativSettings(), preparation: preparation)
+        continuation?.resume()
+        await fulfillment(of: [returned], timeout: 2)
+        XCTAssertEqual(speech.phase, .idle)
+        XCTAssertNil(speech.errorMessage)
+    }
+
+    func testPreparationFailureCanBeRetried() async {
+        for failingStage in ["download", "server"] {
+            let failed = expectation(description: "Preparation failed at \(failingStage)")
+            var shouldFail = true
+            let playback = TestSpeechPlayback()
+            let preparation = ChatSpeechPreparation(
+                resolveModel: { _ in .init(id: ChatSpeechPreparation.defaultModelID, isInstalled: false) },
+                downloadModel: { _, _ in
+                    if shouldFail && failingStage == "download" {
+                        defer { failed.fulfill() }
+                        throw URLError(.notConnectedToInternet)
+                    }
+                },
+                prepareServer: { _ in
+                    if shouldFail {
+                        XCTAssertEqual(failingStage, "server", "Failed downloads must not start a server")
+                        defer { failed.fulfill() }
+                        throw URLError(.cannotConnectToHost)
+                    }
+                }
+            )
+            let speech = ChatResponseSpeech(synthesize: { _, _ in
+                XCTAssertFalse(shouldFail)
+                return Data([1])
+            }, makePlayback: { _ in playback })
+            let id = UUID()
+            speech.toggle(messageID: id, text: "Response", settings: NativSettings(), preparation: preparation)
+            await fulfillment(of: [failed], timeout: 2)
+            XCTAssertEqual(speech.phase, .idle)
+            XCTAssertNotNil(speech.errorMessage)
+            shouldFail = false
+            await playResponse(speech, playback: playback, id: id, settings: NativSettings(), preparation: preparation)
+            XCTAssertNil(speech.errorMessage)
+            speech.stop()
+        }
+    }
+
+    func testAutomaticModelSelectionPrefersInstalledChoiceAndOnlyFallsBackWithoutTTS() {
+        func local(_ id: String, capabilities: Set<LocalModelCapability>) -> LocalModel {
+            LocalModel(
+                repoID: id, snapshotURL: nil, modifiedAt: nil, sizeBytes: nil,
+                parameterCount: nil, quantizationBits: nil, quantizationGroupSize: nil,
+                contextSize: nil, provider: nil, capabilities: capabilities, drafterKind: nil, hiddenSize: nil
+            )
+        }
+        let first = local("a/voice", capabilities: [.textToSpeech])
+        let preferred = local("z/voice", capabilities: [.textToSpeech])
+        let language = local("a/chat", capabilities: [.text])
+        XCTAssertEqual(
+            ChatSpeechPreparation.selectModel(preferredModelID: preferred.repoID, installedModels: [first, preferred, language]),
+            .init(id: preferred.repoID, isInstalled: true)
+        )
+        for preference in [nil, "removed/voice"] {
+            XCTAssertEqual(
+                ChatSpeechPreparation.selectModel(preferredModelID: preference, installedModels: [preferred, language, first]),
+                .init(id: first.repoID, isInstalled: true)
+            )
+            XCTAssertEqual(
+                ChatSpeechPreparation.selectModel(preferredModelID: preference, installedModels: [language]),
+                .init(id: "nativ-community/phonon", isInstalled: false)
+            )
+        }
+    }
+
     private func playResponse(
         _ speech: ChatResponseSpeech, playback: TestSpeechPlayback, id: UUID,
-        text: String = "Response", settings: NativSettings? = nil
+        text: String = "Response", settings: NativSettings? = nil,
+        preparation: ChatSpeechPreparation? = nil
     ) async {
         let played = expectation(description: "Response played")
         playback.onPlay = { played.fulfill() }
         speech.stop()
-        speech.toggle(messageID: id, text: text, settings: settings ?? self.settings)
+        speech.toggle(messageID: id, text: text, settings: settings ?? self.settings, preparation: preparation)
         await fulfillment(of: [played], timeout: 2)
         XCTAssertEqual(speech.phase, .playing)
     }
