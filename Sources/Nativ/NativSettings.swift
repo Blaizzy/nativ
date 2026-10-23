@@ -216,7 +216,6 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
     case textToSpeech
     case speechToText
     case embeddings
-    case decision
 
     var id: Self { self }
 
@@ -230,8 +229,6 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "Text-to-Speech"
         case .speechToText:
             "Speech-to-Text"
-        case .decision:
-            "Decisions"
         case .embeddings:
             "Embeddings"
         }
@@ -247,8 +244,6 @@ enum ModelPreloadSlot: String, CaseIterable, Identifiable, Sendable {
             "speaker.wave.2"
         case .speechToText:
             "waveform"
-        case .decision:
-            "arrow.triangle.branch"
         case .embeddings:
             "square.stack.3d.up"
         }
@@ -653,7 +648,6 @@ struct NativSettings: Codable, Equatable {
     var imageGenerationModelID: String?
     var textToSpeechModelID: String?
     var speechToTextModelID: String?
-    var decisionModelID: String?
     var embeddingModelID: String?
     var serverAPIKey: String?
     var huggingFaceToken: String?
@@ -716,7 +710,6 @@ struct NativSettings: Codable, Equatable {
         imageGenerationModelID: String? = nil,
         textToSpeechModelID: String? = nil,
         speechToTextModelID: String? = nil,
-        decisionModelID: String? = nil,
         embeddingModelID: String? = nil,
         serverAPIKey: String? = nil,
         huggingFaceToken: String? = nil,
@@ -777,7 +770,6 @@ struct NativSettings: Codable, Equatable {
         self.imageGenerationModelID = imageGenerationModelID
         self.textToSpeechModelID = textToSpeechModelID
         self.speechToTextModelID = speechToTextModelID
-        self.decisionModelID = decisionModelID
         self.embeddingModelID = embeddingModelID
         self.serverAPIKey = serverAPIKey
         self.huggingFaceToken = huggingFaceToken
@@ -840,7 +832,6 @@ struct NativSettings: Codable, Equatable {
         case imageGenerationModelID
         case textToSpeechModelID
         case speechToTextModelID
-        case decisionModelID
         case embeddingModelID
         case serverAPIKey
         case huggingFaceToken
@@ -938,7 +929,6 @@ struct NativSettings: Codable, Equatable {
         speechToTextModelID =
             try container.decodeIfPresent(String.self, forKey: .speechToTextModelID)
             ?? defaults.speechToTextModelID
-        decisionModelID = try container.decodeIfPresent(String.self, forKey: .decisionModelID)
         embeddingModelID =
             try container.decodeIfPresent(String.self, forKey: .embeddingModelID)
             ?? defaults.embeddingModelID
@@ -1073,7 +1063,6 @@ struct NativSettings: Codable, Equatable {
         try container.encodeIfPresent(imageGenerationModelID, forKey: .imageGenerationModelID)
         try container.encodeIfPresent(textToSpeechModelID, forKey: .textToSpeechModelID)
         try container.encodeIfPresent(speechToTextModelID, forKey: .speechToTextModelID)
-        try container.encodeIfPresent(decisionModelID, forKey: .decisionModelID)
         try container.encodeIfPresent(embeddingModelID, forKey: .embeddingModelID)
         try container.encode(serverHost, forKey: .serverHost)
         try container.encode(serverPort, forKey: .serverPort)
@@ -1284,7 +1273,6 @@ struct NativSettings: Codable, Equatable {
         }
         settings.textToSpeechModelID = Self.normalizedModelID(settings.textToSpeechModelID)
         settings.speechToTextModelID = Self.normalizedModelID(settings.speechToTextModelID)
-        settings.decisionModelID = Self.normalizedModelID(settings.decisionModelID)
         settings.embeddingModelID = Self.normalizedModelID(settings.embeddingModelID)
         settings.serverAPIKey = ServerAPIAuthentication.normalizedToken(settings.serverAPIKey)
         settings.huggingFaceToken = HuggingFaceAuthentication.normalizedToken(
@@ -1382,7 +1370,6 @@ struct NativSettings: Codable, Equatable {
             && lhs.imageGenerationModelID == rhs.imageGenerationModelID
             && lhs.textToSpeechModelID == rhs.textToSpeechModelID
             && lhs.speechToTextModelID == rhs.speechToTextModelID
-            && lhs.decisionModelID == rhs.decisionModelID
             && lhs.embeddingModelID == rhs.embeddingModelID
             && lhs.serverAPIKey == rhs.serverAPIKey
             && lhs.huggingFaceToken == rhs.huggingFaceToken
@@ -1471,9 +1458,6 @@ struct NativSettings: Codable, Equatable {
         if let speechToTextModelID = settings.speechToTextModelID {
             arguments.append(contentsOf: ["--stt-model", speechToTextModelID])
         }
-        if let decisionModelID = settings.decisionModelID {
-            arguments.append(contentsOf: ["--decision-model", decisionModelID])
-        }
         if Self.serverSupportsEmbeddingModelArgument,
             let embeddingModelID = settings.embeddingModelID
         {
@@ -1516,8 +1500,6 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID
         case .speechToText:
             speechToTextModelID
-        case .decision:
-            decisionModelID
         case .embeddings:
             embeddingModelID
         }
@@ -1533,8 +1515,6 @@ struct NativSettings: Codable, Equatable {
             textToSpeechModelID = modelID
         case .speechToText:
             speechToTextModelID = modelID
-        case .decision:
-            decisionModelID = modelID
         case .embeddings:
             embeddingModelID = modelID
         }

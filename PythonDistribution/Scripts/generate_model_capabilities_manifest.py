@@ -21,7 +21,6 @@ CAPABILITY_NAMES = (
     "text_to_speech",
     "embeddings",
     "reranking",
-    "decision",
 )
 PACKAGE_NAMES = ("mlx-vlm", "mlx-audio")
 
@@ -127,7 +126,7 @@ def _loader_packages(root: Path, *, requires_config_type: bool = True) -> set[st
 
 def _runtime_loader_mapping(
     site_packages: Path, candidate_model_types: set[str]
-) -> tuple[dict[str, str], set[str]]:
+) -> dict[str, str]:
     python = site_packages.parents[2] / "bin" / "python3"
     if not python.exists():
         raise FileNotFoundError(f"Missing bundled Python interpreter: {python}")
@@ -140,7 +139,6 @@ from mlx_vlm.utils import get_model_and_args
 
 candidates = json.load(sys.stdin)
 resolved = {}
-decisions = set()
 for candidate in candidates:
     module, loader = get_model_and_args({"model_type": candidate})
     if not hasattr(module, "Model") or not hasattr(module, "ModelConfig"):
@@ -149,9 +147,7 @@ for candidate in candidates:
             "Model and ModelConfig"
         )
     resolved[candidate] = loader
-    if getattr(module.Model, "decision_types", ()):
-        decisions.add(loader)
-json.dump({"loaders": resolved, "decisions": sorted(decisions)}, sys.stdout, sort_keys=True)
+json.dump(resolved, sys.stdout, sort_keys=True)
 """
     result = subprocess.run(
         [str(python), "-c", resolver],
@@ -168,8 +164,7 @@ json.dump({"loaders": resolved, "decisions": sorted(decisions)}, sys.stdout, sor
         )
 
     try:
-        payload = json.loads(result.stdout)
-        mapping = payload["loaders"]
+        mapping = json.loads(result.stdout)
     except json.JSONDecodeError as error:
         raise RuntimeError("Bundled MLX resolver returned invalid JSON") from error
     if (
@@ -184,44 +179,7 @@ json.dump({"loaders": resolved, "decisions": sorted(decisions)}, sys.stdout, sor
         )
     ):
         raise RuntimeError("Bundled MLX resolver returned an invalid loader mapping")
-    decisions = set(payload["decisions"])
-    if not decisions or not decisions.issubset(set(mapping.values())):
-        raise RuntimeError("Bundled MLX runtime has no valid decision loaders")
-    return mapping, decisions
-
-
-def _configuration_aliases(utils_path: Path, resolved: dict[str, str]) -> list[dict[str, str]]:
-    tree = _parse_module(utils_path)
-    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_model_type")
-    aliases = []
-    for node in ast.walk(function):
-        if not isinstance(node, ast.If) or not isinstance(node.test, ast.BoolOp) or not isinstance(node.test.op, ast.And):
-            continue
-        conditions = node.test.values
-        if len(conditions) != 2:
-            continue
-        match, suffix = conditions
-        if not (isinstance(match, ast.Compare) and isinstance(match.left, ast.Name)
-                and match.left.id == "model_type" and len(match.ops) == 1 and isinstance(match.ops[0], ast.Eq)
-                and isinstance(match.comparators[0], ast.Constant) and isinstance(match.comparators[0].value, str)):
-            continue
-        if not (isinstance(suffix, ast.Call) and isinstance(suffix.func, ast.Attribute)
-                and suffix.func.attr == "endswith" and len(suffix.args) == 1
-                and isinstance(suffix.args[0], ast.Constant) and isinstance(suffix.args[0].value, str)):
-            continue
-        expression = ast.unparse(suffix.func.value)
-        if expression != "str((config.get('auto_map') or {}).get('AutoModel', ''))":
-            continue
-        if len(node.body) != 1 or not isinstance(node.body[0], ast.Assign):
-            raise RuntimeError("Unsupported runtime configuration alias assignment")
-        assignment = node.body[0]
-        if not (len(assignment.targets) == 1 and isinstance(assignment.targets[0], ast.Name)
-                and assignment.targets[0].id == "model_type" and isinstance(assignment.value, ast.Constant)
-                and assignment.value.value in resolved.values()):
-            raise RuntimeError("Invalid runtime configuration alias target")
-        aliases.append({"model_type": match.comparators[0].value,
-                        "auto_model_suffix": suffix.args[0].value, "loader": assignment.value.value})
-    return aliases
+    return mapping
 
 
 def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
@@ -363,7 +321,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     vlm_alias_mapping = _string_mapping(mlx_vlm_root / "utils.py", "MODEL_REMAPPING")
     all_loaders = language_loaders | drafter_loaders
     _validate_mapping_targets(vlm_alias_mapping, all_loaders)
-    resolved_model_types, decision_types = _runtime_loader_mapping(
+    resolved_model_types = _runtime_loader_mapping(
         site_packages,
         all_loaders | set(vlm_alias_mapping),
     )
@@ -377,7 +335,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
             details.append("unexpected loaders: " + ", ".join(sorted(unexpected)))
         raise RuntimeError("Bundled MLX loader mapping is incomplete: " + "; ".join(details))
 
-    language_types = _apply_alias_precedence(language_loaders, resolved_model_types) - decision_types
+    language_types = _apply_alias_precedence(language_loaders, resolved_model_types)
     drafter_types = _apply_alias_precedence(drafter_loaders, resolved_model_types)
     language_aliases = _aliases_for(resolved_model_types, language_types)
     drafter_aliases = _aliases_for(resolved_model_types, drafter_types)
@@ -431,7 +389,6 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     _validate_mapping_targets(reranking_alias_mapping, reranking_types)
 
     capabilities = {
-        "decision": _entry(decision_types, _aliases_for(resolved_model_types, decision_types)),
         "language": _entry(
             language_types,
             language_aliases,
@@ -468,7 +425,6 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
         "schema_version": SCHEMA_VERSION,
         "package_versions": _package_versions(site_packages),
         "capabilities": capabilities,
-        "configuration_aliases": _configuration_aliases(mlx_vlm_root / "utils.py", resolved_model_types),
     }
 
 
@@ -529,20 +485,6 @@ def validate_manifest(manifest: object) -> None:
                 raise RuntimeError("Invalid speculative drafter kinds")
         elif kinds is not None:
             raise RuntimeError(f"Unexpected {capability_name} model kinds")
-
-    known_loaders = {model_type for entry in capabilities.values() for model_type in entry["model_types"]}
-    configuration_aliases = manifest.get("configuration_aliases", [])
-    if not isinstance(configuration_aliases, list) or any(
-        not isinstance(alias, dict)
-        or not isinstance(alias.get("model_type"), str)
-        or not alias["model_type"]
-        or alias["model_type"] != alias["model_type"].strip().lower()
-        or not isinstance(alias.get("auto_model_suffix"), str)
-        or not alias["auto_model_suffix"]
-        or alias.get("loader") not in known_loaders
-        for alias in configuration_aliases
-    ):
-        raise RuntimeError("Invalid runtime configuration aliases")
 
 
 def generate_model_capabilities_manifest(site_packages: Path, output: Path) -> Path:
