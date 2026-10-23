@@ -47,6 +47,32 @@ final class MarkdownParserTests: XCTestCase {
 
 @MainActor
 final class MarkdownGeometryTests: XCTestCase {
+    func testClosingRenderedDocumentReleasesSurfaceAndTextViews() async throws {
+        weak var releasedSurface: MarkdownSurface?
+        weak var releasedText: MarkdownSelectableTextView?
+        autoreleasepool {
+            let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let surface = MarkdownSurface()
+            surface.configure(content: "```swift\nlet value = 42\n```", style: .init())
+            surface.frame = CGRect(origin: .zero, size: surface.preflight(width: 600).size)
+            window.contentView = surface
+            surface.refreshVisibleBlocks()
+            XCTAssertFalse(surface.visibleTextViews.isEmpty)
+            releasedSurface = surface
+            releasedText = surface.visibleTextViews.first
+            window.contentView = nil
+            window.close()
+        }
+        // AppKit may defer teardown until the next event-loop turn.
+        for _ in 0..<5 where releasedText != nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertNil(releasedSurface)
+        XCTAssertNil(releasedText)
+    }
+
     func testMovingAncestorIntoViewportMountsTextWithoutScrolling() async throws {
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled],

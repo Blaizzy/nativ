@@ -120,6 +120,7 @@ final class ArtifactStore: ObservableObject {
     }
 
     func fileURL(for artifact: Artifact) -> URL {
+        if let url = artifact.workFileURL { return url }
         if let asset = artifact.asset, let url = mediaStore.fileURL(for: asset) { return url }
         return cacheDirectory.appendingPathComponent(artifact.relativePath)
     }
@@ -241,6 +242,7 @@ final class ArtifactStore: ObservableObject {
     }
 
     func rescan() {
+        knownFingerprint = nil // Work files may change outside the chat.
         trash?.reconcile()
         refresh()
     }
@@ -284,7 +286,7 @@ final class ArtifactStore: ObservableObject {
     func delete(_ toDelete: [Artifact]) -> Set<Artifact.ID> {
         var deletedIDs: Set<Artifact.ID> = []
         for artifact in toDelete {
-            guard !deletedIDs.contains(artifact.id), deletionHandler(artifact) else {
+            guard artifact.workFileURL == nil, !deletedIDs.contains(artifact.id), deletionHandler(artifact) else {
                 continue
             }
             mutationRevision += 1
@@ -401,17 +403,17 @@ final class ArtifactStore: ObservableObject {
     ) -> CatalogSnapshot {
         let chats = ChatSessionStore()
         let images = ImageGenerationSessionStore()
-        let fingerprint = "unified-v2#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
+        let fingerprint = "unified-v3-work-files#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
         if !known.artifacts.isEmpty,
            known.fingerprint == fingerprint,
            known.artifacts.allSatisfy({ artifact in
-               artifact.asset.flatMap(MediaAssetStore.shared.fileURL) != nil
+               artifact.workFileURL == nil && artifact.asset.flatMap(MediaAssetStore.shared.fileURL) != nil
            }) {
             return known
         }
 
-        let artifacts = ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions())
-            .filter { $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
+        let artifacts = ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions(), chatStore: chats)
+            .filter { $0.workFileURL != nil || $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
         writeIndex(artifacts, fingerprint: fingerprint, to: indexURL)
         removeLegacyCache(cacheDirectory: cacheDirectory, indexURL: indexURL)
         return CatalogSnapshot(fingerprint: fingerprint, artifacts: artifacts)

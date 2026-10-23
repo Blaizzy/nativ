@@ -267,6 +267,78 @@ final class ArtifactCatalogTests: XCTestCase {
         XCTAssertEqual(artifact.workspace, .imageGeneration)
     }
 
+    @MainActor
+    func testWorkDocumentsUseSavedFilesAndExistingArtifactActions() async throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let item = ChatWorkItem(title: "Trip notes", kind: .document, content: "# San Francisco")
+        var session = fixture.chat(messages: [])
+        session.workState = ChatWorkState(items: [item])
+        // Stage a legacy chat file without creating a Git checkout in the test.
+        try fixture.chats.workFiles.save(session.workState!, previous: nil, sessionID: session.id)
+        let artifacts = ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats)
+        let artifact = try XCTUnwrap(artifacts.first)
+        XCTAssertEqual(artifacts.count, 1)
+        XCTAssertEqual(artifact.kind, .document)
+        XCTAssertEqual(artifact.filename, "Trip notes.md")
+        XCTAssertEqual(artifact.sessionID, session.id)
+        XCTAssertEqual(artifact.locations.first?.attachmentID, item.id)
+        XCTAssertNil(artifact.locations.first?.messageID)
+        let store = ArtifactStore(storage: fixture.storage, refreshesAutomatically: false)
+        XCTAssertEqual(store.fileURL(for: artifact), fixture.chats.workFiles.fileURL(for: item, sessionID: session.id))
+        let preview = await store.textPreview(for: artifact)
+        XCTAssertEqual(preview, "# San Francisco")
+        XCTAssertEqual(store.searchResults(in: artifacts, query: "trip", semanticMatches: nil).count, 1)
+        XCTAssertFalse(store.delete(artifact))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(for: artifact).path))
+        let decoded = try JSONDecoder().decode(Artifact.self, from: JSONEncoder().encode(artifact))
+        XCTAssertEqual(decoded, artifact)
+    }
+
+    func testWorkCatalogSkipsUnsavedFilesAndSeparatesForkedChats() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let item = ChatWorkItem(title: "Notes", kind: .document, content: "Saved")
+        var first = fixture.chat(messages: [])
+        first.workState = ChatWorkState(items: [item,
+            ChatWorkItem(title: "Web", kind: .website, content: "", url: "https://example.com"),
+            ChatWorkItem(title: "Terminal", kind: .terminal, content: "")])
+        XCTAssertTrue(ArtifactCatalog.artifacts(chats: [first], images: [], chatStore: fixture.chats).isEmpty)
+        try fixture.chats.workFiles.save(first.workState!, previous: nil, sessionID: first.id)
+        var second = fixture.chat(messages: [])
+        second.workState = first.workState
+        try fixture.chats.workFiles.save(second.workState!, previous: nil, sessionID: second.id)
+        let artifacts = ArtifactCatalog.artifacts(chats: [first, second], images: [], chatStore: fixture.chats)
+        XCTAssertEqual(artifacts.count, 2)
+        XCTAssertEqual(Set(artifacts.map(\.id)).count, 2)
+        XCTAssertEqual(Set(artifacts.compactMap(\.workFileURL)).count, 2)
+        let repeated = ArtifactCatalog.artifacts(chats: [first, second], images: [], chatStore: fixture.chats)
+        XCTAssertEqual(artifacts.map(\.id), repeated.map(\.id))
+        let url = try XCTUnwrap(fixture.chats.workFiles.fileURL(for: item, sessionID: first.id))
+        try FileManager.default.removeItem(at: url)
+        XCTAssertEqual(ArtifactCatalog.artifacts(chats: [first, second], images: [], chatStore: fixture.chats).count, 1)
+    }
+
+    func testWorkCatalogIncludesAllSavedFileTypesIncludingWebsites() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        var session = fixture.chat(messages: [])
+        session.workState = ChatWorkState(items: [
+            ChatWorkItem(title: "Notes.md", kind: .document, content: "Notes"),
+            ChatWorkItem(title: "main.py", kind: .code, content: "print(1)"),
+            ChatWorkItem(title: "data.json", kind: .code, content: "{}"),
+            ChatWorkItem(title: "style.css", kind: .code, content: "body {}"),
+            ChatWorkItem(title: "app.js", kind: .code, content: "const n = 1;"),
+            ChatWorkItem(title: "Site", kind: .website, content: "<html></html>"),
+            ChatWorkItem(title: "Page.html", kind: .document, content: "Page"),
+            ChatWorkItem(title: "Mislabelled", kind: .code, content: "<html><body>Page</body></html>")
+        ])
+        try fixture.chats.workFiles.save(session.workState!, previous: nil, sessionID: session.id)
+        let artifacts = ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats)
+        XCTAssertEqual(Set(artifacts.map(\.filename)), ["Notes.md", "main.py", "data.json", "style.css", "app.js",
+                                                               "Site.html", "Page.html", "Mislabelled.html"])
+    }
+
     private struct Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var media: MediaAssetStore { MediaAssetStore(rootDirectory: root.appendingPathComponent("Media")) }

@@ -99,7 +99,8 @@ struct ArtifactPreview: View {
             ArtifactVideoPlayer(url: url)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         case .document:
-            QuickLookFilePreview(url: url)
+            ArtifactDocumentPreview(url: url, isWorkFile: artifact.workFileURL != nil)
+                .id(url)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
@@ -192,5 +193,51 @@ private struct ArtifactVideoPlayer: NSViewRepresentable {
     static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
         nsView.player?.pause()
         nsView.player = nil
+    }
+}
+
+private struct ArtifactDocumentPreview: View {
+    let url: URL
+    let isWorkFile: Bool
+    @State private var source: String?
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if let source {
+                ScrollView {
+                    MarkdownRenderer(content: ChatWorkDocument.filePreview(source, filename: url.lastPathComponent),
+                                     baseURL: url, fontSize: 15, imagePolicy: .document)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(24)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+            } else if isLoading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                QuickLookFilePreview(url: url)
+            }
+        }
+        .task(id: url) {
+            let ext = url.pathExtension.lowercased()
+            if isWorkFile || ChatWorkDocument.markdownExtensions.contains(ext)
+                || ChatWorkDocument.sourceLanguages[ext] != nil {
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    guard let file = try? FileHandle(forReadingFrom: url) else { return nil as String? }
+                    defer { try? file.close() }
+                    // Larger attachments retain the native preview instead of showing truncated text.
+                    guard let data = try? file.read(upToCount: 2_000_001), data.count <= 2_000_000 else { return nil }
+                    return String(data: data, encoding: .utf8)
+                }.value
+                guard !Task.isCancelled else { return }
+                source = loaded
+            }
+            guard !Task.isCancelled else { return }
+            isLoading = false
+        }
+        .onDisappear {
+            source = nil
+            isLoading = true
+        }
     }
 }

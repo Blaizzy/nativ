@@ -123,6 +123,7 @@ struct Artifact: Identifiable, Codable, Equatable {
     let createdAt: Date
     let prompt: String?
     let sessionTitle: String
+    var workFileURL: URL? = nil
     var asset: MediaAssetReference? = nil
     var generation: ArtifactGeneration? = nil
     var usages: [ArtifactUsage]? = nil
