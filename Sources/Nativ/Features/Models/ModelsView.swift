@@ -3424,6 +3424,8 @@ extension LocalModelCapability {
 extension LocalModelProvider {
     fileprivate var modelBadgeColor: Color {
         switch self {
+        case .recursiveSI:
+            .primary
         case .google:
             .primary
         case .openAI:
