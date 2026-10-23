@@ -9,6 +9,7 @@ final class ControlPanelSharedDependencies {
     let inferenceActivity = InferenceActivityCoordinator()
     let projects = ChatProjectStore()
     let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
+    let fileIndex = ArtifactFileIndexCoordinator()
     private let artifactChangeOrigin = UUID()
     lazy var artifactTrash = ArtifactTrash(
         isActive: { [inferenceActivity] workspace, id in

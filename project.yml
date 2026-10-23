@@ -313,6 +313,7 @@ targets:
       - path: Sources/Nativ/Features/Artifacts/ArtifactRecovery.swift
       - path: Sources/Nativ/Features/Artifacts/ArtifactCatalog.swift
       - path: Sources/Nativ/Features/Artifacts/ArtifactFileIndexStore.swift
+      - path: Sources/Nativ/Features/Artifacts/ArtifactFileIndex.swift
       - path: Sources/Nativ/Features/Artifacts/Artifact.swift
       - path: Sources/Nativ/Features/Documents
       - path: Sources/Nativ/Features/Chat/ChatSessionStore.swift
