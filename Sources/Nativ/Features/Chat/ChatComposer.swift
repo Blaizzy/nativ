@@ -1065,8 +1065,11 @@ struct ChatComposer<ContextHeader: View>: View {
             settings.structuredOutputEnabled = false
             settings.thinkingBudgetEnabled = false
         }
+        let requiresRestart = !model.settings.hasSameLaunchConfiguration(as: settings)
         model.settings = settings
-        model.restartServer()
+        if requiresRestart {
+            model.restartServer()
+        }
     }
 
     private func availableReasoningLevels(

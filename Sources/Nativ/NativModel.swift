@@ -101,8 +101,10 @@ final class NativModel: ChatModelSwitchingSurface {
     var settings = NativSettings.load() {
         didSet {
             settings.save()
+            runtimeSettings.setDesired(settings.runtimeSettings)
         }
     }
+    let runtimeSettings = NativRuntimeSettingsController()
 
     var menuIsOpen = false
     var onMenuStateChanged: (() -> Void)?
@@ -474,6 +476,12 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         if shouldStartMetrics {
+            if let launched = settingsAppliedAtServerStart {
+                let client = NativRuntimeSettingsClient(baseURL: launched.serverBaseURL, apiKey: launched.serverAPIKey)
+                runtimeSettings.start(applied: launched.runtimeSettings) { values in
+                    try await client.update(values)
+                }
+            }
             startMetricsPolling()
         }
         notifyMenuStateChanged()
@@ -1225,6 +1233,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     private func stopMetricsPolling(clearSession: Bool) {
+        runtimeSettings.stop()
         prefillCompletionTask?.cancel()
         prefillCompletionTask = nil
         prefillProgress.apply(.reset)
@@ -1263,6 +1272,7 @@ final class NativModel: ChatModelSwitchingSurface {
         metricsStartupGraceUntil = nil
         metricsLoading = false
         modelLoadingProgress = nil
+        runtimeSettings.serverBecameReady()
         recordSessionActivity(
             promptTokenCount: fetchedMetrics.summary.promptTokensTotal,
             generatedTokenCount: fetchedMetrics.summary.generatedTokensTotal

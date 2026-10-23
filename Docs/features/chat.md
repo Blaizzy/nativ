@@ -57,7 +57,7 @@ The full transcript stays visible and editable. Encrypted compaction state is sa
 separately with the session and replayed with subsequent messages, including tool
 results. Editing covered messages or changing the model, server, or instructions
 rebuilds the request from the transcript. Failed or cancelled requests do not replace
-saved compaction state. Enable **Prefix Caching** in Model Configuration to reuse
+saved compaction state. **Prefix Caching** is enabled by default in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
 PDF and other document excerpts are sent as current source context, separately

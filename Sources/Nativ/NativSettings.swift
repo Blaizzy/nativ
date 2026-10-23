@@ -744,7 +744,7 @@ struct NativSettings: Codable, Equatable {
         structuredOutputEnabled: Bool = false,
         structuredOutputName: String = "Response",
         structuredOutputSchema: String = Self.defaultStructuredOutputSchema,
-        prefixCachingEnabled: Bool = false,
+        prefixCachingEnabled: Bool = true,
         prefixCacheBlocks: Int = 2048,
         prefixCacheBlockSize: Int = 16,
         hasUsedPromptRecall: Bool = false,
@@ -1375,23 +1375,27 @@ struct NativSettings: Codable, Equatable {
             && lhs.huggingFaceToken == rhs.huggingFaceToken
             && lhs.serverHost == rhs.serverHost
             && lhs.serverPort == rhs.serverPort
-            && lhs.maxTokens == rhs.maxTokens
-            && lhs.maxKVSize == rhs.maxKVSize
-            && lhs.kvQuantizationEnabled == rhs.kvQuantizationEnabled
-            && (!lhs.kvQuantizationEnabled
-                || (lhs.kvBits == rhs.kvBits
-                    && lhs.kvGroupSize == rhs.kvGroupSize
-                    && lhs.quantizedKVStart == rhs.quantizedKVStart
-                    && lhs.turboQuantEnabled == rhs.turboQuantEnabled))
-            && lhsSpeculativeDecodingActive == rhsSpeculativeDecodingActive
-            && (!lhsSpeculativeDecodingActive
-                || (lhs.draftModelID == rhs.draftModelID
-                    && lhs.draftKind == rhs.draftKind
-                    && lhs.draftBlockSize == rhs.draftBlockSize))
-            && lhs.prefixCachingEnabled == rhs.prefixCachingEnabled
-            && (!lhs.prefixCachingEnabled
-                || (lhs.prefixCacheBlocks == rhs.prefixCacheBlocks
-                    && lhs.prefixCacheBlockSize == rhs.prefixCacheBlockSize))
+            // The engine has no live setting for draft block size yet.
+            && (lhsSpeculativeDecodingActive ? lhs.draftBlockSize : 0)
+                == (rhsSpeculativeDecodingActive ? rhs.draftBlockSize : 0)
+    }
+
+    /// Settings accepted by the engine's management API. Explicit nulls clear
+    /// optional overrides; zero restores the model's full context window.
+    var runtimeSettings: [String: MLXJSONValue] {
+        let settings = normalized()
+        return [
+            "apc_enabled": .bool(settings.prefixCachingEnabled),
+            "apc_num_blocks": .number(Double(settings.prefixCacheBlocks)),
+            "apc_block_size": .number(Double(settings.prefixCacheBlockSize)),
+            "max_kv_size": .number(Double(settings.maxKVSize)),
+            "kv_bits": settings.kvQuantizationEnabled ? .number(settings.kvBits) : .null,
+            "kv_quant_scheme": .string(settings.kvQuantizationEnabled && settings.turboQuantEnabled ? "turboquant" : "uniform"),
+            "kv_group_size": settings.kvQuantizationEnabled ? .number(Double(settings.kvGroupSize)) : .null,
+            "quantized_kv_start": settings.kvQuantizationEnabled ? .number(Double(settings.quantizedKVStart)) : .null,
+            "draft_model": settings.speculativeDecodingActive ? .string(settings.draftModelID) : .null,
+            "draft_kind": settings.speculativeDecodingActive && settings.draftKind != "auto" ? .string(settings.draftKind) : .null,
+        ]
     }
 
     var serverBaseURL: URL {

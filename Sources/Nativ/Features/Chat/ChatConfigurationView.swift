@@ -36,6 +36,7 @@ struct ModelConfigurationLayout<Content: View>: View {
         ModelConfigurationLayoutContent(
             settings: $model.settings,
             settingsRequireRestart: model.settingsRequireRestart,
+            runtimeSettings: model.runtimeSettings,
             isConfigurationVisible: $isConfigurationVisible,
             onReset: model.resetSettings
         ) {
@@ -49,6 +50,7 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
     @Environment(\.displayScale) private var displayScale
     @Binding var settings: NativSettings
     let settingsRequireRestart: Bool
+    let runtimeSettings: NativRuntimeSettingsController?
     @Binding var isConfigurationVisible: Bool
     let onReset: () -> Void
     private let content: Content
@@ -58,12 +60,14 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
     init(
         settings: Binding<NativSettings>,
         settingsRequireRestart: Bool,
+        runtimeSettings: NativRuntimeSettingsController? = nil,
         isConfigurationVisible: Binding<Bool>,
         onReset: @escaping () -> Void,
         @ViewBuilder content: () -> Content
     ) {
         _settings = settings
         self.settingsRequireRestart = settingsRequireRestart
+        self.runtimeSettings = runtimeSettings
         _isConfigurationVisible = isConfigurationVisible
         self.onReset = onReset
         self.content = content()
@@ -107,6 +111,7 @@ struct ModelConfigurationLayoutContent<Content: View>: View {
             ModelConfigurationView(
                 settings: $settings,
                 settingsRequireRestart: settingsRequireRestart,
+                runtimeSettings: runtimeSettings,
                 onReset: onReset
             )
             .padding(.top, ModelConfigurationLayoutMetrics.topInset)
@@ -175,6 +180,7 @@ private struct ModelConfigurationPanelMaterial: NSViewRepresentable {
 struct ModelConfigurationView: View {
     @Binding var settings: NativSettings
     let settingsRequireRestart: Bool
+    let runtimeSettings: NativRuntimeSettingsController?
     let onReset: () -> Void
     @State private var modelConfiguration: LocalModelConfigurationMetadata?
     @State private var isLoadingModelConfiguration = false
@@ -261,7 +267,17 @@ struct ModelConfigurationView: View {
                 Label("Server restart required", systemImage: "arrow.clockwise")
                     .font(.footnote)
                     .foregroundStyle(.orange)
-            } else {
+            }
+            if let error = runtimeSettings?.errorMessage {
+                Text("Live settings could not be applied: \(error)")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                Button("Retry") { runtimeSettings?.retry() }
+            } else if runtimeSettings?.hasPendingChanges == true {
+                Text("Applying settings to the running server…")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if !settingsRequireRestart {
                 Text("Request settings apply to the next message.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -477,7 +493,7 @@ struct ModelConfigurationView: View {
                     range: 0...1_048_576
                 )
 
-                Text("Changes to the KV cache require a server restart.")
+                Text("Changes apply on the next request. The model may reload while the server stays running.")
                     .configurationHintStyle()
             }
         }
@@ -660,7 +676,7 @@ struct ModelConfigurationView: View {
         guard let selected = draftModelLibrary.models.first(where: {
             $0.repoID == trimmedID
         }) else {
-            return ("The drafter is loaded after the next server restart.", false)
+            return ("The drafter is loaded on the next request. Changes to draft block size require a server restart.", false)
         }
         if isDrafterIncompatible(selected),
            let drafterHiddenSize = selected.hiddenSize,
@@ -671,7 +687,7 @@ struct ModelConfigurationView: View {
             )
         }
         if let kindLabel = selected.drafterKindLabel {
-            return ("Detected \(kindLabel) drafter. Loaded after the next server restart.", false)
+            return ("Detected \(kindLabel) drafter. Loaded on the next request. Changes to draft block size require a server restart.", false)
         }
         return (
             "No drafter metadata found in this model. Speculative decoding may fall back to DFlash or fail to load.",
@@ -743,7 +759,7 @@ struct ModelConfigurationView: View {
                     value: $settings.prefixCacheBlockSize,
                     range: 1...4096
                 )
-                Text("Shared prompt prefixes are reused after a server restart.")
+                Text("Shared prompt prefixes are reused automatically. Changes apply on the next request without restarting the server.")
                     .configurationHintStyle()
             }
         }

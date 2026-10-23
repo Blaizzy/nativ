@@ -288,6 +288,7 @@ struct ModelsView: View {
         ModelConfigurationLayoutContent(
             settings: settingsBinding,
             settingsRequireRestart: model.settingsRequireRestart,
+            runtimeSettings: model.runtimeSettings,
             isConfigurationVisible: $showsConfiguration,
             onReset: model.resetSettings
         ) {
