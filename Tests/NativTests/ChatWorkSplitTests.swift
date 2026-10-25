@@ -4,6 +4,19 @@ import WebKit
 import XCTest
 
 final class ChatWorkSplitTests: XCTestCase {
+    func testAccessPickerWrapsOtherControlsWithoutCollapsingExistingSplit() {
+        for accessWidth: CGFloat in [96, 104, 115] {
+            let controls = ChatComposerControlsSizing(workspaceWidth: 116, accessWidth: accessWidth,
+                                                      modelWidth: 180, showsContext: true)
+            let sizing = ChatWorkSplitSizing(minimumChatWidth: max(480, controls.minimumWidth + 64))
+            XCTAssertTrue(sizing.canSplit(834))
+            let chatWidth = sizing.chatWidth(preferred: nil, available: 834)
+            XCTAssertLessThan(chatWidth - 64, controls.singleRowWidth)
+            XCTAssertGreaterThanOrEqual(chatWidth - 64, controls.minimumWidth)
+            XCTAssertGreaterThanOrEqual(CGFloat(680), controls.singleRowWidth)
+        }
+    }
+
     func testDividerStopsBeforeControlsCompressThenCollapsesPastThreshold() {
         let sizing = ChatWorkSplitSizing(minimumChatWidth: 520)
         XCTAssertEqual(sizing.chatWidth(preferred: 505, available: 1_200), 520)

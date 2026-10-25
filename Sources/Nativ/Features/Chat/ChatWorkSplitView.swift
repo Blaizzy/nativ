@@ -26,6 +26,21 @@ struct ChatComposerMinimumWidthKey: PreferenceKey {
     }
 }
 
+/// Keep workspace and access together; let model/send controls wrap as one group.
+struct ChatComposerControlsSizing {
+    let workspaceWidth: CGFloat
+    let accessWidth: CGFloat
+    let modelWidth: CGFloat
+    let showsContext: Bool
+
+    private var leadingWidth: CGFloat { 30 + workspaceWidth + accessWidth + 8 * 3 }
+    private var trailingWidth: CGFloat {
+        12 + modelWidth + 32 + (showsContext ? 17 + 8 * 3 : 8 * 2)
+    }
+    var singleRowWidth: CGFloat { leadingWidth + trailingWidth + 8 + 22 }
+    var minimumWidth: CGFloat { max(leadingWidth, trailingWidth) + 22 }
+}
+
 struct ChatWorkSplitSizing {
     var minimumChatWidth: CGFloat = 480
     let minimumWorkWidth: CGFloat = 320

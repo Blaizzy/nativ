@@ -242,6 +242,7 @@ struct ChatComposer<ContextHeader: View>: View {
     @State private var browsingConfigurationRevision = 0
     @State private var composerWidth: CGFloat = 410
     @State private var workspacePickerWidth: CGFloat = 120
+    @State private var accessPickerWidth: CGFloat = 120
     @State private var modelPickerWidth: CGFloat = 180
     private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
@@ -382,48 +383,58 @@ struct ChatComposer<ContextHeader: View>: View {
                         )
                     }
 
-                    HStack(spacing: 8) {
-                        ChatComposerAddButton(
-                            isEnabled: canCompose,
-                            isPresented: $showsAddPanel
-                        )
-                        .frame(width: 30, height: 30)
-                        .help("More message options")
+                    controlsLayout {
+                        HStack(spacing: 8) {
+                            ChatComposerAddButton(
+                                isEnabled: canCompose,
+                                isPresented: $showsAddPanel
+                            )
+                            .frame(width: 30, height: 30)
+                            .help("More message options")
 
-                        ChatWorkspacePicker(
-                            selection: workspaceMode,
-                            onSelect: onSelectWorkspaceMode
-                        )
-                        .fixedSize()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
+                            ChatWorkspacePicker(
+                                selection: workspaceMode,
+                                onSelect: onSelectWorkspaceMode
+                            )
+                            .fixedSize()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
 
-                        Spacer(minLength: 12)
-
-                        if let contextWindowUsage {
-                            ChatContextWindowRing(usage: contextWindowUsage)
-                                .equatable()
+                            ChatAccessPicker(selection: viewModel.currentAccessMode,
+                                             onSelect: viewModel.setAccessMode)
+                                .fixedSize()
+                                .disabled(viewModel.isLoadingSessions || viewModel.isCurrentSessionSending)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { accessPickerWidth = $0 }
+                            Spacer(minLength: 0)
                         }
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 12)
 
-                        modelPicker
-                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
-
-                        Button {
-                            if showsStopButton {
-                                viewModel.cancel()
-                            } else {
-                                send()
+                            if let contextWindowUsage {
+                                ChatContextWindowRing(usage: contextWindowUsage)
+                                    .equatable()
                             }
-                        } label: {
-                            Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
-                                .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(actionButtonColor, in: Circle())
-                                .contentShape(.circle)
+
+                            modelPicker
+                                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
+
+                            Button {
+                                if showsStopButton {
+                                    viewModel.cancel()
+                                } else {
+                                    send()
+                                }
+                            } label: {
+                                Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
+                                    .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 32, height: 32)
+                                    .background(actionButtonColor, in: Circle())
+                                    .contentShape(.circle)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!showsStopButton && !effectiveCanSend)
+                            .help(actionButtonHelp)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!showsStopButton && !effectiveCanSend)
-                        .help(actionButtonHelp)
                     }
                     .padding(.leading, 10)
                     .padding(.trailing, 12)
@@ -494,12 +505,19 @@ struct ChatComposer<ContextHeader: View>: View {
         }
     }
 
-    private var minimumControlsWidth: CGFloat {
-        // Add, workspace picker, spacer, optional context ring, model picker, Send,
-        // plus the row's spacing and horizontal padding.
-        30 + workspacePickerWidth + 12 + modelPickerWidth + 32 + 22
-            + (contextWindowUsage == nil ? 8 * 4 : 17 + 8 * 5)
+    private var controlsSizing: ChatComposerControlsSizing {
+        ChatComposerControlsSizing(workspaceWidth: workspacePickerWidth,
+                                  accessWidth: accessPickerWidth, modelWidth: modelPickerWidth,
+                                  showsContext: contextWindowUsage != nil)
     }
+
+    private var controlsLayout: AnyLayout {
+        composerWidth < controlsSizing.singleRowWidth
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 8))
+    }
+
+    private var minimumControlsWidth: CGFloat { controlsSizing.minimumWidth }
 
     private var addPanel: some View {
         ChatComposerActionPanel(
