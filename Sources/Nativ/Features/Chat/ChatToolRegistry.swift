@@ -554,6 +554,17 @@ final class ChatToolConsentGate {
         sessions.filter { pending[$0.key] != nil }
     }
 
+    func authorize(
+        _ operation: ChatToolOperation, mode: ChatAccessMode, id: UUID, sessionID: UUID,
+        onAwaiting: () -> Void
+    ) async -> ChatToolConsentOutcome {
+        guard !Task.isCancelled else { return .cancelled }
+        guard mode.requiresApproval(for: operation) else { return .approved }
+        onAwaiting()
+        let approved = await awaitDecision(for: id, inSession: sessionID)
+        return ChatToolConsentRouter.outcome(approved: approved, isCancelled: Task.isCancelled)
+    }
+
     func confirm(_ id: UUID) {
         resolve(id, approved: true)
     }
@@ -585,6 +596,70 @@ final class ChatToolConsentGate {
             Task { @MainActor in
                 denyRequest()
             }
+        }
+    }
+}
+
+/// Access modes change consent only; executor safety checks remain mandatory.
+enum ChatAccessMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case standard
+    case medium
+    case fullAccess
+
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .standard: "Standard"
+        case .medium: "Medium"
+        case .fullAccess: "Full access"
+        }
+    }
+
+    func requiresApproval(for operation: ChatToolOperation) -> Bool {
+        switch operation {
+        case .routine: false
+        case .workPane: self == .standard
+        case .sensitive: self != .fullAccess
+        case .command: true
+        case .external: self == .medium
+        }
+    }
+
+}
+
+/// Classifies effects independently of the selected approval mode.
+enum ChatToolOperation: CaseIterable, Sendable {
+    case routine, workPane, sensitive, command, external
+
+    static func classify(
+        toolName: String?, customKind: CustomToolKind?, workAction: ChatWorkRequest.Action?,
+        isMCP: Bool, usesNativeFilesystem: Bool, protectedWrite: Bool
+    ) -> Self {
+        if let customKind {
+            switch customKind {
+            case .script: return .command
+            case .endpoint: return .external
+            }
+        }
+        if isMCP {
+            return usesNativeFilesystem ? (protectedWrite ? .sensitive : .routine) : .external
+        }
+        if toolName == ChatTerminalToolRegistry.toolName { return .command }
+        if toolName == ChatWorkToolRegistry.toolName {
+            guard let workAction else { return .sensitive }
+            return work(workAction)
+        }
+        if protectedWrite || toolName == ChatSwitchModelToolRegistry.toolName { return .sensitive }
+        return .routine
+    }
+
+    static func work(_ action: ChatWorkRequest.Action) -> Self {
+        // Exhaustive so every new work action requires an explicit policy decision.
+        switch action {
+        case .run: .command
+        case .click, .type, .upload: .sensitive
+        case .list, .attachments, .read, .create, .update, .open, .search, .inspect,
+             .navigate, .back, .forward, .reload, .interrupt: .workPane
         }
     }
 }

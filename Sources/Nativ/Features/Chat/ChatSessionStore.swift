@@ -36,6 +36,7 @@ struct ChatSession: Identifiable, Equatable, Codable {
     var personalizationSnapshot: String? = nil
     var worktree: ChatGitWorktree? = nil
     var workFilesInWorktree: Bool? = nil
+    var accessMode: ChatAccessMode? = nil
 
     mutating func capturePersonalization(_ personalization: NativPersonalization) {
         guard personalizationSnapshot == nil else { return }

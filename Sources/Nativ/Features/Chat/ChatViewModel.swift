@@ -168,6 +168,7 @@ final class ChatViewModel: ObservableObject {
         let userMessageID: UUID
         let assistantMessageID: UUID
         let settings: NativSettings
+        let accessMode: ChatAccessMode
         let personalizationSnapshot: String
         var toolScope: ChatToolScope
         let imageGenerationModelID: String?
@@ -1557,6 +1558,19 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    var currentAccessMode: ChatAccessMode { currentSession?.accessMode ?? .standard }
+
+    func setAccessMode(_ mode: ChatAccessMode) {
+        guard !isLoadingSessions, let currentSessionID, canModifySession(currentSessionID), !isCurrentSessionSending,
+              var session = currentSessionSnapshot else { return }
+        session.accessMode = mode
+        guard saveSession(session) else { return }
+        currentSession = session
+        upsertStoredSession(session)
+        refreshSessionList()
+        objectWillChange.send()
+    }
+
     func renameSession(_ sessionID: UUID, to newTitle: String) {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canModifySession(sessionID),
@@ -2076,6 +2090,9 @@ final class ChatViewModel: ObservableObject {
                 userMessageID: userMessageID,
                 assistantMessageID: UUID(),
                 settings: settings,
+                accessMode: (currentSession?.id == sessionID
+                    ? currentSession?.accessMode
+                    : storedSessions.first(where: { $0.id == sessionID })?.accessMode) ?? .standard,
                 personalizationSnapshot: currentSession?.personalizationSnapshot ?? "",
                 toolScope: toolScope(for: sessionID, settings: settings),
                 imageGenerationModelID: imageGenerationModelID(for: sessionID)

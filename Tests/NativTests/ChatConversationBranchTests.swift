@@ -1,6 +1,19 @@
 import XCTest
 
 final class ChatConversationBranchTests: XCTestCase {
+    func testBranchPreservesEveryAccessLevelIncludingLegacyDefault() throws {
+        let response = ChatTranscriptMessage(role: .assistant, content: "Done")
+        for mode: ChatAccessMode? in [nil, .standard, .medium, .fullAccess] {
+            let source = ChatSession(id: UUID(), title: "Source", createdAt: .now, updatedAt: .now,
+                                     messages: [ChatTranscriptMessage(role: .user, content: "Hello"), response],
+                                     accessMode: mode)
+            let branch = try XCTUnwrap(ChatConversationBranch.throughAssistantResponse(response.id, in: source))
+            XCTAssertEqual(branch.accessMode, mode)
+            let restored = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(branch))
+            XCTAssertEqual(restored.accessMode, mode)
+        }
+    }
+
     func testPersonalizationSnapshotIsFrozenAcrossEditsReloadAndBranching() throws {
         var personalization = NativPersonalization()
         personalization.profile.preferredName = "Alex"

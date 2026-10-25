@@ -152,7 +152,8 @@ enum ChatConversationBranch {
             projectID: source.projectID,
             imageGenerationModelID: source.imageGenerationModelID,
             workState: source.workState,
-            personalizationSnapshot: source.personalizationSnapshot
+            personalizationSnapshot: source.personalizationSnapshot,
+            accessMode: source.accessMode
         )
     }
 }
