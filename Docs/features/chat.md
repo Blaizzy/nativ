@@ -417,3 +417,30 @@ grouping by chat. Rendered files are cached under Application Support.
 **Smart search** ranks artifacts semantically using an on-device embedding model. It activates
 only after that model is installed; until then, search falls back to plain text matching over
 artifact metadata.
+
+
+## Tool access modes
+
+The composer’s pill-shaped access button opens a popover with Standard, Medium, and Full access, each with a short description. The selected level has a checkmark; Full access uses a yellow accent. “Learn more” in this popover opens a scrollable comparison table of automatic actions and approval requirements. This table is accessible only through the access popover.
+Existing and new chats default to Standard. The selection is saved with the chat
+and captured when a request is submitted; changing it affects new requests.
+
+Standard preserves the existing tool confirmation behavior. Medium automatically allows
+work-pane reads, creation, edits, browsing/navigation, and terminal interruption. It asks
+before browser click/type/upload, protected filesystem writes, model switching, and all
+commands/scripts. Ordinary built-in file operations remain automatic. The native filesystem
+MCP adapter follows the same protected-path rules. Other MCP servers and custom endpoints
+are unclassified and require approval in Medium; tool names and server hints are not proof
+that an external operation is read-only.
+
+Full access automatically
+allows non-execution tool operations, including browser interactions, work-pane edits,
+protected file writes, model switching, and interrupting a terminal command. Native
+`terminal`, `chat_work` with `action: run`, and custom script tools still require
+confirmation for every execution. Cancellation and denial prevent execution.
+
+Full access does not disable command safety blocks, authorized filesystem roots,
+sensitive-path blocks, revision checks, or terminal state validation. MCP servers
+continue to supply their own tool capabilities; Nativ does not infer arbitrary MCP
+tools’ execution semantics from their names. Scheduled routines retain their existing
+policy and do not inherit a chat’s access mode.
