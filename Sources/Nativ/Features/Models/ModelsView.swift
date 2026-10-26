@@ -1429,7 +1429,7 @@ struct ModelsView: View {
         let capabilities = hubCapabilityFilters
         let access = hubAccessFilter
         return { hubModel in
-            guard !hubModel.isGGUF else { return false }
+            guard !hubModel.isGGUFOnly else { return false }
             let matchesCapability = HuggingFaceCapabilityFilter.matches(
                 hubModel,
                 capabilities: capabilities
@@ -3484,6 +3484,8 @@ extension LocalModelProvider {
         case .stepFun:
             .primary
         case .internLM:
+            .primary
+        case .gradium:
             .primary
         }
     }

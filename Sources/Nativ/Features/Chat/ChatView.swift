@@ -143,7 +143,7 @@ private enum ChatTranscriptLayout {
 private struct ChatResponseSpeechContext {
     let speech: ChatResponseSpeech
     let settings: NativSettings
-    let isServerRunning: Bool
+    let preparation: ChatSpeechPreparation
 }
 
 private struct ChatResponseSpeechContextKey: EnvironmentKey {
@@ -165,14 +165,19 @@ private struct ChatResponseSpeechModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.chatResponseSpeech, ChatResponseSpeechContext(
-                speech: speech, settings: model.settings, isServerRunning: model.isRunning
+                speech: speech, settings: model.settings, preparation: .automatic(using: model)
             ))
             .onChange(of: chat.currentSessionID, initial: true) { _, _ in
                 speech.stop()
                 speech.errorMessage = nil
             }
             .onChange(of: model.isRunning) { _, isRunning in
-                if !isRunning { speech.stop() }
+                if !isRunning && speech.phase != .playing { speech.stop() }
+            }
+            .onReceive(HuggingFaceDownloadManager.shared.rowUpdates) { modelID in
+                guard let preparingModelID = speech.preparingModelID,
+                      modelID == nil || modelID == preparingModelID else { return }
+                speech.updateDownloadProgress(HuggingFaceDownloadManager.shared.progress(for: preparingModelID))
             }
             .onChange(of: model.settings.serverBaseURL) { _, _ in speech.stop() }
             .onChange(of: model.settings.textToSpeechModelID) { _, _ in speech.stop() }
@@ -2447,46 +2452,44 @@ private struct ChatSpeakResponseButton: View {
     @State private var isHovering = false
 
     private var isActive: Bool { context.speech.messageID == messageID }
-    private var isGenerating: Bool { isActive && context.speech.phase == .generating }
-    private var isEnabled: Bool {
-        isActive || (context.isServerRunning && context.settings.normalized().textToSpeechModelID != nil)
-    }
+    private var isPreparing: Bool { isActive && context.speech.phase != .playing }
 
     private var title: String {
-        if isGenerating { return "Cancel reading aloud" }
+        if isPreparing { return "Cancel reading aloud" }
         if isActive { return "Stop reading aloud" }
-        if !context.isServerRunning { return "Start the server to read aloud" }
-        if context.settings.normalized().textToSpeechModelID == nil {
-            return "Choose a text-to-speech model in Models to read aloud"
-        }
         return "Read aloud"
     }
 
     var body: some View {
         Button {
-            context.speech.toggle(messageID: messageID, text: text, settings: context.settings)
+            context.speech.toggle(
+                messageID: messageID, text: text, settings: context.settings,
+                preparation: context.preparation
+            )
         } label: {
-            Group {
-                if isGenerating {
+            HStack(spacing: 6) {
+                if isPreparing {
                     ProgressView()
                         .controlSize(.mini)
                         .overlay {
                             Image(systemName: "stop.fill").font(.system(size: 5))
                         }
+                    if let status = context.speech.statusText {
+                        Text(status).font(.caption).lineLimit(1)
+                    }
                 } else {
                     Image(systemName: isActive ? "stop.fill" : "speaker.wave.2")
                         .font(.system(size: 13, weight: .medium))
                 }
             }
             .foregroundStyle(isActive ? Color.accentColor : (isHovering ? Color.primary : Color.secondary))
-            .frame(width: 30, height: 28)
+            .frame(minWidth: 30, minHeight: 28)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .disabled(!isEnabled)
         .help(title)
         .accessibilityLabel(title)
-        .accessibilityValue(isGenerating ? "Preparing to read aloud" : isActive ? "Reading aloud" : "")
+        .accessibilityValue(isPreparing ? context.speech.statusText ?? "Preparing to read aloud" : isActive ? "Reading aloud" : "")
         .onHover { isHovering = $0 }
         .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
