@@ -278,8 +278,7 @@ enum HuggingFaceCapabilityFilter {
 }
 
 enum HuggingFaceDownloadFilePolicy {
-    /// Also skip optional GGUF artifacts when repository metadata does not
-    /// identify them or a download is requested outside Discover.
+    /// Skip GGUF files while retaining usable weights in mixed-format repositories.
     static let ignoredPatterns = ["*.[gG][gG][uU][fF]"]
 
     static var pythonListLiteral: String {
@@ -312,8 +311,13 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let capabilities: Set<LocalModelCapability>
     let drafterKind: String?
 
-    var isGGUF: Bool {
-        id.localizedCaseInsensitiveContains("gguf")
+    var isGGUFOnly: Bool {
+        // Hub format tags describe files, not an exclusive repository format.
+        // Mixed repositories still provide safetensors that Nativ can download.
+        guard !tags.contains(where: { $0.lowercased() == "safetensors" }) else {
+            return false
+        }
+        return id.localizedCaseInsensitiveContains("gguf")
             || libraryName?.localizedCaseInsensitiveContains("gguf") == true
             || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
     }

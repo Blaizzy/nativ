@@ -185,6 +185,8 @@ public final class NativResponsesClient: @unchecked Sendable {
 struct MLXResponseStream {
     private(set) var response: MLXJSONValue?
     private var decodeRate: Double?
+    private var prefillRate: Double?
+    private var peakMemoryGB: Double?
     private var toolCalls = MLXChatToolCallAccumulator()
 
     mutating func consume(_ data: String) throws -> MLXChatStreamDelta? {
@@ -199,6 +201,8 @@ struct MLXResponseStream {
             )
         }
         decodeRate = event["timings"]?["predicted_per_second"]?.numberValue ?? decodeRate
+        prefillRate = event["timings"]?["prompt_per_second"]?.numberValue ?? prefillRate
+        peakMemoryGB = event["timings"]?["peak_memory"]?.numberValue ?? peakMemoryGB
         switch type {
         case "response.output_text.delta":
             return MLXChatStreamDelta(content: event["delta"]?.stringValue, decodeTokensPerSecond: decodeRate)
@@ -260,9 +264,9 @@ struct MLXResponseStream {
                 promptTokens: $0["input_tokens"]?.intValue,
                 completionTokens: $0["output_tokens"]?.intValue,
                 totalTokens: $0["total_tokens"]?.intValue,
-                promptTokensPerSecond: nil,
+                promptTokensPerSecond: prefillRate,
                 decodeTokensPerSecond: decodeRate,
-                peakMemoryGB: nil
+                peakMemoryGB: peakMemoryGB
             )
         }
         return MLXResponseCompletion(

@@ -100,7 +100,14 @@ Tunable settings (in [`NativSettings`](../../Sources/Nativ/NativSettings.swift))
 - Reasoning: `thinkingBudgetEnabled` / `thinkingBudget`.
 - Structured output: `structuredOutputEnabled` with a named JSON schema.
 - KV-cache quantization: `kvQuantizationEnabled`, `kvBits`, `quantizedKVStart`.
-- Prefix caching: `prefixCachingEnabled` and block sizing.
+- Prefix caching (enabled by default): `prefixCachingEnabled` and block sizing.
+
+Auto compact is also enabled by default. Request settings apply to the next message.
+Prefix caching, context size, KV quantization, and draft-model selection are sent to
+the running engine through `/v1/settings`. Cache and drafter changes may reload the
+model on its next request, without restarting the server. Failed live updates are
+shown in Model Configuration with a Retry action. Endpoint, model preload, and
+draft block-size changes still require a server restart.
 
 ## Speculative decoding
 

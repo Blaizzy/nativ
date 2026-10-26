@@ -5,6 +5,45 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testCachingAndCompactionDefaultsPreserveExplicitOptOuts() throws {
+        for settings in [NativSettings(), try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))] {
+            XCTAssertTrue(settings.prefixCachingEnabled)
+            XCTAssertTrue(settings.compactionEnabled)
+            XCTAssertEqual(settings.launchEnvironment["APC_ENABLED"], "1")
+        }
+        let optedOut = NativSettings(compactionEnabled: false, prefixCachingEnabled: false)
+        let restored = try PropertyListDecoder().decode(NativSettings.self, from: PropertyListEncoder().encode(optedOut))
+        XCTAssertFalse(restored.prefixCachingEnabled)
+        XCTAssertFalse(restored.compactionEnabled)
+    }
+
+    func testLiveInferenceSettingsDoNotRequireRestart() {
+        let original = NativSettings()
+        let changed = NativSettings(
+            maxTokens: 4096, maxKVSize: 32768, compactionEnabled: false,
+            kvQuantizationEnabled: true, kvBits: 3.5, kvGroupSize: 128,
+            quantizedKVStart: 64, turboQuantEnabled: true,
+            speculativeDecodingEnabled: true, draftModelID: "org/draft", draftKind: "mtp",
+            prefixCachingEnabled: false, prefixCacheBlocks: 4096, prefixCacheBlockSize: 32
+        )
+        XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
+        XCTAssertTrue(changed.hasSameLaunchConfiguration(as: original))
+        XCTAssertEqual(changed.runtimeSettings["apc_enabled"], .bool(false))
+        XCTAssertEqual(changed.runtimeSettings["apc_num_blocks"], .number(4096))
+        XCTAssertEqual(changed.runtimeSettings["apc_block_size"], .number(32))
+        XCTAssertEqual(changed.runtimeSettings["kv_bits"], .number(3.5))
+        XCTAssertEqual(changed.runtimeSettings["kv_quant_scheme"], .string("turboquant"))
+        XCTAssertEqual(changed.runtimeSettings["max_kv_size"], .number(32768))
+        XCTAssertEqual(changed.runtimeSettings["draft_model"], .string("org/draft"))
+        XCTAssertEqual(original.runtimeSettings["kv_bits"], .null)
+        XCTAssertEqual(original.runtimeSettings["draft_model"], .null)
+        XCTAssertEqual(original.runtimeSettings["max_kv_size"], .number(0))
+        XCTAssertNil(original.runtimeSettings["max_tokens"])
+        var blockSizeChanged = changed
+        blockSizeChanged.draftBlockSize = 8
+        XCTAssertFalse(original.hasSameLaunchConfiguration(as: blockSizeChanged))
+    }
+
     func testFormattingPreferencesRoundTripIndependentlyAndInjectOnlySelectedPrompts() throws {
         for emoji in NativPersonalization.EmojiUsage.allCases {
             for markdown in NativPersonalization.MarkdownUsage.allCases {

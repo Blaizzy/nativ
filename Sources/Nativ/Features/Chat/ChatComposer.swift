@@ -242,6 +242,7 @@ struct ChatComposer<ContextHeader: View>: View {
     @State private var browsingConfigurationRevision = 0
     @State private var composerWidth: CGFloat = 410
     @State private var workspacePickerWidth: CGFloat = 120
+    @State private var accessPickerWidth: CGFloat = 120
     @State private var modelPickerWidth: CGFloat = 180
     private let textInset = EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)
     private let editorMinimumHeight: CGFloat = 64
@@ -382,48 +383,58 @@ struct ChatComposer<ContextHeader: View>: View {
                         )
                     }
 
-                    HStack(spacing: 8) {
-                        ChatComposerAddButton(
-                            isEnabled: canCompose,
-                            isPresented: $showsAddPanel
-                        )
-                        .frame(width: 30, height: 30)
-                        .help("More message options")
+                    controlsLayout {
+                        HStack(spacing: 8) {
+                            ChatComposerAddButton(
+                                isEnabled: canCompose,
+                                isPresented: $showsAddPanel
+                            )
+                            .frame(width: 30, height: 30)
+                            .help("More message options")
 
-                        ChatWorkspacePicker(
-                            selection: workspaceMode,
-                            onSelect: onSelectWorkspaceMode
-                        )
-                        .fixedSize()
-                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
+                            ChatWorkspacePicker(
+                                selection: workspaceMode,
+                                onSelect: onSelectWorkspaceMode
+                            )
+                            .fixedSize()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { workspacePickerWidth = $0 }
 
-                        Spacer(minLength: 12)
-
-                        if let contextWindowUsage {
-                            ChatContextWindowRing(usage: contextWindowUsage)
-                                .equatable()
+                            ChatAccessPicker(selection: viewModel.currentAccessMode,
+                                             onSelect: viewModel.setAccessMode)
+                                .fixedSize()
+                                .disabled(viewModel.isLoadingSessions || viewModel.isCurrentSessionSending)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { accessPickerWidth = $0 }
+                            Spacer(minLength: 0)
                         }
+                        HStack(spacing: 8) {
+                            Spacer(minLength: 12)
 
-                        modelPicker
-                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
-
-                        Button {
-                            if showsStopButton {
-                                viewModel.cancel()
-                            } else {
-                                send()
+                            if let contextWindowUsage {
+                                ChatContextWindowRing(usage: contextWindowUsage)
+                                    .equatable()
                             }
-                        } label: {
-                            Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
-                                .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 32, height: 32)
-                                .background(actionButtonColor, in: Circle())
-                                .contentShape(.circle)
+
+                            modelPicker
+                                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { modelPickerWidth = $0 }
+
+                            Button {
+                                if showsStopButton {
+                                    viewModel.cancel()
+                                } else {
+                                    send()
+                                }
+                            } label: {
+                                Image(systemName: showsStopButton ? "stop.fill" : "arrow.up")
+                                    .font(.system(size: showsStopButton ? 10 : 15, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 32, height: 32)
+                                    .background(actionButtonColor, in: Circle())
+                                    .contentShape(.circle)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(!showsStopButton && !effectiveCanSend)
+                            .help(actionButtonHelp)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!showsStopButton && !effectiveCanSend)
-                        .help(actionButtonHelp)
                     }
                     .padding(.leading, 10)
                     .padding(.trailing, 12)
@@ -494,12 +505,19 @@ struct ChatComposer<ContextHeader: View>: View {
         }
     }
 
-    private var minimumControlsWidth: CGFloat {
-        // Add, workspace picker, spacer, optional context ring, model picker, Send,
-        // plus the row's spacing and horizontal padding.
-        30 + workspacePickerWidth + 12 + modelPickerWidth + 32 + 22
-            + (contextWindowUsage == nil ? 8 * 4 : 17 + 8 * 5)
+    private var controlsSizing: ChatComposerControlsSizing {
+        ChatComposerControlsSizing(workspaceWidth: workspacePickerWidth,
+                                  accessWidth: accessPickerWidth, modelWidth: modelPickerWidth,
+                                  showsContext: contextWindowUsage != nil)
     }
+
+    private var controlsLayout: AnyLayout {
+        composerWidth < controlsSizing.singleRowWidth
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(spacing: 8))
+    }
+
+    private var minimumControlsWidth: CGFloat { controlsSizing.minimumWidth }
 
     private var addPanel: some View {
         ChatComposerActionPanel(
@@ -1065,8 +1083,11 @@ struct ChatComposer<ContextHeader: View>: View {
             settings.structuredOutputEnabled = false
             settings.thinkingBudgetEnabled = false
         }
+        let requiresRestart = !model.settings.hasSameLaunchConfiguration(as: settings)
         model.settings = settings
-        model.restartServer()
+        if requiresRestart {
+            model.restartServer()
+        }
     }
 
     private func availableReasoningLevels(
@@ -1379,6 +1400,225 @@ private struct ChatPromptEditBanner: View {
             RoundedRectangle(cornerRadius: 9)
                 .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
+    }
+}
+
+private struct ChatAccessPicker: View {
+    let selection: ChatAccessMode
+    let onSelect: (ChatAccessMode) -> Void
+    @State private var showsOptions = false
+    @State private var showsComparison = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Button {
+            showsOptions.toggle()
+        } label: {
+            Label(selection.title, systemImage: selection.accessSymbol)
+                .font(.body)
+                .foregroundStyle(selection == .fullAccess ? fullAccessColor : .primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.primary.opacity(0.07), in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Tool access: \(selection.title)")
+        .help("Choose how Nativ asks for approval")
+        .popover(isPresented: $showsOptions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            ChatAccessOptions(selection: selection) { mode in
+                onSelect(mode)
+                showsOptions = false
+            } onLearnMore: {
+                showsOptions = false
+                showsComparison = true
+            }
+        }
+        .sheet(isPresented: $showsComparison) {
+            ChatAccessComparison()
+        }
+    }
+
+    private var fullAccessColor: Color {
+        ChatAccessMode.fullAccessColor(in: colorScheme)
+    }
+}
+
+private extension ChatAccessMode {
+    static func fullAccessColor(in scheme: ColorScheme) -> Color {
+        scheme == .dark ? .yellow : Color(red: 0.48, green: 0.35, blue: 0)
+    }
+
+    var accessSymbol: String {
+        switch self {
+        case .standard: "hand.raised"
+        case .medium: "shield.lefthalf.filled"
+        case .fullAccess: "exclamationmark.shield"
+        }
+    }
+
+    var accessDescription: String {
+        switch self {
+        case .standard: "Ask for work-pane actions, sensitive edits, and commands"
+        case .medium: "Read, browse, and edit locally without asking"
+        case .fullAccess: "Run tools automatically; ask only for commands and scripts"
+        }
+    }
+}
+
+private struct ChatAccessOptions: View {
+    let selection: ChatAccessMode
+    let onSelect: (ChatAccessMode) -> Void
+    let onLearnMore: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var hoveredMode: ChatAccessMode?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text("Tool approvals")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                Button(action: onLearnMore) {
+                    Text("Learn more").underline()
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+
+            ForEach(ChatAccessMode.allCases) { mode in
+                Button {
+                    onSelect(mode)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: mode.accessSymbol)
+                            .font(.body)
+                            .frame(width: 18)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(mode.title)
+                            Text(mode.accessDescription)
+                                .font(.caption)
+                                .foregroundStyle(mode == .fullAccess ? accent : .secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 6)
+                        Image(systemName: "checkmark")
+                            .font(.body.weight(.medium))
+                            .opacity(selection == mode ? 1 : 0)
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(mode == .fullAccess ? accent : .primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.primary.opacity(hoveredMode == mode ? 0.06 : 0),
+                                in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveredMode = $0 ? mode : nil }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(mode.title + ". " + mode.accessDescription)
+                .accessibilityAddTraits(selection == mode ? .isSelected : [])
+            }
+        }
+        .font(.body)
+        .padding(8)
+        .frame(width: 360)
+    }
+
+    private var accent: Color {
+        ChatAccessMode.fullAccessColor(in: colorScheme)
+    }
+}
+
+private struct ChatAccessComparison: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Choose what runs automatically")
+                        .font(.title2.weight(.semibold))
+                    Text("Access levels apply to this chat. Changes take effect on your next request.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            ScrollView {
+                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 0) {
+                    GridRow {
+                        Text("Action").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("Standard")
+                        Text("Medium")
+                        Text("Full access")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.vertical, 12)
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    row("Read and search local files", operation: .routine)
+                    row("Create and edit ordinary files", operation: .routine)
+                    row("Edit protected instructions or configuration", operation: .sensitive)
+                    row("Search and read the web", operation: .routine)
+                    row("Generate or edit images", operation: .routine)
+                    row("List models and view system/server stats", operation: .routine)
+                    row("Switch models", operation: .sensitive)
+                    row("Work pane: list, read, inspect, and list attachments", operation: .workPane)
+                    row("Work pane: create and edit documents or code", operation: .workPane)
+                    row("Browser: open, search, navigate, back, forward, reload", operation: .workPane)
+                    row("Browser: click, type, or upload attachments", operation: .sensitive)
+                    row("Interrupt a terminal command", operation: .workPane)
+                    row("Run commands or custom scripts", operation: .command)
+                    row("Filesystem MCP: read, list, search, and ordinary edits", operation: .routine)
+                    row("Filesystem MCP: protected writes or moves", operation: .sensitive)
+                    row("Other MCP tools and custom endpoints", operation: .external)
+                }
+            }
+            .frame(maxHeight: .infinity)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Safety restrictions stay on at every level", systemImage: "shield.lefthalf.filled")
+                    .font(.subheadline.weight(.semibold))
+                Text("Automatic means no Nativ approval prompt. Folder limits, blocked paths, command safety checks, and edit validation still apply. Protected files include AGENTS.md and credential configuration such as .env. Filesystem dry runs do not ask for approval.")
+                Text("Medium asks for all other MCP tools and custom endpoints because their effects are unclassified. Nativ cannot reliably identify command execution inside third-party tools. Scheduled routines keep their separate rules.")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .padding(24)
+        .frame(width: 820, height: 710)
+    }
+
+    @ViewBuilder
+    private func row(_ action: String, operation: ChatToolOperation) -> some View {
+        let standard = ChatAccessMode.standard.requiresApproval(for: operation)
+        let medium = ChatAccessMode.medium.requiresApproval(for: operation)
+        let full = ChatAccessMode.fullAccess.requiresApproval(for: operation)
+        GridRow {
+            Text(action)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            decision(standard)
+            decision(medium)
+            decision(full)
+        }
+        .font(.subheadline)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(action). Standard: \(standard ? "Ask" : "Automatic"). Medium: \(medium ? "Ask" : "Automatic"). Full access: \(full ? "Ask" : "Automatic").")
+        Divider().gridCellUnsizedAxes(.horizontal)
+    }
+
+    private func decision(_ asks: Bool) -> some View {
+        Label(asks ? "Ask" : "Automatic", systemImage: asks ? "hand.raised" : "checkmark")
+            .foregroundStyle(asks ? .secondary : .primary)
+            .fixedSize()
     }
 }
 

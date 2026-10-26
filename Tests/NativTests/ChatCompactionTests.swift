@@ -178,8 +178,42 @@ final class ChatCompactionTests: XCTestCase {
         XCTAssertEqual(result.completion.finishReason, "tool_calls")
         XCTAssertEqual(result.completion.usage?.promptTokens, 1000)
         XCTAssertEqual(result.completion.usage?.completionTokens, 20)
+        XCTAssertNil(result.completion.usage?.promptTokensPerSecond)
+        XCTAssertNil(result.completion.usage?.peakMemoryGB)
+        XCTAssertEqual(result.completion.usage?.decodeTokensPerSecond, 42)
         let measured = try stream.result(elapsed: 1, inputTokensBeforeCompaction: 8000)
         XCTAssertEqual(measured.inputTokensBeforeCompaction, 8000)
+    }
+
+    func testResponseTimingsReachChatMetricsForCompletedAndIncompleteStreams() throws {
+        for status in ["completed", "incomplete"] {
+            var stream = MLXResponseStream()
+            _ = try stream.consume(#"{"type":"response.output_text.delta","delta":"Hello","timings":{"predicted_per_second":30}}"#)
+            let done = MLXJSONValue.object([
+                "type": .string("response.\(status)"),
+                "timings": .object([
+                    "prompt_per_second": .number(1234.5),
+                    "predicted_per_second": .number(42),
+                    "peak_memory": .number(8.5),
+                ]),
+                "response": .object([
+                    "status": .string(status),
+                    "output": .array([.object([
+                        "type": .string("message"),
+                        "content": .array([.object(["type": .string("output_text"), "text": .string("Hello")])]),
+                    ])]),
+                    "usage": .object(["input_tokens": .number(1000), "output_tokens": .number(20), "total_tokens": .number(1020)]),
+                ]),
+            ])
+            _ = try stream.consume(String(decoding: JSONEncoder().encode(done), as: UTF8.self))
+            let completion = try stream.result(elapsed: 1).completion
+            let metrics = ChatResponseMetrics(completion: completion)
+            XCTAssertEqual(metrics.prefillTokensPerSecond, 1234.5)
+            XCTAssertEqual(metrics.decodeTokensPerSecond, 42)
+            XCTAssertEqual(metrics.peakMemoryGB, 8.5)
+            XCTAssertEqual(metrics.totalTokens, 1020)
+            XCTAssertEqual(completion.finishReason, status == "incomplete" ? "length" : "stop")
+        }
     }
 
     func testFailedOrUnfinishedStreamCannotCommitCompaction() throws {
@@ -421,6 +455,9 @@ final class ChatCompactionTests: XCTestCase {
             onEvent: { _ in }
         )
         XCTAssertEqual(response.completion.content, "Hello")
+        let metrics = ChatResponseMetrics(completion: response.completion)
+        XCTAssertEqual(metrics.prefillTokensPerSecond, 1234.5)
+        XCTAssertEqual(metrics.peakMemoryGB, 8.5)
         XCTAssertNotNil(response.compaction)
         XCTAssertEqual(response.inputTokensBeforeCompaction, 25000)
         let recorded = await progress.tokens
@@ -586,7 +623,7 @@ private final class CompactionURLProtocol: URLProtocol {
             data: {"type":"response.output_text.delta","delta":"Hello"}
 
             event: response.completed
-            data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"compaction","encrypted_content":"opaque"},{"type":"message","content":[{"type":"output_text","text":"Hello"}]}]}}
+            data: {"type":"response.completed","timings":{"prompt_per_second":1234.5,"predicted_per_second":42,"peak_memory":8.5},"response":{"status":"completed","usage":{"input_tokens":1000,"output_tokens":20,"total_tokens":1020},"output":[{"type":"compaction","encrypted_content":"opaque"},{"type":"message","content":[{"type":"output_text","text":"Hello"}]}]}}
 
 
             """
