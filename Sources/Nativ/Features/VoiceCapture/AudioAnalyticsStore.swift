@@ -37,6 +37,11 @@ struct AudioTranscriptionRecord: Codable, Equatable, Identifiable, Sendable {
     let title: String?
     let audioFileName: String?
     let summary: String?
+    var diarization: AudioDiarization? = nil
+
+    var displayTranscript: String {
+        diarization?.formattedTranscript ?? transcript
+    }
 
     var resolvedKind: AudioRecordKind {
         kind ?? .dictation
@@ -97,6 +102,8 @@ final class AudioAnalyticsStore: ObservableObject {
 
     private let storageURL: URL
     private let calendar: Calendar
+    private var storageReadFailed = false
+
     private var cachedWordCounts: [String: Int] = [:]
     private var cachedTotalWords = 0
     private var cachedAverageWordsPerMinute: Double?
@@ -264,11 +271,49 @@ final class AudioAnalyticsStore: ObservableObject {
         persistAudioReference: Bool = false,
         summary: String? = nil,
         preserveExistingSummary: Bool = true,
+        diarization: AudioDiarization? = nil,
         recordedAt: Date? = nil,
         updatedAt: Date = Date()
     ) {
+        do {
+            try saveTranscription(recordingURL: recordingURL, transcript: transcript,
+                durationSeconds: durationSeconds, modelID: modelID, applicationName: applicationName,
+                kind: kind, title: title, persistAudioReference: persistAudioReference, summary: summary,
+                preserveExistingSummary: preserveExistingSummary, diarization: diarization,
+                recordedAt: recordedAt, updatedAt: updatedAt)
+        } catch {
+            NSLog("Nativ could not save transcription: %@", error.localizedDescription)
+        }
+    }
+
+    /// Publish the transcript and its speaker metadata only after their atomic
+    /// write succeeds. Callers can safely start matching once this returns.
+    func saveTranscription(
+        recordingURL: URL,
+        transcript: String,
+        durationSeconds: TimeInterval?,
+        modelID: String?,
+        applicationName: String?,
+        kind: AudioRecordKind? = nil,
+        title: String? = nil,
+        persistAudioReference: Bool = false,
+        summary: String? = nil,
+        preserveExistingSummary: Bool = true,
+        diarization: AudioDiarization? = nil,
+        recordedAt: Date? = nil,
+        updatedAt: Date = Date()
+    ) throws {
         let id = recordingURL.deletingPathExtension().lastPathComponent
         let existing = record(withID: id)
+        var updatedRecords = records
+        var resolvedDiarization = diarization
+        // IDs are local to a diarization run. Preserve identity only when its
+        // complete segmentation is unchanged; never guess after re-diarizing.
+        if let old = existing?.diarization, var new = resolvedDiarization,
+           old.hasSameSegmentation(as: new) {
+            new.speakerNames = old.speakerNames
+            resolvedDiarization = new
+        }
         let resolvedRecordedAt = existing?.recordedAt
             ?? recordedAt
             ?? Self.fileDate(for: recordingURL)
@@ -286,13 +331,15 @@ final class AudioAnalyticsStore: ObservableObject {
             audioFileName: persistAudioReference
                 ? recordingURL.lastPathComponent
                 : existing?.audioFileName,
-            summary: summary ?? (preserveExistingSummary ? existing?.summary : nil)
+            summary: summary ?? (preserveExistingSummary ? existing?.summary : nil),
+            diarization: resolvedDiarization
         )
-        records.removeAll { $0.id == id }
-        records.append(record)
-        records.sort { $0.recordedAt > $1.recordedAt }
+        updatedRecords.removeAll { $0.id == id }
+        updatedRecords.append(record)
+        updatedRecords.sort { $0.recordedAt > $1.recordedAt }
+        try persist(records: updatedRecords)
+        records = updatedRecords
         rebuildDerivedMetrics()
-        save()
     }
 
     func addCapture(
@@ -330,7 +377,8 @@ final class AudioAnalyticsStore: ObservableObject {
             kind: existing.kind,
             title: existing.title,
             audioFileName: existing.audioFileName,
-            summary: summary
+            summary: summary,
+            diarization: existing.diarization
         )
         records.removeAll { $0.id == recordID }
         records.append(record)
@@ -357,12 +405,30 @@ final class AudioAnalyticsStore: ObservableObject {
             kind: existing.kind,
             title: normalizedTitle,
             audioFileName: existing.audioFileName,
-            summary: existing.summary
+            summary: existing.summary,
+            diarization: existing.diarization
         )
         records.removeAll { $0.id == recordID }
         records.append(record)
         records.sort { $0.recordedAt > $1.recordedAt }
         rebuildDerivedMetrics()
+        save()
+    }
+
+    func updateSpeakerName(_ name: String, speakerID: Int, for recordID: String) {
+        guard let index = records.firstIndex(where: { $0.id == recordID }),
+              var diarization = records[index].diarization,
+              diarization.speakerIDs.contains(speakerID) else { return }
+        let normalized = name.components(separatedBy: .newlines).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var names = diarization.speakerNames ?? [:]
+        names[String(speakerID)] = normalized.isEmpty ? nil : String(normalized.prefix(80))
+        diarization.speakerNames = names.isEmpty ? nil : names
+        // Persist recovered timings when editing a legacy recording.
+        if diarization.transcriptSegments == nil, !diarization.resolvedTranscriptSegments.isEmpty {
+            diarization.transcriptSegments = diarization.resolvedTranscriptSegments
+        }
+        records[index].diarization = diarization
         save()
     }
 
@@ -533,7 +599,8 @@ final class AudioAnalyticsStore: ObservableObject {
             kind: record.kind,
             title: record.title,
             audioFileName: record.audioFileName,
-            summary: record.summary
+            summary: record.summary,
+            diarization: record.diarization
         )
     }
 
@@ -551,14 +618,15 @@ final class AudioAnalyticsStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let decoded = try? JSONDecoder().decode(
-                [AudioTranscriptionRecord].self,
-                from: data
-              )
-        else {
-            records = []
-            rebuildDerivedMetrics()
+        guard FileManager.default.fileExists(atPath: storageURL.path) else { return }
+        let decoded: [AudioTranscriptionRecord]
+        do {
+            let data = try Data(contentsOf: storageURL)
+            let decoder = JSONDecoder()
+            decoded = try decoder.decode([AudioTranscriptionRecord].self, from: data)
+        } catch {
+            storageReadFailed = true
+            NSLog("Nativ could not read voice analytics: %@", error.localizedDescription)
             return
         }
         var migratedImportedDates = false
@@ -580,14 +648,18 @@ final class AudioAnalyticsStore: ObservableObject {
 
     private func save() {
         do {
-            try FileManager.default.createDirectory(
-                at: storageURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try JSONEncoder().encode(records)
-            try data.write(to: storageURL, options: .atomic)
+            try persist(records: records)
         } catch {
             NSLog("Nativ could not save voice analytics: %@", error.localizedDescription)
         }
     }
+
+    private func persist(records: [AudioTranscriptionRecord]) throws {
+        guard !storageReadFailed else { throw CocoaError(.fileReadCorruptFile) }
+        try FileManager.default.createDirectory(at: storageURL.deletingLastPathComponent(),
+                                               withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(records)
+        try data.write(to: storageURL, options: .atomic)
+    }
+
 }

@@ -68,6 +68,12 @@ jobs:
             -only-testing:NativTests/ChatCompactionTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
+            -only-testing:NativTests/AudioAnalyticsStoreTests \
+            -only-testing:NativTests/AudioPlaybackStateTests \
+            -only-testing:NativTests/NativAudioClientTests \
+            -only-testing:NativTests/AudioDiarizationTests \
+            -only-testing:NativTests/AudioDiarizationStorageTests \
+            -only-testing:NativTests/AudioRecordExportTests \
             -only-testing:NativTests/ModelPrimaryTaskResolverTests \
             -only-testing:NativTests/LocalModelDiscoveryTests \
             -only-testing:NativTests/HuggingFaceModelSupportTests \

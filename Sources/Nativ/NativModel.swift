@@ -397,6 +397,35 @@ final class NativModel: ChatModelSwitchingSurface {
         return settingsAppliedAtServerStart.serverBaseURL
     }
 
+    /// Called only by an explicit processing action or a newly completed meeting.
+    /// Readiness is checked separately from process launch, including with native ASR.
+    func prepareAudioAnalysisServer() async throws -> NativAudioClient {
+        try Task.checkCancellation()
+        if !isRunning { startServer() }
+        guard isRunning, let launched = settingsAppliedAtServerStart else {
+            throw NativAudioAnalysisError.serverNotRunning
+        }
+        let client = NativAudioClient(baseURL: launched.serverBaseURL, apiKey: launched.serverAPIKey, timeout: 7_200)
+        let deadline = Date().addingTimeInterval(120)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        while Date() < deadline {
+            try Task.checkCancellation()
+            guard isRunning else { throw NativAudioAnalysisError.serverNotRunning }
+            var request = URLRequest(url: launched.serverBaseURL.appendingPathComponent("health"))
+            request.timeoutInterval = 2
+            if let key = launched.serverAPIKey, !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            }
+            if let (_, response) = try? await session.data(for: request),
+               let response = response as? HTTPURLResponse, response.statusCode == 200 {
+                return client
+            }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        throw NativAudioAnalysisError.serverNotRunning
+    }
+
     func startServer() {
         var shouldStartMetrics = false
         clearModelLoadFailure()
