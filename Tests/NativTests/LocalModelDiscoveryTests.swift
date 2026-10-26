@@ -179,6 +179,42 @@ final class LocalModelDiscoveryTests: XCTestCase {
         }
     }
 
+    func testSparkTTSPreservesSpeechRoleWithQwen2Backbone() async throws {
+        let repoID = "mlx-community/Spark-TTS-0.5B-bf16"
+        try makeTextModelSnapshot(
+            repoID: repoID,
+            modelType: "qwen2",
+            architectures: ["Qwen2ForCausalLM"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+
+        XCTAssertTrue(model.capabilities.contains(.textToSpeech))
+        XCTAssertFalse(model.capabilities.contains(.text))
+        XCTAssertFalse(model.isEligibleForLanguageModelPicker)
+    }
+
+    func testNemotronStreamingRemainsSpeechToText() async throws {
+        let repoID = "nvidia/nemotron-speech-streaming-en-0.6b"
+        try makeTextModelSnapshot(
+            repoID: repoID,
+            modelType: "nemotron_asr_streaming",
+            architectures: ["NemotronAsrStreamingForRNNT"],
+            sentenceTransformer: false
+        )
+
+        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
+        let model = try XCTUnwrap(models.first { $0.repoID == repoID })
+
+        XCTAssertTrue(model.capabilities.contains(.speechToText))
+        XCTAssertEqual(
+            LocalModelDiscovery.speechToTextModelID(in: models, selectedModelID: repoID),
+            repoID
+        )
+    }
+
     func testStartupRejectsEncoderFromAdditionalRootAndDirectPath() async throws {
         try makeTextModelSnapshot(
             repoID: "org/encoder", modelType: "bert",

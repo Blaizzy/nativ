@@ -29,7 +29,6 @@ enum ModelPrimaryTaskResolver {
             return .unknown
         }
         let capabilities = registry.capabilities(for: modelType)
-        guard !capabilities.isEmpty else { return .unknown }
 
         let architectures = (config["architectures"] as? [String] ?? [])
             .joined(separator: " ").lowercased()
@@ -37,19 +36,18 @@ enum ModelPrimaryTaskResolver {
         let descriptors = [modelType.lowercased(), architectures, name].joined(separator: " ")
         let pipeline = (config["pipeline_tag"] as? String)?.lowercased() ?? ""
 
-        // Task metadata disambiguates checkpoints that reuse a chat backbone.
-        // Loader availability and aliases always come from the bundled runtime.
-        if capabilities.contains(.speechToText),
-           pipeline == "automatic-speech-recognition"
+        // Preserve speech task hints for converted checkpoints that retain a
+        // chat backbone or use an alias absent from the runtime manifest.
+        if pipeline == "automatic-speech-recognition"
             || ["asr", "transcribe", "speechrecognition", "forcedaligner"]
                 .contains(where: descriptors.contains) {
             return .speechToText
         }
-        if capabilities.contains(.textToSpeech),
-           pipeline == "text-to-speech"
+        if pipeline == "text-to-speech"
             || ["tts", "texttospeech", "speechsynthesis"].contains(where: descriptors.contains) {
             return .textToSpeech
         }
+        guard !capabilities.isEmpty else { return .unknown }
         if descriptors.contains("rerank") || architectures.contains("sequenceclassification") {
             return capabilities.contains(.reranking) ? .reranking : .nonLanguage
         }
