@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib.metadata
+import inspect
 import json
 import subprocess
 from pathlib import Path
@@ -124,9 +125,22 @@ def _loader_packages(root: Path, *, requires_config_type: bool = True) -> set[st
     return loaders
 
 
-def _runtime_loader_mapping(
+def _runtime_model_capabilities(model: type) -> tuple[bool, bool]:
+    """Inspect the bundled loader's generation/output contract without loading weights."""
+    forward = model.__call__
+    parameters = inspect.signature(forward).parameters
+    generates_text = "cache" in parameters or callable(getattr(model, "generate", None))
+    # Encoder loaders expose EmbeddingOutput; some omit the return annotation.
+    output = inspect.signature(forward).return_annotation
+    embeds = getattr(output, "__name__", None) == "EmbeddingOutput" or (
+        "EmbeddingOutput" in getattr(getattr(forward, "__code__", None), "co_names", ())
+    )
+    return generates_text and not embeds, embeds
+
+
+def _runtime_loader_metadata(
     site_packages: Path, candidate_model_types: set[str]
-) -> dict[str, str]:
+) -> tuple[dict[str, str], set[str], set[str]]:
     python = site_packages.parents[2] / "bin" / "python3"
     if not python.exists():
         raise FileNotFoundError(f"Missing bundled Python interpreter: {python}")
@@ -136,9 +150,13 @@ import json
 import sys
 
 from mlx_vlm.utils import get_model_and_args
+sys.path.insert(0, sys.argv[1])
+from generate_model_capabilities_manifest import _runtime_model_capabilities
 
 candidates = json.load(sys.stdin)
 resolved = {}
+generation_types = set()
+embedding_types = set()
 for candidate in candidates:
     module, loader = get_model_and_args({"model_type": candidate})
     if not hasattr(module, "Model") or not hasattr(module, "ModelConfig"):
@@ -147,10 +165,16 @@ for candidate in candidates:
             "Model and ModelConfig"
         )
     resolved[candidate] = loader
-json.dump(resolved, sys.stdout, sort_keys=True)
+    generates_text, embeds = _runtime_model_capabilities(module.Model)
+    if generates_text:
+        generation_types.add(loader)
+    if embeds:
+        embedding_types.add(loader)
+json.dump({"loaders": resolved, "generation_types": sorted(generation_types),
+           "embedding_types": sorted(embedding_types)}, sys.stdout, sort_keys=True)
 """
     result = subprocess.run(
-        [str(python), "-c", resolver],
+        [str(python), "-B", "-c", resolver, str(Path(__file__).parent)],
         input=json.dumps(sorted(candidate_model_types)),
         capture_output=True,
         text=True,
@@ -164,7 +188,8 @@ json.dump(resolved, sys.stdout, sort_keys=True)
         )
 
     try:
-        mapping = json.loads(result.stdout)
+        metadata = json.loads(result.stdout)
+        mapping = metadata["loaders"]
     except json.JSONDecodeError as error:
         raise RuntimeError("Bundled MLX resolver returned invalid JSON") from error
     if (
@@ -179,7 +204,11 @@ json.dump(resolved, sys.stdout, sort_keys=True)
         )
     ):
         raise RuntimeError("Bundled MLX resolver returned an invalid loader mapping")
-    return mapping
+    generation_types = set(metadata["generation_types"])
+    embedding_types = set(metadata["embedding_types"])
+    if not generation_types or not (generation_types | embedding_types) <= set(mapping.values()):
+        raise RuntimeError("Bundled MLX resolver returned invalid model capabilities")
+    return mapping, generation_types, embedding_types
 
 
 def _image_model_types(models_root: Path) -> tuple[set[str], set[str]]:
@@ -321,7 +350,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     vlm_alias_mapping = _string_mapping(mlx_vlm_root / "utils.py", "MODEL_REMAPPING")
     all_loaders = language_loaders | drafter_loaders
     _validate_mapping_targets(vlm_alias_mapping, all_loaders)
-    resolved_model_types = _runtime_loader_mapping(
+    resolved_model_types, generation_types, native_embedding_types = _runtime_loader_metadata(
         site_packages,
         all_loaders | set(vlm_alias_mapping),
     )
@@ -376,7 +405,7 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     embedding_alias_mapping = _string_mapping(
         mlx_vlm_root / "embedding_loader.py", "EMBEDDING_MODEL_REMAPPING"
     )
-    embedding_types = set(embedding_alias_mapping.values())
+    embedding_types = set(embedding_alias_mapping.values()) | native_embedding_types
     _validate_mapping_targets(embedding_alias_mapping, language_types)
 
     reranking_types = _literal_mapping_keys(
@@ -421,6 +450,9 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
             _aliases_for(reranking_alias_mapping, reranking_types),
         ),
     }
+    capabilities["language"]["generation_model_types"] = sorted(
+        generation_types & language_types
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "package_versions": _package_versions(site_packages),
@@ -448,6 +480,7 @@ def validate_manifest(manifest: object) -> None:
         model_types = entry.get("model_types")
         aliases = entry.get("aliases")
         kinds = entry.get("kinds")
+        generation_types = entry.get("generation_model_types")
         if (
             not isinstance(model_types, list)
             or not model_types
@@ -472,6 +505,17 @@ def validate_manifest(manifest: object) -> None:
             for alias, target in aliases.items()
         ):
             raise RuntimeError(f"Invalid {capability_name} aliases")
+        if capability_name == "language":
+            if (
+                not isinstance(generation_types, list)
+                or not generation_types
+                or any(not isinstance(value, str) for value in generation_types)
+                or len(set(generation_types)) != len(generation_types)
+                or not set(generation_types) <= set(model_types)
+            ):
+                raise RuntimeError("Invalid language generation model types")
+        elif generation_types is not None:
+            raise RuntimeError(f"Unexpected {capability_name} generation model types")
         if capability_name == "speculative_drafters":
             if (
                 not isinstance(kinds, dict)

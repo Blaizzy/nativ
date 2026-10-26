@@ -123,13 +123,8 @@ struct LocalModel: Identifiable, Equatable, Sendable {
     }
 
     var isEligibleForLanguageModelPicker: Bool {
-        // Any text-generative model qualifies (chat + omni), even if it also carries an
-        // image-generation tag. A vision model qualifies only when it isn't image-gen/editing.
-        guard !capabilities.contains(.drafter), !capabilities.contains(.reranking) else {
-            return false
-        }
-        return capabilities.contains(.text)
-            || (capabilities.contains(.vision) && !capabilities.contains(.imageGeneration))
+        capabilities.contains(.text)
+            && capabilities.isDisjoint(with: [.drafter, .reranking, .embeddings])
     }
 
     var drafterKindLabel: String? {
@@ -994,6 +989,21 @@ enum LocalModelDiscovery {
         return "\(repoID) is missing preprocessor_config.json, which \(modelType) speech models need in order to load."
     }
 
+    static func isKnownNonLanguageModel(repoID: String, searchPaths: [String]) -> Bool {
+        let fileManager = FileManager.default
+        for path in searchPaths {
+            guard let snapshot = modelSnapshotURL(
+                repoID: repoID, path: expandedPath(path), fileManager: fileManager
+            ), let data = try? Data(contentsOf: snapshot.appendingPathComponent("config.json")),
+               let config = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            return primaryTask(model: repoID, config: config, at: snapshot, fileManager: fileManager)
+                .isKnownNonLanguage
+        }
+        // Missing metadata or an unknown loader is not proof of a non-chat model.
+        return false
+    }
+
     private static func modelSnapshotURL(
         repoID: String,
         path: String,
@@ -1659,9 +1669,8 @@ enum LocalModelDiscovery {
         let keys = recursiveKeys(in: config).union(recursiveKeys(in: modelIndex))
         let descriptors = [modelDescriptors(in: config), modelDescriptors(in: modelIndex)]
             .joined(separator: " ")
-        let primaryTask = ModelPrimaryTaskResolver.resolve(
-            model: model,
-            config: config
+        let primaryTask = primaryTask(
+            model: model, config: config, at: snapshotURL, fileManager: fileManager
         )
         var capabilities = Set<LocalModelCapability>()
 
@@ -1670,15 +1679,7 @@ enum LocalModelDiscovery {
             capabilities.insert(.drafter)
         }
 
-        let textDescriptors = [
-            "causallm", "conditionalgeneration", "language", "llm", "gpt",
-            "gemma", "qwen", "mistral", "llama", "deepseek", "cohere"
-        ]
-        let generativeArchitectures = ["forcausallm", "forconditionalgeneration", "lmheadmodel"]
-        if primaryTask.includesLanguageCapability(
-            fallbackMatch: textDescriptors.contains(where: descriptors.contains)
-                || generativeArchitectures.contains(where: descriptors.contains)
-        ) {
+        if primaryTask.isLanguageCapable {
             capabilities.insert(.text)
         }
 
@@ -1687,7 +1688,11 @@ enum LocalModelDiscovery {
             capabilities.formUnion([.audio, .textToSpeech])
         case .speechToText:
             capabilities.formUnion([.audio, .speechToText])
-        case .language, .audioLanguage, .unknown:
+        case .embeddings:
+            capabilities.insert(.embeddings)
+        case .reranking:
+            capabilities.insert(.reranking)
+        case .language, .nonLanguage, .unknown:
             break
         }
 
@@ -1755,48 +1760,6 @@ enum LocalModelDiscovery {
             capabilities.insert(.audio)
         }
 
-        let speechToTextDescriptors = ["whisper", "asr", "transcribe", "speechrecognition"]
-        if speechToTextDescriptors.contains(where: descriptors.contains) {
-            capabilities.insert(.speechToText)
-        }
-
-        let textToSpeechDescriptors = ["tts", "texttospeech", "speechsynthesis"]
-        if textToSpeechDescriptors.contains(where: descriptors.contains) {
-            capabilities.insert(.textToSpeech)
-        }
-
-        if let embeddingStamp = config["mlx_embeddings"] as? [String: Any],
-            (embeddingStamp["kind"] as? String) == "embedding" {
-            if (embeddingStamp["modality"] as? String) != "vision" {
-                capabilities.insert(.embeddings)
-            }
-        } else {
-            let embeddingModelType = ((config["model_type"] as? String) ?? "")
-                .lowercased()
-                .replacingOccurrences(of: "-", with: "_")
-            let textEmbeddingModelTypes: Set<String> = [
-                "bert", "modernbert", "xlm_roberta", "llama_bidirec"
-            ]
-            let hasSentenceTransformerLayout =
-                fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("modules.json").path)
-                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("1_Pooling/config.json").path)
-                || fileManager.fileExists(atPath: snapshotURL.appendingPathComponent("sentence_bert_config.json").path)
-            let isEmbeddingModel =
-                hasSentenceTransformerLayout
-                || (!generativeArchitectures.contains(where: descriptors.contains)
-                    && (textEmbeddingModelTypes.contains(embeddingModelType)
-                        || descriptors.contains("embedding")))
-            if isEmbeddingModel && !capabilities.contains(.vision) {
-                capabilities.insert(.embeddings)
-            }
-        }
-
-        if model.localizedCaseInsensitiveContains("rerank")
-            || descriptors.contains("reranker")
-            || descriptors.contains("reranking") {
-            capabilities.insert(.reranking)
-        }
-
         if capabilities.contains(.text)
             && (descriptors.contains("reasoning")
                 || descriptors.contains("thinking")
@@ -1817,6 +1780,17 @@ enum LocalModelDiscovery {
         }
 
         return capabilities
+    }
+
+    private static func primaryTask(
+        model: String, config: [String: Any], at snapshotURL: URL, fileManager: FileManager
+    ) -> ModelPrimaryTask {
+        let hasEmbeddingLayout = [
+            "modules.json", "1_Pooling/config.json", "sentence_bert_config.json",
+        ].contains { fileManager.fileExists(atPath: snapshotURL.appendingPathComponent($0).path) }
+        return ModelPrimaryTaskResolver.resolve(
+            model: model, config: config, hasEmbeddingLayout: hasEmbeddingLayout
+        )
     }
 
     private static func supportsThinkingMode(
