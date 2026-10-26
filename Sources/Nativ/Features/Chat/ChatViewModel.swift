@@ -2297,13 +2297,6 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
-    private func awaitToolConsent(
-        for toolMessageID: UUID,
-        in sessionID: UUID
-    ) async -> Bool {
-        await toolConsentGate.awaitDecision(for: toolMessageID, inSession: sessionID)
-    }
-
     func cancel() {
         activeTask?.cancel()
         // Do not wait for the task to unwind: a stalled stream may stay parked in
@@ -2960,221 +2953,82 @@ final class ChatViewModel: ObservableObject {
                 let customTool = toolCall.function?.name.flatMap { toolName in
                     queuedRequest.settings.customTools.first { $0.toolName == toolName }
                 }
-                var fileWriteApprovalGranted = false
-                var terminalApprovalGranted = false
-                if customTool?.kind == .script || toolCall.function?.name == ChatWorkToolRegistry.toolName {
-                    if case .failure(let error) = workRequestAtConsent {
-                        updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .failed,
-                                          content: ChatToolDispatcher.failurePayload(toolName: ChatWorkToolRegistry.toolName, error: error),
-                                          attachments: [])
-                        continue
-                    }
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: workConsentContent(for: toolCall, in: queuedRequest.sessionID,
-                                                    resolved: try? workRequestAtConsent?.get()),
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
-                    switch ChatToolConsentRouter.outcome(
-                        approved: approved, isCancelled: Task.isCancelled)
-                    {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content:
-                                #"{"ok":false,"error":"The user declined to run this tool."}"#,
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        terminalApprovalGranted = (try? workRequestAtConsent?.get().action.isTerminalMutation) == true
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
+                let toolName = toolCall.function?.name
+                let isMCP = toolName.flatMap { mcpHost?.handlesTool(named: $0) } ?? false
+                let usesNativeFilesystem = toolName.flatMap { mcpHost?.usesNativeFilesystemTool(named: $0) } ?? false
+                if case .failure(let error) = workRequestAtConsent {
+                    updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .failed,
+                                      content: ChatToolDispatcher.failurePayload(toolName: ChatWorkToolRegistry.toolName, error: error),
+                                      attachments: [])
+                    continue
                 }
-
-                let isNativeTerminal =
-                    customTool == nil
-                    && !(toolCall.function?.name.flatMap {
-                        mcpHost?.handlesTool(named: $0)
-                    } ?? false)
-                    && toolCall.function?.name == ChatTerminalToolRegistry.toolName
+                let workRequest = try? workRequestAtConsent?.get()
+                let isNativeTerminal = customTool == nil && !isMCP
+                    && toolName == ChatTerminalToolRegistry.toolName
                 if isNativeTerminal {
                     do {
                         try ChatTerminalToolExecutor().preflight(
-                            call: toolCall,
-                            defaultWorkingDirectory: queuedRequest.toolScope
-                                .terminalWorkingDirectory
-                        )
+                            call: toolCall, defaultWorkingDirectory: queuedRequest.toolScope.terminalWorkingDirectory)
                     } catch {
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .failed,
-                            content: ChatTerminalToolExecutor().failurePayload(error: error),
-                            attachments: []
-                        )
+                        updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .failed,
+                                          content: ChatTerminalToolExecutor().failurePayload(error: error), attachments: [])
                         continue
-                    }
-
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
-                    switch ChatToolConsentRouter.outcome(
-                        approved: approved,
-                        isCancelled: Task.isCancelled
-                    ) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatTerminalToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        terminalApprovalGranted = true
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
                     }
                 }
-
-                let mcpWriteRequiresApproval = toolCall.function?.name.map {
-                    mcpHost?.requiresFileWriteApproval(
-                        named: $0, argumentsJSON: toolCall.function?.arguments,
-                        projectScope: queuedRequest.toolScope
-                    ) ?? false
-                } ?? false
-                let nativeWriteRequiresApproval =
-                    !(toolCall.function?.name.flatMap { mcpHost?.handlesTool(named: $0) } ?? false)
-                    && ChatFileWriteApprovalPolicy.requiresApproval(
-                        call: toolCall,
-                        rootPath: queuedRequest.toolScope.isProject
-                            ? queuedRequest.toolScope.fileWriteRootPath
-                            : queuedRequest.settings.fileWriteRootPath
-                    )
-                if customTool == nil, mcpWriteRequiresApproval || nativeWriteRequiresApproval
-                {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
-                    switch ChatToolConsentRouter.outcome(
-                        approved: approved,
-                        isCancelled: Task.isCancelled
-                    ) {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatFileWriteToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        fileWriteApprovalGranted = true
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
+                let protectedWrite: Bool
+                if customTool != nil {
+                    protectedWrite = false
+                } else if isMCP {
+                    protectedWrite = toolName.map {
+                        mcpHost?.requiresFileWriteApproval(named: $0, argumentsJSON: toolCall.function?.arguments,
+                                                          projectScope: queuedRequest.toolScope) ?? false
+                    } ?? false
+                } else {
+                    protectedWrite = ChatFileWriteApprovalPolicy.requiresApproval(
+                        call: toolCall, rootPath: queuedRequest.toolScope.isProject
+                            ? queuedRequest.toolScope.fileWriteRootPath : queuedRequest.settings.fileWriteRootPath)
+                }
+                let operation = ChatToolOperation.classify(
+                    toolName: toolName, customKind: customTool?.kind, workAction: workRequest?.action,
+                    isMCP: isMCP, usesNativeFilesystem: usesNativeFilesystem, protectedWrite: protectedWrite)
+                let consent = await toolConsentGate.authorize(
+                    operation, mode: queuedRequest.accessMode, id: toolMessageID, sessionID: queuedRequest.sessionID
+                ) {
+                    updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .awaitingConsent,
+                                      content: workConsentContent(for: toolCall, in: queuedRequest.sessionID,
+                                                                  resolved: workRequest), attachments: [])
+                }
+                switch consent {
+                case .cancelled:
+                    cancelToolMessages(currentID: toolMessageID, currentCall: toolCall,
+                                       remainingCalls: Array(toolCalls.dropFirst(index + 1)),
+                                       after: insertionAnchor, in: queuedRequest.sessionID)
+                    throw CancellationError()
+                case .declined:
+                    let content: String
+                    if isNativeTerminal {
+                        content = ChatTerminalToolExecutor().declinedPayload()
+                    } else if protectedWrite {
+                        content = ChatFileWriteToolExecutor().declinedPayload()
+                    } else if toolName == ChatSwitchModelToolRegistry.toolName {
+                        content = ChatSwitchModelToolExecutor().declinedPayload()
+                    } else {
+                        content = #"{"ok":false,"error":"The user declined to run this tool."}"#
+                    }
+                    updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .declined,
+                                      content: content, attachments: [])
+                    continue
+                case .approved:
+                    if queuedRequest.accessMode.requiresApproval(for: operation) {
+                        updateToolMessage(toolMessageID, in: queuedRequest.sessionID, status: .running,
+                                          content: "", attachments: [])
                     }
                 }
+                try Task.checkCancellation()
+                let fileWriteApprovalGranted = protectedWrite
+                let terminalApprovalGranted = isNativeTerminal || workRequest?.action.isTerminalMutation == true
 
-                if toolCall.function?.name == ChatSwitchModelToolRegistry.toolName {
-                    updateToolMessage(
-                        toolMessageID,
-                        in: queuedRequest.sessionID,
-                        status: .awaitingConsent,
-                        content: "",
-                        attachments: []
-                    )
-                    let approved = await awaitToolConsent(for: toolMessageID, in: queuedRequest.sessionID)
-                    switch ChatToolConsentRouter.outcome(
-                        approved: approved, isCancelled: Task.isCancelled)
-                    {
-                    case .cancelled:
-                        cancelToolMessages(
-                            currentID: toolMessageID,
-                            currentCall: toolCall,
-                            remainingCalls: Array(toolCalls.dropFirst(index + 1)),
-                            after: insertionAnchor,
-                            in: queuedRequest.sessionID
-                        )
-                        throw CancellationError()
-                    case .declined:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .declined,
-                            content: ChatSwitchModelToolExecutor().declinedPayload(),
-                            attachments: []
-                        )
-                        continue
-                    case .approved:
-                        updateToolMessage(
-                            toolMessageID,
-                            in: queuedRequest.sessionID,
-                            status: .running,
-                            content: "",
-                            attachments: []
-                        )
-                    }
+                if toolName == ChatSwitchModelToolRegistry.toolName {
                     guard let appModel else {
                         updateToolMessage(
                             toolMessageID,

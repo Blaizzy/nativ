@@ -7,7 +7,7 @@ enum ChatSwitchModelToolRegistry {
     static func definitions() -> [MLXChatToolDefinition] {
         [MLXChatToolDefinition(function: MLXChatFunctionDefinition(
             name: toolName,
-            description: "Switch the active local language model. Requires user confirmation before it runs.",
+            description: "Switch the active local language model. User confirmation follows the chat’s access mode.",
             parameters: .object([
                 "type": .string("object"),
                 "additionalProperties": .bool(false),
