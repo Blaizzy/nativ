@@ -1,39 +1,151 @@
 import SwiftUI
 
+/// Saved recordings with a summary preview and separate playback controls.
 struct AudioLibraryRecordings: View {
     let records: [AudioTranscriptionRecord]
+    let profiles: [AudioSpeakerProfile]
     @ObservedObject var library: AudioCaptureLibrary
     let onOpen: (AudioTranscriptionRecord, AudioRecordingSection) -> Void
     let onRename: (AudioTranscriptionRecord, String) -> Void
     let onDelete: (AudioTranscriptionRecord) -> Void
 
+    @State private var renamingRecord: AudioTranscriptionRecord?
+    @State private var editedTitle = ""
+    @State private var hoveredID: String?
+
     var body: some View {
-        LazyVStack(spacing: 10) {
+        LazyVStack(spacing: 12) {
             ForEach(records) { record in
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        InlineEditableAudioTitle(title: record.displayTitle, placeholder: "Recording title",
-                            font: .callout.weight(.semibold), onRename: { onRename(record, $0) })
-                        Text(record.recordedAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.caption).foregroundStyle(.secondary)
-                        if library.processingRecordIDs.contains(record.id) {
-                            AudioRecordingProgress(recordID: record.id, library: library)
-                        }
-                    }
-                    Spacer()
-                    Button("Open recording") { onOpen(record, .summary) }
-                    Button { library.togglePlayback(for: record) } label: {
-                        Image(systemName: library.playingRecordID == record.id && !library.isPlaybackPaused
-                              ? "pause.fill" : "play.fill")
-                    }
-                    .disabled(library.audioURL(for: record) == nil)
-                    .accessibilityLabel("Play or pause recording")
-                    AudioRecordingActions(record: record, library: library, onDelete: { onDelete(record) })
+                if record.resolvedKind == .dictation {
+                    AudioTranscriptRow(record: record, onDelete: { onDelete(record) })
+                } else {
+                    summaryCard(record)
                 }
-                .padding(16)
-                .background(Color.primary.opacity(0.025), in: RoundedRectangle(cornerRadius: 12))
             }
         }
+        .alert("Rename recording", isPresented: Binding(
+            get: { renamingRecord != nil }, set: { if !$0 { renamingRecord = nil } }
+        )) {
+            TextField("Recording title", text: $editedTitle)
+            Button("Cancel", role: .cancel) { renamingRecord = nil }
+            Button("Save") {
+                if let record = renamingRecord { onRename(record, editedTitle) }
+                renamingRecord = nil
+            }
+            .disabled(editedTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private func summaryCard(_ record: AudioTranscriptionRecord) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            Button { onOpen(record, .summary) } label: {
+                VStack(alignment: .leading, spacing: 12) {
+                    recordHeading(record)
+                    Text(excerpt(record)).font(.callout).foregroundStyle(.secondary)
+                        .lineLimit(2).multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    people(record)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open summary for \(record.displayTitle)")
+            .accessibilityIdentifier("audio.library.open.\(record.id)")
+            VStack(alignment: .trailing, spacing: 22) {
+                controls(record)
+                Button { onOpen(record, .summary) } label: {
+                    Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Open recording")
+            }
+            .padding(16)
+        }
+        .background(Color.primary.opacity(hoveredID == record.id ? 0.055 : 0.025), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(hoveredID == record.id ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .onHover { hoveredID = $0 ? record.id : nil }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("audio.library.record.\(record.id)")
+    }
+
+    private func recordHeading(_ record: AudioTranscriptionRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(record.displayTitle).font(.callout.weight(.semibold)).lineLimit(2)
+                .multilineTextAlignment(.leading)
+            HStack(spacing: 8) {
+                Text(record.recordedAt.formatted(date: .abbreviated, time: .shortened))
+                if let duration = record.durationSeconds {
+                    Text("·")
+                    Text(NativFormatting.clockDuration(duration)).monospacedDigit()
+                }
+            }
+            .font(.caption).foregroundStyle(.secondary)
+            if library.processingRecordIDs.contains(record.id) {
+                AudioRecordingProgress(recordID: record.id, library: library)
+            }
+        }
+    }
+
+    private func people(_ record: AudioTranscriptionRecord) -> some View {
+        let names = speakerNames(record)
+        return HStack(spacing: 6) {
+            ForEach(Array(names.prefix(3).enumerated()), id: \.offset) { _, name in
+                HStack(spacing: 5) {
+                    Text(name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined())
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 23, height: 23)
+                        .background(Color.accentColor.opacity(0.12), in: Circle())
+                    Text(name).font(.caption).lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+            }
+            if names.count > 3 { Text("+\(names.count - 3)").font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+
+    private func controls(_ record: AudioTranscriptionRecord) -> some View {
+        let playing = library.playingRecordID == record.id && !library.isPlaybackPaused
+        return HStack(spacing: 8) {
+            Button { library.togglePlayback(for: record) } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 12, weight: .semibold)).frame(width: 32, height: 32)
+                    .background(Color.primary.opacity(0.045), in: Circle())
+                    .overlay { Circle().stroke(Color.primary.opacity(0.12), lineWidth: 1) }
+            }
+            .buttonStyle(.plain).disabled(library.audioURL(for: record) == nil)
+            .accessibilityLabel("\(playing ? "Pause" : "Play") \(record.displayTitle)")
+            .accessibilityIdentifier("audio.library.play.\(record.id)")
+            AudioRecordingActions(record: record, library: library, onDelete: { onDelete(record) }, onRename: {
+                editedTitle = record.displayTitle
+                renamingRecord = record
+            })
+        }
+    }
+
+    private func speakerNames(_ record: AudioTranscriptionRecord) -> [String] {
+        guard let diarization = record.diarization?.groupedByProfile else { return [] }
+        return diarization.speakerIDs.map { speaker in
+            let profileID = diarization.speakerProfileIDs?[String(speaker)]
+            return profiles.first { $0.id == profileID }?.name ?? diarization.speakerName(speaker)
+        }
+    }
+
+    private func excerpt(_ record: AudioTranscriptionRecord) -> AttributedString {
+        guard let summary = record.summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return AttributedString("No summary yet. Open the recording to generate one.")
+        }
+        let text = summary.split(separator: "\n").prefix(8).map {
+            String($0).replacingOccurrences(of: #"^\s*(?:#{1,6}\s+|[-*+]\s+)"#,
+                                           with: "", options: .regularExpression)
+        }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let parsed = (try? AttributedString(markdown: text,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+        let plainText = String(parsed.characters)
+        return AttributedString(String(plainText.prefix(320)) + (plainText.count > 320 ? "…" : ""))
     }
 }
 

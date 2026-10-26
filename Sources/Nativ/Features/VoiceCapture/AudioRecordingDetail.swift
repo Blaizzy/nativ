@@ -237,15 +237,44 @@ struct AudioRecordingDetail: View {
 
     @ViewBuilder private var summaryPane: some View {
         if let summary {
-            ScrollView {
-                MarkdownRenderer(content: summary, fontSize: 15)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+            AudioSummaryView(
+                document: AudioSummaryDocument(record: record, summary: summary),
+                legacyReferences: summary.contains("nativ://recording/") ? [] : AudioSummaryReference.references(
+                    in: summary, duration: record.durationSeconds ?? 0
+                ),
+                onOpenLegacy: { seconds in
+                    seekTarget = seconds
+                    seekRequestID = UUID()
+                    speakerFilter = .all
+                    section = .transcript
+                    if library.audioURL(for: record) != nil { library.seekPlayback(for: record, to: seconds) }
+                },
+                onOpenLink: openSummaryReference
+            )
             .accessibilityIdentifier("recording.summary")
         } else {
             emptyState(isSummary: true)
         }
+    }
+
+    private func openSummaryReference(_ url: URL) -> Bool {
+        guard url.scheme == "nativ" else { return false }
+        guard let target = AudioSummarySources(record: record).target(for: url) else { return true }
+        switch target {
+        case .speaker(let id):
+            seekTarget = nil
+            seekRequestID = UUID()
+            speakerFilter = analytics.profileID(speakerID: id, recordID: record.id)
+                .map(AudioTranscriptSpeakerFilter.profile) ?? .speaker(id)
+            section = .transcript
+        case .passage(let seconds):
+            speakerFilter = .all
+            seekTarget = seconds
+            seekRequestID = UUID()
+            section = .transcript
+            if library.audioURL(for: record) != nil { library.seekPlayback(for: record, to: seconds) }
+        }
+        return true
     }
 
     @ViewBuilder private var transcriptPane: some View {

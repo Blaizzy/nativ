@@ -13,11 +13,13 @@ struct MarkdownRenderer: View {
     let content: String
     var baseURL: URL?
     let fontSize: CGFloat
+    var listItemSpacing: CGFloat?
     var imagePolicy: ImagePolicy = .mathOnly
     var isStreaming = false
     var onTranslate: ((String) -> Void)?
     var onAddToChat: ((String) -> Void)?
     var onRequestEdit: ((String, String) async throws -> Void)?
+    var onOpenLink: ((URL) -> Bool)?
 
     private struct LoadedImages {
         let request: MarkdownImageRequest
@@ -37,12 +39,14 @@ struct MarkdownRenderer: View {
                 fontSize: fontSize,
                 dark: colorScheme == .dark,
                 baseURL: baseURL,
-                images: images
+                images: images,
+                listItemSpacing: listItemSpacing
             ),
             isStreaming: isStreaming,
             onTranslate: onTranslate,
             onAddToChat: onAddToChat,
-            onRequestEdit: onRequestEdit
+            onRequestEdit: onRequestEdit,
+            onOpenLink: onOpenLink
         )
         .task(id: request) {
             guard let request else { return }
