@@ -186,31 +186,6 @@ final class LocalModelProviderTests: XCTestCase {
 }
 
 final class HuggingFaceCapabilityFilterTests: XCTestCase {
-    func testRuntimeConfigurationAliasesPreserveOrdinaryBackbones() throws {
-        let registry = try Nativ.modelTypeRegistry()
-        for type in ["lfm2_vl", "lfm2-vl"] {
-            XCTAssertEqual(registry.loader(for: type, capability: .decision, autoModel: "modeling_d1.D1Model"), "d1")
-            XCTAssertNil(registry.loader(for: type, capability: .language, autoModel: "modeling_d1.D1Model"))
-            XCTAssertNil(registry.loader(for: type, capability: .decision, autoModel: "other.CustomModel"))
-            XCTAssertNotNil(registry.loader(for: type, capability: .language))
-        }
-        XCTAssertNil(registry.loader(for: "qwen3", capability: .decision, autoModel: "modeling_d1.D1Model"))
-    }
-
-    func testDecisionHubMetadataDoesNotClassifyGenericTextClassifiers() throws {
-        let decision = try decodeModel(pipelineTag: "text-generation", config: ["model_type": "decider2"])
-        XCTAssertTrue(decision.capabilities.contains(.decision))
-        XCTAssertFalse(decision.capabilities.contains(.text))
-        let generic = try decodeModel(pipelineTag: "text-classification", config: ["model_type": "bert"])
-        XCTAssertFalse(generic.capabilities.contains(.decision))
-        let d1 = try decodeModel(pipelineTag: "image-text-to-text", config: [
-            "model_type": "lfm2_vl", "auto_map": ["AutoModel": "modeling_d1.D1Model", "AutoTokenizer": ["CustomTokenizer", NSNull()]],
-        ])
-        XCTAssertTrue(d1.capabilities.contains(.decision))
-        XCTAssertFalse(d1.capabilities.contains(.text))
-    }
-
-
     func testEmptyCapabilitySelectionUsesOneUnfilteredQuery() {
         XCTAssertEqual(
             HuggingFaceCapabilityFilter.queryVariants(for: []),
@@ -456,7 +431,7 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
         XCTAssertNil(model.drafterKind)
     }
 
-    func testGGUFTaggedSafetensorsRepositoryIsIdentifiedAsGGUF() throws {
+    func testGGUFTaggedSafetensorsRepositoryIsNotExcluded() throws {
         let model = try decodeModel(
             id: "test/model-GGUF",
             pipelineTag: "text-generation",
@@ -464,19 +439,52 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             safetensors: ["parameters": ["F16": 1_000]]
         )
 
-        XCTAssertTrue(model.isGGUF)
+        XCTAssertFalse(model.isGGUFOnly)
     }
 
-    func testGGUFIdentificationChecksEachMetadataFieldIgnoringCase() throws {
+    func testGGUFOnlyIdentificationChecksEachMetadataFieldIgnoringCase() throws {
         let models = [
             try decodeModel(id: "test/model-GgUf", pipelineTag: "text-generation"),
             try decodeModel(pipelineTag: "text-generation", libraryName: "GGUF"),
-            try decodeModel(pipelineTag: "text-generation", tags: ["safetensors", "gguf"]),
+            try decodeModel(pipelineTag: "text-generation", tags: ["GgUf"]),
         ]
 
         for model in models {
-            XCTAssertTrue(model.isGGUF, "Expected GGUF metadata to exclude \(model.id)")
+            XCTAssertTrue(model.isGGUFOnly, "Expected GGUF-only metadata to exclude \(model.id)")
         }
+    }
+
+    func testSafetensorsTagOverridesGGUFMetadataIgnoringCase() throws {
+        let models = [
+            try decodeModel(id: "test/model-GgUf", pipelineTag: "text-generation", tags: ["SaFeTeNsOrS"]),
+            try decodeModel(pipelineTag: "text-generation", libraryName: "GGUF", tags: ["SaFeTeNsOrS"]),
+            try decodeModel(pipelineTag: "text-generation", tags: ["SaFeTeNsOrS", "GgUf"]),
+        ]
+
+        for model in models {
+            XCTAssertFalse(model.isGGUFOnly, "Mixed-format repository should remain visible: \(model.id)")
+        }
+    }
+
+    func testPhononSpanishMixedFormatRepositoryRemainsDiscoverable() throws {
+        let model = try decodeModel(
+            id: "gradium/phonon-40m-es",
+            pipelineTag: "text-to-speech",
+            libraryName: "transformers",
+            tags: ["transformers", "safetensors", "gguf", "gradium_phonon_tts", "text-to-audio", "text-to-speech", "tts", "phonon", "es"],
+            config: [
+                "model_type": "gradium_phonon_tts",
+                "architectures": ["GradiumPhononTTSForConditionalGeneration"],
+            ]
+        )
+
+        XCTAssertFalse(model.isGGUFOnly)
+        XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.textToSpeech]))
+        XCTAssertTrue(queryCanReturn(model, capabilities: [.textToSpeech]))
+        XCTAssertTrue(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "model.q4k.gguf"))
+        XCTAssertTrue(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "model.q8.gguf"))
+        XCTAssertFalse(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "model.safetensors"))
+        XCTAssertFalse(HuggingFaceDownloadFilePolicy.shouldIgnore(path: "default-voice.safetensors"))
     }
 
     func testSafetensorsRepositoryWithoutGGUFMetadataIsNotExcluded() throws {
@@ -488,14 +496,14 @@ final class HuggingFaceCapabilityFilterTests: XCTestCase {
             safetensors: ["parameters": ["F16": 1_000]]
         )
 
-        XCTAssertFalse(model.isGGUF)
+        XCTAssertFalse(model.isGGUFOnly)
         XCTAssertTrue(HuggingFaceCapabilityFilter.matches(model, capabilities: [.text]))
     }
 
     func testMissingOptionalMetadataDoesNotIdentifyRepositoryAsGGUF() throws {
         let model = try decodeModel(pipelineTag: "text-generation")
 
-        XCTAssertFalse(model.isGGUF)
+        XCTAssertFalse(model.isGGUFOnly)
     }
 
     func testGGUFArtifactsAreExcludedFromSnapshotDownloads() {

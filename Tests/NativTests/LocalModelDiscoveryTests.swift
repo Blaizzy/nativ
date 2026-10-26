@@ -920,33 +920,6 @@ final class LocalModelDiscoveryTests: XCTestCase {
         XCTAssertFalse(reranker.isEligibleForLanguageModelPicker)
     }
 
-    func testDecisionModelsAreExcludedFromChatIncludingD1Backbone() async throws {
-        for type in ["decider2", "laya", "clef", "d1", "d1_omni"] {
-            try makeDrafterSnapshot(repoID: "test/\(type)", config: ["model_type": type])
-        }
-        try makeDrafterSnapshot(repoID: "test/liquid-decision", config: [
-            "model_type": "lfm2_vl", "vision_config": [:],
-            "architectures": ["Lfm2VlForConditionalGeneration"],
-            "auto_map": ["AutoModel": "modeling_d1.D1Model", "AutoTokenizer": ["CustomTokenizer", NSNull()]],
-        ])
-        try makeDrafterSnapshot(repoID: "test/ordinary-vlm", config: [
-            "model_type": "lfm2_vl", "vision_config": [:],
-            "architectures": ["Lfm2VlForConditionalGeneration"],
-        ])
-        let models = try await LocalModelDiscovery.scan(searchPaths: searchPaths)
-        XCTAssertEqual(models.count, 7)
-        for model in models where model.repoID != "test/ordinary-vlm" {
-            XCTAssertTrue(model.capabilities.contains(.decision), model.repoID)
-            XCTAssertFalse(model.capabilities.contains(.text), model.repoID)
-            XCTAssertFalse(model.isEligibleForLanguageModelPicker, model.repoID)
-            XCTAssertNil(model.onDemandCapability)
-        }
-        let ordinary = try XCTUnwrap(models.first { $0.repoID == "test/ordinary-vlm" })
-        XCTAssertFalse(ordinary.capabilities.contains(.decision))
-        XCTAssertTrue(ordinary.isEligibleForLanguageModelPicker)
-        XCTAssertNil(ordinary.onDemandCapability)
-    }
-
     private func write(_ string: String, to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),

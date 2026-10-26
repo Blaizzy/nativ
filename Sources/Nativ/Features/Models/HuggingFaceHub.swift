@@ -173,11 +173,6 @@ enum HuggingFaceCapabilityFilter {
             tags: ["embedding", "embeddings", "sentence-transformers"]
         ),
         Rule(
-            capability: .decision,
-            pipelineTags: [],
-            tags: ["decision", "decision-model"]
-        ),
-        Rule(
             capability: .reranking,
             pipelineTags: ["text-ranking"],
             tags: ["reranker", "reranking"],
@@ -253,8 +248,7 @@ enum HuggingFaceCapabilityFilter {
     static func resolveCapabilities(
         pipelineTag: String?,
         tags: [String],
-        configIdentifiesDrafter: Bool,
-        runtimeCapabilities: Set<NativModelCapability> = []
+        configIdentifiesDrafter: Bool
     ) -> Set<LocalModelCapability> {
         let pipeline = pipelineTag?.lowercased() ?? ""
         let normalizedTags = tags.map { $0.lowercased() }
@@ -269,12 +263,6 @@ enum HuggingFaceCapabilityFilter {
                 )
             }.map(\.capability)
         )
-        if runtimeCapabilities.contains(.decision) {
-            capabilities.insert(.decision)
-        }
-        if capabilities.contains(.decision) {
-            capabilities.subtract([.text, .reasoning, .tools])
-        }
         if configIdentifiesDrafter {
             capabilities.insert(.drafter)
         }
@@ -290,8 +278,7 @@ enum HuggingFaceCapabilityFilter {
 }
 
 enum HuggingFaceDownloadFilePolicy {
-    /// Also skip optional GGUF artifacts when repository metadata does not
-    /// identify them or a download is requested outside Discover.
+    /// Skip GGUF files while retaining usable weights in mixed-format repositories.
     static let ignoredPatterns = ["*.[gG][gG][uU][fF]"]
 
     static var pythonListLiteral: String {
@@ -324,8 +311,13 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
     let capabilities: Set<LocalModelCapability>
     let drafterKind: String?
 
-    var isGGUF: Bool {
-        id.localizedCaseInsensitiveContains("gguf")
+    var isGGUFOnly: Bool {
+        // Hub format tags describe files, not an exclusive repository format.
+        // Mixed repositories still provide safetensors that Nativ can download.
+        guard !tags.contains(where: { $0.lowercased() == "safetensors" }) else {
+            return false
+        }
+        return id.localizedCaseInsensitiveContains("gguf")
             || libraryName?.localizedCaseInsensitiveContains("gguf") == true
             || tags.contains { $0.localizedCaseInsensitiveContains("gguf") }
     }
@@ -396,11 +388,7 @@ struct HuggingFaceModel: Decodable, Identifiable, Equatable, Sendable {
         capabilities = HuggingFaceCapabilityFilter.resolveCapabilities(
             pipelineTag: pipelineTag,
             tags: tags,
-            configIdentifiesDrafter: drafterKind != nil,
-            runtimeCapabilities: ModelPrimaryTaskResolver.runtimeCapabilities(
-                modelType: supportConfiguration?.modelType,
-                autoModel: supportConfiguration?.autoModel
-            )
+            configIdentifiesDrafter: drafterKind != nil
         )
     }
 }

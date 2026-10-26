@@ -480,8 +480,6 @@ public struct NativLatestRequest: Decodable {
 public struct NativRuntimeSnapshot: Decodable {
     public let loadedModel: String?
     public let loadedAdapter: String?
-    public let loadedDecisionModel: String?
-    public let decisionModelLoadError: String?
     public let loadedContextSize: Int?
     public let configuredContextLimit: Int?
     public let effectiveContextLimit: Int?
@@ -498,10 +496,6 @@ public struct NativRuntimeSnapshot: Decodable {
     enum CodingKeys: String, CodingKey {
         case loadedModel = "loaded_model"
         case loadedAdapter = "loaded_adapter"
-        case loadedModels = "loaded_models"
-        case preloadFailures = "preload_failures"
-        case loadedDecisionModel = "loaded_decision_model"
-        case decisionModelLoadError = "decision_model_load_error"
         case loadedContextSize = "loaded_context_size"
         case configuredContextLimit = "configured_context_limit"
         case effectiveContextLimit = "effective_context_limit"
@@ -515,8 +509,6 @@ public struct NativRuntimeSnapshot: Decodable {
     public init() {
         loadedModel = nil
         loadedAdapter = nil
-        loadedDecisionModel = nil
-        decisionModelLoadError = nil
         loadedContextSize = nil
         configuredContextLimit = nil
         effectiveContextLimit = nil
@@ -531,18 +523,6 @@ public struct NativRuntimeSnapshot: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         loadedModel = try container.decodeIfPresent(String.self, forKey: .loadedModel)
         loadedAdapter = try container.decodeIfPresent(String.self, forKey: .loadedAdapter)
-        let loadedModels = try container.decodeIfPresent([String: [String: MLXJSONValue]].self, forKey: .loadedModels)
-        let preloadFailures = try container.decodeIfPresent([String: [String: MLXJSONValue]].self, forKey: .preloadFailures)
-        if case .string(let modelID) = loadedModels?["decision"]?["model"] {
-            loadedDecisionModel = modelID
-        } else {
-            loadedDecisionModel = try container.decodeIfPresent(String.self, forKey: .loadedDecisionModel)
-        }
-        if case .string(let error) = preloadFailures?["decision"]?["error"] {
-            decisionModelLoadError = error
-        } else {
-            decisionModelLoadError = try container.decodeIfPresent(String.self, forKey: .decisionModelLoadError)
-        }
         loadedContextSize = try container.decodeIfPresent(Int.self, forKey: .loadedContextSize)
         configuredContextLimit = try container.decodeIfPresent(Int.self, forKey: .configuredContextLimit)
         effectiveContextLimit = try container.decodeIfPresent(Int.self, forKey: .effectiveContextLimit)
@@ -669,159 +649,6 @@ public final class NativMetricsClient: @unchecked Sendable {
         }
 
         return try JSONDecoder().decode(NativMetrics.self, from: data)
-    }
-}
-
-public enum NativDecisionError: Error, LocalizedError {
-    case invalidRequest
-    case invalidResponse
-    case httpStatus(Int, String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .invalidRequest:
-            "A decision request needs context or media and at least one question."
-        case .invalidResponse:
-            "The decision response did not match the requested questions or valid answer ranges."
-        case .httpStatus(let status, let body):
-            NativServerErrorMessage.endpointFailure(
-                endpoint: "Decision endpoint", statusCode: status, responseBody: body
-            )
-        }
-    }
-}
-
-public struct NativDecisionQuestion: Encodable, Sendable {
-    public enum Kind: String, Encodable, Sendable {
-        case choice, score, bool
-        case multiLabel = "multi_label"
-    }
-
-    public var type: Kind
-    public var instructions: String
-    public var criteria: MLXJSONValue?
-    public var threshold: Double?
-
-    public init(type: Kind = .choice, instructions: String, criteria: MLXJSONValue? = nil, threshold: Double? = nil) {
-        self.type = type
-        self.instructions = instructions
-        self.criteria = criteria
-        self.threshold = threshold
-    }
-}
-
-public struct NativDecisionResponse: Codable, Sendable {
-    public struct Answer: Codable, Sendable {
-        public let type: String
-        public let value: MLXJSONValue
-        public let probabilities: [String: Double]?
-        public let probability: Double?
-        public let scores: [String: Double]?
-        public let metadata: MLXJSONValue?
-    }
-
-    public let model: String
-    public let answers: [String: Answer]
-    public let usage: [String: Int]?
-
-    func validate(questions: [String: NativDecisionQuestion]) throws {
-        guard Set(answers.keys) == Set(questions.keys) else { throw NativDecisionError.invalidResponse }
-        for (key, question) in questions {
-            guard let answer = answers[key], answer.type == question.type.rawValue else {
-                throw NativDecisionError.invalidResponse
-            }
-            let labels: [String]
-            switch question.criteria {
-            case .array(let values): labels = values.compactMap { if case .string(let label) = $0 { label } else { nil } }
-            case .object(let values): labels = Array(values.keys)
-            default: labels = []
-            }
-            let validValue: Bool
-            let probabilityLabels: Set<String>
-            switch (question.type, answer.value) {
-            case (.choice, .string(let value)):
-                validValue = labels.contains(value)
-                probabilityLabels = Set(labels)
-            case (.bool, .bool):
-                validValue = true
-                probabilityLabels = ["false", "true"]
-            case (.score, .number(let value)):
-                let count: Int
-                if case .array(let values) = question.criteria { count = values.count } else { count = 0 }
-                validValue = count >= 2 && value.isFinite && value >= 0 && value <= Double(count - 1)
-                probabilityLabels = Set((0..<count).map(String.init))
-            case (.multiLabel, .array(let values)):
-                let selected = values.compactMap { if case .string(let label) = $0 { label } else { nil } }
-                validValue = selected.count == values.count && Set(selected).count == selected.count && Set(selected).isSubset(of: Set(labels))
-                probabilityLabels = Set(labels)
-            default:
-                throw NativDecisionError.invalidResponse
-            }
-            let distributions = [answer.probabilities, answer.scores].compactMap { $0 }
-            guard validValue,
-                  answer.probability.map({ $0.isFinite && (0...1).contains($0) }) ?? true,
-                  distributions.allSatisfy({ distribution in
-                      Set(distribution.keys).isSubset(of: probabilityLabels)
-                          && distribution.values.allSatisfy { $0.isFinite && (0...1).contains($0) }
-                  }) else { throw NativDecisionError.invalidResponse }
-        }
-    }
-}
-
-public struct NativDecisionClient: Sendable {
-    private let baseURL: URL
-    private let apiKey: String?
-    private let timeout: TimeInterval
-    private let session: URLSession
-
-    public init(baseURL: URL, apiKey: String? = nil, timeout: TimeInterval = 30, session: URLSession = .shared) {
-        self.baseURL = baseURL
-        self.apiKey = apiKey
-        self.timeout = timeout
-        self.session = session
-    }
-
-    public func predict(
-        model: String? = nil,
-        state: MLXJSONValue? = nil,
-        questions: [String: NativDecisionQuestion],
-        images: [String]? = nil,
-        audio: String? = nil
-    ) async throws -> NativDecisionResponse {
-        guard !questions.isEmpty,
-              (state != nil && state != .null) || images?.isEmpty == false || audio?.isEmpty == false else {
-            throw NativDecisionError.invalidRequest
-        }
-        try Task.checkCancellation()
-        var request = URLRequest(url: baseURL.appendingPathComponent("v1/decisions"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        NativServerAuthorization.authorize(&request, apiKey: apiKey)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        request.httpBody = try encoder.encode(RequestBody(
-            model: model, state: state, questions: questions, images: images, audio: audio
-        ))
-        let (data, response) = try await session.data(for: request)
-        try Task.checkCancellation()
-        guard let response = response as? HTTPURLResponse else {
-            throw NativDecisionError.invalidResponse
-        }
-        guard (200..<300).contains(response.statusCode) else {
-            throw NativDecisionError.httpStatus(response.statusCode, String(decoding: data, as: UTF8.self))
-        }
-        let result = try JSONDecoder().decode(NativDecisionResponse.self, from: data)
-        try result.validate(questions: questions)
-        return result
-    }
-
-    private struct RequestBody: Encodable {
-        let model: String?
-        let state: MLXJSONValue?
-        let questions: [String: NativDecisionQuestion]
-        let images: [String]?
-        let audio: String?
     }
 }
 

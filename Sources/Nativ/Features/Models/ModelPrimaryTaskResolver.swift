@@ -1,5 +1,4 @@
 import Foundation
-import NativServerKit
 
 enum ModelPrimaryTask: Equatable, Sendable {
     case language
@@ -7,13 +6,12 @@ enum ModelPrimaryTask: Equatable, Sendable {
     case textToSpeech
     case speechToText
     case unknown
-    case decision
 
     var isLanguageCapable: Bool {
         switch self {
         case .language, .audioLanguage:
             true
-        case .textToSpeech, .speechToText, .unknown, .decision:
+        case .textToSpeech, .speechToText, .unknown:
             false
         }
     }
@@ -22,35 +20,19 @@ enum ModelPrimaryTask: Equatable, Sendable {
         switch self {
         case .textToSpeech, .speechToText:
             true
-        case .language, .audioLanguage, .unknown, .decision:
+        case .language, .audioLanguage, .unknown:
             false
         }
     }
 
     func includesLanguageCapability(fallbackMatch: Bool) -> Bool {
-        switch self {
-        case .language, .audioLanguage: true
-        case .unknown: fallbackMatch
-        case .textToSpeech, .speechToText, .decision: false
-        }
+        isLanguageCapable || (!isExclusiveSpeech && fallbackMatch)
     }
 }
 
 enum ModelPrimaryTaskResolver {
-    private static let registry = try? Nativ.modelTypeRegistry()
-
-    static func runtimeCapabilities(modelType: String?, autoModel: String? = nil) -> Set<NativModelCapability> {
-        registry?.capabilities(for: modelType ?? "", autoModel: autoModel) ?? []
-    }
-
     static func resolve(model: String, config: [String: Any]) -> ModelPrimaryTask {
         let modelType = normalized(config["model_type"] as? String)
-        if runtimeCapabilities(
-            modelType: modelType,
-            autoModel: (config["auto_map"] as? [String: Any])?["AutoModel"] as? String
-        ).contains(.decision) {
-            return .decision
-        }
         let architectures = (config["architectures"] as? [String] ?? [])
             .map(normalized)
         let modelName = normalized(

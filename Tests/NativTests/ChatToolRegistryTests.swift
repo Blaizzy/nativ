@@ -1451,3 +1451,153 @@ final class ChatTranscriptMessageCodableTests: XCTestCase {
         XCTAssertEqual(decoded, original)
     }
 }
+
+@MainActor
+final class ChatAccessModeTests: XCTestCase {
+    func testApprovalMatrix() {
+        let cases: [(ChatToolOperation, [Bool])] = [
+            (.routine, [false, false, false]), (.workPane, [true, false, false]),
+            (.sensitive, [true, true, false]), (.command, [true, true, true]),
+            (.external, [false, true, false]),
+        ]
+        for (operation, expected) in cases {
+            XCTAssertEqual(ChatAccessMode.allCases.map { $0.requiresApproval(for: operation) }, expected)
+        }
+    }
+
+    func testWorkActionsAndExternalRoutesAreClassifiedIndependentlyOfMode() {
+        for action: ChatWorkRequest.Action in [.list, .attachments, .read, .create, .update, .open,
+            .search, .inspect, .navigate, .back, .forward, .reload, .interrupt] {
+            XCTAssertEqual(ChatToolOperation.work(action), .workPane)
+        }
+        for action: ChatWorkRequest.Action in [.click, .type, .upload] {
+            XCTAssertEqual(ChatToolOperation.work(action), .sensitive)
+        }
+        XCTAssertEqual(ChatToolOperation.work(.run), .command)
+        func classify(_ name: String, _ kind: CustomToolKind? = nil, mcp: Bool = false,
+                      filesystem: Bool = false, protected: Bool = false) -> ChatToolOperation {
+            ChatToolOperation.classify(toolName: name, customKind: kind, workAction: nil,
+                                      isMCP: mcp, usesNativeFilesystem: filesystem, protectedWrite: protected)
+        }
+        XCTAssertEqual(classify("terminal"), .command)
+        XCTAssertEqual(classify("custom__script", .script), .command)
+        XCTAssertEqual(classify("custom__endpoint", .endpoint), .external)
+        XCTAssertEqual(classify("switch_model"), .sensitive)
+        XCTAssertEqual(classify("patch", protected: true), .sensitive)
+        XCTAssertEqual(classify("write_file"), .routine)
+        XCTAssertEqual(classify("mcp__read", mcp: true), .external)
+        XCTAssertEqual(classify("mcp__write", mcp: true, filesystem: true), .routine)
+        XCTAssertEqual(classify("mcp__write", mcp: true, filesystem: true, protected: true), .sensitive)
+    }
+
+    func testApprovalGatePreventsDispatchUntilConfirmedAndStopsDeniedOrCancelledCalls() async throws {
+        for operation: ChatToolOperation in [.command, .external, .sensitive] {
+            for resolution in ["confirm", "deny", "cancel", "confirmThenCancel"] {
+                let gate = ChatToolConsentGate()
+                let id = UUID()
+                var didExecute = false
+                var didAsk = false
+                let task = Task { @MainActor in
+                    let outcome = await gate.authorize(operation, mode: .medium, id: id, sessionID: UUID()) {
+                        didAsk = true
+                    }
+                    guard outcome == .approved else { return outcome }
+                    try Task.checkCancellation()
+                    // Exercise the real dispatcher with an injected work executor; no external effects.
+                    var context = ChatToolExecutionContext(imageGenerationModelID: nil,
+                        baseURL: URL(string: "http://localhost:1")!, apiKey: nil, imageReferences: [],
+                        modelSearchPath: "", additionalModelSearchPaths: [])
+                    context.workAction = { _ in didExecute = true; return "{}" }
+                    _ = try await ChatToolDispatcher.execute(
+                        call: MLXChatToolCall(id: "test", function: MLXChatFunctionCall(
+                            name: "chat_work", arguments: #"{"action":"list"}"#)), context: context)
+                    return outcome
+                }
+                for _ in 0..<200 where gate.pendingCount == 0 {
+                    try await Task.sleep(for: .milliseconds(5))
+                }
+                XCTAssertTrue(didAsk)
+                XCTAssertEqual(gate.pendingCount, 1)
+                XCTAssertFalse(didExecute)
+                switch resolution {
+                case "confirm": gate.confirm(id)
+                case "deny": gate.deny(id)
+                case "confirmThenCancel": gate.confirm(id); task.cancel()
+                default: task.cancel()
+                }
+                let outcome = try await task.value
+                XCTAssertEqual(outcome, resolution == "confirm" ? .approved : resolution == "deny" ? .declined : .cancelled)
+                XCTAssertEqual(didExecute, resolution == "confirm")
+                XCTAssertEqual(gate.pendingCount, 0)
+            }
+        }
+    }
+
+    func testAutomaticAndAlreadyCancelledAuthorizationNeverPrompt() async {
+        let gate = ChatToolConsentGate()
+        for mode in ChatAccessMode.allCases {
+            for operation in ChatToolOperation.allCases where !mode.requiresApproval(for: operation) {
+                let outcome = await gate.authorize(operation, mode: mode, id: UUID(), sessionID: UUID()) {
+                    XCTFail("Automatic operations must not prompt")
+                }
+                XCTAssertEqual(outcome, .approved)
+            }
+        }
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await gate.authorize(.routine, mode: .fullAccess, id: UUID(), sessionID: UUID()) {
+                XCTFail("Cancelled requests must not prompt")
+            }
+        }
+        let cancelled = await task.value
+        XCTAssertEqual(cancelled, .cancelled)
+        XCTAssertEqual(gate.pendingCount, 0)
+    }
+
+    func testComposerModePersistsPerChat() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ChatSessionStore(chatDirectory: root)
+        let first = ChatSession(id: UUID(), title: "First", createdAt: Date(), updatedAt: Date(),
+                                messages: [ChatTranscriptMessage(role: .user, content: "First")])
+        let second = ChatSession(id: UUID(), title: "Second", createdAt: Date(), updatedAt: Date(),
+                                 messages: [ChatTranscriptMessage(role: .user, content: "Second")])
+        XCTAssertTrue(store.saveSession(first))
+        XCTAssertTrue(store.saveSession(second))
+        let chat = ChatViewModel(sessionDirectory: root)
+        for _ in 0..<1_000 where chat.isLoadingSessions {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertFalse(chat.isLoadingSessions)
+        chat.selectSession(first.id)
+        XCTAssertEqual(chat.currentAccessMode, .standard)
+        chat.setAccessMode(.fullAccess)
+        XCTAssertEqual(chat.currentAccessMode, .fullAccess)
+        XCTAssertEqual(store.loadSessions().first(where: { $0.id == first.id })?.accessMode, .fullAccess)
+        chat.selectSession(second.id)
+        XCTAssertEqual(chat.currentAccessMode, .standard)
+        chat.selectSession(first.id)
+        XCTAssertEqual(chat.currentAccessMode, .fullAccess)
+        chat.setAccessMode(.medium)
+        XCTAssertEqual(chat.currentAccessMode, .medium)
+        XCTAssertEqual(store.loadSessions().first(where: { $0.id == first.id })?.accessMode, .medium)
+        chat.selectSession(second.id)
+        XCTAssertEqual(chat.currentAccessMode, .standard)
+        chat.selectSession(first.id)
+        XCTAssertEqual(chat.currentAccessMode, .medium)
+        chat.setAccessMode(.standard)
+        XCTAssertEqual(store.loadSessions().first(where: { $0.id == first.id })?.accessMode, .standard)
+    }
+
+
+    func testLegacySessionDefaultsToStandardAndFullAccessRoundTrips() throws {
+        let json = #"{"id":"11111111-1111-1111-1111-111111111111","title":"Legacy","createdAt":0,"updatedAt":0,"messages":[]}"#
+        var session = try JSONDecoder().decode(ChatSession.self, from: Data(json.utf8))
+        XCTAssertEqual(session.accessMode ?? .standard, .standard)
+        for mode in ChatAccessMode.allCases {
+            session.accessMode = mode
+            let restored = try JSONDecoder().decode(ChatSession.self, from: JSONEncoder().encode(session))
+            XCTAssertEqual(restored.accessMode, mode)
+        }
+    }
+}

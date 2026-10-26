@@ -5,6 +5,45 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testCachingAndCompactionDefaultsPreserveExplicitOptOuts() throws {
+        for settings in [NativSettings(), try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))] {
+            XCTAssertTrue(settings.prefixCachingEnabled)
+            XCTAssertTrue(settings.compactionEnabled)
+            XCTAssertEqual(settings.launchEnvironment["APC_ENABLED"], "1")
+        }
+        let optedOut = NativSettings(compactionEnabled: false, prefixCachingEnabled: false)
+        let restored = try PropertyListDecoder().decode(NativSettings.self, from: PropertyListEncoder().encode(optedOut))
+        XCTAssertFalse(restored.prefixCachingEnabled)
+        XCTAssertFalse(restored.compactionEnabled)
+    }
+
+    func testLiveInferenceSettingsDoNotRequireRestart() {
+        let original = NativSettings()
+        let changed = NativSettings(
+            maxTokens: 4096, maxKVSize: 32768, compactionEnabled: false,
+            kvQuantizationEnabled: true, kvBits: 3.5, kvGroupSize: 128,
+            quantizedKVStart: 64, turboQuantEnabled: true,
+            speculativeDecodingEnabled: true, draftModelID: "org/draft", draftKind: "mtp",
+            prefixCachingEnabled: false, prefixCacheBlocks: 4096, prefixCacheBlockSize: 32
+        )
+        XCTAssertTrue(original.hasSameLaunchConfiguration(as: changed))
+        XCTAssertTrue(changed.hasSameLaunchConfiguration(as: original))
+        XCTAssertEqual(changed.runtimeSettings["apc_enabled"], .bool(false))
+        XCTAssertEqual(changed.runtimeSettings["apc_num_blocks"], .number(4096))
+        XCTAssertEqual(changed.runtimeSettings["apc_block_size"], .number(32))
+        XCTAssertEqual(changed.runtimeSettings["kv_bits"], .number(3.5))
+        XCTAssertEqual(changed.runtimeSettings["kv_quant_scheme"], .string("turboquant"))
+        XCTAssertEqual(changed.runtimeSettings["max_kv_size"], .number(32768))
+        XCTAssertEqual(changed.runtimeSettings["draft_model"], .string("org/draft"))
+        XCTAssertEqual(original.runtimeSettings["kv_bits"], .null)
+        XCTAssertEqual(original.runtimeSettings["draft_model"], .null)
+        XCTAssertEqual(original.runtimeSettings["max_kv_size"], .number(0))
+        XCTAssertNil(original.runtimeSettings["max_tokens"])
+        var blockSizeChanged = changed
+        blockSizeChanged.draftBlockSize = 8
+        XCTAssertFalse(original.hasSameLaunchConfiguration(as: blockSizeChanged))
+    }
+
     func testFormattingPreferencesRoundTripIndependentlyAndInjectOnlySelectedPrompts() throws {
         for emoji in NativPersonalization.EmojiUsage.allCases {
             for markdown in NativPersonalization.MarkdownUsage.allCases {
@@ -266,22 +305,6 @@ final class NativSettingsTests: XCTestCase {
         XCTAssertFalse(settings.launchArguments.contains("--tts-model"))
         XCTAssertFalse(settings.launchArguments.contains("--stt-model"))
         XCTAssertFalse(settings.launchArguments.contains("--embedding-model"))
-    }
-
-    func testDecisionModelSelectionPersistsSeparatelyFromChat() throws {
-        var settings = NativSettings(languageModelID: "org/chat")
-        settings.setModelID("  org/decision  ", for: .decision)
-        let normalized = settings.normalized()
-        let decoded = try JSONDecoder().decode(NativSettings.self, from: JSONEncoder().encode(normalized))
-        XCTAssertEqual(decoded.modelID(for: .decision), "org/decision")
-        XCTAssertEqual(decoded.languageModelID, "org/chat")
-        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--decision-model", "org/decision"))
-        XCTAssertTrue(decoded.launchArguments.containsAdjacent("--model", "org/chat"))
-        XCTAssertFalse(decoded.hasSameLaunchConfiguration(as: NativSettings(languageModelID: "org/chat")))
-        settings.setModelID(" ", for: .decision)
-        XCTAssertFalse(settings.launchArguments.contains("--decision-model"))
-        let legacy = try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))
-        XCTAssertNil(legacy.decisionModelID)
     }
 
     func testEmbeddingModelSlotRoundTripsAndRequiresRestart() throws {
@@ -1493,239 +1516,4 @@ private final class ChatTimeoutHTTPFixture {
 
 private enum SocketTestError: Error {
     case operation(String, Int32)
-}
-
-final class NativDecisionClientTests: XCTestCase {
-    private func client(path: String = "") -> NativDecisionClient {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DecisionURLProtocol.self]
-        return NativDecisionClient(
-            baseURL: URL(string: "https://decision.test/\(path)")!, apiKey: " test-key ",
-            session: URLSession(configuration: configuration)
-        )
-    }
-
-    func testDecisionRequestAndTypedResponse() async throws {
-        let response = try await client().predict(
-            model: "test/decision", state: .object(["action": .string("Next page")]),
-            questions: ["permission": .init(instructions: "Classify the action", criteria: .array([
-                .string("allow"), .string("ask"), .string("deny"),
-            ]))]
-        )
-        XCTAssertEqual(response.model, "test/decision")
-        XCTAssertEqual(response.answers["permission"]?.value, .string("allow"))
-        XCTAssertEqual(response.answers["permission"]?.probabilities?["allow"], 0.9)
-    }
-
-    func testHTTPAndMissingAnswersAreErrors() async {
-        for path in ["failure", "missing"] {
-            do {
-                _ = try await client(path: path).predict(
-                    state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
-                )
-                XCTFail("Expected an error for \(path)")
-            } catch let error as NativDecisionError {
-                switch (path, error) {
-                case ("failure", .httpStatus(400, _)), ("missing", .invalidResponse): break
-                default: XCTFail("Unexpected error: \(error)")
-                }
-            } catch { XCTFail("Unexpected error: \(error)") }
-        }
-    }
-
-    func testCancelledRequestDoesNotReachTransport() async {
-        let decisionClient = client(path: "cancelled")
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return try await decisionClient.predict(
-                state: .string("context"), questions: ["permission": .init(type: .bool, instructions: "Proceed?")]
-            )
-        }
-        do {
-            _ = try await task.value
-            XCTFail("Expected cancellation")
-        } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
-    }
-
-    func testEmptyRequestIsRejected() async {
-        do {
-            _ = try await client().predict(questions: [:])
-            XCTFail("Expected invalid request")
-        } catch NativDecisionError.invalidRequest {} catch { XCTFail("\(error)") }
-    }
-
-    func testDecisionResponseValidationRejectsInvalidTypesLabelsAndRanges() throws {
-        let choice = NativDecisionQuestion(instructions: "Choose", criteria: .array([.string("A"), .string("B")]))
-        let score = NativDecisionQuestion(type: .score, instructions: "Rate", criteria: .array([.string("Low"), .string("High")]))
-        let boolean = NativDecisionQuestion(type: .bool, instructions: "Yes?")
-        let cases: [(NativDecisionQuestion, String)] = [
-            (choice, #"{"type":"bool","value":true}"#),
-            (choice, #"{"type":"choice","value":"C"}"#),
-            (choice, #"{"type":"choice","value":"A","probabilities":{"A":1.2}}"#),
-            (choice, #"{"type":"choice","value":"A","probabilities":{"C":0.5}}"#),
-            (score, #"{"type":"score","value":2}"#),
-            (score, #"{"type":"score","value":-1}"#),
-            (boolean, #"{"type":"bool","value":"true"}"#),
-            (boolean, #"{"type":"bool","value":true,"probability":-0.2}"#),
-        ]
-        for (question, answer) in cases {
-            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
-            let response = try JSONDecoder().decode(NativDecisionResponse.self, from: data)
-            XCTAssertThrowsError(try response.validate(questions: ["answer": question]))
-        }
-        for (question, answer) in [
-            (score, #"{"type":"score","value":0.75,"probabilities":{"0":0.25,"1":0.75}}"#),
-            (boolean, #"{"type":"bool","value":true,"probability":0.9}"#),
-        ] {
-            let data = Data("{\"model\":\"test\",\"answers\":{\"answer\":\(answer)}}".utf8)
-            XCTAssertNoThrow(try JSONDecoder().decode(NativDecisionResponse.self, from: data).validate(questions: ["answer": question]))
-        }
-    }
-
-    func testDecisionPreloadReadsRuntimeModelRegistry() throws {
-        let loaded = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
-            #"{"loaded_model":null,"loaded_models":{"decision":{"model":"LiquidAI/d1-3B","adapter":null,"model_kind":"decision"},"stt":{"model":"test/speech","adapter":null}},"preload_failures":{}}"#.utf8
-        ))
-        XCTAssertEqual(loaded.loadedDecisionModel, "LiquidAI/d1-3B")
-        XCTAssertNil(loaded.loadedModel)
-        XCTAssertNil(loaded.decisionModelLoadError)
-        let failed = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
-            #"{"loaded_models":{},"preload_failures":{"decision":{"model":"test/decision","error":"Out of memory"}}}"#.utf8
-        ))
-        XCTAssertNil(failed.loadedDecisionModel)
-        XCTAssertEqual(failed.decisionModelLoadError, "Out of memory")
-    }
-
-    func testDecisionPreloadMetricsRemainBackwardCompatible() throws {
-        let legacy = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data("{}".utf8))
-        XCTAssertNil(legacy.loadedDecisionModel)
-        XCTAssertNil(legacy.decisionModelLoadError)
-        let failure = try JSONDecoder().decode(NativRuntimeSnapshot.self, from: Data(
-            #"{"loaded_model":"test/chat","decision_model_load_error":"Cannot load decisions"}"#.utf8
-        ))
-        XCTAssertEqual(failure.loadedModel, "test/chat")
-        XCTAssertEqual(failure.decisionModelLoadError, "Cannot load decisions")
-    }
-}
-
-private final class DecisionURLProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func stopLoading() {}
-
-    override func startLoading() {
-        XCTAssertEqual(request.httpMethod, "POST")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-        let path = request.url!.path
-        let body: String
-        let status: Int
-        if path.hasPrefix("/failure/") {
-            body = #"{"detail":"Unsupported decision type"}"#
-            status = 400
-        } else if path.hasPrefix("/missing/") {
-            body = #"{"model":"test/decision","answers":{}}"#
-            status = 200
-        } else {
-            XCTAssertEqual(path, "/v1/decisions")
-            if let stream = request.httpBodyStream {
-                stream.open()
-                defer { stream.close() }
-                var data = Data()
-                var buffer = [UInt8](repeating: 0, count: 1024)
-                while stream.hasBytesAvailable {
-                    let count = stream.read(&buffer, maxLength: buffer.count)
-                    if count <= 0 { break }
-                    data.append(contentsOf: buffer.prefix(count))
-                }
-                let payload = try? JSONDecoder().decode(MLXJSONValue.self, from: data)
-                XCTAssertEqual(payload, .object([
-                    "model": .string("test/decision"), "state": .object(["action": .string("Next page")]),
-                    "questions": .object(["permission": .object([
-                        "type": .string("choice"), "instructions": .string("Classify the action"),
-                        "criteria": .array([.string("allow"), .string("ask"), .string("deny")]),
-                    ])]),
-                ]))
-            } else {
-                XCTFail("Missing request body")
-            }
-            body = #"{"model":"test/decision","answers":{"permission":{"type":"choice","value":"allow","probabilities":{"allow":0.9,"ask":0.08,"deny":0.02}}},"usage":{"input_tokens":42,"output_tokens":0}}"#
-            status = 200
-        }
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(
-            url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil
-        )!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
-        client?.urlProtocolDidFinishLoading(self)
-    }
-}
-
-@MainActor
-final class DecisionRequestComposerTests: XCTestCase {
-    func testValidationRequiresContextQuestionAndDistinctChoices() {
-        let composer = DecisionRequestComposer()
-        XCTAssertNotNil(composer.validationMessage)
-        composer.context = "A customer asks about delivery."
-        composer.question = "Which department?"
-        composer.choices = "Sales\nSales"
-        XCTAssertNotNil(composer.validationMessage)
-        composer.choices = "Sales\nSupport"
-        XCTAssertNil(composer.validationMessage)
-        composer.answerType = .bool
-        composer.choices = ""
-        XCTAssertNil(composer.validationMessage)
-    }
-
-    func testRequestUsesTypedContextAndOrderedScale() async throws {
-        let composer = DecisionRequestComposer()
-        composer.context = "The delivery arrived a day late."
-        composer.question = "Rate the severity."
-        composer.answerType = .score
-        composer.choices = "Low\nMedium\nHigh"
-        let finished = expectation(description: "Request completed")
-        composer.run { state, question in
-            XCTAssertEqual(state, .string(composer.context))
-            XCTAssertEqual(question.type, .score)
-            XCTAssertEqual(question.criteria, .array([.string("Low"), .string("Medium"), .string("High")]))
-            defer { finished.fulfill() }
-            return try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
-                #"{"model":"fixture","answers":{"answer":{"type":"score","value":1}}}"#.utf8))
-        }
-        await fulfillment(of: [finished], timeout: 2)
-        await Task.yield()
-        XCTAssertEqual(composer.result?.answers["answer"]?.value, .number(1))
-        XCTAssertEqual(composer.resultChoices, ["Low", "Medium", "High"])
-        XCTAssertFalse(composer.isRunning)
-    }
-
-    func testCancellationKeepsBusyUntilWorkerCompletesAndDiscardsResult() async throws {
-        let composer = DecisionRequestComposer()
-        composer.context = "Context"
-        composer.question = "Question?"
-        composer.answerType = .bool
-        let started = expectation(description: "Worker started")
-        var continuation: CheckedContinuation<NativDecisionResponse, Never>?
-        composer.run { _, _ in
-            await withCheckedContinuation {
-                continuation = $0
-                started.fulfill()
-            }
-        }
-        await fulfillment(of: [started], timeout: 2)
-        composer.cancel()
-        XCTAssertTrue(composer.isRunning)
-        XCTAssertTrue(composer.isCancelling)
-        composer.run { _, _ in
-            XCTFail("A second request must remain blocked")
-            throw CancellationError()
-        }
-        let response = try JSONDecoder().decode(NativDecisionResponse.self, from: Data(
-            #"{"model":"fixture","answers":{"answer":{"type":"bool","value":true}}}"#.utf8))
-        continuation?.resume(returning: response)
-        for _ in 0..<10 where composer.isRunning { await Task.yield() }
-        XCTAssertFalse(composer.isRunning)
-        XCTAssertFalse(composer.isCancelling)
-        XCTAssertNil(composer.result)
-        XCTAssertNil(composer.error)
-    }
 }

@@ -1,0 +1,4 @@
+<!-- Recursive symbol from the official wordmark at https://recursive.com/; cropped to the symbol for a template icon. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="3 3.5 28 28">
+  <path d="M 27.994 15.379 L 27.994 19.238 L 9.234 30.043 L 5.885 28.114 L 5.885 6.503 L 9.234 4.574 Z M 9.501 29.274 L 27.46 18.93 L 27.46 15.994 L 12.05 24.828 L 12.05 13.908 L 9.501 12.358 Z M 6.687 6.657 L 22.098 15.534 L 12.583 21.014 L 12.583 23.907 L 27.192 15.533 L 9.234 5.19 Z M 12.583 20.398 L 17.946 17.309 L 12.583 14.22 Z" fill="#000"/>
+</svg>

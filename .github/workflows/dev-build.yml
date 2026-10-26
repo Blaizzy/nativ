@@ -62,8 +62,12 @@ jobs:
             -only-testing:NativTests/MCPFilesystemSafetyTests \
             -only-testing:NativTests/MCPServerCatalogTests \
             -only-testing:NativTests/ChatProjectStoreTests \
+            -only-testing:NativTests/ChatCompactionTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
+            -only-testing:NativTests/ChatResponseSpeechTests \
+            -only-testing:NativTests/NativAudioSpeechClientTests \
+            -only-testing:NativTests/HuggingFaceCapabilityFilterTests \
             -only-testing:NativTests/SystemTelemetryTests \
             -only-testing:NativTests/SystemMonitorIdentityTests \
             -only-testing:NativTests/SystemMonitorObservationPolicyTests test

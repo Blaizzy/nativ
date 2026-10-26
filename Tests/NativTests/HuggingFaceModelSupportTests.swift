@@ -2,23 +2,6 @@ import NativServerKit
 import XCTest
 
 final class HuggingFaceModelSupportTests: XCTestCase {
-    func testNativeDecisionLoadersAndD1ConfigurationAreSupported() throws {
-        let classifier = try makeClassifier()
-        for payload: [String: Any] in [
-            ["model_type": "laya"],
-            ["model_type": "lfm2_vl", "auto_map": ["AutoModel": "modeling_d1.D1Model", "AutoTokenizer": ["CustomTokenizer", NSNull()]]],
-        ] {
-            XCTAssertEqual(classifier.classify(
-                configuration: try configuration(payload), pipelineTag: "text-classification", tags: []
-            ), .supported)
-        }
-        XCTAssertEqual(classifier.classify(
-            configuration: try configuration([
-                "model_type": "lfm2_vl", "auto_map": ["AutoModel": "other.CustomModel"],
-            ]), pipelineTag: "image-text-to-text", tags: []
-        ), .unknown)
-    }
-
     func testCanonicalAndAliasModelTypesAreSupported() throws {
         let classifier = try makeClassifier()
 
@@ -337,9 +320,6 @@ final class HuggingFaceModelSupportTests: XCTestCase {
                 "aliases": [:],
             ]
         }
-        capabilities[NativModelCapability.decision.rawValue] = [
-            "model_types": ["laya", "d1"], "aliases": [:],
-        ]
         capabilities[NativModelCapability.language.rawValue] = [
             "model_types": ["language-loader"],
             "aliases": ["language-alias": "language-loader"],
@@ -353,7 +333,6 @@ final class HuggingFaceModelSupportTests: XCTestCase {
             "schema_version": 1,
             "package_versions": ["mlx-vlm": "test", "mlx-audio": "test"],
             "capabilities": capabilities,
-            "configuration_aliases": [["model_type": "lfm2_vl", "auto_model_suffix": "D1Model", "loader": "d1"]],
         ])
         let registry = try NativModelTypeRegistry(data: data)
         return HuggingFaceModelSupportClassifier(registry: registry)

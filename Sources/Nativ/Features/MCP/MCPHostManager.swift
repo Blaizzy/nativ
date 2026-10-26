@@ -77,6 +77,14 @@ final class MCPHostManager: ObservableObject {
         route(for: name) != nil
     }
 
+    /// Only this adapter executes locally through Nativ's verified filesystem policy.
+    /// Other servers remain unclassified, regardless of names or server-supplied hints.
+    func usesNativeFilesystemTool(named name: String) -> Bool {
+        guard let route = route(for: name) else { return false }
+        return usesNativeFilesystem(route.connection.config)
+            && MCPFilesystemTools.Tool(rawValue: route.toolName) != nil
+    }
+
     func requiresFileWriteApproval(
         named name: String, argumentsJSON: String?, projectScope: ChatToolScope
     ) -> Bool {

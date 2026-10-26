@@ -101,8 +101,10 @@ final class NativModel: ChatModelSwitchingSurface {
     var settings = NativSettings.load() {
         didSet {
             settings.save()
+            runtimeSettings.setDesired(settings.runtimeSettings)
         }
     }
+    let runtimeSettings = NativRuntimeSettingsController()
 
     var menuIsOpen = false
     var onMenuStateChanged: (() -> Void)?
@@ -395,37 +397,6 @@ final class NativModel: ChatModelSwitchingSurface {
         return settingsAppliedAtServerStart.serverBaseURL
     }
 
-    func predictDecision(modelID: String, state: MLXJSONValue,
-                         question: NativDecisionQuestion) async throws -> NativDecisionResponse {
-        guard isRunning, let activeSettings = settingsAppliedAtServerStart, !isModelLoading, !inferenceActivityInProgress else {
-            throw NativDecisionError.httpStatus(409, "Start the server and wait for active inference or model loading to finish.")
-        }
-        let operationID = UUID()
-        guard inferenceActivity?.begin(resource: .decision, windowID: operationID, operationID: operationID) != false else {
-            throw NativDecisionError.httpStatus(409, "Another decision request is already running.")
-        }
-        defer { inferenceActivity?.end(resource: .decision, operationID: operationID) }
-        let operation = Task {
-            do {
-                return try await NativDecisionClient(baseURL: activeSettings.serverBaseURL, apiKey: activeSettings.serverAPIKey, timeout: 120)
-                    .predict(model: modelID, state: state, questions: ["answer": question])
-            } catch {
-                if error is URLError {
-                    let client = NativMetricsClient(baseURL: activeSettings.serverBaseURL)
-                    while server.isRunning && settingsAppliedAtServerStart == activeSettings {
-                        if let snapshot = try? await client.fetchMetrics(apiKey: activeSettings.serverAPIKey),
-                           snapshot.summary.inFlight == 0 { break }
-                        try? await Task.sleep(for: .seconds(1))
-                    }
-                }
-                throw error
-            }
-        }
-        let result = try await operation.value
-        try Task.checkCancellation()
-        return result
-    }
-
     func startServer() {
         var shouldStartMetrics = false
         clearModelLoadFailure()
@@ -505,6 +476,12 @@ final class NativModel: ChatModelSwitchingSurface {
         }
 
         if shouldStartMetrics {
+            if let launched = settingsAppliedAtServerStart {
+                let client = NativRuntimeSettingsClient(baseURL: launched.serverBaseURL, apiKey: launched.serverAPIKey)
+                runtimeSettings.start(applied: launched.runtimeSettings) { values in
+                    try await client.update(values)
+                }
+            }
             startMetricsPolling()
         }
         notifyMenuStateChanged()
@@ -755,7 +732,6 @@ final class NativModel: ChatModelSwitchingSurface {
             == normalizedModelID
             && server.isRunning
             && !settingsRequireRestart
-            && (slot != .decision || normalizedModelID == metrics?.server.loadedDecisionModel)
         guard !selectionIsAlreadyApplied else {
             return
         }
@@ -1257,6 +1233,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     private func stopMetricsPolling(clearSession: Bool) {
+        runtimeSettings.stop()
         prefillCompletionTask?.cancel()
         prefillCompletionTask = nil
         prefillProgress.apply(.reset)
@@ -1295,15 +1272,11 @@ final class NativModel: ChatModelSwitchingSurface {
         metricsStartupGraceUntil = nil
         metricsLoading = false
         modelLoadingProgress = nil
+        runtimeSettings.serverBecameReady()
         recordSessionActivity(
             promptTokenCount: fetchedMetrics.summary.promptTokensTotal,
             generatedTokenCount: fetchedMetrics.summary.generatedTokensTotal
         )
-        if fetchedMetrics.server.loadedDecisionModel == nil,
-           let message = fetchedMetrics.server.decisionModelLoadError,
-           message != metrics?.server.decisionModelLoadError {
-            setModelLoadFailure(modelID: settings.decisionModelID, message: message)
-        }
         metrics = fetchedMetrics
         modelSwitchInProgress = false
         modelSwitchTargetID = nil
