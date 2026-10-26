@@ -915,6 +915,34 @@ final class NativAudioClientTests: XCTestCase {
         }
     }
 
+    func testSpeakerEndpointsWithRealServer() async throws {
+        guard let address = ProcessInfo.processInfo.environment["NATIV_AUDIO_TEST_SERVER"],
+              let path = ProcessInfo.processInfo.environment["NATIV_AUDIO_TEST_PCM"] else {
+            throw XCTSkip("Set NATIV_AUDIO_TEST_SERVER and NATIV_AUDIO_TEST_PCM for real-model HTTP validation.")
+        }
+        let client = NativAudioClient(baseURL: try XCTUnwrap(URL(string: address)), timeout: 300)
+        let result = try await client.diarize(pcmURL: URL(fileURLWithPath: path),
+            model: MeetingDiarizer.defaultModelID)
+        XCTAssertEqual(Set(result.segments.map(\.speaker)), Set(0..<8))
+        XCTAssertEqual(result.segments.count, 31)
+        let span = try XCTUnwrap(result.segments.first { $0.end - $0.start > 3.3 })
+        let start = Int(((span.start + 0.15) * 16000).rounded())
+        let end = min(Int(((span.end - 0.15) * 16000).rounded()), start + 10 * 16000)
+        let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        defer { try? file.close() }
+        try file.seek(toOffset: UInt64(start * 4))
+        let pcm = try XCTUnwrap(file.read(upToCount: (end - start) * 4))
+        let excerpt = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: excerpt) }
+        try pcm.write(to: excerpt)
+        let duration = Double(end - start) / 16000
+        let response = try await client.speakerEmbedding(pcmURL: excerpt, windows: [.init(start: 0, end: duration)],
+            model: SpeakerVoiceEmbeddingExtractor.modelID)
+        try SpeakerVoiceEmbedding(modelID: response.model, revision: response.revision,
+            vector: response.embedding, durationSeconds: response.duration).validate()
+        XCTAssertEqual(response.duration, duration, accuracy: 1 / 16000)
+    }
+
     func testSpeakerAnalysisUploadPreservesPCMAndUsesConfiguredServer() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -239,6 +239,9 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioDiarization.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioLibraryFilter.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSpeakerProfile.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSpeakerRecognition.swift
       - path: Sources/Nativ/Features/VoiceCapture/MeetingAudioAnalysis.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioPlaybackState.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioRecordExport.swift

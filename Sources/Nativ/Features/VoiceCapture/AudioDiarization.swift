@@ -13,6 +13,9 @@ struct AudioDiarization: Codable, Equatable, Sendable {
     var speakerTranscript: String?
     var transcriptSegments: [TranscriptSegment]? = nil
     var speakerNames: [String: String]? = nil
+    var speakerProfileIDs: [String: String]? = nil
+    var speakerSuggestions: [String: AudioSpeakerSuggestion]? = nil
+    var dismissedSpeakerSuggestions: [String: [String]]? = nil
 
     struct TranscriptSegment: Codable, Equatable, Sendable {
         let start: Double
@@ -25,6 +28,84 @@ struct AudioDiarization: Codable, Equatable, Sendable {
 
     func hasSameSegmentation(as other: Self) -> Bool {
         modelID == other.modelID && revision == other.revision && segments == other.segments
+    }
+
+    /// Update identity metadata while retaining recovered timings from older recordings.
+    mutating func setProfile(_ profile: AudioSpeakerProfile?, for speakerID: Int) {
+        let slot = String(speakerID)
+        var links = speakerProfileIDs ?? [:], names = speakerNames ?? [:]
+        links[slot] = profile?.id
+        names[slot] = profile?.name
+        speakerProfileIDs = links.isEmpty ? nil : links
+        speakerNames = names.isEmpty ? nil : names
+        speakerSuggestions?[slot] = nil
+        if transcriptSegments == nil, !resolvedTranscriptSegments.isEmpty {
+            transcriptSegments = resolvedTranscriptSegments
+        }
+    }
+
+    /// Backward-compatible presentation for recordings linked before core merging.
+    var groupedByProfile: Self {
+        var firstSpeaker: [String: Int] = [:]
+        var representatives: [Int: Int] = [:]
+        for speaker in speakerIDs {
+            guard let profileID = speakerProfileIDs?[String(speaker)] else { continue }
+            let representative = firstSpeaker[profileID] ?? speaker
+            firstSpeaker[profileID] = representative
+            representatives[speaker] = representative
+        }
+        guard representatives.contains(where: { $0.key != $0.value }) else { return self }
+        var result = Self(modelID: modelID, revision: revision, segments: segments.map {
+            Segment(start: $0.start, end: $0.end, speaker: representatives[$0.speaker] ?? $0.speaker)
+        }, speakerTranscript: speakerTranscript, speakerNames: speakerNames,
+           speakerProfileIDs: speakerProfileIDs, speakerSuggestions: speakerSuggestions,
+           dismissedSpeakerSuggestions: dismissedSpeakerSuggestions)
+        let turns = resolvedTranscriptSegments
+        if transcriptSegments != nil || !turns.isEmpty {
+            result.transcriptSegments = turns.map {
+                TranscriptSegment(start: $0.start, end: $0.end,
+                    speakers: Array(Set($0.speakers.map { representatives[$0] ?? $0 })).sorted(), text: $0.text)
+            }
+        }
+        return result
+    }
+
+    /// Reassign stored speech and transcript turns without changing their text,
+    /// timing or order. The existing participant keeps its recording-wide ID.
+    func mergingSpeakers(_ sources: Set<Int>, into target: Int) throws -> Self {
+        let removed = sources.subtracting([target])
+        guard !removed.isEmpty else { return self }
+        guard speakerIDs.contains(target), removed.isSubset(of: Set(speakerIDs)) else {
+            throw AudioSpeakerProfileError.missingSpeaker
+        }
+        let turns = resolvedTranscriptSegments
+        // A legacy transcript that cannot be parsed must not silently retain
+        // obsolete speaker IDs or lose its text during a merge.
+        guard speakerTranscript?.isEmpty != false || !turns.isEmpty else {
+            throw AudioSpeakerProfileError.invalidTranscriptForMerge
+        }
+        var result = Self(modelID: modelID, revision: revision, segments: segments.map {
+            Segment(start: $0.start, end: $0.end, speaker: removed.contains($0.speaker) ? target : $0.speaker)
+        }, speakerTranscript: speakerTranscript, transcriptSegments: transcriptSegments,
+           speakerNames: speakerNames, speakerProfileIDs: speakerProfileIDs,
+           speakerSuggestions: speakerSuggestions, dismissedSpeakerSuggestions: dismissedSpeakerSuggestions)
+        if transcriptSegments != nil || !turns.isEmpty {
+            result.transcriptSegments = turns.map {
+                TranscriptSegment(start: $0.start, end: $0.end,
+                    speakers: Array(Set($0.speakers.map { removed.contains($0) ? target : $0 })).sorted(), text: $0.text)
+            }
+            result.speakerTranscript = result.transcriptSegments?.map {
+                Chunk(start: $0.start, end: $0.end, speakers: $0.speakers).labeled($0.text)
+            }.joined(separator: "\n\n")
+        }
+        for source in removed {
+            let key = String(source)
+            result.speakerNames?[key] = nil
+            result.speakerProfileIDs?[key] = nil
+            result.speakerSuggestions?[key] = nil
+            result.dismissedSpeakerSuggestions?[key] = nil
+        }
+        return result
     }
 
     /// Timing alone is not a processed meeting. Older completed runs saved
@@ -40,7 +121,7 @@ struct AudioDiarization: Codable, Equatable, Sendable {
     }
 
     var formattedTranscript: String? {
-        let turns = resolvedTranscriptSegments
+        let turns = groupedByProfile.resolvedTranscriptSegments
         guard !turns.isEmpty else { return speakerTranscript }
         return turns.map { turn in
             let label = turn.speakers.isEmpty ? "Unassigned speaker" : turn.speakers.map(speakerName).joined(separator: " + ")
