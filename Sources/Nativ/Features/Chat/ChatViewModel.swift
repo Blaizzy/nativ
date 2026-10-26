@@ -160,6 +160,14 @@ struct ChatPastedTextDraft: Equatable {
 final class ChatViewModel: ObservableObject {
     /// MCP tool host, set by ChatView. Provides MCP tool definitions + execution.
     weak var mcpHost: MCPHostManager?
+    private var agentRegistries: [UUID: ChatAgentRegistry] = [:]
+
+    func agentRegistry(for sessionID: UUID) -> ChatAgentRegistry {
+        if let existing = agentRegistries[sessionID] { return existing }
+        let registry = ChatAgentRegistry()
+        agentRegistries[sessionID] = registry
+        return registry
+    }
     private static let liveDecodeRateRefreshInterval: TimeInterval = 0.25
 
     private struct QueuedChatRequest {
@@ -1701,6 +1709,7 @@ final class ChatViewModel: ObservableObject {
         guard sessionStore.deleteSession(id: sessionID) else {
             throw ChatGitWorktreeError(message: "The chat could not be deleted from disk. Try deleting it again.")
         }
+        agentRegistries.removeValue(forKey: sessionID)?.cancelAll()
         storedSessions.removeAll { $0.id == sessionID }
         workBrowsers.remove(sessionID: sessionID)
         workTerminals.remove(sessionID: sessionID)
@@ -2136,6 +2145,11 @@ final class ChatViewModel: ObservableObject {
 
     func denyToolConsent(_ toolMessageID: UUID) {
         toolConsentGate.deny(toolMessageID)
+    }
+
+    func cancelSpawnedAgent(_ agentID: String) {
+        guard let currentSessionID else { return }
+        agentRegistries[currentSessionID]?.cancel(agentID)
     }
 
     func imageModelSelectionRequest(
@@ -2917,8 +2931,96 @@ final class ChatViewModel: ObservableObject {
             }
 
             var insertionAnchor = assistantMessageID
+            var handledSpawnAgentIndices = Set<Int>()
             for (index, toolCall) in toolCalls.enumerated() {
                 try Task.checkCancellation()
+                if handledSpawnAgentIndices.contains(index) {
+                    continue
+                }
+
+                if toolCall.function?.name == ChatSpawnAgentToolRegistry.toolName,
+                   toolIsAvailable(ChatSpawnAgentToolRegistry.toolName, settings: activeSettings, scope: queuedRequest.toolScope) {
+                    let batch = toolCalls[index...].prefix {
+                        $0.function?.name == ChatSpawnAgentToolRegistry.toolName
+                    }
+                    var batchMessageIDs: [UUID] = []
+                    for (offset, call) in batch.enumerated() {
+                        let toolMessageID = UUID()
+                        guard insertToolMessage(
+                            id: toolMessageID,
+                            call: call,
+                            after: insertionAnchor,
+                            in: queuedRequest.sessionID
+                        ) else {
+                            throw NativChatError.invalidResponse
+                        }
+                        insertionAnchor = toolMessageID
+                        batchMessageIDs.append(toolMessageID)
+                        handledSpawnAgentIndices.insert(index + offset)
+                    }
+
+                    if let worktree = queuedRequest.toolScope.worktree,
+                       worktree.availableRootPath == nil || worktree.availableRootPath != queuedRequest.toolScope.rootPath {
+                        throw ChatGitWorktreeError(message: "The chat worktree is unavailable. Restore its folder before running tools.")
+                    }
+                    var sharedContext = ChatToolExecutionContext(
+                        imageGenerationModelID: activeImageModelID,
+                        baseURL: queuedRequest.settings.serverBaseURL,
+                        apiKey: queuedRequest.settings.serverAPIKey,
+                        imageReferences: [],
+                        modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
+                        additionalModelSearchPaths: queuedRequest.settings.additionalModelSearchPaths,
+                        huggingFaceToken: appModel?.effectiveHuggingFaceToken,
+                        mcpHost: mcpHost,
+                        settings: activeSettings,
+                        spawnAgentParentMessages: Array((sessionMessages(for: queuedRequest.sessionID) ?? []).prefix { $0.id != assistantMessageID }),
+                        agentRegistry: agentRegistry(for: queuedRequest.sessionID)
+                    )
+
+                    sharedContext.fileReadRootPath = queuedRequest.toolScope.isProject
+                        ? queuedRequest.toolScope.fileReadRootPath : activeSettings.fileReadRootPath
+                    sharedContext.fileReadTracker = fileReadTracker
+                    sharedContext.fileSearchTracker = fileSearchTracker
+                    sharedContext.fileWriteRootPath = queuedRequest.toolScope.isProject
+                        ? queuedRequest.toolScope.fileWriteRootPath : activeSettings.fileWriteRootPath
+                    sharedContext.fileOperationRunID = fileOperationRunID
+                    sharedContext.projectScope = queuedRequest.toolScope
+                    sharedContext.subAgentToolDefinitions = availableToolDefinitions(
+                        canEditImage: false, settings: activeSettings, scope: queuedRequest.toolScope)
+                    sharedContext.subAgentSystemPrompt = Self.systemPrompt(
+                        sessionPrompt: activeSettings.systemPrompt,
+                        personalizationPrompt: queuedRequest.personalizationSnapshot,
+                        projectPrompt: queuedRequest.toolScope.systemPrompt,
+                        includesChatWork: false, includesToolGuide: true,
+                        skills: activeSettings.skills.filter(\.isEnabled))
+
+                    var foregroundCalls: [MLXChatToolCall] = []
+                    var foregroundMessageIDs: [UUID] = []
+                    for (call, toolMessageID) in zip(batch, batchMessageIDs) {
+                        if ChatSpawnAgentToolArguments.runsInBackground(call.function?.arguments) {
+                            await startBackgroundSpawnAgent(
+                                call: call,
+                                toolMessageID: toolMessageID,
+                                context: sharedContext,
+                                in: queuedRequest.sessionID
+                            )
+                        } else {
+                            foregroundCalls.append(call)
+                            foregroundMessageIDs.append(toolMessageID)
+                        }
+                    }
+                    if !foregroundCalls.isEmpty {
+                        await runConcurrentSpawnAgentBatch(
+                            calls: foregroundCalls,
+                            messageIDs: foregroundMessageIDs,
+                            context: sharedContext,
+                            in: queuedRequest.sessionID
+                        )
+                    }
+                    appModel?.refreshMetricsIfRunning(force: true)
+                    continue
+                }
+
                 let selectedWorkItemAtConsent = workState(for: queuedRequest.sessionID)?.selectedID
                 // Freeze inferred targets before consent; tab selection or another read cannot retarget approval.
                 let workRequestAtConsent: Result<ChatWorkRequest, Error>? =
@@ -3155,6 +3257,10 @@ final class ChatViewModel: ObservableObject {
                                 in: queuedRequest.sessionID
                             )
                         },
+                        mcpHost: mcpHost,
+                        settings: activeSettings,
+                        spawnAgentParentMessages: Array((sessionMessages(for: queuedRequest.sessionID) ?? []).prefix { $0.id != assistantMessageID }),
+                        agentRegistry: agentRegistry(for: queuedRequest.sessionID),
                         workAction: { [weak self, terminalApprovalGranted] request in
                             guard let self else { throw ChatWorkError.unavailable }
                             try Task.checkCancellation()
@@ -3599,6 +3705,121 @@ final class ChatViewModel: ObservableObject {
         storedSessions[sessionIndex].messages.insert(message, at: anchorIndex + 1)
         searchLibrary.invalidate(sessionID, from: self)
         return true
+    }
+
+    private func startBackgroundSpawnAgent(
+        call: MLXChatToolCall,
+        toolMessageID: UUID,
+        context: ChatToolExecutionContext,
+        in sessionID: UUID
+    ) async {
+        var callContext = context
+        callContext.spawnAgentUpdate = { [weak self] subMessages in
+            _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
+        }
+        let executor = ChatSpawnAgentToolExecutor()
+        do {
+            try Task.checkCancellation()
+            let prepared = try await executor.prepare(call: call, context: callContext)
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .running,
+                content: executor.handlePayload(agentID: prepared.agentID),
+                attachments: []
+            )
+            let task = Task { [weak self] in
+                guard let self else {
+                    return
+                }
+                let content = await executor.run(prepared)
+                let finalStatus = prepared.registry?.record(for: prepared.agentID)?.toolStatus ?? .failed
+                await self.updateToolMessage(
+                    toolMessageID,
+                    in: sessionID,
+                    status: finalStatus,
+                    content: content,
+                    attachments: []
+                )
+            }
+            prepared.registry?.setTask(task, for: prepared.agentID)
+        } catch {
+            updateToolMessage(
+                toolMessageID,
+                in: sessionID,
+                status: .failed,
+                content: executor.failurePayload(error: error),
+                attachments: []
+            )
+        }
+    }
+
+    private func runConcurrentSpawnAgentBatch(
+        calls: [MLXChatToolCall],
+        messageIDs: [UUID],
+        context: ChatToolExecutionContext,
+        in sessionID: UUID
+    ) async {
+        await withTaskGroup(of: Void.self) { group in
+            var remaining = zip(calls, messageIDs).makeIterator()
+            func addNext() {
+                guard !Task.isCancelled, let (call, toolMessageID) = remaining.next() else {
+                    return
+                }
+                group.addTask { [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    var callContext = context
+                    callContext.spawnAgentUpdate = { [weak self] subMessages in
+                        _ = self?.updateMessage(toolMessageID, in: sessionID) { $0.subMessages = subMessages }
+                    }
+                    let executor = ChatSpawnAgentToolExecutor()
+                    do {
+                        try Task.checkCancellation()
+                        let prepared = try await executor.prepare(call: call, context: callContext)
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .running,
+                            content: executor.handlePayload(agentID: prepared.agentID),
+                            attachments: []
+                        )
+                        let task = Task<Void, Never> {
+                            let content = await executor.run(prepared)
+                            let finalStatus = await prepared.registry?.record(for: prepared.agentID)?.toolStatus ?? .failed
+                            await self.updateToolMessage(
+                                toolMessageID,
+                                in: sessionID,
+                                status: finalStatus,
+                                content: content,
+                                attachments: []
+                            )
+                        }
+                        await prepared.registry?.setTask(task, for: prepared.agentID)
+                        await withTaskCancellationHandler {
+                            await task.value
+                        } onCancel: {
+                            task.cancel()
+                        }
+                    } catch {
+                        await self.updateToolMessage(
+                            toolMessageID,
+                            in: sessionID,
+                            status: .failed,
+                            content: executor.failurePayload(error: error),
+                            attachments: []
+                        )
+                    }
+                }
+            }
+            for _ in 0..<min(ChatConcurrentSpawnGate.maximumConcurrent, calls.count) {
+                addNext()
+            }
+            while await group.next() != nil {
+                addNext()
+            }
+        }
     }
 
     private func normalizedToolCalls(_ toolCalls: [MLXChatToolCall]) -> [MLXChatToolCall] {

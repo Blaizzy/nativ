@@ -1288,7 +1288,7 @@ private struct ChatGenerationStatusRow: View, Equatable {
     }
 }
 
-private struct ChatLiveDecodeMetricsBadge: View, Equatable {
+struct ChatLiveDecodeMetricsBadge: View, Equatable {
     let metrics: ChatResponseMetrics
 
     var body: some View {

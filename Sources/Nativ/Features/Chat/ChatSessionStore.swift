@@ -210,7 +210,7 @@ struct ChatPastedText: Identifiable, Equatable, Codable {
     }
 }
 
-struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
+struct ChatTranscriptMessage: Identifiable, Equatable, Codable, Sendable {
     enum Role: String, Equatable, Codable {
         case user
         case assistant
@@ -250,6 +250,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var toolName: String?
     var toolStatus: ToolStatus?
     var toolArguments: String?
+    var subMessages: [ChatTranscriptMessage]
     var annotations: [ChatAnnotation] = []
     var pastedTexts: [ChatPastedText] = []
 
@@ -269,7 +270,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolCallID: String? = nil,
         toolName: String? = nil,
         toolStatus: ToolStatus? = nil,
-        toolArguments: String? = nil
+        toolArguments: String? = nil,
+        subMessages: [ChatTranscriptMessage] = []
     ) {
         self.id = id
         self.role = role
@@ -287,6 +289,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         self.toolName = toolName
         self.toolStatus = toolStatus
         self.toolArguments = toolArguments
+        self.subMessages = subMessages
     }
 
     enum CodingKeys: String, CodingKey {
@@ -308,6 +311,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case toolName
         case toolStatus
         case toolArguments
+        case subMessages
         case annotations
         case pastedTexts
     }
@@ -338,6 +342,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
         toolStatus = try container.decodeIfPresent(ToolStatus.self, forKey: .toolStatus)
         toolArguments = try container.decodeIfPresent(String.self, forKey: .toolArguments)
+        subMessages = try container.decodeIfPresent([ChatTranscriptMessage].self, forKey: .subMessages) ?? []
         annotations = try container.decodeIfPresent([ChatAnnotation].self, forKey: .annotations) ?? []
         pastedTexts = ChatPastedText.validated(
             try container.decodeIfPresent([ChatPastedText].self, forKey: .pastedTexts) ?? [],
@@ -373,6 +378,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(toolStatus, forKey: .toolStatus)
         try container.encodeIfPresent(toolArguments, forKey: .toolArguments)
+        try container.encode(subMessages, forKey: .subMessages)
         if !annotations.isEmpty { try container.encode(annotations, forKey: .annotations) }
         if !pastedTexts.isEmpty { try container.encode(pastedTexts, forKey: .pastedTexts) }
     }
