@@ -22,13 +22,21 @@ struct ChatSpeechPreparation {
         return Model(id: selected?.repoID ?? defaultModelID, isInstalled: selected != nil)
     }
 
+    static func resolveModel(for settings: NativSettings) async throws -> Model {
+        let installed: [LocalModel]
+        do {
+            installed = try await LocalModelDiscovery.scan(searchPaths: settings.localModelSearchPaths)
+        } catch LocalModelDiscoveryError.pathNotFound(_) {
+            // A new cache is created by the downloader when no voice is installed.
+            installed = []
+        }
+        try Task.checkCancellation()
+        return selectModel(preferredModelID: settings.textToSpeechModelID, installedModels: installed)
+    }
+
     static func automatic(using appModel: NativModel) -> Self {
         Self(
-            resolveModel: { settings in
-                let installed = try await LocalModelDiscovery.scan(searchPaths: settings.localModelSearchPaths)
-                try Task.checkCancellation()
-                return selectModel(preferredModelID: settings.textToSpeechModelID, installedModels: installed)
-            },
+            resolveModel: resolveModel(for:),
             downloadModel: { model, settings in
                 try await HuggingFaceDownloadManager.shared.downloadIfNeeded(
                     repoID: model.id,

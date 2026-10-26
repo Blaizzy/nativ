@@ -508,6 +508,47 @@ final class ChatResponseSpeechTests: XCTestCase {
         }
     }
 
+    func testAutomaticSpeechDownloadsFallbackWhenCacheDoesNotExist() async {
+        let cache = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("hub", isDirectory: true)
+        let settings = NativSettings(modelSearchPath: cache.path)
+        let playback = TestSpeechPlayback()
+        var didDownload = false
+        let preparation = ChatSpeechPreparation(
+            resolveModel: ChatSpeechPreparation.resolveModel(for:),
+            downloadModel: { selected, _ in
+                XCTAssertEqual(selected, .init(id: ChatSpeechPreparation.defaultModelID, isInstalled: false))
+                didDownload = true
+            },
+            prepareServer: { _ in }
+        )
+        let speech = ChatResponseSpeech(synthesize: { _, settings in
+            XCTAssertTrue(didDownload)
+            XCTAssertEqual(settings.textToSpeechModelID, ChatSpeechPreparation.defaultModelID)
+            return Data([1])
+        }, makePlayback: { _ in playback })
+
+        await playResponse(speech, playback: playback, id: UUID(), settings: settings, preparation: preparation)
+
+        XCTAssertTrue(didDownload)
+        XCTAssertNil(speech.errorMessage)
+        speech.stop()
+    }
+
+    func testAutomaticModelResolutionRejectsCachePathThatIsAFile() async throws {
+        let cache = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data().write(to: cache)
+        defer { try? FileManager.default.removeItem(at: cache) }
+
+        do {
+            _ = try await ChatSpeechPreparation.resolveModel(for: NativSettings(modelSearchPath: cache.path))
+            XCTFail("Invalid cache paths must not be treated as an empty model library")
+        } catch LocalModelDiscoveryError.notDirectory(let path) {
+            XCTAssertEqual(path, cache.path)
+        }
+    }
+
     func testAutomaticModelSelectionPrefersInstalledChoiceAndOnlyFallsBackWithoutTTS() {
         func local(_ id: String, capabilities: Set<LocalModelCapability>) -> LocalModel {
             LocalModel(
