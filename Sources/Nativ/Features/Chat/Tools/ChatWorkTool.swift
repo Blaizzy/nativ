@@ -4,10 +4,10 @@ import NativServerKit
 enum ChatWorkToolRegistry {
     static let toolName = "chat_work"
     static let sessionPrompt = """
-        Use web_search to find sources and web_read to read their pages when those tools are available. \
+        Use chat_work to search and browse in the shared browser: {"action":"search","query":"search terms"}. \
+        Open source pages with {"action":"open","url":"https://example.com"} or navigate in the current tab; inspect reads its current state. \
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
-        Use chat_work for the shared side window (work pane or canvas), interactive websites, documents and terminals. \
-        Open a website with {"action":"open","url":"https://example.com"}. Use current element IDs for browser actions. \
+        Use current element IDs for browser actions. The shared side window (work pane or canvas) also holds documents and terminals. \
         If a URL fails, search the original subject; do not retry the same failed URL or claim it was read. \
         Read documents before updating; use the returned id and expected_revision. A revision_conflict includes the \
         current content to merge. Only claim a save after a successful create/update. Upload original chat attachments \

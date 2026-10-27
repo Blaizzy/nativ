@@ -60,11 +60,11 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. **Prefix Caching** is enabled by default in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
-`web_search` and `web_read` are available without API keys. When no provider is
-connected, search retrieves DuckDuckGo HTML and page reading extracts text without
-executing page scripts or opening a browser tab. Connected providers remain in use.
-Blocked searches and pages that need JavaScript report a limitation so the agent can
-use the shared browser. Search snippets do not count as full page reads.
+Chat Work is the primary browsing path. Agents search with `chat_work`
+(`action: search`, `query: ...`), open or navigate to source pages, and inspect or
+interact with them in the shared browser the user sees. Browser search requires no
+API key. The optional `web_search` and `web_read` provider tools remain available
+when configured. Search snippets do not count as full page reads.
 
 Browsing tool results are saved as bounded excerpts, with omission notices. The
 budget scales with the effective context (4 KB per tool result at 8K context),

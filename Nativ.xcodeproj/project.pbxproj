@@ -348,7 +348,6 @@
 		81CA2499AF2C4701FC0C817B /* RoutineRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B95090B83C36E4F06C7C5E3 /* RoutineRunner.swift */; };
 		823D9E08D7818B714E75C7D3 /* ControlPanelSidebarModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76F460CC6B734041A8C60AAE /* ControlPanelSidebarModels.swift */; };
 		828C68B2F6BC8AE5019D2D4D /* MarkdownLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC4975A173CF8A58FC745811 /* MarkdownLayout.swift */; };
-		830D5F8D227CEAF5C7A5C545 /* KeylessWebBrowsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C835D93EA52002F711E79B1 /* KeylessWebBrowsing.swift */; };
 		83E74199C4F9A50350E3E354 /* NativComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */; };
 		85964D86CBE7F3D9965E1E00 /* ChatAnnotationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64368AEE6D3F7CC3AB10D8C5 /* ChatAnnotationActions.swift */; };
 		859706E482A5B1BF77CFBECA /* LogTextStorageMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54B0E640985EEB0E4E0AEE79 /* LogTextStorageMutation.swift */; };
@@ -396,7 +395,6 @@
 		97E650D432DEF7B2F1A4D5C0 /* ChatGitWorktree.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE367FA9B5C5C130C430C14 /* ChatGitWorktree.swift */; };
 		97EEA29CCD874048A8CE9D54 /* VoiceShortcut.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7405BB62742DE08EB640A2C5 /* VoiceShortcut.swift */; };
 		98086CE0CF71463BDF07F8A8 /* RoutineLaunchAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34FBE730C051EFF28B1323B /* RoutineLaunchAgent.swift */; };
-		98AE4687E661F54C314E2B65 /* KeylessWebBrowsing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C835D93EA52002F711E79B1 /* KeylessWebBrowsing.swift */; };
 		9954F8086FE0A7A9B3378EC9 /* NativComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20EE1CE9AAE5A3B9A2D4669C /* NativComponents.swift */; };
 		99CBBEE3F1E0092E70D172D4 /* Firecrawl.png in Resources */ = {isa = PBXBuildFile; fileRef = EEF71E7A328DFB6E2E741999 /* Firecrawl.png */; };
 		9A1E1FD2D597C682F4A8D2A9 /* AudioInputLevelMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2DDA5274474AC8D54DFDF71 /* AudioInputLevelMonitor.swift */; };
@@ -796,7 +794,6 @@
 		2A876C6D832E392C40F6154E /* HuggingFaceDownloadCapacity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceDownloadCapacity.swift; sourceTree = "<group>"; };
 		2BDBC269531FA6C6DA9F5DDC /* ModelPrimaryTaskResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelPrimaryTaskResolverTests.swift; sourceTree = "<group>"; };
 		2BDC9AFB58899E777CFF3BCD /* ChatArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatArchive.swift; sourceTree = "<group>"; };
-		2C835D93EA52002F711E79B1 /* KeylessWebBrowsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeylessWebBrowsing.swift; sourceTree = "<group>"; };
 		2CF9F903E2609C4A522C19CF /* ChatConfigurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatConfigurationView.swift; sourceTree = "<group>"; };
 		2D43B777F5D0E5B8E94DECA9 /* HuggingFaceModelReadmeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HuggingFaceModelReadmeTests.swift; sourceTree = "<group>"; };
 		2DAD8909B0CA98AAC277761A /* XMLTextParsing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMLTextParsing.swift; sourceTree = "<group>"; };
@@ -1759,7 +1756,6 @@
 		DBAEEF58B4350C85820F9310 /* Browsing */ = {
 			isa = PBXGroup;
 			children = (
-				2C835D93EA52002F711E79B1 /* KeylessWebBrowsing.swift */,
 				7A1B88001E3E22C2E592C0BA /* WebBrowsingError.swift */,
 				B4E0214BE1D88EB4CDB66836 /* WebBrowsingProviderClient.swift */,
 				254FDFBF7C5F7C8019E9E03F /* WebBrowsingRuntime.swift */,
@@ -2449,7 +2445,6 @@
 				42293318F2E4FA62AD0CF762 /* IntegrationTypes.swift in Sources */,
 				E96652149FDCCF65899280A8 /* IntegrationsView.swift in Sources */,
 				71659335E55225ABCBB4E993 /* IssueReport.swift in Sources */,
-				830D5F8D227CEAF5C7A5C545 /* KeylessWebBrowsing.swift in Sources */,
 				54D53CD1A2BA96B2336C2406 /* KitsSectionView.swift in Sources */,
 				BE712AD5A19F62157BB8535C /* LaunchAtLoginController.swift in Sources */,
 				5B3B51CB0BA8A49688890283 /* LaunchSplashPreferences.swift in Sources */,
@@ -2753,7 +2748,6 @@
 				41E383BBE43E9CDE0B70826D /* IntegrationServices.swift in Sources */,
 				351B2202E8690FC608A32AEF /* IntegrationServicesTests.swift in Sources */,
 				F5EB384AAC13043938A0A7EB /* IntegrationTypes.swift in Sources */,
-				98AE4687E661F54C314E2B65 /* KeylessWebBrowsing.swift in Sources */,
 				4D68ADCC4BD23950C9E8F6FD /* LaunchAtLoginController.swift in Sources */,
 				486C3304E9F8D8EB1B44F7F9 /* LaunchSplashPreferences.swift in Sources */,
 				BDC47F2DC6505C9A89BAC5F7 /* LaunchSplashPreferencesTests.swift in Sources */,

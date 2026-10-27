@@ -78,11 +78,6 @@ struct ChatWebReadToolExecutor {
     }
 
     func failurePayload(error: Error) -> String {
-        if let error = error as? KeylessWebBrowsingError {
-            let data = try? JSONSerialization.data(withJSONObject: ["ok": false,
-                "error": ["code": "page_unavailable", "message": error.localizedDescription]])
-            return data.map { String(decoding: $0, as: UTF8.self) } ?? "Text browsing failed."
-        }
         let failure = WebReadFailure(error: error)
         let payload = WebReadToolFailurePayload(
             ok: false,

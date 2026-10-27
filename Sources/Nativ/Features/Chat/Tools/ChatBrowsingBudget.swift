@@ -15,7 +15,7 @@ enum ChatBrowsingBudget {
         for _ in 0..<12 {
             var bounded = reduce(object, textLimit: textLimit, elementLimit: elementLimit) as? [String: Any] ?? object
             bounded["truncated"] = true
-            bounded["omission_notice"] = "Page excerpts were shortened to fit the context. Use web_read with focus for more detail."
+            bounded["omission_notice"] = "Page excerpts were shortened to fit the context; some page content and controls were omitted."
             guard let encoded = try? JSONSerialization.data(withJSONObject: bounded, options: [.sortedKeys, .withoutEscapingSlashes]) else { return content }
             if encoded.count <= maximumBytes {
                 return String(decoding: encoded, as: UTF8.self)

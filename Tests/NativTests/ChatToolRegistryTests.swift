@@ -116,6 +116,37 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
     }
 
+    @MainActor
+    func testChatWorkBrowserResultsAreBoundedBeforeReturningToModel() async throws {
+        let tabID = UUID().uuidString
+        let url = "https://example.com/ocr"
+        let snapshot = try JSONSerialization.data(withJSONObject: [
+            "id": tabID, "url": url,
+            "text": String(repeating: "piña 🍍 ", count: 10_000),
+            "elements": [["id": "link-1", "label": "Read source", "href": url]],
+        ])
+        let content = String(decoding: snapshot, as: UTF8.self)
+        var context = makeContext()
+        context.browsingMaximumResultBytes = ChatBrowsingBudget.maximumBytes(context: 8192)
+        context.workAction = { _ in content }
+
+        for arguments in [
+            #"{"action":"search","query":"local OCR models"}"#,
+            #"{"action":"open","url":"https://example.com/ocr"}"#,
+            #"{"action":"inspect"}"#,
+        ] {
+            let outcome = try await ChatToolDispatcher.execute(
+                call: makeCall(name: ChatWorkToolRegistry.toolName, arguments: arguments), context: context
+            )
+            XCTAssertLessThanOrEqual(outcome.content.utf8.count, 4096)
+            let object = try decode(outcome.content)
+            XCTAssertEqual(object["truncated"] as? Bool, true)
+            XCTAssertEqual(object["id"] as? String, tabID)
+            XCTAssertEqual(object["url"] as? String, url)
+            XCTAssertEqual((object["elements"] as? [[String: Any]])?.first?["id"] as? String, "link-1")
+        }
+    }
+
     func testWebSearchCarriesConfigurationMetadata() {
         let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
             $0.definition.function.name == ChatWebSearchToolRegistry.toolName

@@ -300,9 +300,6 @@ struct WebBrowsingSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Without a connected provider, Nativ uses DuckDuckGo search and built-in page reading. No API key is required.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
             if showsCapabilityPicker {
                 capabilityPicker
             }

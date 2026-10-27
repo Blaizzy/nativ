@@ -56,18 +56,6 @@ private final class StubWebSearchCredentialStore: WebSearchCredentialStoring {
 }
 
 final class ChatWebSearchToolTests: XCTestCase {
-    func testLiveKeylessSearchAndRead() async throws {
-        guard ProcessInfo.processInfo.environment["NATIV_LIVE_WEB_TEST"] == "1" else {
-            throw XCTSkip("Set NATIV_LIVE_WEB_TEST=1 for live HTTP verification")
-        }
-        let browser = KeylessWebBrowsing(client: URLSessionWebBrowsingHTTPClient())
-        let results = try await browser.search(query: "Tesseract OCR official documentation", limit: 5)
-        XCTAssertFalse(results.isEmpty)
-        let pages = try await browser.read(urls: ["https://tesseract-ocr.github.io/"], focus: "OCR")
-        XCTAssertTrue(pages.first?.isSuccess == true)
-        print("Live keyless search returned \(results.count) sources; page characters: \(pages.first?.content?.count ?? 0)")
-    }
-
     func testBraveRequestAndResultMapping() async throws {
         let client = StubWebSearchHTTPClient(
             response: #"{"web":{"results":[{"title":"Nativ","url":"https://nativ.dev","description":"Local AI"}]}}"#
@@ -327,7 +315,7 @@ final class ChatWebSearchToolTests: XCTestCase {
             XCTFail("Expected the rejected credential to fail")
         } catch {}
         XCTAssertEqual(preferences.credentialIssue(for: .brave), .invalidAuthentication)
-        XCTAssertTrue(rejectedRuntime.isConfigured(.search))
+        XCTAssertFalse(rejectedRuntime.isConfigured(.search))
 
         let acceptedRuntime = WebBrowsingRuntime(
             credentials: credentials,
@@ -360,29 +348,28 @@ final class ChatWebSearchToolTests: XCTestCase {
         _ = try await runtime.search(query: "Nativ", limit: 1)
     }
 
-    func testKeylessSearchExtractsResultsWithoutCookiesOrAVisibleBrowser() async throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
-        let client = StubWebSearchHTTPClient(response: """
-            <div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Focr">OCR &amp; text</a>
-            <div class="result__snippet">Readable snippet</div></div><script>throw new Error('must not execute')</script>
-            """)
-        let runtime = WebBrowsingRuntime(credentials: StubWebSearchCredentialStore(),
-            preferences: WebBrowsingPreferences(defaults: defaults), client: client)
-        let results = try await runtime.search(query: "OCR", limit: 5)
-        XCTAssertEqual(results, [WebSearchResult(title: "OCR & text", url: "https://example.com/ocr", snippet: "Readable snippet")!])
-        let request = await client.recordedRequest()
-        XCTAssertEqual(request?.url?.host, "html.duckduckgo.com")
-        XCTAssertEqual(request?.httpShouldHandleCookies, false)
-        XCTAssertNil(request?.value(forHTTPHeaderField: "Authorization"))
-    }
+    func testMissingKeyFailureTellsTheModelWhereToSendTheUser() async throws {
+        let suiteName = "ChatWebSearchToolTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = WebBrowsingPreferences(defaults: defaults)
+        preferences.searchProvider = .exa
+        let executor = ChatWebSearchToolExecutor(
+            credentials: StubWebSearchCredentialStore(),
+            preferences: preferences,
+            client: StubWebSearchHTTPClient(response: "{}")
+        )
 
-    func testKeylessSearchChallengeIsAnActionableFailure() async throws {
-        let browser = KeylessWebBrowsing(client: StubWebSearchHTTPClient(response: "<form>Verify you are human</form>"))
         do {
-            _ = try await browser.search(query: "OCR", limit: 5)
-            XCTFail("A challenge is not search evidence")
+            _ = try await executor.execute(call: makeWebSearchCall(query: "Nativ"))
+            XCTFail("Expected a missing-key failure")
         } catch {
-            XCTAssertTrue(error.localizedDescription.contains("blocked"))
+            let payload = try failureObject(executor.failurePayload(error: error))
+            XCTAssertEqual(payload["code"] as? String, WebBrowsingFailureCode.missingAPIKey.rawValue)
+            XCTAssertEqual(
+                payload["user_action_required"] as? String,
+                "Ask the user to add a search API key in Extensions → Browsing, then retry web_search."
+            )
         }
     }
 

@@ -305,7 +305,6 @@ targets:
       - path: Sources/Nativ/Features/Browsing/WebBrowsingError.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingProviderClient.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingRuntime.swift
-      - path: Sources/Nativ/Features/Browsing/KeylessWebBrowsing.swift
       - path: Sources/Nativ/Features/Browsing/WebBrowsingTransport.swift
       - path: Sources/Nativ/Features/Browsing/Providers/BraveBrowsingProvider.swift
       - path: Sources/Nativ/Features/Browsing/Providers/ExaBrowsingProvider.swift

@@ -74,14 +74,14 @@ final class ChatWebReadToolTests: XCTestCase {
         XCTAssertFalse(WebSearchProvider.pageReaders.contains(.searxng))
     }
 
-    func testSearchOnlyProviderCanUseBuiltInReader() throws {
+    func testSearchOnlyProviderDoesNotAdvertiseReadWithoutAReader() throws {
         let suiteName = "ChatWebReadToolTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let preferences = WebBrowsingPreferences(defaults: defaults)
         preferences.searchProvider = .brave
 
-        XCTAssertTrue(ChatWebReadToolRegistry.isConfigured(
+        XCTAssertFalse(ChatWebReadToolRegistry.isConfigured(
             credentials: StubWebReadCredentialStore(keys: [.brave: "key"]),
             preferences: preferences
         ))
@@ -101,21 +101,34 @@ final class ChatWebReadToolTests: XCTestCase {
         ))
     }
 
-    func testBuiltInReaderExtractsArticleAndBoundsLargePages() async throws {
-        let body = String(repeating: "OCR models recognize text. ", count: 800)
-        let client = StubWebReadHTTPClient(response: """
-            <title>OCR</title><nav>Navigation noise</nav><main><h1>OCR</h1><p>\(body)</p></main>
-            <script>document.body.textContent='Executed script';</script><footer>Footer noise</footer>
-            """)
-        let reader = KeylessWebBrowsing(client: client)
-        let pages = try await reader.read(urls: ["https://example.com/ocr"], focus: "OCR")
-        let page = try XCTUnwrap(pages.first)
-        XCTAssertEqual(page.title, "OCR")
-        XCTAssertTrue(page.isSuccess)
-        XCTAssertTrue(page.truncated)
-        XCTAssertLessThanOrEqual(page.content?.count ?? 0, 6000)
-        XCTAssertFalse(page.content?.contains("noise") ?? true)
-        XCTAssertFalse(page.content?.contains("Executed script") ?? true)
+    func testMissingPageReaderReturnsActionableFailure() async throws {
+        let suiteName = "ChatWebReadToolTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = WebBrowsingPreferences(defaults: defaults)
+        preferences.searchProvider = .brave
+        let executor = ChatWebReadToolExecutor(
+            credentials: StubWebReadCredentialStore(keys: [.brave: "key"]),
+            preferences: preferences,
+            client: StubWebReadHTTPClient(response: "{}")
+        )
+
+        do {
+            _ = try await executor.execute(call: MLXChatToolCall(
+                id: "read",
+                function: MLXChatFunctionCall(
+                    name: ChatWebReadToolRegistry.toolName,
+                    arguments: #"{"urls":["https://example.com"]}"#
+                )
+            ))
+            XCTFail("Expected page-reader routing to be required")
+        } catch {
+            let data = try XCTUnwrap(executor.failurePayload(error: error).data(using: .utf8))
+            let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let failure = try XCTUnwrap(root["error"] as? [String: Any])
+            XCTAssertEqual(failure["code"] as? String, "page_reader_not_configured")
+            XCTAssertTrue((failure["user_action_required"] as? String)?.contains("Extensions → Browsing") == true)
+        }
     }
 
     func testBrowsingBudgetPreservesValidJSONAndSourceIdentity() throws {
