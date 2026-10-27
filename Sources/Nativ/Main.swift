@@ -23,6 +23,11 @@ private final class MetricsProbeResult: @unchecked Sendable {
 enum Main {
     @MainActor
     static func main() {
+        if CommandLine.arguments.dropFirst().first == "--browser-stdio" {
+            ChatBrowserCLI.run()
+            return
+        }
+
         if CommandLine.arguments.dropFirst().first == "--xet-download" {
             Task { await HuggingFaceXetDownload.run() }
             RunLoop.main.run()
