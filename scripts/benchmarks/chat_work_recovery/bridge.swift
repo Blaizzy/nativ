@@ -43,10 +43,15 @@ private final class ChatWorkBenchmarkBridge {
             let messages = try JSONDecoder().decode(Context.self, from: arguments).messages
             let evidence = ProcessInfo.processInfo.environment["CHAT_WORK_BENCHMARK_EVIDENCE"] == "1"
                 ? ChatBrowserEvidence.context(messages: messages, maximumBytes: min(8192, maximumBytes)) : nil
-            return String(decoding: try JSONEncoder().encode(["text": evidence ?? ""]), as: UTF8.self)
+            let enabled = ProcessInfo.processInfo.environment["CHAT_WORK_BENCHMARK_EVIDENCE"] == "1"
+            return String(decoding: try JSONEncoder().encode([
+                "text": evidence ?? "",
+                "missing_pages": enabled ? ChatBrowserEvidence.missingPageInstruction(messages: messages) ?? "" : "",
+                "stalled_search": enabled ? ChatBrowserEvidence.stalledSearchInstruction(messages: messages) ?? "" : "",
+            ]), as: UTF8.self)
         }
         guard input.name == "chat_work" else { throw ChatWorkError.invalid("Use chat_work.") }
-        var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments)
+        var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments).resolvingElementOpen()
         if request.action == .list { return try state.itemListJSON() }
         if request.action == .read {
             guard request.id != nil else { throw ChatWorkError.invalid("read requires id.") }
@@ -57,6 +62,9 @@ private final class ChatWorkBenchmarkBridge {
             request = ChatWorkRequest(action: .inspect, id: state.selectedID)
         }
         guard request.action.isBrowserAction || request.action == .open else { throw ChatWorkError.unavailable }
+        if request.id == nil, let elementID = request.elementID {
+            request.id = pool.itemID(for: elementID, sessionID: sessionID)
+        }
         let item = try state.browserItem(for: request)
         request.id = item.id
         let browser = pool.browser(for: item, sessionID: sessionID)

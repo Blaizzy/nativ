@@ -3,6 +3,15 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testOpeningAnElementUsesClickValidationAndConsent() throws {
+        let call = MLXChatToolCall(id: "result", function: .init(name: "chat_work", arguments: #"{"action":"open","element_id":"snapshot:0"}"#))
+        let request = try ChatWorkRequest.decode(call)
+        XCTAssertEqual(request.action, .click)
+        XCTAssertEqual(request.elementID, "snapshot:0")
+        XCTAssertEqual(ChatToolOperation.work(request.action), .sensitive)
+        XCTAssertThrowsError(try ChatWorkRequest(action: .open, url: "https://example.com", elementID: "snapshot:0").resolvingElementOpen())
+    }
+
     func testSearchingAnExplicitAddressNavigatesWithoutLosingQueryParameters() throws {
         let url = "https://example.com/source?q=C%2B%2B&lang=en#section"
         XCTAssertEqual(try ChatWorkRequest(action: .search, query: "  \(url)  ").navigationURL?.absoluteString, url)

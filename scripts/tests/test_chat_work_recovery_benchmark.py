@@ -75,9 +75,8 @@ class ResponsesReplayTests(unittest.TestCase):
             self.assertEqual(first["message"]["content"], "answer")
             messages.append({"role": "assistant", "content": "Next turn"})
             generate_responses("http://localhost", sampling, messages, [], "New evidence", 8192, saved, count, final_instruction="Finish honestly")
-        self.assertEqual(seen[1]["input"], [capsule, {"type": "message", "role": "assistant", "content": "Next turn"},
-                                           {"type": "message", "role": "user", "content": "New evidence"},
-                                           {"type": "message", "role": "user", "content": "Finish honestly"}])
+        self.assertEqual(seen[1]["input"], [capsule, {"type": "message", "role": "assistant", "content": "Next turn"}])
+        self.assertEqual(seen[1]["transient_context"], "New evidence\n\nFinish honestly")
         self.assertEqual(seen[1]["instructions"], "System\n\nFinish honestly")
         self.assertEqual(seen[1]["max_output_tokens"], 4096)
         self.assertEqual(seen[1]["context_management"][0]["compact_threshold"], 6144)

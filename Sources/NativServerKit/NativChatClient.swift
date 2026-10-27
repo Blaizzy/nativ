@@ -487,6 +487,11 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         }
     }
 
+    public var requestContext: String? {
+        let text = contextMessages.compactMap(\.textContent).joined(separator: "\n\n")
+        return text.isEmpty ? nil : text
+    }
+
     public init(
         model: String,
         messages: [MLXChatMessage],
@@ -528,6 +533,7 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case model
         case messages
+        case requestContext = "transient_context"
         case maxTokens = "max_tokens"
         case temperature
         case topK = "top_k"
@@ -548,7 +554,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
-        try container.encode(messages + contextMessages, forKey: .messages)
+        try container.encode(messages, forKey: .messages)
+        try container.encodeIfPresent(requestContext, forKey: .requestContext)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(temperature, forKey: .temperature)
         try container.encode(topK, forKey: .topK)
@@ -931,6 +938,7 @@ public final class NativChatClient: @unchecked Sendable {
 
 private struct PromptTokenCountRequest: Encodable {
     let input: [MLXChatMessage]
+    let requestContext: String?
     let model: String
     let tools: [MLXChatToolDefinition]?
     let toolChoice: String?
@@ -940,7 +948,8 @@ private struct PromptTokenCountRequest: Encodable {
     let thinkingEndToken: String?
 
     init(_ request: MLXChatCompletionRequest) {
-        input = request.messages + request.contextMessages
+        input = request.messages
+        requestContext = request.requestContext
         model = request.model
         tools = request.tools
         toolChoice = request.toolChoice
@@ -952,6 +961,7 @@ private struct PromptTokenCountRequest: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case input
+        case requestContext = "transient_context"
         case model
         case tools
         case toolChoice = "tool_choice"

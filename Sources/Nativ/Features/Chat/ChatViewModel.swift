@@ -939,6 +939,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resolvedWorkRequest(_ request: ChatWorkRequest, in sessionID: UUID) throws -> ChatWorkRequest {
+        let request = try request.resolvingElementOpen()
         if request.action == .upload {
             _ = try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
         }
@@ -2773,6 +2774,7 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
+        var researchContinuations = 0
         var tracksWorkSaves = workState(for: request.sessionID)?.items.contains(where: \.canEdit) == true
         var savedWorkFiles: [UUID: String] = [:]
         var activeSettings = queuedRequest.settings
@@ -2821,7 +2823,7 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest.sessionID
             )
             guard
-                let request = makeCompletionRequest(
+                var request = makeCompletionRequest(
                     for: queuedRequest,
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
@@ -2831,6 +2833,13 @@ final class ChatViewModel: ObservableObject {
                 )
             else {
                 throw NativChatError.invalidResponse
+            }
+
+            if advertisesTools, request.tools?.contains(where: { $0.function.name == ChatWorkToolRegistry.toolName }) == true {
+                request.completionInstruction = [
+                    ChatBrowserEvidence.missingPageInstruction(messages: request.messages),
+                    ChatBrowserEvidence.stalledSearchInstruction(messages: request.messages),
+                ].compactMap { $0 }.joined(separator: "\n\n")
             }
 
             let streamingMessageID = assistantMessageID
@@ -2914,8 +2923,14 @@ final class ChatViewModel: ObservableObject {
                 isCancelled: false
             )
 
-            guard advertisesTools, !toolCalls.isEmpty else {
-                return
+            guard advertisesTools else { return }
+            if toolCalls.isEmpty {
+                guard researchContinuations < 2,
+                      request.tools?.contains(where: { $0.function.name == ChatWorkToolRegistry.toolName }) == true,
+                      ChatBrowserEvidence.missingPageInstruction(messages: request.messages) != nil else { return }
+                // A prose response is not completion when an explicit page-read
+                // requirement is still unmet. Retry within the same round budget.
+                researchContinuations += 1
             }
 
             var insertionAnchor = assistantMessageID

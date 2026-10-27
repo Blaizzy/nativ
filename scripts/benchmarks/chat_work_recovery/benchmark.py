@@ -63,14 +63,14 @@ def generate(base, payload):
 def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count, final_instruction=""):
     history = [m for m in messages if m["role"] not in ("system", "developer")]
     items = ([capsule] if capsule else []) + [{"type": "message", **m} for m in history[prefix_count:]]
-    if context:
-        items.append({"type": "message", "role": "user", "content": context})
     payload = {**sampling, "instructions": "\n\n".join(m["content"] for m in messages if m["role"] == "system"),
                "input": items, "tools": tools, "stream": True, "store": False,
                "context_management": [{"type": "compaction", "compact_threshold": int(limit * .75)}]}
-    if final_instruction:
+    if final_instruction and not tools:
         payload["instructions"] += "\n\n" + final_instruction
-        payload["input"].append({"type": "message", "role": "user", "content": final_instruction})
+    transient = "\n\n".join(text for text in (context, final_instruction) if text)
+    if transient:
+        payload["transient_context"] = transient
     payload["max_output_tokens"] = payload.pop("max_tokens")
     req = urllib.request.Request(base + "/v1/responses", json.dumps(payload).encode(), {"Content-Type": "application/json"})
     started = time.perf_counter()
@@ -253,19 +253,28 @@ def main():
         started = time.perf_counter()
         final = ""
         capsule, prefix_count = None, 0
+        continuations = 0
         for round_index in range(a.max_rounds):
             if time.perf_counter() - started > 1800:
                 result["stop_reason"] = "30-minute task deadline"
                 break
-            context = browser.call("context", {"messages": messages}, a.context)["text"]
+            progress = browser.call("context", {"messages": messages}, a.context)
+            context = progress["text"]
+            guidance = "\n\n".join(filter(None, [progress.get("missing_pages"), progress.get("stalled_search")]))
+            final_instruction = setup["final_answer_prompt"] if round_index == 32 and a.mode == "recovery" else guidance
             inference, capsule, prefix_count = generate_responses(
                 a.base, sampling, messages, definitions if round_index < 32 else [], context, a.context, capsule, prefix_count,
-                setup["final_answer_prompt"] if round_index == 32 and a.mode == "recovery" else "")
+                final_instruction)
             step = {"inference": inference, "tools": [], "evidence_context": context}
             result["steps"].append(step)
             msg = inference["message"]
             messages.append(msg)
             if not msg.get("tool_calls") or round_index == 32:
+                if round_index < 32 and a.mode == "recovery" and progress.get("missing_pages") and continuations < 2:
+                    continuations += 1
+                    step["continued_incomplete_research"] = True
+                    save()
+                    continue
                 final = msg.get("content", "")
                 result["stop_reason"] = "model_final"
                 break
@@ -282,7 +291,7 @@ def main():
                 url = object_result.get("url", "")
                 is_search = (object_result.get("source_kind") == "search" or
                              ("google." in url and "/search" in url) or "consent.google" in url or "/sorry/" in url)
-                if not is_search and object_result.get("ok", True) and (object_result.get("content") or object_result.get("text")) and url:
+                if not is_search and object_result.get("page_status") != "blocked" and object_result.get("http_status", 200) < 400 and object_result.get("ok", True) and (object_result.get("content") or object_result.get("text")) and url:
                     result["read_urls"].append(url)
                 text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
                 step["tools"].append({"call": call, "seconds": time.perf_counter()-tick,

@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--contexts", nargs="+", type=int, default=[8192, 16384])
     parser.add_argument("--cases", nargs="+", choices=["chain", "catalog", "live"])
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--modes", nargs="+", choices=["baseline", "recovery"], default=["baseline", "recovery"])
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -51,7 +52,7 @@ def main():
             else:
                 raise RuntimeError("Runtime did not become ready")
             for rep in range(args.repetitions):
-                modes = ["baseline", "recovery"] if rep != 1 else ["recovery", "baseline"]
+                modes = args.modes if rep != 1 else list(reversed(args.modes))
                 cases = args.cases or (["chain", "catalog", "live"] if context == 8192 else ["chain", "catalog"])
                 for case in cases:
                     for mode in modes:

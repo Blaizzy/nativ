@@ -24,12 +24,42 @@ final class ChatBrowserEvidenceTests: XCTestCase {
             receipt("https://example.com/a#one"), receipt("https://example.com/a#two"),
             receipt("https://www.google.com/search?q=ocr"), receipt("https://www.google.com/goto?url=opaque"),
             receipt("https://consent.google.com/"), receipt("https://www.google.com/sorry/index"), receipt("https://example.com/fail", extra: ["ok": false]),
-            receipt("https://example.com/challenge?js_challenge=1"),
+            receipt("https://example.com/challenge?js_challenge=1", text: "Verify you are human"),
             receipt("https://example.com/missing", extra: ["title": "Page not found"])]
         let context = try XCTUnwrap(ChatBrowserEvidence.context(messages: messages, maximumBytes: 4096))
         XCTAssertTrue(context.contains("\"distinct_source_pages_observed\":1"))
         XCTAssertFalse(context.contains("#one"))
         XCTAssertFalse(context.contains("google.com"))
+    }
+
+    func testSoftErrorsAndLoginAreExcludedButCompletedChallengeIsReadable() throws {
+        let messages = try [MLXChatMessage(role: "user", content: "Read at least 5 different pages"),
+            receipt("https://medium.com/missing", text: "PAGE NOT FOUND\n404", extra: ["title": "Medium"]),
+            receipt("https://facebook.com/login", text: "Log in to Facebook\nEmail\nPassword"),
+            receipt("https://example.com/consent", extra: ["page_status": "blocked"]),
+            receipt("https://example.com/unauthorized", extra: ["http_status": 401]),
+            receipt("https://example.com/article?js_challenge=1", text: "An actual rendered discussion"),
+            receipt("https://example.com/article", text: "An actual rendered discussion")]
+        let context = try XCTUnwrap(ChatBrowserEvidence.context(messages: messages, maximumBytes: 4096))
+        XCTAssertTrue(context.contains("\"distinct_source_pages_observed\":1"))
+        XCTAssertTrue(context.contains("rendered discussion"))
+        XCTAssertFalse(context.contains("js_challenge"))
+        XCTAssertFalse(context.contains("PAGE NOT FOUND"))
+        XCTAssertTrue(ChatBrowserEvidence.missingPageInstruction(messages: messages)?.contains("Only 1") == true)
+    }
+
+    func testPageRequirementAndRepeatedSearchRecoveryAreBoundedToCurrentTask() throws {
+        let task = MLXChatMessage(role: "user", content: "read at least 5 different pages")
+        let search = try receipt("https://google.com/search?q=test", extra: ["source_kind": "search"])
+        XCTAssertNotNil(ChatBrowserEvidence.stalledSearchInstruction(messages: [task, search, search, search]))
+        XCTAssertNil(ChatBrowserEvidence.stalledSearchInstruction(messages: [task, search, search]))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [.init(role: "user", content: "Summarize these 5 pages")]))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [task]))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [.init(role: "user", content: "Don't read five pages"), search]))
+        let pages = try (1...5).map { try receipt("https://example.com/page/\($0)") }
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [task] + pages))
+        XCTAssertNotNil(ChatBrowserEvidence.missingPageInstruction(messages: [.init(role: "user", content: "Read five sources")] + pages.prefix(4)))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [task] + pages + [.init(role: "user", content: "Thanks")]))
     }
 
     func testNewUserRequestDoesNotReusePreviousResearch() throws {

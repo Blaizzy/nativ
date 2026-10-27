@@ -33,7 +33,7 @@ enum ChatBrowsingBudget {
             }
         }
         if let values = value as? [Any] {
-            let selected = key == "elements" ? Array(values.prefix(elementLimit)) : values
+            let selected = ["elements", "results"].contains(key) ? Array(values.prefix(elementLimit)) : values
             return selected.map { reduce($0, textLimit: textLimit, elementLimit: elementLimit, key: key) }
         }
         if let text = value as? String, ["text", "content", "snippet", "value", "label", "title"].contains(key), text.utf8.count > textLimit {

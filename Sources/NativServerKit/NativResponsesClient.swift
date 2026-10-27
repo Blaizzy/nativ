@@ -94,7 +94,7 @@ public final class NativResponsesClient: @unchecked Sendable {
         if !instructions.isEmpty {
             payload["instructions"] = .string(instructions)
         }
-        payload["input"] = .array(input + (try Self.inputItems(request.contextMessages)))
+        payload["input"] = .array(input)
         payload["stream"] = .bool(true)
         payload["store"] = .bool(false)
         payload["context_management"] = .array([.object([

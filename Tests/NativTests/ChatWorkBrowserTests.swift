@@ -11,22 +11,41 @@ final class ChatWorkBrowserTests: XCTestCase {
     func testSearchSourcesPrecedeNavigationAndKeepUsableURLs() async throws {
         let browser = makeBrowser()
         browser.webView.frame = CGRect(x: 0, y: 0, width: 900, height: 700)
-        browser.load(ChatWorkItem(title: "Search fixture", kind: .website, content:
-            "<main>" + (0..<50).map { "<a href='/menu/\($0)'>Menu \($0)</a>" }.joined() +
-            "<a href='https://www.google.com/goto?url=opaque'><h3>Source result</h3></a>" +
-            "<a href='/source'><h3>Relative source</h3></a></main>"))
-        defer { browser.stop() }
+        let server = try ChatWorkHTTPFixture()
+        let base = try await server.start()
+        defer { browser.stop(); server.stop() }
+        browser.load(ChatWorkItem(title: "Search fixture", kind: .website, content: "", url: base.absoluteString))
         _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        let html = "<main>" + (0..<50).map { "<a href='/menu/\($0)'>Menu \($0)</a>" }.joined() +
+            "<a href='https://www.google.com/goto?url=opaque'><h3>Source result</h3></a>" +
+            "<a href='/next'><h3>Relative source</h3></a></main><div role='dialog'>Cookies<button>Accept cookies</button></div>"
+        _ = try await browser.webView.callAsyncJavaScript("document.body.innerHTML = html", arguments: ["html": html], in: nil, contentWorld: .defaultClient)
         let rawSnapshot = try await browser.webView.callAsyncJavaScript(
             ChatWorkBrowser.inspectScript, arguments: ["snapshotID": "test", "tabID": "tab", "isSearchPage": true,
                                                       "canGoBack": false, "canGoForward": false],
             in: nil, contentWorld: .defaultClient)
         let snapshot = try XCTUnwrap(rawSnapshot as? [String: Any])
-        let controls = try XCTUnwrap(snapshot["elements"] as? [[String: Any]])
-        XCTAssertEqual(controls.first?["label"] as? String, "Source result")
-        XCTAssertEqual(controls.first?["href"] as? String, "https://www.google.com/goto?url=opaque")
-        XCTAssertTrue((controls[1]["href"] as? String)?.hasPrefix("http://127.0.0.1:") == true)
+        let results = try XCTUnwrap(snapshot["results"] as? [[String: Any]])
+        XCTAssertEqual(results.first?["title"] as? String, "Source result")
+        XCTAssertEqual((snapshot["elements"] as? [[String: Any]])?.first?["label"] as? String, "Accept cookies")
+        XCTAssertEqual(snapshot["page_status"] as? String, "blocked")
+        let action = try XCTUnwrap(results[1]["open"] as? [String: String])
+        XCTAssertEqual(action["action"], "click")
+        XCTAssertEqual(action["element_id"], results[1]["id"] as? String)
+        let opened = try await browser.execute(ChatWorkRequest(action: .click, elementID: action["element_id"]))
+        XCTAssertTrue((opened["url"] as? String)?.hasSuffix("/next") == true)
+        XCTAssertFalse((snapshot["text"] as? String)?.contains("opaque") == true)
         XCTAssertEqual(snapshot["source_kind"] as? String, "search")
+        try browser.navigate(base.absoluteString)
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        _ = try await browser.webView.callAsyncJavaScript("document.body.innerHTML = html", arguments: ["html": html], in: nil, contentWorld: .defaultClient)
+        let revisited = try await browser.webView.callAsyncJavaScript(ChatWorkBrowser.inspectScript,
+            arguments: ["snapshotID": "new", "tabID": "tab", "isSearchPage": true, "openedTitles": ["source result"],
+                        "canGoBack": true, "canGoForward": false], in: nil, contentWorld: .defaultClient) as? [String: Any]
+        let ranked = try XCTUnwrap(revisited?["results"] as? [[String: Any]])
+        XCTAssertEqual(ranked[0]["title"] as? String, "Relative source")
+        XCTAssertEqual(ranked[1]["title_previously_opened"] as? Bool, true)
+
     }
 
     private func persistentProfile() -> ChatWorkBrowserProfile {

@@ -100,8 +100,11 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     private var isStartingPreview = false
     private var pendingNavigation: WKNavigation?
     private var navigationFailure: ChatWorkNavigationFailure?
+    private var httpStatus: Int?
     private var observations: [NSKeyValueObservation] = []
     fileprivate(set) var elementLabels: [String: String] = [:]
+    private var searchResultTitles: [String: String] = [:]
+    private var openedSearchTitles: [String] = []
 
     init(profile: ChatWorkBrowserProfile = .shared) {
         self.profile = profile
@@ -280,6 +283,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        if navigationResponse.isForMainFrame {
+            httpStatus = (navigationResponse.response as? HTTPURLResponse)?.statusCode
+        }
         // Authentication/challenge pages (401/403) may still need browser interaction.
         if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse,
            response.statusCode == 404 || response.statusCode == 410 || response.statusCode >= 500 {
@@ -295,6 +301,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         annotator.cancel()
         pendingNavigation = navigation
+        httpStatus = nil
         runtimeErrors = []
         errorMessage = nil
         navigationFailure = nil
@@ -368,6 +375,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             guard let elementID = request.elementID else {
                 throw ChatWorkError.invalid("Inspect the page, then supply an element_id.")
             }
+            let searchTitle = searchResultTitles[elementID]
             if request.action == .type && request.text == nil {
                 throw ChatWorkError.invalid("type requires text.")
             }
@@ -386,6 +394,10 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                 "files": files.map { ["name": $0.filename, "type": $0.mimeType, "base64": $0.data.base64EncodedString()] }
             ], in: nil, contentWorld: .defaultClient)
             if let error = result as? String, !error.isEmpty { throw ChatWorkError.invalid(error) }
+            if request.action == .click, let title = searchTitle, !openedSearchTitles.contains(title) {
+                openedSearchTitles.append(title)
+                openedSearchTitles = Array(openedSearchTitles.suffix(64))
+            }
             if request.action == .upload {
                 selectedFiles = files.map {
                     ["attachment_id": $0.id.uuidString, "filename": $0.filename,
@@ -412,16 +424,24 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         guard var object = try await webView.callAsyncJavaScript(
             Self.inspectScript, arguments: ["snapshotID": UUID().uuidString,
                                            "isSearchPage": searchPage,
+                                           "openedTitles": openedSearchTitles,
                                            "tabID": request.id?.uuidString ?? "",
                                            "canGoBack": webView.canGoBack,
                                            "canGoForward": webView.canGoForward], in: nil, contentWorld: .defaultClient
         ) as? [String: Any] else { throw ChatWorkError.invalid("The page could not be inspected.") }
+        object["http_status"] = httpStatus
+        if let status = httpStatus, status >= 400 { object["page_status"] = "blocked" }
         object["runtime_errors"] = runtimeErrors
         object["local_page_url"] = localPageURL?.absoluteString
         object["selected_files"] = selectedFiles
-        if let elements = object["elements"] as? [[String: Any]] {
-            elementLabels = Dictionary(elements.compactMap { element in
-                guard let id = element["id"] as? String, let label = element["label"] as? String else { return nil }
+        searchResultTitles = Dictionary((object["results"] as? [[String: Any]] ?? []).compactMap { result in
+            guard let id = result["id"] as? String, let title = result["title"] as? String else { return nil }
+            return (id, title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }, uniquingKeysWith: { first, _ in first })
+        let controls = (object["elements"] as? [[String: Any]] ?? []) + (object["results"] as? [[String: Any]] ?? [])
+        do {
+            elementLabels = Dictionary(controls.compactMap { element in
+                guard let id = element["id"] as? String, let label = (element["label"] ?? element["title"]) as? String else { return nil }
                 return (id, label.isEmpty ? (element["tag"] as? String ?? "control") : label)
             }, uniquingKeysWith: { first, _ in first })
         }
@@ -464,9 +484,15 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         const token = snapshotID;
         const refs = new Map();
         const search = isSearchPage;
-        const resultLinks = search ? [...document.querySelectorAll('a h3')].map(h => h.closest('a')) : [];
+        const opened = new Set(typeof openedTitles === 'undefined' ? [] : openedTitles);
+        const resultTitle = el => el.querySelector('h3')?.innerText.slice(0, 180) || '';
+        const wasOpened = el => opened.has(resultTitle(el).trim().toLowerCase());
+        const resultLinks = search ? [...document.querySelectorAll('a h3')].map(h => h.closest('a'))
+            .sort((a, b) => Number(wasOpened(a)) - Number(wasOpened(b))) : [];
+        const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(visible);
+        const dialogControls = dialogs.flatMap(d => [...d.querySelectorAll('a[href],button,input,[role="button"]')]);
         const fileInputs = [...document.querySelectorAll('input[type="file"]')].slice(0, 20);
-        const controls = [...new Set([...resultLinks, ...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')])]
+        const controls = [...new Set([...dialogControls, ...resultLinks, ...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')])]
             .filter(el => el.type !== 'file' && visible(el)).slice(0, 40);
         const elements = [...controls, ...fileInputs].map((el, i) => {
                 const id = token + ':' + i;
@@ -484,10 +510,23 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                     href: el.href?.slice(0, 2048), disabled: !!el.disabled};
             });
         globalThis.__nativWorkRefs = refs;
+        const body = (document.querySelector('article,main,[role="main"]') || document.body)?.innerText || '';
+        const dialog = dialogs[0];
+        const article = document.querySelector('article')?.innerText || '';
+        const login = [...document.querySelectorAll('input[type="password"]')].some(visible) && article.length < 300;
+        const blocked = login || /^(?:\\s*(?:404|page not found|access denied|just a moment|verify you are human)\\b)/i.test(body)
+            || (!!dialog && /cookie|consent|sign in|log in|verify/i.test(dialog.innerText));
+        const results = search ? elements.filter(e => resultLinks.includes(refs.get(e.id).el)).slice(0, 10).map(e => ({
+            id: e.id, title: resultTitle(refs.get(e.id).el), title_previously_opened: wasOpened(refs.get(e.id).el),
+            open: {action: 'click', element_id: e.id}
+        })) : [];
         return {id: tabID, kind: 'website', source_kind: search ? 'search' : 'page', url: location.href, title: document.title,
+            page_status: blocked ? 'blocked' : search ? 'search' : 'readable',
             can_go_back: canGoBack, can_go_forward: canGoForward, untrusted_page_content: true,
-            text_truncated: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').length > 6000,
-            text: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').slice(0, 6000), elements};
+            text_truncated: !search && body.length > 6000,
+            text: search ? (dialog ? dialog.innerText.slice(0, 2000) : 'Use chat_work with a result’s open action to read it. Search results do not count as source-page reads.') : body.slice(0, 6000),
+            ...(search ? {results} : {}),
+            elements: search ? elements.filter(e => !resultLinks.includes(refs.get(e.id).el)).slice(0, 8) : elements};
         """
 
     private static let actionScript = """
