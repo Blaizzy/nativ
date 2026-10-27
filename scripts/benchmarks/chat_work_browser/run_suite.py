@@ -24,7 +24,8 @@ def main():
     parser.add_argument("--max-output-tokens", type=int, default=2048)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    environment = {"hardware": subprocess.check_output(["system_profiler", "SPHardwareDataType"], text=True),
+    hardware = json.loads(subprocess.check_output(["system_profiler", "SPHardwareDataType", "-json"], text=True))["SPHardwareDataType"][0]
+    environment = {"hardware": {key: hardware[key] for key in ["machine_name", "machine_model", "chip_type", "number_processors", "physical_memory"] if key in hardware},
                    "os": platform.platform(), "python": sys.version,
                    "packages": {p: importlib.metadata.version(p) for p in ["mlx", "mlx-vlm", "transformers"]},
                    "settings": {"prefix_cache": True, "disk_cache": False, "thinking": False, "temperature": 0, "max_output_tokens": args.max_output_tokens}}

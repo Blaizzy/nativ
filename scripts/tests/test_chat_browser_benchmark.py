@@ -20,7 +20,8 @@ class ChatBrowserBenchmarkGradingTests(unittest.TestCase):
     def test_chain_requires_order_and_preserves_unknown_facts(self):
         records = [{"code": "A"}, {"code": "B"}]
         reads = ["http://localhost/checkpoint/1", "http://localhost/checkpoint/2"]
-        for answer in [{"tokens": ["B", "A"], "passport": None}, {"tokens": ["A", "B"], "passport": "A"}]:
+        for answer in [{"tokens": ["B", "A"], "passport": None}, {"tokens": ["A", "B"], "passport": "A"},
+                       {"tokens": ["A", "B", "invented"], "passport": None}]:
             self.assertFalse(grade("chain", json.dumps(answer), reads, records)["completed"])
         self.assertTrue(grade("chain", json.dumps({"tokens": ["A", "B"], "passport": None}), reads, records)["completed"])
 

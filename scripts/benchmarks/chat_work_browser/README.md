@@ -5,6 +5,10 @@ one JSON result per line. It runs Chat Work's actual WebKit browser, navigation/
 handling and cookie profile. It does not start a model server or require a search API
 key. This is a prototype; ordinary chat tool registration is unchanged.
 
+See [RESULTS.md](RESULTS.md) for the completed 30-run comparison and separate
+four-run output-budget diagnostic. The measured completion rates do not support
+enabling the compact interface by default.
+
 ```json
 {"name":"browser_search","arguments":{"query":"local OCR models"},"context":8192}
 {"name":"browser_read","arguments":{"url":"https://example.com/source"},"context":8192}
