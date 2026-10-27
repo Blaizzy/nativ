@@ -82,10 +82,11 @@ its attachment still rebuilds the history. Document fitting counts the summary
 and uncovered messages rather than the full pre-compaction transcript.
 
 Compaction requires a server that supports the Responses compaction API and
-budgets output from actual input usage. The bundled requirements pin the server
-revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
-External servers need that change too. To test a different checkout containing
-the fix, override the bundled source:
+budgets output from actual input usage, as implemented in
+[mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
+MLX-VLM will be updated before the Nativ release to include the recovery fixes in
+[mlx-vlm PR #2602](https://github.com/Blaizzy/mlx-vlm/pull/2602).
+To test those fixes before the runtime update, override the bundled source:
 
 ```sh
 MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build
