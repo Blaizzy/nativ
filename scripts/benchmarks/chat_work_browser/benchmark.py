@@ -13,6 +13,7 @@ import subprocess
 import threading
 import time
 import urllib.request
+from urllib.parse import urlsplit
 import uuid
 
 
@@ -154,7 +155,11 @@ def grade(case, final, reads, records):
         grade["correct_tokens"] = sum(a == r["code"] for a, r in zip(answer.get("tokens", []), records))
         grade["unknown_preserved"] = "passport" in answer and answer["passport"] is None
         grade["completed"] = grade["correct_tokens"] == len(records) and grade["unknown_preserved"]
-    grade["completed"] = grade["completed"] and len(set(reads)) >= len(records)
+    expected_paths = ({f"/checkpoint/{i}" for i in range(1, len(records) + 1)} if case == "chain" else
+                      {"/" + r["name"] for r in records})
+    read_paths = {urlsplit(url).path for url in reads}
+    grade["required_pages_read"] = len(expected_paths & read_paths)
+    grade["completed"] = grade["completed"] and expected_paths.issubset(read_paths)
     return grade
 
 

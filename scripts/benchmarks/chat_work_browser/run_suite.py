@@ -18,6 +18,9 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=18985)
+    parser.add_argument("--contexts", nargs="+", type=int, default=[8192, 16384])
+    parser.add_argument("--cases", nargs="+", choices=["chain", "catalog", "live"])
+    parser.add_argument("--repetitions", type=int, default=3)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     environment = {"hardware": subprocess.check_output(["system_profiler", "SPHardwareDataType"], text=True),
@@ -26,7 +29,7 @@ def main():
                    "settings": {"prefix_cache": True, "disk_cache": False, "thinking": False, "temperature": 0}}
     (args.output / "environment.json").write_text(json.dumps(environment, indent=2))
     base = f"http://127.0.0.1:{args.port}"
-    for context in [8192, 16384]:
+    for context in args.contexts:
         log = open(args.output / f"runtime-{context}.log", "w")
         proc = subprocess.Popen([sys.executable, "-m", "mlx_vlm.server", "--host", "127.0.0.1",
                                  "--port", str(args.port), "--max-kv-size", str(context)], stdout=log, stderr=log,
@@ -44,9 +47,9 @@ def main():
                     time.sleep(.2)
             else:
                 raise RuntimeError("Runtime did not become ready")
-            for rep in range(3):
+            for rep in range(args.repetitions):
                 modes = ["work", "compact"] if rep != 1 else ["compact", "work"]
-                cases = ["chain", "catalog", "live"] if context == 8192 else ["chain", "catalog"]
+                cases = args.cases or (["chain", "catalog", "live"] if context == 8192 else ["chain", "catalog"])
                 for case in cases:
                     for mode in modes:
                         label = f"{case}-{context}-{mode}-{rep}"

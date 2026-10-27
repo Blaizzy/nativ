@@ -37,7 +37,9 @@ final class ChatBrowserCommandsTests: XCTestCase {
         browser.load(ChatWorkItem(title: "Search fixture", kind: .website, content: """
             <html><body><main><a href="https://accounts.google.com"><h3>Account</h3></a>
             <div class="g"><a href="https://example.com/ocr"><h3>Local OCR</h3></a><p>Source description.</p></div>
-            <a href="https://example.com/ocr"><h3>Duplicate</h3></a></main></body></html>
+            <a href="https://example.com/ocr"><h3>Duplicate</h3></a>
+            <a href="https://www.google.com/url?q=https%3A%2F%2Fexample.com%2Fother&amp;sa=U"><h3>Redirected source</h3></a>
+            <a href="https://www.google.com/goto?url=opaque"><h3>Browser redirect</h3></a></main></body></html>
             """))
         defer { browser.stop() }
         _ = try await browser.execute(ChatWorkRequest(action: .inspect))
@@ -45,9 +47,11 @@ final class ChatBrowserCommandsTests: XCTestCase {
             ChatBrowserCommands.extractionScript, arguments: [:], in: nil, contentWorld: .defaultClient
         ) as? [String: Any]
         let results = try XCTUnwrap(snapshot?["results"] as? [[String: Any]])
-        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results.count, 3)
         XCTAssertEqual(results.first?["url"] as? String, "https://example.com/ocr")
         XCTAssertEqual(results.first?["title"] as? String, "Local OCR")
+        XCTAssertEqual(results[1]["url"] as? String, "https://example.com/other")
+        XCTAssertEqual(results.last?["url"] as? String, "https://www.google.com/goto?url=opaque")
         XCTAssertTrue(results.first?["snippet"] as? String == "Local OCR\n\nSource description.")
     }
 }

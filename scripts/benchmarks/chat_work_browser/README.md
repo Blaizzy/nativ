@@ -10,7 +10,9 @@ key. This is a prototype; ordinary chat tool registration is unchanged.
 {"name":"browser_read","arguments":{"url":"https://example.com/source"},"context":8192}
 ```
 
-Reads return `next_offset` for continuation, plus source links. Reuse the same process
+Search preserves Google result redirects, including opaque `/goto` links, and resolves
+them through ordinary browser navigation when read. Cite the final URL returned by
+the page read. Reads return `next_offset` for continuation, plus source links. Reuse the same process
 for subsequent calls. `{"name":"tools"}` exports the exact flat and generic schemas.
 The `chat_work` command accepts existing browser actions for the baseline and for
 operator-assisted interaction with a consent page. Non-browser actions are rejected.
@@ -45,3 +47,8 @@ MLX-VLM revision, passing `--binary /path/to/Nativ.app/Contents/MacOS/Nativ`,
 This compares browser-tool components, not complete Nativ UI latency or every tool
 advertised by the app. The baseline includes the current context bounds and shortened
 instructions; it is not the original 0.4.3 release. Live results can vary over time.
+
+Generate the HTML report and machine-readable summary with `summarize.py /path/to/results`.
+The scorer requires the actual expected fixture pages, so the catalog index cannot
+substitute for an unread source. A chain also requires exact order and preservation
+of unknown facts. Report partial token recall separately from complete task success.

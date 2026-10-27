@@ -6,12 +6,24 @@ import html
 import json
 from pathlib import Path
 import statistics
+from urllib.parse import urlsplit
 
 
 def metrics(path):
     data = json.loads(path.read_text())
     if "grade" not in data:
-        return None
+        if "error" not in data:
+            return None
+        data["grade"] = {"completed": False, "infrastructure_error": data["error"]}
+        data.setdefault("final", "")
+        data.setdefault("task_seconds", 0)
+    case = data["config"]["case"]
+    if case in ("chain", "catalog"):
+        expected_paths = ({f"/checkpoint/{i}" for i in range(1, 25)} if case == "chain" else
+                          {f"/Scanner-{i:02d}" for i in range(1, 13)})
+        read_paths = {urlsplit(url).path for url in data["read_urls"]}
+        data["grade"]["required_pages_read"] = len(expected_paths & read_paths)
+        data["grade"]["completed"] = data["grade"]["completed"] and expected_paths.issubset(read_paths)
     config = data["config"]
     steps = data["steps"]
     tools = [t for s in steps for t in s["tools"]]
@@ -53,7 +65,7 @@ def main():
     for (case, context, mode), values in sorted(groups.items()):
         aggregates.append({"case": case, "context": context, "mode": mode, "runs": len(values),
                            "completed": sum(r["completed"] for r in values),
-                           **{key: statistics.median(r[key] for r in values) for key in [
+                           **{key: statistics.median(r[key] for r in values if r[key] is not None) if any(r[key] is not None for r in values) else 0 for key in [
                                "seconds", "pages_read", "tool_calls", "tool_errors", "tool_result_bytes",
                                "prompt_tokens_sum", "prompt_tokens_peak", "first_prompt_tokens", "ttft_median"]},
                            "seconds_range": [min(r["seconds"] for r in values), max(r["seconds"] for r in values)],

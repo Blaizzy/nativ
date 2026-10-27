@@ -102,7 +102,7 @@ final class ChatBrowserCLI {
             let rows = extracted["results"] as? [[String: Any]] ?? []
             guard !rows.isEmpty else {
                 return try json(["ok": false, "error": "No search results could be extracted. The browser may require consent or a challenge.",
-                                 "id": item.id.uuidString, "url": extracted["url"] ?? "", "source_kind": "search"])
+                                 "id": item.id.uuidString, "url": extracted["url"] ?? "", "source_kind": "search", "diagnostics": extracted["search_diagnostics"] ?? [:]])
             }
             var result: [String: Any] = ["ok": true, "source_kind": "search", "untrusted_page_content": true,
                                          "id": item.id.uuidString, "url": extracted["url"] ?? "", "results": rows]
