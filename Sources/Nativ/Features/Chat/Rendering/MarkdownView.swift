@@ -11,6 +11,7 @@ struct MarkdownView: NSViewRepresentable {
     var onTranslate: ((String) -> Void)?
     var onAddToChat: ((String) -> Void)?
     var onRequestEdit: ((String, String) async throws -> Void)?
+    var onOpenLink: ((URL) -> Bool)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.chatSearchHighlight) private var searchHighlight
 
@@ -19,6 +20,7 @@ struct MarkdownView: NSViewRepresentable {
         view.onTranslate = onTranslate
         view.onAddToChat = onAddToChat
         view.onRequestEdit = onRequestEdit
+        view.onOpenLink = onOpenLink
         view.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         view.setSearchHighlight(searchHighlight)
         return view
@@ -28,6 +30,7 @@ struct MarkdownView: NSViewRepresentable {
         nsView.onTranslate = onTranslate
         nsView.onAddToChat = onAddToChat
         nsView.onRequestEdit = onRequestEdit
+        nsView.onOpenLink = onOpenLink
         nsView.configure(content: content, style: style, plainText: plainText, fadesStreamingText: isStreaming && !reduceMotion)
         nsView.setSearchHighlight(searchHighlight)
     }
@@ -45,6 +48,7 @@ struct MarkdownView: NSViewRepresentable {
 
 @MainActor
 final class MarkdownSurface: NSView {
+    var onOpenLink: ((URL) -> Bool)?
     var onTranslate: ((String) -> Void)?
     var onAddToChat: ((String) -> Void)?
     var onRequestEdit: ((String, String) async throws -> Void)?
@@ -482,6 +486,12 @@ final class MarkdownSelectableTextView: NSTextView {
         if document.range.length == 0, event.clickCount == 1, !event.modifierFlags.contains(.shift), let link {
             clicked(onLink: link, at: index)
         }
+    }
+
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+        if let url, document?.openLink(url) == true { return }
+        super.clicked(onLink: link, at: charIndex)
     }
 
     override func rightMouseDown(with event: NSEvent) {

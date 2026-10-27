@@ -616,7 +616,7 @@ final class AudioCaptureLibrary: ObservableObject {
             }
             do {
                 guard let current = self.analytics.record(withID: record.id) else { throw AudioSpeakerProfileError.recordingChanged }
-                let summary = try await self.generateSummary(for: current.transcript)
+                let summary = try await self.generateSummary(for: current)
                 guard let latest = self.analytics.record(withID: record.id),
                       latest.transcript == current.transcript, latest.diarization == current.diarization,
                       latest.summary == current.summary else { throw AudioSpeakerProfileError.recordingChanged }
@@ -960,7 +960,7 @@ final class AudioCaptureLibrary: ObservableObject {
             if automaticallySummarize {
                 do {
                     guard let current = analytics.record(withID: recordID) else { throw AudioSpeakerProfileError.recordingChanged }
-                    let summary = try await generateSummary(for: current.transcript)
+                    let summary = try await generateSummary(for: current)
                     guard let latest = analytics.record(withID: recordID),
                           latest.transcript == current.transcript, latest.diarization == current.diarization,
                           latest.summary == current.summary else { throw AudioSpeakerProfileError.recordingChanged }
@@ -1095,7 +1095,7 @@ final class AudioCaptureLibrary: ObservableObject {
         })
     }
 
-    private func generateSummary(for transcript: String) async throws -> String {
+    private func generateSummary(for record: AudioTranscriptionRecord) async throws -> String {
         // Snapshot both stages so editing preferences cannot change a summary in progress.
         let summaryLanguage = AudioCapturePreferences.summaryLanguage
         let summaryPrompt = AudioCapturePreferences.summaryPrompt
@@ -1124,74 +1124,11 @@ final class AudioCaptureLibrary: ObservableObject {
             apiKey: configuration.serverAPIKey,
             resourceTimeout: 1_800
         )
-        let chunks = Self.transcriptChunks(transcript, maximumCharacters: 14_000)
-        var partialSummaries: [String] = []
-        for chunk in chunks {
-            try Task.checkCancellation()
-            let prompt = """
-                TRANSCRIPT:
-                \(chunk)
-                """
-            let completion = try await client.completeChat(
-                Self.summaryRequest(
-                    modelID: modelID,
-                    prompt: prompt,
-                    language: summaryLanguage,
-                    summaryPrompt: summaryPrompt,
-                    maxTokens: configuration.maxTokens
-                )
-            )
-            partialSummaries.append(completion.content)
-        }
-
-        if partialSummaries.count == 1 {
-            return partialSummaries[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let combinedPrompt = """
-            SECTION SUMMARIES:
-            \(partialSummaries.joined(separator: "\n\n---\n\n"))
-            """
-        let completion = try await client.completeChat(
-            Self.summaryRequest(
-                modelID: modelID,
-                prompt: combinedPrompt,
-                language: summaryLanguage,
-                summaryPrompt: mergePrompt,
-                maxTokens: configuration.maxTokens
-            )
-        )
-        return completion.content.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func summaryRequest(
-        modelID: String,
-        prompt: String,
-        language: AudioSummaryLanguage,
-        summaryPrompt: String,
-        maxTokens: Int
-    ) -> MLXChatCompletionRequest {
-        let systemPrompt = """
-            \(summaryPrompt)
-
-            OUTPUT LANGUAGE:
-            \(language.instruction)
-            This output language rule takes precedence over language requests elsewhere in the prompt or source material.
-            """
-        return MLXChatCompletionRequest(
-            model: modelID,
-            messages: [
-                MLXChatMessage(
-                    role: "system",
-                    content: systemPrompt
-                ),
-                MLXChatMessage(role: "user", content: prompt),
-            ],
-            maxTokens: maxTokens,
-            temperature: 0.2,
-            topK: 0,
-            topP: 1,
-            minP: 0,
-            enableThinking: false
+        return try await AudioSummaryGenerator.generate(
+            record: record, client: client, modelID: modelID, maxTokens: configuration.maxTokens,
+            supportsReasoning: languageModels.first { $0.repoID == modelID }?.capabilities.contains(.reasoning) == true,
+            contextSize: languageModels.first { $0.repoID == modelID }?.contextSize,
+            summaryPrompt: summaryPrompt, mergePrompt: mergePrompt, languageInstruction: summaryLanguage.instruction
         )
     }
 
@@ -1372,32 +1309,7 @@ final class AudioCaptureLibrary: ObservableObject {
         "\(kind.title) · \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 
-    private static func transcriptChunks(
-        _ transcript: String,
-        maximumCharacters: Int
-    ) -> [String] {
-        guard transcript.count > maximumCharacters else {
-            return [transcript]
-        }
-        var chunks: [String] = []
-        var start = transcript.startIndex
-        while start < transcript.endIndex {
-            let proposedEnd = transcript.index(
-                start,
-                offsetBy: maximumCharacters,
-                limitedBy: transcript.endIndex
-            ) ?? transcript.endIndex
-            var end = proposedEnd
-            if proposedEnd < transcript.endIndex,
-               let newline = transcript[start..<proposedEnd].lastIndex(of: "\n")
-            {
-                end = transcript.index(after: newline)
-            }
-            chunks.append(String(transcript[start..<end]))
-            start = end
-        }
-        return chunks
-    }
+
 }
 
 struct MeetingApplication: Equatable {

@@ -5,6 +5,7 @@ struct MarkdownStyle: Hashable {
     var dark = false
     var baseURL: URL?
     var images: MarkdownImages = .empty
+    var listItemSpacing: CGFloat?
 
     var foreground: NSColor {
         dark ? NSColor(white: 0.94, alpha: 1) : NSColor(white: 0.06, alpha: 1)
@@ -118,7 +119,7 @@ enum MarkdownLayouter {
             case "list":
                 let indent = min(width / 2, style.fontSize * 2)
                 for (index, item) in node.children.enumerated() {
-                    if index > 0 { y += node.tight ? 4 : 16 }
+                    if index > 0 { y += style.listItemSpacing ?? (node.tight ? 4 : 16) }
                     let itemY = y
                     let marker =
                         item.checked.map { $0 ? "☑" : "☐" }

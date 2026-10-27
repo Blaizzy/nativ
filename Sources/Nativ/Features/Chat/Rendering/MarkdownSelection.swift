@@ -29,6 +29,7 @@ final class MarkdownSelection {
     init(surface: MarkdownSurface) { self.surface = surface }
 
     func contextualMenu(for event: NSEvent) -> NSMenu? { surface?.menu(for: event) }
+    func openLink(_ url: URL) -> Bool { surface?.onOpenLink?(url) ?? false }
 
     func invalidate(contentChanged: Bool) {
         indexed = false

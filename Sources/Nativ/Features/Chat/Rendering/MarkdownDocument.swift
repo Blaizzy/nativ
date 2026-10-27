@@ -8,6 +8,8 @@ struct MarkdownNode: Sendable {
     var literal = ""
     var destination = ""
     var level = 0
+    var startLine = 0
+    var endLine = 0
     var ordered = false
     var start = 1
     var tight = false
@@ -47,6 +49,8 @@ enum MarkdownParser {
         while let node = cursor {
             let kind = string(cmark_node_get_type_string(node))
             var value = MarkdownNode(kind: kind)
+            value.startLine = Int(cmark_node_get_start_line(node))
+            value.endLine = Int(cmark_node_get_end_line(node))
             value.literal = string(cmark_node_get_literal(node))
             value.destination = string(cmark_node_get_url(node))
             if kind == "heading" { value.level = Int(cmark_node_get_heading_level(node)) }

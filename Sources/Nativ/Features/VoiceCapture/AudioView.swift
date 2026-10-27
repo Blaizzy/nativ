@@ -159,7 +159,8 @@ struct AudioView: View {
     private var includeSystemAudio = true
     @AppStorage(AudioCapturePreferences.suggestMeetingTranscriptionKey)
     private var suggestMeetingTranscription = false
-    @State private var searchText = ""
+    @State private var libraryFilter = AudioLibraryFilter()
+    @State private var libraryPageIndex = 0
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
@@ -449,9 +450,16 @@ struct AudioView: View {
                 )
                 .id(record.id + (recordingSourceProfileID ?? "") + String(initiallyShowsRecordingSpeakers))
             } else {
-                AudioPage(title: "Audio Library", subtitle: "Review recordings and dictation history") {
-                    savedCapturesPanel
-                    recentDictationsPanel
+                ScrollViewReader { proxy in
+                    AudioPage(
+                        title: "Audio Library",
+                        subtitle: "Find recordings, transcripts and summaries"
+                    ) {
+                        savedCapturesPanel.id("audio-library-results")
+                    }
+                    .onChange(of: libraryPageIndex) { _, _ in
+                        proxy.scrollTo("audio-library-results", anchor: .top)
+                    }
                 }
             }
         case .speakers:
@@ -2813,71 +2821,15 @@ struct AudioView: View {
         .audioPanelStyle()
     }
 
-    private var recentDictationsPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Recent Dictations")
-                        .font(.headline)
-                    Text("Search and reuse transcripts stored locally.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Clear All", role: .destructive) {
-                    isConfirmingClearAllDictations = true
-                }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.red)
-                .disabled(dictationRecords.isEmpty)
-                .help("Delete all recent dictations")
-
-                TextField("Search transcripts", text: $searchText)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 240)
-            }
-
-            if filteredRecords.isEmpty {
-                ContentUnavailableView {
-                    Label(
-                        searchText.isEmpty ? "No transcripts yet" : "No matching transcripts",
-                        systemImage: searchText.isEmpty ? "text.badge.plus" : "magnifyingglass"
-                    )
-                } description: {
-                    Text(
-                        searchText.isEmpty
-                            ? "Your completed voice dictations will appear here."
-                            : "Try a different search."
-                    )
-                }
-                .frame(maxWidth: .infinity, minHeight: 160)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(filteredRecords.prefix(30).enumerated()), id: \.element.id) {
-                        index, record in
-                        AudioTranscriptRow(
-                            record: record,
-                            onDelete: { pendingDeleteDictation = record }
-                        )
-                        if index < min(filteredRecords.count, 30) - 1 {
-                            Divider()
-                        }
-                    }
-                }
-            }
-        }
-        .padding(18)
-        .audioPanelStyle()
-    }
-
     private var savedCapturesPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let matches = libraryFilter.records(in: analytics.records, profiles: analytics.speakerProfiles)
+        let page = AudioLibraryPage(records: matches, index: libraryPageIndex)
+        return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Recordings")
+                    Text(libraryFilter.kind.title)
                         .font(.headline)
-                    Text("Persistent audio, raw transcripts, and local summaries.")
+                    Text("Search transcripts, summaries and speaker names.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -2897,20 +2849,25 @@ struct AudioView: View {
                 .controlSize(.small)
             }
 
-            if captureRecords.isEmpty {
+            AudioLibraryControls(filter: $libraryFilter, profiles: analytics.speakerProfiles)
+            AudioLibraryPagination(page: page, selection: $libraryPageIndex)
+            if libraryFilter.kind == .dictations {
+                HStack {
+                    Spacer()
+                    Button("Clear all dictations", role: .destructive) { isConfirmingClearAllDictations = true }
+                        .font(.caption).disabled(dictationRecords.isEmpty)
+                }
+            }
+            if matches.isEmpty {
                 ContentUnavailableView {
-                    Label("No saved recordings", systemImage: "waveform.badge.plus")
+                    Label("No matching recordings", systemImage: "magnifyingglass")
                 } description: {
-                    Text("Start a recording to create your local audio library.")
-                } actions: {
-                    Button("Start Recording") {
-                        destination = .record
-                    }
-                    .buttonStyle(.borderedProminent)
+                    Text("Try another search or clear the filters.")
                 }
                 .frame(maxWidth: .infinity, minHeight: 170)
             } else {
-                AudioLibraryRecordings(records: captureRecords, library: captureLibrary,
+                AudioLibraryRecordings(records: page.records, profiles: analytics.speakerProfiles,
+                    library: captureLibrary,
                     onOpen: { record, section in
                         recordingSourceProfileID = nil
                         initiallyShowsRecordingSpeakers = false
@@ -2918,11 +2875,19 @@ struct AudioView: View {
                         selectedRecordingID = record.id
                     },
                     onRename: { record, title in analytics.updateTitle(title, for: record.id) },
-                    onDelete: { pendingDeleteRecording = $0 })
+                    onDelete: { record in
+                        if record.resolvedKind == .dictation { pendingDeleteDictation = record }
+                        else { pendingDeleteRecording = record }
+                    })
+                AudioLibraryPagination(page: page, selection: $libraryPageIndex, identifier: "audio.library.footer")
             }
         }
         .padding(18)
         .audioPanelStyle()
+        .onChange(of: libraryFilter) { _, _ in libraryPageIndex = 0 }
+        .onChange(of: matches.map(\.id)) { _, _ in
+            libraryPageIndex = AudioLibraryPage(records: matches, index: libraryPageIndex).index
+        }
     }
 
     private func chooseAudioToImport() {
@@ -3032,18 +2997,6 @@ struct AudioView: View {
         }
         guard hoveredActivity != nextActivity else { return }
         hoveredActivity = nextActivity
-    }
-
-    private var filteredRecords: [AudioTranscriptionRecord] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
-            return dictationRecords
-        }
-        return dictationRecords.filter { record in
-            record.transcript.localizedCaseInsensitiveContains(query)
-                || record.applicationName?.localizedCaseInsensitiveContains(query) == true
-                || record.modelID?.localizedCaseInsensitiveContains(query) == true
-        }
     }
 
     private var dictationRecords: [AudioTranscriptionRecord] {
@@ -3179,7 +3132,8 @@ struct AudioView: View {
         analytics.deleteAllDictations(
             recordingsDirectory: try? VoiceAudioRecorder.recordingsDirectory
         )
-        searchText = ""
+        libraryFilter.query = ""
+        libraryPageIndex = 0
     }
 
     private func apply(_ shortcut: VoiceShortcut, to kind: AudioShortcutKind) {

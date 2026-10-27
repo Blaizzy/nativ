@@ -47,6 +47,26 @@ final class MarkdownParserTests: XCTestCase {
 
 @MainActor
 final class MarkdownGeometryTests: XCTestCase {
+    func testInternalLinksReachTheCurrentSurfaceHandler() throws {
+        let url = try XCTUnwrap(URL(string: "nativ://recording/passage/source"))
+        let surface = MarkdownSurface()
+        surface.configure(content: "[Source](\(url.absoluteString))", style: .init())
+        let layout = surface.preflight(width: 600)
+        let fragment = try XCTUnwrap(layout.blocks.first?.text.first)
+        XCTAssertEqual(fragment.text.attribute(.link, at: 0, effectiveRange: nil) as? URL, url)
+        let view = MarkdownSelectableTextView(fragment: fragment)
+        view.document = surface.selection
+        var opened: [URL] = []
+        surface.onOpenLink = { opened.append($0); return true }
+        view.clicked(onLink: url, at: 0)
+        XCTAssertEqual(opened, [url])
+        surface.onOpenLink = { _ in opened.removeAll(); return true }
+        view.clicked(onLink: url.absoluteString, at: 0)
+        XCTAssertTrue(opened.isEmpty, "Mounted text must use the latest callback")
+        surface.onOpenLink = nil
+        XCTAssertFalse(surface.selection.openLink(url), "Unclaimed links retain native behavior")
+    }
+
     func testMovingAncestorIntoViewportMountsTextWithoutScrolling() async throws {
         let window = NSWindow(
             contentRect: CGRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled],

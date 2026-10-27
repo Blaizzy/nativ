@@ -76,6 +76,11 @@ jobs:
             -only-testing:NativTests/AudioSpeakerProfileTests \
             -only-testing:NativTests/AudioLibraryFilterTests \
             -only-testing:NativTests/AudioRecordExportTests \
+            -only-testing:NativTests/AudioSummaryReferenceTests \
+            -only-testing:NativTests/AudioSummaryDocumentTests \
+            -only-testing:NativTests/MarkdownParserTests \
+            -only-testing:NativTests/MarkdownGeometryTests \
+            -only-testing:NativTests/MarkdownSelectionTests \
             -only-testing:NativTests/ModelPrimaryTaskResolverTests \
             -only-testing:NativTests/LocalModelDiscoveryTests \
             -only-testing:NativTests/HuggingFaceModelSupportTests \
