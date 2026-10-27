@@ -2,8 +2,12 @@
 
 This experiment keeps the `chat_work` tool and shared WebKit browser. It adds a
 bounded, transient record of exact source excerpts for the current user request,
-plus source-first Google controls, absolute link URLs, direct navigation for URL search queries, and an explicit final-answer instruction at the tool-round limit. There are no compact
-browser tools and no installed CLI entry point.
+plus source-first Google controls, absolute link URLs, direct navigation for URL
+search queries, and an explicit final-answer instruction at the tool-round limit.
+The closing instruction follows the evidence and is also present in the system
+guidance. There are no compact browser tools and no installed CLI entry point.
+
+See [measured results and limitations](RESULTS.md).
 
 `build_helper.py` temporarily appends the test bridge to `Main.swift`, builds,
 then restores every modified source in `finally`. Do not edit or run another build
@@ -29,17 +33,25 @@ production evidence builder. Cookies are isolated in a nonpersistent profile.
 - `/v1/responses` with a 75% compaction threshold. Replay the returned compaction
   item plus the new conversation tail; append fresh evidence outside the saved
   prefix, following Nativ's client request construction.
-- 8K and 16K contexts; three trials per condition, reversing the order in the
-  middle repetition. Baseline and revised arms both expose only `chat_work`.
+- Primary 8K comparison: three trials per condition, reversing the order in the
+  middle repetition. Exploratory 16K checks: one trial per condition. Baseline
+  and revised arms both expose only `chat_work`.
 - Both arms allow 4,096 output tokens to reduce the output-limit confound found in
   the earlier experiment. Both allow 32 tool rounds followed by one generation
-  without tools, matching the app's round gate. The revised arm receives the new final-answer instruction; the baseline retains its existing behavior. A 30-minute task deadline applies.
+  without tools, matching the app's round gate. The revised arm receives closing
+  guidance; the baseline retains its existing behavior. A 30-minute task deadline
+  applies. The recorded 22-run comparison predates the final change that repeats
+  closing guidance after evidence; separate replays and fresh live runs evaluate
+  that change. Pin the source revision listed in RESULTS.md to reproduce each stage.
 - A 24-page dependent chain checks exact ordered recall and an unknown fact.
   A 12-page catalog checks every record, a total and a constrained recommendation.
   Facts occur only in served pages, never in the model prompt or evidence code.
 - The original five-page live OCR request runs at 8K. Search snippets and repeated
   reads cannot satisfy its source count. The automatic live gate requires five
-  distinct page payloads plus a final answer; manually inspect source quality.
+  distinct page payloads plus a final answer. `summarize.py` also requires a
+  `review.json` beside each live `result.json`, containing `completed` and the
+  review rationale. Without a recorded review, live completion is false; the
+  provisional automatic gate remains visible separately.
 - Raw captures include exact schemas, prompts, tool calls/results, evidence
   context, Responses events, compaction items, timing, usage and runtime health.
 
