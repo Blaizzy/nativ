@@ -8,6 +8,7 @@ private enum AudioDestination: String, CaseIterable, Identifiable {
     case overview
     case record
     case history
+    case speakers
     case model
     case animation
     case shortcuts
@@ -19,7 +20,8 @@ private enum AudioDestination: String, CaseIterable, Identifiable {
         case .record: "Record"
         case .overview: "Overview"
         case .history: "Library"
-        case .model: "Model"
+        case .speakers: "Speakers"
+        case .model: "Models"
         case .animation: "Animation"
         case .shortcuts: "Shortcuts"
         }
@@ -30,6 +32,7 @@ private enum AudioDestination: String, CaseIterable, Identifiable {
         case .record: "record.circle"
         case .overview: "square.grid.2x2"
         case .history: "books.vertical"
+        case .speakers: "person.2"
         case .model: "cpu"
         case .animation: "sparkles"
         case .shortcuts: "keyboard"
@@ -160,6 +163,11 @@ struct AudioView: View {
     @State private var editingShortcut: AudioShortcutKind?
     @State private var shortcutConflict: String?
     @State private var destination: AudioDestination = .record
+    @State private var selectedRecordingID: String?
+    @State private var selectedRecordingSection: AudioRecordingSection = .summary
+    @State private var selectedSpeakerProfileID: String?
+    @State private var recordingSourceProfileID: String?
+    @State private var initiallyShowsRecordingSpeakers = false
     @State private var pendingDeleteDictation: AudioTranscriptionRecord?
     @State private var pendingDeleteRecording: AudioTranscriptionRecord?
     @State private var hoveredActivity: AudioDailyUsage?
@@ -357,6 +365,12 @@ struct AudioView: View {
                 ForEach(AudioDestination.allCases) { item in
                     Button {
                         withAnimation(.snappy(duration: 0.18)) {
+                            if item == .history || item == .speakers {
+                                selectedRecordingID = nil
+                                selectedSpeakerProfileID = nil
+                                recordingSourceProfileID = nil
+                                initiallyShowsRecordingSpeakers = false
+                            }
                             destination = item
                         }
                     } label: {
@@ -408,25 +422,69 @@ struct AudioView: View {
                 modelUsagePanel
             }
         case .history:
-            AudioPage(
-                title: "Audio Library",
-                subtitle: "Review persistent recordings alongside dictation history"
-            ) {
-                savedCapturesPanel
-                recentDictationsPanel
+            if let record = captureRecords.first(where: { $0.id == selectedRecordingID }) {
+                AudioRecordingDetail(
+                    record: record,
+                    library: captureLibrary,
+                    analytics: analytics,
+                    recognition: captureLibrary.speakerRecognition,
+                    initialSection: selectedRecordingSection,
+                    initialSpeakerProfileID: recordingSourceProfileID,
+                    initialShowsSpeakers: initiallyShowsRecordingSpeakers,
+                    onBack: {
+                        selectedRecordingID = nil
+                        if let profileID = recordingSourceProfileID {
+                            selectedSpeakerProfileID = profileID
+                            destination = .speakers
+                        }
+                        recordingSourceProfileID = nil
+                    },
+                    onRename: { analytics.updateTitle($0, for: record.id) },
+                    onRenameSpeaker: { analytics.updateSpeakerName($1, speakerID: $0, for: record.id) },
+                    onDelete: { pendingDeleteRecording = record },
+                    onOpenSpeakerProfile: { profileID in
+                        selectedSpeakerProfileID = profileID
+                        destination = .speakers
+                    }
+                )
+                .id(record.id + (recordingSourceProfileID ?? "") + String(initiallyShowsRecordingSpeakers))
+            } else {
+                AudioPage(title: "Audio Library", subtitle: "Review recordings and dictation history") {
+                    savedCapturesPanel
+                    recentDictationsPanel
+                }
+            }
+        case .speakers:
+            AudioSpeakerProfilesView(
+                store: analytics, recognition: captureLibrary.speakerRecognition, library: captureLibrary,
+                selectedProfileID: $selectedSpeakerProfileID
+            ) { recordID, profileID in
+                recordingSourceProfileID = profileID
+                initiallyShowsRecordingSpeakers = false
+                selectedRecordingID = recordID
+                selectedRecordingSection = .transcript
+                destination = .history
+            } onReviewMatch: { recordID in
+                recordingSourceProfileID = nil
+                initiallyShowsRecordingSpeakers = true
+                selectedRecordingID = recordID
+                selectedRecordingSection = .summary
+                destination = .history
             }
         case .model:
             AudioPage(
-                title: "Transcription Model",
-                subtitle: "Choose which installed model handles voice dictation"
+                title: "Audio Models",
+                subtitle: "Transcription and speaker identification for your recordings"
             ) {
                 modelConfigurationPanel
                     .frame(maxWidth: 760)
                 diarizationModelPanel
                     .frame(maxWidth: 760)
-                AudioSpeakerEmbeddingModelPanel(token: model.effectiveHuggingFaceToken,
-                    recognition: captureLibrary.speakerRecognition)
-                    .frame(maxWidth: 760)
+                AudioSpeakerEmbeddingModelPanel(
+                    token: model.effectiveHuggingFaceToken,
+                    recognition: captureLibrary.speakerRecognition
+                )
+                .frame(maxWidth: 760)
             }
         case .animation:
             AudioPage(
@@ -1708,7 +1766,7 @@ struct AudioView: View {
     private var modelConfigurationPanel: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Model selection")
+                Text("Transcription model")
                     .font(.subheadline.weight(.semibold))
                 Text("Choose an installed model, or use Automatic for built-in transcription on macOS 27 and later.")
                     .font(.caption)
@@ -2852,28 +2910,15 @@ struct AudioView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 170)
             } else {
-                LazyVStack(spacing: 10) {
-                    ForEach(captureRecords) { record in
-                        AudioCaptureRecordRow(
-                            record: record,
-                            audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
-                            isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
-                            isTranscribing: captureLibrary.transcribingRecordIDs.contains(record.id),
-                            isDiarizing: captureLibrary.diarizingRecordIDs.contains(record.id),
-                            isPlaying: captureLibrary.playingRecordID == record.id
-                                && !captureLibrary.isPlaybackPaused,
-                            isPaused: captureLibrary.playingRecordID == record.id
-                                && captureLibrary.isPlaybackPaused,
-                            onPlay: { captureLibrary.togglePlayback(for: record) },
-                            onStop: { captureLibrary.stopPlayback() },
-                            onReveal: { captureLibrary.revealAudio(for: record) },
-                            onTranscribe: { captureLibrary.retryTranscription(record) },
-                            onSummarize: { captureLibrary.summarize(record) },
-                            onRename: { analytics.updateTitle($0, for: record.id) },
-                            onDelete: { pendingDeleteRecording = record }
-                        )
-                    }
-                }
+                AudioLibraryRecordings(records: captureRecords, library: captureLibrary,
+                    onOpen: { record, section in
+                        recordingSourceProfileID = nil
+                        initiallyShowsRecordingSpeakers = false
+                        selectedRecordingSection = section
+                        selectedRecordingID = record.id
+                    },
+                    onRename: { record, title in analytics.updateTitle(title, for: record.id) },
+                    onDelete: { pendingDeleteRecording = $0 })
             }
         }
         .padding(18)
@@ -2995,7 +3040,7 @@ struct AudioView: View {
             return dictationRecords
         }
         return dictationRecords.filter { record in
-            record.displayTranscript.localizedCaseInsensitiveContains(query)
+            record.transcript.localizedCaseInsensitiveContains(query)
                 || record.applicationName?.localizedCaseInsensitiveContains(query) == true
                 || record.modelID?.localizedCaseInsensitiveContains(query) == true
         }
@@ -3074,7 +3119,7 @@ struct AudioView: View {
             refreshLocalModels()
         case .overview, .history:
             importExistingTranscripts()
-        case .animation, .shortcuts:
+        case .animation, .shortcuts, .speakers:
             break
         }
     }
@@ -3091,7 +3136,7 @@ struct AudioView: View {
         case .overview, .history:
             importExistingTranscripts()
             inputLevelMonitor.stop()
-        case .animation, .shortcuts:
+        case .animation, .shortcuts, .speakers:
             inputLevelMonitor.stop()
         }
     }
@@ -3357,7 +3402,7 @@ private struct AudioTitleDoubleClickTarget: NSViewRepresentable {
     }
 }
 
-private struct InlineEditableAudioTitle: View {
+struct InlineEditableAudioTitle: View {
     let title: String
     let placeholder: String
     let font: Font
@@ -3442,7 +3487,7 @@ private struct InlineEditableAudioTitle: View {
     }
 }
 
-private struct AudioTranscriptRow: View {
+struct AudioTranscriptRow: View {
     let record: AudioTranscriptionRecord
     let onDelete: () -> Void
     @State private var copied = false
@@ -3527,7 +3572,7 @@ private struct AudioTranscriptRow: View {
     }
 }
 
-private func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
+func audioTranscriptionModelDisplayName(_ modelID: String) -> String {
     if modelID == DefaultSpeechModel.identifier { return "Parakeet Redux" }
     return modelID.split(separator: "/").last.map(String.init) ?? modelID
 }
@@ -3592,499 +3637,7 @@ private struct AudioTranscriptionModelMetadata: View {
         )
             .lineLimit(1)
             .help("Transcribed with \(modelID)")
-            .accessibilityLabel("Transcription model \(modelID)")
     }
-}
-
-private struct AudioCaptureRecordRow: View {
-    let record: AudioTranscriptionRecord
-    let audioIsAvailable: Bool
-    let isProcessing: Bool
-    let isTranscribing: Bool
-    let isDiarizing: Bool
-    let isPlaying: Bool
-    let isPaused: Bool
-    let onPlay: () -> Void
-    let onStop: () -> Void
-    let onReveal: () -> Void
-    let onTranscribe: () -> Void
-    let onSummarize: () -> Void
-    let onRename: (String) -> Void
-    let onDelete: () -> Void
-
-    @State private var selectedDetail: DetailSection?
-    @State private var copiedDetail: DetailSection?
-    @State private var hoveredDetail: DetailSection?
-    @State private var isExporting = false
-    @State private var exportedFormat: AudioRecordExportFormat?
-    @State private var exportError: String?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private enum DetailSection: Hashable {
-        case summary
-        case transcript
-
-        var title: String {
-            switch self {
-            case .summary: "Summary"
-            case .transcript: "Transcript"
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .summary: "sparkles"
-            case .transcript: "text.alignleft"
-            }
-        }
-
-        var tint: Color {
-            switch self {
-            case .summary: .primary
-            case .transcript: .primary
-            }
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: record.resolvedKind.systemImage)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(record.resolvedKind == .dictation ? Color.secondary : Color.blue)
-                    .frame(width: 36, height: 36)
-                    .background(
-                        (record.resolvedKind == .dictation ? Color.secondary : Color.blue)
-                            .opacity(0.11),
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
-
-                VStack(alignment: .leading, spacing: 4) {
-                    InlineEditableAudioTitle(
-                        title: record.displayTitle,
-                        placeholder: "\(record.resolvedKind.title) title",
-                        font: .callout.weight(.semibold),
-                        onRename: onRename
-                    )
-                    HStack(spacing: 7) {
-                        Text(record.resolvedKind.title)
-                        Text("·")
-                        Text(record.recordedAt.formatted(date: .abbreviated, time: .shortened))
-                        if let duration = record.durationSeconds {
-                            Text("·")
-                            Text(NativFormatting.clockDuration(duration))
-                        }
-                        if !record.displayTranscript.isEmpty {
-                            Text("·")
-                            Text("\(record.wordCount) words")
-                        }
-                        if let modelID = record.modelID, !modelID.isEmpty {
-                            Text("·")
-                            AudioTranscriptionModelMetadata(modelID: modelID)
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 12)
-
-                if isProcessing {
-                    HStack(spacing: 7) {
-                        ProgressView().controlSize(.small)
-                        Text(processingLabel)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Button(action: onPlay) {
-                    Label(
-                        isPlaying ? "Pause" : (isPaused ? "Resume" : "Play"),
-                        systemImage: isPlaying ? "pause.fill" : "play.fill"
-                    )
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(!audioIsAvailable)
-
-                if isPlaying || isPaused {
-                    Button(action: onStop) {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .labelStyle(.iconOnly)
-                    .help("Stop playback")
-                }
-
-                if record.displayTranscript.isEmpty && !isProcessing {
-                    Button("Transcribe", action: onTranscribe)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(!audioIsAvailable)
-                }
-
-                exportStatus
-
-                Menu {
-                    Menu {
-                        ForEach(AudioRecordExportFormat.allCases, id: \.self) { format in
-                            Button(format.title) { export(as: format) }
-                        }
-                    } label: {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(isExporting || !AudioRecordExport(record: record).isAvailable)
-                    .help("Export the summary and transcript together")
-                    Divider()
-                    if !record.displayTranscript.isEmpty {
-                        Menu {
-                            Button(action: onTranscribe) {
-                                Label("Transcript", systemImage: "text.alignleft")
-                            }
-                            .disabled(!audioIsAvailable || isProcessing)
-
-                            Button(action: onSummarize) {
-                                Label("Summary", systemImage: "sparkles")
-                            }
-                            .disabled(isProcessing)
-                        } label: {
-                            Label("Regenerate", systemImage: "arrow.clockwise")
-                        }
-                        Divider()
-                        Button("Copy Transcript", action: copyTranscript)
-                        if let summary = record.summary, !summary.isEmpty {
-                            Button("Copy Summary") {
-                                copy(summary, detail: .summary)
-                            }
-                        }
-                    }
-                    Divider()
-                    Button("Reveal in Finder", action: onReveal)
-                        .disabled(!audioIsAvailable)
-                    Button("Delete Recording", role: .destructive, action: onDelete)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .frame(width: 18)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-
-            if !record.displayTranscript.isEmpty {
-                VStack(spacing: 0) {
-                    detailMenu
-
-                    if let selectedDetail {
-                        Divider()
-                            .padding(.horizontal, 12)
-
-                        detailContent(selectedDetail)
-                            .transition(.opacity)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.primary.opacity(0.032), in: RoundedRectangle(cornerRadius: 11))
-                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                }
-            }
-
-            if record.displayTranscript.isEmpty && !isProcessing {
-                Label(
-                    "Audio saved without a transcript. You can keep or delete the recording.",
-                    systemImage: "exclamationmark.circle"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            }
-        }
-        .padding(14)
-        .background(
-            Color.primary.opacity(0.025),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
-        .alert("Export Failed", isPresented: Binding(
-            get: { exportError != nil },
-            set: { if !$0 { exportError = nil } }
-        )) {
-            Button("OK", role: .cancel) { exportError = nil }
-        } message: {
-            Text(exportError ?? "The document could not be saved.")
-        }
-        .task(id: exportedFormat) {
-            guard exportedFormat != nil else { return }
-            do {
-                try await Task.sleep(for: .seconds(3))
-            } catch {
-                return
-            }
-            withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
-        }
-    }
-
-    @ViewBuilder
-    private var exportStatus: some View {
-        if isExporting {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Exporting…")
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .transition(.opacity)
-        } else if let exportedFormat {
-            Label("\(exportedFormat.title) exported", systemImage: "checkmark.circle.fill")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color.green.opacity(0.1), in: Capsule())
-                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
-        }
-    }
-
-    private var exportFeedbackAnimation: Animation {
-        reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.35, dampingFraction: 0.7)
-    }
-
-    private var processingLabel: String {
-        if isDiarizing { return "Identifying speakers…" }
-        if isTranscribing {
-            return record.displayTranscript.isEmpty ? "Transcribing" : "Regenerating transcript"
-        }
-        return "Summarizing"
-    }
-
-    private var detailMenu: some View {
-        HStack(spacing: 5) {
-            detailButton(.summary)
-            detailButton(.transcript)
-            Spacer(minLength: 8)
-
-            if selectedDetail != nil {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        selectedDetail = nil
-                    }
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 28, height: 28)
-                        .background(Color.primary.opacity(0.05), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Collapse details")
-            }
-        }
-        .padding(6)
-    }
-
-    private func detailButton(_ detail: DetailSection) -> some View {
-        let isSelected = selectedDetail == detail
-        let isHovered = hoveredDetail == detail
-        return Button {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                selectedDetail = isSelected ? nil : detail
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: detail.systemImage)
-                    .font(.caption.weight(.semibold))
-
-                Text(detail.title)
-                    .font(.callout.weight(.semibold))
-
-                if detail == .summary, record.summary?.isEmpty != false {
-                    Text(isProcessing ? "Working" : "Create")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(
-                            (isSelected ? Color.white : Color.purple).opacity(0.14),
-                            in: Capsule()
-                        )
-                } else if detail == .transcript {
-                    Text(record.wordCount.formatted())
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(
-                            isSelected ? Color.white.opacity(0.78) : Color.primary.opacity(0.42)
-                        )
-                }
-            }
-            .foregroundStyle(isSelected ? Color.white : detail.tint)
-            .padding(.horizontal, 11)
-            .frame(height: 32)
-            .background(
-                isSelected
-                    ? Color.accentColor
-                    : (isHovered ? Color.primary.opacity(0.06) : Color.clear),
-                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-            )
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(.easeOut(duration: 0.12)) {
-                hoveredDetail = hovering ? detail : nil
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func detailContent(_ detail: DetailSection) -> some View {
-        switch detail {
-        case .summary:
-            if let summary = record.summary, !summary.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
-                    detailHeader(
-                        title: "AI-Generated Notes",
-                        detail: .summary,
-                        text: summary
-                    )
-
-                    ScrollView {
-                        MarkdownRenderer(
-                            content: MathPreprocessor.preprocess(summary),
-                            fontSize: NSFont.preferredFont(forTextStyle: .callout).pointSize
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 360)
-                }
-                .padding(14)
-            } else {
-                HStack(spacing: 12) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.purple)
-                        .frame(width: 34, height: 34)
-                        .background(Color.purple.opacity(0.1), in: Circle())
-
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(isProcessing ? "Creating your summary" : "Create a concise summary")
-                            .font(.callout.weight(.semibold))
-                        Text("Turn this transcript into structured notes, decisions, and action items.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer(minLength: 12)
-
-                    if isProcessing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Button("Generate", action: onSummarize)
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                    }
-                }
-                .padding(14)
-            }
-
-        case .transcript:
-            VStack(alignment: .leading, spacing: 10) {
-                detailHeader(
-                    title: "Verbatim transcript · \(record.wordCount.formatted()) words",
-                    detail: .transcript,
-                    text: record.displayTranscript
-                )
-
-                ScrollView {
-                    Text(record.displayTranscript)
-                        .font(.body)
-                        .foregroundStyle(Color.primary.opacity(0.82))
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 320)
-            }
-            .padding(14)
-        }
-    }
-
-    private func detailHeader(
-        title: String,
-        detail: DetailSection,
-        text: String
-    ) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Spacer(minLength: 8)
-
-            Button {
-                copy(text, detail: detail)
-            } label: {
-                Label(
-                    copiedDetail == detail ? "Copied" : "Copy",
-                    systemImage: copiedDetail == detail ? "checkmark" : "doc.on.doc"
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.mini)
-        }
-    }
-
-    private func export(as format: AudioRecordExportFormat) {
-        let document = AudioRecordExport(record: record)
-        guard document.isAvailable, !isExporting else { return }
-        withAnimation(exportFeedbackAnimation) { exportedFormat = nil }
-        let panel = NSSavePanel()
-        panel.title = "Export Summary and Transcript"
-        panel.prompt = "Export"
-        panel.allowedContentTypes = [format.contentType]
-        panel.nameFieldStringValue = document.filename(for: format)
-        panel.canCreateDirectories = true
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            withAnimation(exportFeedbackAnimation) { isExporting = true }
-            Task { @MainActor in
-                do {
-                    try await Task.detached(priority: .userInitiated) {
-                        try document.write(to: url, format: format)
-                    }.value
-                    withAnimation(exportFeedbackAnimation) {
-                        isExporting = false
-                        exportedFormat = format
-                    }
-                } catch {
-                    withAnimation(exportFeedbackAnimation) { isExporting = false }
-                    exportError = error.localizedDescription
-                }
-            }
-        }
-    }
-
-    private func copyTranscript() {
-        copy(record.displayTranscript, detail: .transcript)
-    }
-
-    private func copy(_ text: String, detail: DetailSection) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copiedDetail = detail
-        Task {
-            try? await Task.sleep(for: .seconds(1.5))
-            if copiedDetail == detail {
-                copiedDetail = nil
-            }
-        }
-    }
-
 }
 
 private struct ShortcutCaptureSheet: View {
