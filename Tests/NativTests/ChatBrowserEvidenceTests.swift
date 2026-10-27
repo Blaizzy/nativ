@@ -38,6 +38,7 @@ final class ChatBrowserEvidenceTests: XCTestCase {
             receipt("https://facebook.com/login", text: "Log in to Facebook\nEmail\nPassword"),
             receipt("https://example.com/consent", extra: ["page_status": "blocked"]),
             receipt("https://example.com/player", extra: ["page_status": "insufficient_text"]),
+            receipt("https://example.com/video", extra: ["page_status": "media_metadata"]),
             receipt("https://example.com/paywall", extra: ["page_status": "preview"]),
             receipt("https://example.com/unauthorized", extra: ["http_status": 401]),
             receipt("https://example.com/article?js_challenge=1", text: "An actual rendered discussion"),

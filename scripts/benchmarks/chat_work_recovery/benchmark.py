@@ -291,7 +291,7 @@ def main():
                 url = object_result.get("url", "")
                 is_search = (object_result.get("source_kind") == "search" or
                              ("google." in url and "/search" in url) or "consent.google" in url or "/sorry/" in url)
-                if not is_search and object_result.get("page_status") not in ("blocked", "preview", "insufficient_text") and object_result.get("http_status", 200) < 400 and object_result.get("ok", True) and (object_result.get("content") or object_result.get("text")) and url:
+                if not is_search and object_result.get("page_status") not in ("blocked", "preview", "insufficient_text", "media_metadata") and object_result.get("http_status", 200) < 400 and object_result.get("ok", True) and (object_result.get("content") or object_result.get("text")) and url:
                     result["read_urls"].append(url)
                 text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
                 step["tools"].append({"call": call, "seconds": time.perf_counter()-tick,

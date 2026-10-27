@@ -75,9 +75,12 @@ final class ChatWorkBrowserTests: XCTestCase {
 
     func testPlayerWithoutTranscriptAndShortMemberPreviewAreNotReadableSources() async throws {
         let browser = makeBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 900, height: 700)
         defer { browser.stop() }
         for (html, status) in [
             ("<main><video controls></video>0:00 / 1:36:04</main>", "insufficient_text"),
+            ("<main><video controls></video>" + String(repeating: "Video recommendations and navigation. ", count: 10) + "</main>", "media_metadata"),
+            ("<main><video controls></video><div data-transcript-segment>" + String(repeating: "Actually rendered transcript text. ", count: 10) + "</div></main>", "readable"),
             ("<article>Member-only story<h1>OCR comparison</h1><p>Subscribe to continue reading.</p></article>", "preview"),
             ("<article><h1>A short fact</h1><p>The project code is ORCHID.</p></article>", "readable")
         ] {
