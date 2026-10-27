@@ -422,6 +422,8 @@ struct AudioView: View {
             ) {
                 modelConfigurationPanel
                     .frame(maxWidth: 760)
+                diarizationModelPanel
+                    .frame(maxWidth: 760)
             }
         case .animation:
             AudioPage(
@@ -1778,6 +1780,36 @@ struct AudioView: View {
         .disabled(model.modelSwitchInProgress)
     }
 
+    private var diarizationModelPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("Speaker diarization", systemImage: "person.2.wave.2")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("Default").font(.caption.weight(.medium))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1), in: Capsule())
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Nemotron 3 Diarization").font(.headline)
+                Text(MeetingDiarizer.defaultModelID)
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Identifies speakers across the entire recording before transcription. Speaker IDs stay consistent throughout long recordings.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Divider()
+            HStack(alignment: .top) {
+                Label("Runs locally · Downloads on first use", systemImage: "desktopcomputer")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Link("View model", destination: URL(string: "https://huggingface.co/\(MeetingDiarizer.defaultModelID)")!)
+                    .font(.caption)
+            }
+        }
+        .padding(20)
+        .audioPanelStyle()
+    }
+
     @ViewBuilder
     private var speechModelStatus: some View {
         if DefaultSpeechModel.isPreferred(selectedModelID: selectedModelID) {
@@ -2824,6 +2856,7 @@ struct AudioView: View {
                             audioIsAvailable: captureLibrary.audioURL(for: record) != nil,
                             isProcessing: captureLibrary.processingRecordIDs.contains(record.id),
                             isTranscribing: captureLibrary.transcribingRecordIDs.contains(record.id),
+                            isDiarizing: captureLibrary.diarizingRecordIDs.contains(record.id),
                             isPlaying: captureLibrary.playingRecordID == record.id
                                 && !captureLibrary.isPlaybackPaused,
                             isPaused: captureLibrary.playingRecordID == record.id
@@ -2959,7 +2992,7 @@ struct AudioView: View {
             return dictationRecords
         }
         return dictationRecords.filter { record in
-            record.transcript.localizedCaseInsensitiveContains(query)
+            record.displayTranscript.localizedCaseInsensitiveContains(query)
                 || record.applicationName?.localizedCaseInsensitiveContains(query) == true
                 || record.modelID?.localizedCaseInsensitiveContains(query) == true
         }
@@ -3415,7 +3448,7 @@ private struct AudioTranscriptRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 7) {
-                Text(record.transcript)
+                Text(record.displayTranscript)
                     .font(.callout)
                     .lineLimit(3)
                     .textSelection(.enabled)
@@ -3447,7 +3480,7 @@ private struct AudioTranscriptRow: View {
             HStack(spacing: 4) {
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(record.transcript, forType: .string)
+                    NSPasteboard.general.setString(record.displayTranscript, forType: .string)
                     copied = true
                     Task {
                         try? await Task.sleep(for: .seconds(1.5))
@@ -3565,6 +3598,7 @@ private struct AudioCaptureRecordRow: View {
     let audioIsAvailable: Bool
     let isProcessing: Bool
     let isTranscribing: Bool
+    let isDiarizing: Bool
     let isPlaying: Bool
     let isPaused: Bool
     let onPlay: () -> Void
@@ -3637,7 +3671,7 @@ private struct AudioCaptureRecordRow: View {
                             Text("·")
                             Text(NativFormatting.clockDuration(duration))
                         }
-                        if !record.transcript.isEmpty {
+                        if !record.displayTranscript.isEmpty {
                             Text("·")
                             Text("\(record.wordCount) words")
                         }
@@ -3681,7 +3715,7 @@ private struct AudioCaptureRecordRow: View {
                     .help("Stop playback")
                 }
 
-                if record.transcript.isEmpty && !isProcessing {
+                if record.displayTranscript.isEmpty && !isProcessing {
                     Button("Transcribe", action: onTranscribe)
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -3701,7 +3735,7 @@ private struct AudioCaptureRecordRow: View {
                     .disabled(isExporting || !AudioRecordExport(record: record).isAvailable)
                     .help("Export the summary and transcript together")
                     Divider()
-                    if !record.transcript.isEmpty {
+                    if !record.displayTranscript.isEmpty {
                         Menu {
                             Button(action: onTranscribe) {
                                 Label("Transcript", systemImage: "text.alignleft")
@@ -3736,7 +3770,7 @@ private struct AudioCaptureRecordRow: View {
                 .fixedSize()
             }
 
-            if !record.transcript.isEmpty {
+            if !record.displayTranscript.isEmpty {
                 VStack(spacing: 0) {
                     detailMenu
 
@@ -3757,7 +3791,7 @@ private struct AudioCaptureRecordRow: View {
                 }
             }
 
-            if record.transcript.isEmpty && !isProcessing {
+            if record.displayTranscript.isEmpty && !isProcessing {
                 Label(
                     "Audio saved without a transcript. You can keep or delete the recording.",
                     systemImage: "exclamationmark.circle"
@@ -3820,8 +3854,9 @@ private struct AudioCaptureRecordRow: View {
     }
 
     private var processingLabel: String {
+        if isDiarizing { return "Identifying speakers…" }
         if isTranscribing {
-            return record.transcript.isEmpty ? "Transcribing" : "Regenerating transcript"
+            return record.displayTranscript.isEmpty ? "Transcribing" : "Regenerating transcript"
         }
         return "Summarizing"
     }
@@ -3959,11 +3994,11 @@ private struct AudioCaptureRecordRow: View {
                 detailHeader(
                     title: "Verbatim transcript · \(record.wordCount.formatted()) words",
                     detail: .transcript,
-                    text: record.transcript
+                    text: record.displayTranscript
                 )
 
                 ScrollView {
-                    Text(record.transcript)
+                    Text(record.displayTranscript)
                         .font(.body)
                         .foregroundStyle(Color.primary.opacity(0.82))
                         .lineSpacing(4)
@@ -4032,7 +4067,7 @@ private struct AudioCaptureRecordRow: View {
     }
 
     private func copyTranscript() {
-        copy(record.transcript, detail: .transcript)
+        copy(record.displayTranscript, detail: .transcript)
     }
 
     private func copy(_ text: String, detail: DetailSection) {

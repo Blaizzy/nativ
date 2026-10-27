@@ -36,6 +36,7 @@ final class VoiceDictationExtension: NativHostExtension {
         }
         coordinator.transcriptionConfigurationProvider = context.transcriptionConfiguration
         audioCaptureLibrary.transcriptionConfigurationProvider = context.transcriptionConfiguration
+        audioCaptureLibrary.audioServerProvider = context.audioServer
         coordinator.onOpenSpeechModels = {
             context.openSpeechModels()
             context.showMainWindow()
@@ -53,6 +54,7 @@ final class VoiceDictationExtension: NativHostExtension {
         audioCaptureLibrary.shutdown()
         coordinator.transcriptionConfigurationProvider = nil
         audioCaptureLibrary.transcriptionConfigurationProvider = nil
+        audioCaptureLibrary.audioServerProvider = nil
         coordinator.onOpenSpeechModels = nil
         isActive = false
     }

@@ -90,7 +90,24 @@ struct ParakeetAudio {
     }
 
     /// Downmix by channel mean, then use AVAudioConverter's band-limited resampler.
-    static func read(contentsOf url: URL) throws -> [Float] {
+    static func read(
+        contentsOf url: URL,
+        checkCancellation: () throws -> Void = { try Task.checkCancellation() }
+    ) throws -> [Float] {
+        var samples = [Float]()
+        try readBuffers(contentsOf: url, checkCancellation: checkCancellation) {
+            samples.append(contentsOf: $0)
+        }
+        return samples
+    }
+
+    /// Bounded buffers let meeting processing spool long recordings to disk.
+    static func readBuffers(
+        contentsOf url: URL,
+        checkCancellation: () throws -> Void = { try Task.checkCancellation() },
+        consume: (UnsafeBufferPointer<Float>) throws -> Void
+    ) throws {
+        try checkCancellation()
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         let format = file.processingFormat
         guard format.channelCount > 0, format.sampleRate > 0,
@@ -101,10 +118,9 @@ struct ParakeetAudio {
               let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096),
               let converter = AVAudioConverter(from: mono, to: target)
         else { throw ParakeetError.invalidAudio }
-        var samples = [Float]()
         var readError: Error?
         while true {
-            try Task.checkCancellation()
+            try checkCancellation()
             var conversionError: NSError?
             let status = converter.convert(to: output, error: &conversionError) { requested, state in
                 do {
@@ -131,10 +147,9 @@ struct ParakeetAudio {
             if let readError { throw readError }
             if let conversionError { throw conversionError }
             guard status != .error else { throw ParakeetError.invalidAudio }
-            samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
+            try consume(UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
             if status == .endOfStream { break }
             guard output.frameLength > 0 else { throw ParakeetError.invalidAudio }
         }
-        return samples
     }
 }

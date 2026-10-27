@@ -3,6 +3,17 @@ import PDFKit
 import XCTest
 
 final class AudioRecordExportTests: XCTestCase {
+    func testExportsSpeakerLabelsWhileKeepingPlainTranscriptForAnalytics() throws {
+        var record = record(transcript: "Hello there.")
+        record.diarization = AudioDiarization(modelID: MeetingDiarizer.defaultModelID, revision: "test", segments: [
+            .init(start: 0, end: 1, speaker: 0),
+        ], speakerTranscript: "[00:00] Speaker 1: Hello there.")
+        let data = try AudioRecordExport(record: record).data(format: .text)
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains(record.displayTranscript))
+        XCTAssertEqual(record.transcript, "Hello there.")
+        XCTAssertEqual(record.wordCount, 2)
+    }
+
     func testTextExportsBothSectionsAndPreservesVerbatimText() throws {
         let record = record(transcript: "Speaker: **literal**\n\n  Zażółć  こんにちは\n", summary: "## Decision\nShip **Friday**.")
         let data = try AudioRecordExport(record: record).data(format: .text)

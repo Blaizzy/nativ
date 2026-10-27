@@ -28,9 +28,9 @@ llguidance==1.7.5
 markdown-it-py==4.2.0
 mdurl==0.1.2
 miniaudio==1.71
-mlx-audio>=0.5.0
+mlx-audio>=0.6.2
 mlx-metal>=0.32.0
-mlx-vlm>=0.7.9
+mlx-vlm>=0.7.10
 mlx>=0.32.0
 multidict==6.7.1
 numpy==2.4.4

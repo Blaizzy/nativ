@@ -94,6 +94,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @MainActor UNUserNotif
                         serverIsRunning: self.model.isRunning
                     )
                 },
+                audioServer: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return try await self.model.prepareAudioAnalysisServer()
+                },
                 openSpeechModels: { [weak self] in
                     self?.performWindowIntent(.openSpeechModels)
                 },
