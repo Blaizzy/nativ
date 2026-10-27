@@ -5,6 +5,11 @@ compaction, at additional latency. It does **not** reliably finish open-ended
 research with this model. These results support a draft for further evaluation,
 not a claim that the original browsing report is fully resolved.
 
+[Follow-up diagnosis](DIAGNOSIS.md) found that server capsules retain copies of
+the supposedly transient evidence. Controlled replays confirm this causes extra
+compaction. Separate navigation, source-validation and early-stopping failures
+remain. The diagnosis does not change the implementation or results below.
+
 The compact-command experiment was reverted. Chat Work remains the primary
 browser, using its existing WebKit engine and Google search. No API key, new
 browser tool, normal CLI entry point, or dependency requirement change is part
