@@ -397,8 +397,21 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             try await waitForPage()
         }
         try Task.checkCancellation()
+        // Search navigation can finish before Google inserts its result links.
+        let searchPage = webView.url?.host?.range(of: #"(^|\.)google\.[a-z.]+$"#, options: .regularExpression) != nil
+            && webView.url?.path == "/search"
+        if searchPage {
+            for _ in 0..<32 {
+                let ready = try await webView.callAsyncJavaScript(
+                    "return [...document.querySelectorAll('a h3')].some(h => h.innerText.trim()) || !!document.querySelector('[role=dialog]');",
+                    arguments: [:], in: nil, contentWorld: .defaultClient) as? Bool ?? false
+                if ready { break }
+                try await Task.sleep(for: .milliseconds(250))
+            }
+        }
         guard var object = try await webView.callAsyncJavaScript(
             Self.inspectScript, arguments: ["snapshotID": UUID().uuidString,
+                                           "isSearchPage": searchPage,
                                            "tabID": request.id?.uuidString ?? "",
                                            "canGoBack": webView.canGoBack,
                                            "canGoForward": webView.canGoForward], in: nil, contentWorld: .defaultClient
@@ -443,15 +456,17 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         })();
         """
 
-    private static let inspectScript = """
+    static let inspectScript = """
         const visible = el => {
             const r = el.getBoundingClientRect(), s = getComputedStyle(el);
             return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
         };
         const token = snapshotID;
         const refs = new Map();
+        const search = isSearchPage;
+        const resultLinks = search ? [...document.querySelectorAll('a h3')].map(h => h.closest('a')) : [];
         const fileInputs = [...document.querySelectorAll('input[type="file"]')].slice(0, 20);
-        const controls = [...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')]
+        const controls = [...new Set([...resultLinks, ...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')])]
             .filter(el => el.type !== 'file' && visible(el)).slice(0, 40);
         const elements = [...controls, ...fileInputs].map((el, i) => {
                 const id = token + ':' + i;
@@ -466,10 +481,10 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                     ...(value === undefined ? {} : {value}),
                     ...(el.type === 'file' ? {accept: el.accept, multiple: el.multiple, hidden: !visible(el),
                         files: [...el.files].map(file => ({name: file.name, type: file.type, size: file.size}))} : {}),
-                    href: el.getAttribute('href')?.slice(0, 2048), disabled: !!el.disabled};
+                    href: el.href?.slice(0, 2048), disabled: !!el.disabled};
             });
         globalThis.__nativWorkRefs = refs;
-        return {id: tabID, kind: 'website', url: location.href, title: document.title,
+        return {id: tabID, kind: 'website', source_kind: search ? 'search' : 'page', url: location.href, title: document.title,
             can_go_back: canGoBack, can_go_forward: canGoForward, untrusted_page_content: true,
             text_truncated: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').length > 6000,
             text: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').slice(0, 6000), elements};

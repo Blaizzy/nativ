@@ -5,8 +5,11 @@ enum ChatWorkToolRegistry {
     static let toolName = "chat_work"
     static let sessionPrompt = """
         Use chat_work to search and browse in the shared browser: {"action":"search","query":"search terms"}. \
+        For a supplied URL, navigate directly; search is for discovering sources. A search query consisting of an HTTP(S) URL opens that URL. \
         Open source pages with {"action":"open","url":"https://example.com"} or navigate in the current tab; inspect reads its current state. \
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
+        Browser evidence preserves exact excerpts and unique source visits for the current request. Use it to retain facts across compaction. \
+        Meet the user's requested source count; repeated visits to one URL count once. Once sufficient evidence is collected, answer instead of restarting research. \
         Use current element IDs for browser actions. The shared side window (work pane or canvas) also holds documents and terminals. \
         If a URL fails, search the original subject; do not retry the same failed URL or claim it was read. \
         Read documents before updating; use the returned id and expected_revision. A revision_conflict includes the \
@@ -184,6 +187,9 @@ struct ChatWorkRequest: Decodable {
                   !query.isEmpty, query.count <= 300 else {
                 throw ChatWorkError.invalid("search requires a non-empty query of up to 300 characters.")
             }
+            // Treat an address like the shared browser's address bar. Small models
+            // sometimes send an already-known source URL to search after compaction.
+            if let address = try? ChatWorkState.webURL(query) { return address }
             guard let url = ChatWorkState.searchURL(query) else {
                 throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
             }

@@ -8,6 +8,27 @@ final class ChatWorkBrowserTests: XCTestCase {
         ChatWorkBrowser(profile: ChatWorkBrowserProfile(dataStore: .nonPersistent()))
     }
 
+    func testSearchSourcesPrecedeNavigationAndKeepUsableURLs() async throws {
+        let browser = makeBrowser()
+        browser.webView.frame = CGRect(x: 0, y: 0, width: 900, height: 700)
+        browser.load(ChatWorkItem(title: "Search fixture", kind: .website, content:
+            "<main>" + (0..<50).map { "<a href='/menu/\($0)'>Menu \($0)</a>" }.joined() +
+            "<a href='https://www.google.com/goto?url=opaque'><h3>Source result</h3></a>" +
+            "<a href='/source'><h3>Relative source</h3></a></main>"))
+        defer { browser.stop() }
+        _ = try await browser.execute(ChatWorkRequest(action: .inspect))
+        let rawSnapshot = try await browser.webView.callAsyncJavaScript(
+            ChatWorkBrowser.inspectScript, arguments: ["snapshotID": "test", "tabID": "tab", "isSearchPage": true,
+                                                      "canGoBack": false, "canGoForward": false],
+            in: nil, contentWorld: .defaultClient)
+        let snapshot = try XCTUnwrap(rawSnapshot as? [String: Any])
+        let controls = try XCTUnwrap(snapshot["elements"] as? [[String: Any]])
+        XCTAssertEqual(controls.first?["label"] as? String, "Source result")
+        XCTAssertEqual(controls.first?["href"] as? String, "https://www.google.com/goto?url=opaque")
+        XCTAssertTrue((controls[1]["href"] as? String)?.hasPrefix("http://127.0.0.1:") == true)
+        XCTAssertEqual(snapshot["source_kind"] as? String, "search")
+    }
+
     private func persistentProfile() -> ChatWorkBrowserProfile {
         let identifier = UUID()
         removeProfileAfterTest(identifier)

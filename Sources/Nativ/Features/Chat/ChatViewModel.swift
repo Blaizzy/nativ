@@ -2826,7 +2826,8 @@ final class ChatViewModel: ObservableObject {
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
                     settings: activeSettings,
-                    documentContexts: documentContext.result.contexts
+                    documentContexts: documentContext.result.contexts,
+                    effectiveContextLimit: effectiveContextLimit
                 )
             else {
                 throw NativChatError.invalidResponse
@@ -3302,7 +3303,8 @@ final class ChatViewModel: ObservableObject {
                         before: assistantMessageID,
                         advertisesTools: advertisesTools,
                         settings: settings,
-                        documentContexts: prepared.result.contexts
+                        documentContexts: prepared.result.contexts,
+                        effectiveContextLimit: effectiveContextLimit
                     )
                 else { return prepared }
                 guard let promptTokens = try await count(request) else { return prepared }
@@ -3320,7 +3322,8 @@ final class ChatViewModel: ObservableObject {
                             before: assistantMessageID,
                             advertisesTools: advertisesTools,
                             settings: settings,
-                            documentContexts: [:]
+                            documentContexts: [:],
+                            effectiveContextLimit: effectiveContextLimit
                         )
                     else { return prepared }
                     measuredBasePromptTokens = try await count(baseRequest)
@@ -3368,7 +3371,8 @@ final class ChatViewModel: ObservableObject {
         before assistantMessageID: UUID,
         advertisesTools: Bool,
         settings: NativSettings,
-        documentContexts: [UUID: String]
+        documentContexts: [UUID: String],
+        effectiveContextLimit: Int?
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
             let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -3391,7 +3395,11 @@ final class ChatViewModel: ObservableObject {
             : []
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
-        let includesWorkContext = toolDefinitions.contains { $0.function.name == ChatWorkToolRegistry.toolName }
+        // Keep source evidence available for the final answer after the tool-round
+        // gate removes tool definitions, while still honoring disabled tools.
+        let includesWorkContext = queuedRequest.languageModelSupportsTools && toolIsAvailable(
+            ChatWorkToolRegistry.toolName, settings: settings, scope: queuedRequest.toolScope
+        )
         let requestMessages = Self.completionMessages(
             systemPrompt: Self.systemPrompt(
                 sessionPrompt: settings.systemPrompt,
@@ -3431,6 +3439,13 @@ final class ChatViewModel: ObservableObject {
         request.transientContext = Self.completionContext(
             transcript: precedingMessages, documentContexts: documentContexts, workItems: items
         )
+        if includesWorkContext, let evidence = ChatBrowserEvidence.context(
+            messages: requestMessages, maximumBytes: min(8192, ChatBrowsingBudget.maximumBytes(
+                context: [effectiveContextLimit, settings.maxKVSize].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
+            ))
+        ) {
+            request.transientContext = [request.transientContext, evidence].compactMap { $0 }.joined(separator: "\n\n")
+        }
         return request
     }
 

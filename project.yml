@@ -288,6 +288,7 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatBrowserEvidence.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatBrowsingBudget.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSearchFilesTool.swift

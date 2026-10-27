@@ -3,6 +3,13 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testSearchingAnExplicitAddressNavigatesWithoutLosingQueryParameters() throws {
+        let url = "https://example.com/source?q=C%2B%2B&lang=en#section"
+        XCTAssertEqual(try ChatWorkRequest(action: .search, query: "  \(url)  ").navigationURL?.absoluteString, url)
+        let terms = "reviews of https://example.com/source"
+        XCTAssertEqual(try ChatWorkRequest(action: .search, query: terms).navigationURL?.host, "www.google.com")
+        XCTAssertEqual(try ChatWorkRequest(action: .search, query: "file:///tmp/private").navigationURL?.host, "www.google.com")
+    }
     func testSearchPreservesLiteralPlusesWhenFormDecoded() throws {
         for query in ["C++ template", "C%2B%2B template", "C++ & C# + 100% 日本語"] {
             let urls = [
