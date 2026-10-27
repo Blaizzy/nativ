@@ -461,6 +461,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var messages: [MLXChatMessage]
     /// Current environment state, sent after history without becoming part of the stored conversation.
     public var transientContext: String? = nil
+    /// One-request closing guidance, placed after environment data without changing the saved prefix.
+    public var completionInstruction: String? = nil
 
     public var maxTokens: Int
     public var temperature: Double
@@ -479,8 +481,10 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var streamOptions: MLXChatStreamOptions?
 
     public var contextMessages: [MLXChatMessage] {
-        guard let transientContext, !transientContext.isEmpty else { return [] }
-        return [MLXChatMessage(role: "user", content: transientContext)]
+        [transientContext, completionInstruction].compactMap { content in
+            guard let content, !content.isEmpty else { return nil }
+            return MLXChatMessage(role: "user", content: content)
+        }
     }
 
     public init(

@@ -3447,6 +3447,9 @@ final class ChatViewModel: ObservableObject {
         ) {
             request.transientContext = [request.transientContext, evidence].compactMap { $0 }.joined(separator: "\n\n")
         }
+        if queuedRequest.languageModelSupportsTools && !advertisesTools {
+            request.completionInstruction = ChatToolRoundGate.finalAnswerPrompt
+        }
         return request
     }
 

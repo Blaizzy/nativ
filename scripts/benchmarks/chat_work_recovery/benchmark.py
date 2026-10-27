@@ -70,6 +70,7 @@ def generate_responses(base, sampling, messages, tools, context, limit, capsule,
                "context_management": [{"type": "compaction", "compact_threshold": int(limit * .75)}]}
     if final_instruction:
         payload["instructions"] += "\n\n" + final_instruction
+        payload["input"].append({"type": "message", "role": "user", "content": final_instruction})
     payload["max_output_tokens"] = payload.pop("max_tokens")
     req = urllib.request.Request(base + "/v1/responses", json.dumps(payload).encode(), {"Content-Type": "application/json"})
     started = time.perf_counter()

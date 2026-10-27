@@ -25,6 +25,13 @@ def metrics(path):
     case = data["config"]["case"]
     if case == "live" and "error" not in data:
         data["grade"] = grade("live", data["final"], data["read_urls"], [])
+        # A page count cannot establish that the research was completed. Preserve
+        # that automatic gate separately and require a recorded source audit.
+        data["grade"]["automatic_gate_passed"] = data["grade"]["completed"]
+        review_path = path.with_name("review.json")
+        review = json.loads(review_path.read_text()) if review_path.exists() else None
+        data["grade"]["manual_review"] = review
+        data["grade"]["completed"] = bool(data["grade"]["completed"] and review and review.get("completed"))
     if case in ("chain", "catalog"):
         expected_paths = ({f"/checkpoint/{i}" for i in range(1, 25)} if case == "chain" else
                           {f"/Scanner-{i:02d}" for i in range(1, 13)})
@@ -103,7 +110,7 @@ th{background:#163c57;color:white}details{background:white;padding:14px;margin:1
 <p>Baseline <code>chat_work</code> versus the revised <code>chat_work</code>, using the same WebKit engine.
 </p><p>''' + protocol + '''</p>
 <p class="note">A faster failed task is not a speed improvement. Completion requires all requested facts and source visits for fixtures.
-The live OCR gate checks five distinct non-search page payloads and a final answer (not raw tool-call markup); it does not certify answer accuracy.</p>
+Live completion requires a recorded manual source review in addition to five distinct non-search page payloads and a final answer. The provisional automatic gate is retained in each run's details.</p>
 <table><thead><tr><th>Task</th><th>Context</th><th>Interface</th><th>Completed</th><th>Output cap hits</th><th>Median seconds</th><th>Median pages</th><th>Reported prompt tokens, sum</th><th>Tool output KiB</th></tr></thead><tbody>''' + table + '''</tbody></table>
 <p>Chain: 24 dependent pages, ordered tokens, unknown passport check. Catalog: 12 linked specifications and a constrained recommendation.
 Live: the original five-page OCR research prompt. Fixture pages are synthetic and have deterministic ground truth.</p>

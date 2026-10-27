@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from scripts.benchmarks.chat_work_recovery.benchmark import grade
@@ -35,6 +37,20 @@ class ChatBrowserBenchmarkGradingTests(unittest.TestCase):
         result = grade("live", "A comparison", ["https://example.com/source"] * 5, [])
         self.assertFalse(result["completed"])
 
+    def test_live_summary_requires_a_source_review(self):
+        from scripts.benchmarks.chat_work_recovery.summarize import metrics
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "result.json"
+            path.write_text(json.dumps({"config": {"case": "live", "context": 8192, "mode": "recovery"},
+                "grade": {}, "steps": [], "task_seconds": 1, "final": "A comparison",
+                "read_urls": [f"https://example.com/{i}" for i in range(5)]}))
+            self.assertTrue(metrics(path)["grade"]["automatic_gate_passed"])
+            self.assertFalse(metrics(path)["completed"])
+            path.with_name("review.json").write_text(json.dumps({"completed": False, "reason": "Error pages"}))
+            self.assertFalse(metrics(path)["completed"])
+            path.with_name("review.json").write_text(json.dumps({"completed": True, "reason": "Five relevant pages verified"}))
+            self.assertTrue(metrics(path)["completed"])
+
 
 class ResponsesReplayTests(unittest.TestCase):
     def test_compaction_replay_keeps_fresh_context_outside_saved_prefix(self):
@@ -60,7 +76,8 @@ class ResponsesReplayTests(unittest.TestCase):
             messages.append({"role": "assistant", "content": "Next turn"})
             generate_responses("http://localhost", sampling, messages, [], "New evidence", 8192, saved, count, final_instruction="Finish honestly")
         self.assertEqual(seen[1]["input"], [capsule, {"type": "message", "role": "assistant", "content": "Next turn"},
-                                           {"type": "message", "role": "user", "content": "New evidence"}])
+                                           {"type": "message", "role": "user", "content": "New evidence"},
+                                           {"type": "message", "role": "user", "content": "Finish honestly"}])
         self.assertEqual(seen[1]["instructions"], "System\n\nFinish honestly")
         self.assertEqual(seen[1]["max_output_tokens"], 4096)
         self.assertEqual(seen[1]["context_management"][0]["compact_threshold"], 6144)

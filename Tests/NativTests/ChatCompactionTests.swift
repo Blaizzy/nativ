@@ -2,6 +2,36 @@ import XCTest
 @testable import NativServerKit
 
 final class ChatCompactionTests: XCTestCase {
+    func testClosingGuidanceFollowsEvidenceOnBothRoutesWithoutInvalidatingCompaction() throws {
+        var chat = request([.init(role: "user", content: "Research five sources")])
+        let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        chat.transientContext = "Collected evidence"
+        chat.completionInstruction = ChatToolRoundGate.finalAnswerPrompt
+        let input = try state.input(for: chat, serverURL: server)
+        XCTAssertEqual(input, [capsule])
+        let responses = NativResponsesClient(baseURL: server, tenant: "closing-guidance-test")
+        let wire = try responses.makeResponseRequest(chat, input: input, compactThreshold: 6144)
+        let body = try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))
+        let sent = try XCTUnwrap(body["input"]?.arrayValue)
+        XCTAssertEqual(sent.count, 3)
+        XCTAssertEqual(sent[1]["content"], .string("Collected evidence"))
+        XCTAssertEqual(sent[2]["role"], .string("user"))
+        XCTAssertEqual(sent[2]["content"], .string(ChatToolRoundGate.finalAnswerPrompt))
+        let client = NativChatClient(baseURL: server)
+        let chatBody = try MLXJSONValue(jsonData: JSONEncoder().encode(chat))
+        XCTAssertEqual(chatBody["messages"]?.arrayValue?.last?["role"], sent.last?["role"])
+        XCTAssertEqual(chatBody["messages"]?.arrayValue?.last?["content"], sent.last?["content"])
+        XCTAssertNil(chatBody["completionInstruction"])
+        let countWire = try client.makePromptTokenCountURLRequest(for: chat)
+        XCTAssertEqual(try MLXJSONValue(jsonData: XCTUnwrap(countWire.httpBody))["input"], chatBody["messages"])
+        // Closing guidance is neither persisted nor carried into a new user request.
+        let next = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        chat.completionInstruction = nil
+        chat.transientContext = nil
+        XCTAssertEqual(try next.input(for: chat, serverURL: server), [capsule])
+        XCTAssertTrue(chat.contextMessages.isEmpty)
+    }
+
     @MainActor
     func testUnknownToolCleanupInvalidatesCompactedFailureHistory() throws {
         let call = MLXChatToolCall(id: "bad-call", function: .init(name: "mcp__update", arguments: "{}"))
