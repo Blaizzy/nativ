@@ -424,6 +424,9 @@ struct AudioView: View {
                     .frame(maxWidth: 760)
                 diarizationModelPanel
                     .frame(maxWidth: 760)
+                AudioSpeakerEmbeddingModelPanel(token: model.effectiveHuggingFaceToken,
+                    recognition: captureLibrary.speakerRecognition)
+                    .frame(maxWidth: 760)
             }
         case .animation:
             AudioPage(
@@ -4216,6 +4219,109 @@ private final class ShortcutRecorderNSView: NSView {
         )
         onPreview?(shortcut.displayName)
         onCapture?(shortcut)
+    }
+}
+
+@MainActor
+private struct AudioSpeakerEmbeddingModelPanel: View {
+    let token: String?
+    @ObservedObject var recognition: AudioSpeakerRecognition
+    @ObservedObject private var downloads = HuggingFaceDownloadManager.shared
+    @State private var isInstalled: Bool?
+    @State private var refreshID = UUID()
+
+    private var modelID: String { AudioSpeakerEmbeddingModel.repoID }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Label("Speaker embeddings", systemImage: "person.wave.2")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("Default").font(.caption.weight(.medium))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1), in: Capsule())
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(AudioSpeakerEmbeddingModel.title).font(.headline)
+                Text(modelID)
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                Text("Recognizes recurring voices across meetings and keeps speaker profiles up to date. Runs locally on your Mac.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Divider()
+            HStack(spacing: 12) {
+                downloadStatus
+                Spacer(minLength: 8)
+                Link("View model", destination: URL(string: "https://huggingface.co/\(modelID)")!)
+                    .font(.caption)
+            }
+            if let error = downloads.errorByModelID[modelID] {
+                Text(error.localizedDescription).font(.caption).foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(20)
+        .audioPanelStyle()
+        .accessibilityIdentifier("audio-models.speaker-embeddings")
+        .task(id: refreshID) {
+            isInstalled = nil
+            let cachePath = AudioSpeakerEmbeddingModel.cachePath
+            let installed = await Task.detached(priority: .utility) {
+                AudioSpeakerEmbeddingModel.isInstalled(cachePath: cachePath)
+            }.value
+            guard !Task.isCancelled else { return }
+            isInstalled = installed
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .localModelLibraryDidChange)) { _ in
+            refreshID = UUID()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshID = UUID()
+        }
+        .onChange(of: recognition.processingProfileIDs) { _, ids in
+            if ids.isEmpty { refreshID = UUID() }
+        }
+        .onChange(of: recognition.processingRecordIDs) { _, ids in
+            if ids.isEmpty { refreshID = UUID() }
+        }
+    }
+
+    @ViewBuilder
+    private var downloadStatus: some View {
+        if downloads.isDownloading(modelID) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(downloads.isPaused(for: modelID) ? "Download paused" : "Downloading speaker model…")
+                    .font(.caption).foregroundStyle(.secondary)
+                ProgressView(value: downloads.progress(for: modelID)).frame(width: 170)
+            }
+            Button(downloads.isPaused(for: modelID) ? "Resume" : "Pause") {
+                if downloads.isPaused(for: modelID) {
+                    downloads.resumeDownload(modelID)
+                } else {
+                    downloads.pauseDownload(modelID)
+                }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        } else if isInstalled == true {
+            Label("Downloaded · 42 MB", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if isInstalled == nil {
+            ProgressView().controlSize(.small)
+            Text("Checking model download…").font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("42 MB · Downloads on first use")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Download") {
+                downloads.download(
+                    repoID: modelID, sizeBytes: AudioSpeakerEmbeddingModel.estimatedSizeBytes,
+                    cachePath: AudioSpeakerEmbeddingModel.cachePath,
+                    volumeIdentifier: nil, token: token
+                ) { refreshID = UUID() }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            .accessibilityIdentifier("audio-models.download-speaker-embeddings")
+        }
     }
 }
 

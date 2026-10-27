@@ -4,6 +4,70 @@ import XCTest
 
 @MainActor
 final class AudioDiarizationTests: XCTestCase {
+    func testLinkedVoicesBecomeOneParticipantWithoutChangingWordsOrTiming() throws {
+        let original = AudioDiarization(modelID: "model", revision: "test", segments: [
+            .init(start: 0, end: 2, speaker: 0),
+            .init(start: 2, end: 4, speaker: 1),
+            .init(start: 3, end: 5, speaker: 2),
+            .init(start: 6, end: 8, speaker: 3),
+        ], transcriptSegments: [
+            .init(start: 0, end: 2, speakers: [0], text: "Hello"),
+            .init(start: 2, end: 3, speakers: [1], text: "Hi"),
+            .init(start: 3, end: 4, speakers: [1, 2], text: "Still me"),
+            .init(start: 4, end: 5, speakers: [2], text: "Another passage"),
+            .init(start: 6, end: 8, speakers: [3], text: "A different person"),
+        ], speakerNames: ["0": "Jordan", "1": "Me", "2": "Me", "3": "Me"],
+           speakerProfileIDs: ["0": "nnenna", "1": "me", "2": "me", "3": "different-profile"])
+
+        let grouped = original.groupedByProfile
+        XCTAssertEqual(grouped.speakerIDs, [0, 1, 3], "Identity is the profile ID, not its display name")
+        XCTAssertEqual(grouped.resolvedTranscriptSegments.map(\.speakers), [[0], [1], [1], [1], [3]])
+        XCTAssertEqual(grouped.resolvedTranscriptSegments.map(\.text), original.resolvedTranscriptSegments.map(\.text))
+        XCTAssertEqual(grouped.resolvedTranscriptSegments.map(\.start), original.resolvedTranscriptSegments.map(\.start))
+        XCTAssertEqual(grouped.resolvedTranscriptSegments.map(\.end), original.resolvedTranscriptSegments.map(\.end))
+        XCTAssertTrue(original.formattedTranscript?.contains("[00:03] Me: Still me") == true)
+        XCTAssertFalse(original.formattedTranscript?.contains("Me + Me") == true)
+        XCTAssertEqual(grouped.groupedByProfile, grouped)
+        XCTAssertEqual(original.speakerIDs, [0, 1, 2, 3])
+        XCTAssertEqual(try JSONDecoder().decode(AudioDiarization.self, from: JSONEncoder().encode(original)), original)
+        let merged = try original.mergingSpeakers([1, 2], into: 1)
+        XCTAssertEqual(merged.speakerIDs, [0, 1, 3])
+        XCTAssertEqual(merged.transcriptSegments, grouped.transcriptSegments)
+        XCTAssertNil(merged.speakerProfileIDs?["2"])
+        XCTAssertNil(merged.speakerNames?["2"])
+        XCTAssertFalse(merged.speakerTranscript?.contains("Speaker 3") == true)
+        XCTAssertEqual(try JSONDecoder().decode(AudioDiarization.self, from: JSONEncoder().encode(merged)), merged)
+    }
+
+    func testMatchingLabelsWithoutAProfileStaySeparate() {
+        let original = AudioDiarization(modelID: "model", revision: "test", segments: [
+            .init(start: 0, end: 2, speaker: 0), .init(start: 2, end: 4, speaker: 1),
+        ], speakerNames: ["0": "Alex", "1": "Alex"])
+        XCTAssertEqual(original.groupedByProfile, original)
+    }
+
+    func testLegacyTranscriptIsRecoveredBeforeGroupingLinkedVoices() throws {
+        let original = AudioDiarization(modelID: "model", revision: "test", segments: [
+            .init(start: 0, end: 2, speaker: 0), .init(start: 2, end: 4, speaker: 1),
+        ], speakerTranscript: "[00:00] Speaker 1: Hello\n\n[00:02] Speaker 2: Again",
+           speakerNames: ["0": "Me", "1": "Me"], speakerProfileIDs: ["0": "me", "1": "me"])
+        XCTAssertEqual(original.groupedByProfile.resolvedTranscriptSegments, [
+            .init(start: 0, end: 2, speakers: [0], text: "Hello"),
+            .init(start: 2, end: 4, speakers: [0], text: "Again"),
+        ])
+        XCTAssertEqual(original.formattedTranscript, "[00:00] Me: Hello\n\n[00:02] Me: Again")
+        XCTAssertNil(original.transcriptSegments)
+        XCTAssertEqual(try original.mergingSpeakers([0, 1], into: 0).transcriptSegments,
+                       original.groupedByProfile.transcriptSegments)
+    }
+
+    func testUnrecoverableLegacyTranscriptCannotBeMerged() {
+        let original = AudioDiarization(modelID: "model", revision: "test", segments: [
+            .init(start: 0, end: 2, speaker: 0), .init(start: 2, end: 4, speaker: 1),
+        ], speakerTranscript: "Saved text in an unknown legacy format")
+        XCTAssertThrowsError(try original.mergingSpeakers([0, 1], into: 0))
+    }
+
     func testServerWithRealModel() async throws {
         guard let path = ProcessInfo.processInfo.environment["NATIV_DIARIZATION_TEST_AUDIO"] else {
             throw XCTSkip("Set NATIV_DIARIZATION_TEST_AUDIO to NVIDIA's eight-voice sample WAV.")
