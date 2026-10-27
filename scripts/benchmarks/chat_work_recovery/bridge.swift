@@ -35,7 +35,8 @@ private final class ChatWorkBenchmarkBridge {
         if input.name == "tools" {
             let definitions = String(decoding: try JSONEncoder().encode([ChatWorkToolRegistry.definition]), as: UTF8.self)
             let prompt = String(decoding: try JSONEncoder().encode(ChatWorkToolRegistry.sessionPrompt), as: UTF8.self)
-            return "{\"tools\":\(definitions),\"session_prompt\":\(prompt)}"
+            let finalPrompt = String(decoding: try JSONEncoder().encode(ChatToolRoundGate.finalAnswerPrompt), as: UTF8.self)
+            return "{\"tools\":\(definitions),\"session_prompt\":\(prompt),\"final_answer_prompt\":\(finalPrompt)}"
         }
         if input.name == "context" {
             struct Context: Decodable { var messages: [MLXChatMessage] }
@@ -47,6 +48,14 @@ private final class ChatWorkBenchmarkBridge {
         guard input.name == "chat_work" else { throw ChatWorkError.invalid("Use chat_work.") }
         var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments)
         if request.action == .list { return try state.itemListJSON() }
+        if request.action == .read {
+            guard request.id != nil else { throw ChatWorkError.invalid("read requires id.") }
+            request.action = .inspect
+        }
+        if request.action == .create, request.kind == .website, request.url != nil {
+            _ = try state.execute(request)
+            request = ChatWorkRequest(action: .inspect, id: state.selectedID)
+        }
         guard request.action.isBrowserAction || request.action == .open else { throw ChatWorkError.unavailable }
         let item = try state.browserItem(for: request)
         request.id = item.id

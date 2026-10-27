@@ -60,7 +60,7 @@ def generate(base, payload):
                         **({"tool_calls": list(calls.values())} if calls else {})}}
 
 
-def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count):
+def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count, final_instruction=""):
     history = [m for m in messages if m["role"] not in ("system", "developer")]
     items = ([capsule] if capsule else []) + [{"type": "message", **m} for m in history[prefix_count:]]
     if context:
@@ -68,6 +68,8 @@ def generate_responses(base, sampling, messages, tools, context, limit, capsule,
     payload = {**sampling, "instructions": "\n\n".join(m["content"] for m in messages if m["role"] == "system"),
                "input": items, "tools": tools, "stream": True, "store": False,
                "context_management": [{"type": "compaction", "compact_threshold": int(limit * .75)}]}
+    if final_instruction:
+        payload["instructions"] += "\n\n" + final_instruction
     payload["max_output_tokens"] = payload.pop("max_tokens")
     req = urllib.request.Request(base + "/v1/responses", json.dumps(payload).encode(), {"Content-Type": "application/json"})
     started = time.perf_counter()
@@ -96,7 +98,7 @@ def generate_responses(base, sampling, messages, tools, context, limit, capsule,
     usage = response.get("usage", {})
     return {"seconds": time.perf_counter()-started, "ttft": first-started if first else None,
             "usage": {"prompt_tokens": usage.get("input_tokens"), "completion_tokens": usage.get("output_tokens")},
-            "events": events, "finish_reason": "length" if response.get("status") == "incomplete" else ("tool_calls" if calls else "stop"),
+            "events": events, "request": payload, "finish_reason": "length" if response.get("status") == "incomplete" else ("tool_calls" if calls else "stop"),
             "message": {"role": "assistant", "content": text, **({"tool_calls": calls} if calls else {})}}, capsule, prefix_count
 
 
@@ -173,7 +175,7 @@ def grade(case, final, reads, records):
     grade = {"unique_pages_read": len(set(reads)), "completed": False}
     if case == "live":
         grade["five_source_pages_read"] = len(set(reads)) >= 5
-        grade["final_answer_present"] = bool(final.strip())
+        grade["final_answer_present"] = bool(final.strip()) and not any(marker in final for marker in ("<|tool_call", "<tool_call", "call:chat_work"))
         grade["completed"] = grade["five_source_pages_read"] and grade["final_answer_present"]
         grade["quality_requires_review"] = True
         return grade
@@ -256,7 +258,8 @@ def main():
                 break
             context = browser.call("context", {"messages": messages}, a.context)["text"]
             inference, capsule, prefix_count = generate_responses(
-                a.base, sampling, messages, definitions if round_index < 32 else [], context, a.context, capsule, prefix_count)
+                a.base, sampling, messages, definitions if round_index < 32 else [], context, a.context, capsule, prefix_count,
+                setup["final_answer_prompt"] if round_index == 32 and a.mode == "recovery" else "")
             step = {"inference": inference, "tools": [], "evidence_context": context}
             result["steps"].append(step)
             msg = inference["message"]

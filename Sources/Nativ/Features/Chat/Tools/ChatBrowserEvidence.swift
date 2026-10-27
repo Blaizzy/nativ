@@ -13,6 +13,7 @@ enum ChatBrowserEvidence {
             guard let text = message.textContent,
                   let result = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
                   result["ok"] as? Bool != false, result["error"] == nil,
+                  result["editable"] as? Bool != true, result["local_page_url"] == nil,
                   result["kind"] as? String == "website", result["source_kind"] as? String != "search",
                   let rawURL = result["url"] as? String,
                   var url = URLComponents(string: rawURL), ["http", "https"].contains(url.scheme ?? ""),
@@ -26,7 +27,7 @@ enum ChatBrowserEvidence {
             // Exact excerpts keep numbers/names intact. No inferred facts or summarization.
             let excerpt = prefix(body.trimmingCharacters(in: .whitespacesAndNewlines), bytes: 800)
             if let index = indices[key] {
-                if excerpt.utf8.count > sources[index].text.utf8.count { sources[index].text = excerpt }
+                sources[index].text = excerpt
             } else {
                 indices[key] = sources.count
                 sources.append((key, excerpt))

@@ -3407,7 +3407,8 @@ final class ChatViewModel: ObservableObject {
                 projectPrompt: queuedRequest.toolScope.systemPrompt,
                 includesChatWork: queuedRequest.languageModelSupportsTools,
                 includesToolGuide: !toolDefinitions.isEmpty,
-                skills: settings.skills.filter(\.isEnabled)
+                skills: settings.skills.filter(\.isEnabled),
+                toolRoundLimitReached: queuedRequest.languageModelSupportsTools && !advertisesTools
             ),
             transcript: precedingMessages,
             includesImages: queuedRequest.languageModelSupportsVision
@@ -3460,7 +3461,8 @@ final class ChatViewModel: ObservableObject {
         projectPrompt: String?,
         includesChatWork: Bool,
         includesToolGuide: Bool,
-        skills: [NativSkill]
+        skills: [NativSkill],
+        toolRoundLimitReached: Bool = false
     ) -> String {
         let sections: [String?] = [
             corePrompt,
@@ -3469,7 +3471,7 @@ final class ChatViewModel: ObservableObject {
             personalizationPrompt,
             projectPrompt,
             includesToolGuide ? NativSkill.builtInToolGuide.instructions : nil,
-        ] + skills.map(\.instructions)
+        ] + skills.map(\.instructions) + [toolRoundLimitReached ? ChatToolRoundGate.finalAnswerPrompt : nil]
         return sections.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 

@@ -45,6 +45,12 @@ struct ChatToolExecutionOutcome: Sendable {
 
 enum ChatToolRoundGate {
     static let maximumRounds = 32
+    static let finalAnswerPrompt = """
+        The tool round limit for this request has been reached. Tools are no longer available. \
+        Write your final answer to the user's original request using the evidence already collected. \
+        Do not emit or attempt further tool calls. Clearly state any requested work or source reads \
+        that remain incomplete; do not claim that missing work was done.
+        """
 
     static func advertisesTools(atRound round: Int) -> Bool {
         round < maximumRounds

@@ -25,6 +25,12 @@ class ChatBrowserBenchmarkGradingTests(unittest.TestCase):
             self.assertFalse(grade("chain", json.dumps(answer), reads, records)["completed"])
         self.assertTrue(grade("chain", json.dumps({"tokens": ["A", "B"], "passport": None}), reads, records)["completed"])
 
+    def test_tool_call_markup_is_not_a_final_research_answer(self):
+        result = grade("live", '<|tool_call>call:chat_work{}<tool_call|>',
+                       [f"https://example.com/{i}" for i in range(5)], [])
+        self.assertFalse(result["completed"])
+        self.assertFalse(result["final_answer_present"])
+
     def test_repeated_reads_do_not_meet_the_five_page_gate(self):
         result = grade("live", "A comparison", ["https://example.com/source"] * 5, [])
         self.assertFalse(result["completed"])
@@ -52,10 +58,10 @@ class ResponsesReplayTests(unittest.TestCase):
             self.assertEqual(count, 1)
             self.assertEqual(first["message"]["content"], "answer")
             messages.append({"role": "assistant", "content": "Next turn"})
-            generate_responses("http://localhost", sampling, messages, [], "New evidence", 8192, saved, count)
+            generate_responses("http://localhost", sampling, messages, [], "New evidence", 8192, saved, count, final_instruction="Finish honestly")
         self.assertEqual(seen[1]["input"], [capsule, {"type": "message", "role": "assistant", "content": "Next turn"},
                                            {"type": "message", "role": "user", "content": "New evidence"}])
-        self.assertEqual(seen[1]["instructions"], "System")
+        self.assertEqual(seen[1]["instructions"], "System\n\nFinish honestly")
         self.assertEqual(seen[1]["max_output_tokens"], 4096)
         self.assertEqual(seen[1]["context_management"][0]["compact_threshold"], 6144)
 

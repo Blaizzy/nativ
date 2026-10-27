@@ -2,7 +2,7 @@
 
 This experiment keeps the `chat_work` tool and shared WebKit browser. It adds a
 bounded, transient record of exact source excerpts for the current user request,
-plus source-first Google controls and absolute link URLs. There are no compact
+plus source-first Google controls, absolute link URLs, direct navigation for URL search queries, and an explicit final-answer instruction at the tool-round limit. There are no compact
 browser tools and no installed CLI entry point.
 
 `build_helper.py` temporarily appends the test bridge to `Main.swift`, builds,
@@ -33,7 +33,7 @@ production evidence builder. Cookies are isolated in a nonpersistent profile.
   middle repetition. Baseline and revised arms both expose only `chat_work`.
 - Both arms allow 4,096 output tokens to reduce the output-limit confound found in
   the earlier experiment. Both allow 32 tool rounds followed by one generation
-  without tools, matching the app's round gate. A 30-minute task deadline applies.
+  without tools, matching the app's round gate. The revised arm receives the new final-answer instruction; the baseline retains its existing behavior. A 30-minute task deadline applies.
 - A 24-page dependent chain checks exact ordered recall and an unknown fact.
   A 12-page catalog checks every record, a total and a constrained recommendation.
   Facts occur only in served pages, never in the model prompt or evidence code.
@@ -52,3 +52,8 @@ incomplete; retaining them does not guarantee that every fact on a page survives
 
 Use `summarize.py /path/to/results` for an HTML report and JSON summary. Keep pilot
 runs separate from measured trials. A shorter failed run is not a speedup.
+
+For the final comparison, run three repetitions of all tasks at 8K (`--contexts
+8192 --repetitions 3`), then a separate exploratory 16K run (`--contexts 16384
+--cases chain catalog --repetitions 1`). Do not pool the single 16K trials with the
+repeated 8K conditions. Earlier pilot and diagnostic captures remain excluded.
