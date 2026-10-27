@@ -528,7 +528,7 @@ enum ChatToolDispatcher {
         let request = try ChatWorkRequest.decode(call)
         try Task.checkCancellation()
         let content = try await action(request)
-        let bounded = request.action.isBrowserAction || (request.action == .open && request.url != nil)
+        let bounded = request.action.isBrowserAction || (request.action == .open && (request.url != nil || request.elementID != nil))
             ? ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes) : content
         return ChatToolExecutionOutcome(content: bounded, attachments: [])
     }

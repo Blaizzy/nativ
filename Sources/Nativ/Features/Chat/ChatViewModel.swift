@@ -939,7 +939,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resolvedWorkRequest(_ request: ChatWorkRequest, in sessionID: UUID) throws -> ChatWorkRequest {
-        let request = try request.resolvingElementOpen()
+        let source = request.action == .open ? request.elementID.flatMap { workBrowsers.sourceLink(for: $0, sessionID: sessionID) } : nil
+        if let source, let id = request.id, id != source.id {
+            throw ChatWorkError.invalid("The source result belongs to another tab. Use its original tab id or omit id.")
+        }
+        var request = try request.resolvingElementOpen(sourceURL: source?.url)
+        if let source { request.id = source.id }
         if request.action == .upload {
             _ = try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
         }

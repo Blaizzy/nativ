@@ -24,17 +24,30 @@ final class ChatWorkBrowserTests: XCTestCase {
             ChatWorkBrowser.inspectScript, arguments: ["snapshotID": "test", "tabID": "tab", "isSearchPage": true,
                                                       "canGoBack": false, "canGoForward": false],
             in: nil, contentWorld: .defaultClient)
-        let snapshot = try XCTUnwrap(rawSnapshot as? [String: Any])
+        var snapshot = try XCTUnwrap(rawSnapshot as? [String: Any])
+        browser.rememberSearchLinks(in: &snapshot)
+        XCTAssertNil(snapshot["source_links"])
         let results = try XCTUnwrap(snapshot["results"] as? [[String: Any]])
         XCTAssertEqual(results.first?["title"] as? String, "Source result")
         XCTAssertEqual((snapshot["elements"] as? [[String: Any]])?.first?["label"] as? String, "Accept cookies")
         XCTAssertEqual(snapshot["page_status"] as? String, "blocked")
         let action = try XCTUnwrap(results[1]["open"] as? [String: String])
-        XCTAssertEqual(action["action"], "click")
+        XCTAssertEqual(action["action"], "open")
         XCTAssertEqual(action["element_id"], results[1]["id"] as? String)
-        let opened = try await browser.execute(ChatWorkRequest(action: .click, elementID: action["element_id"]))
+        let resultID = try XCTUnwrap(action["element_id"])
+        let sourceURL = try XCTUnwrap(browser.sourceURL(for: resultID))
+        let request = try ChatWorkRequest(action: .open, elementID: resultID).resolvingElementOpen(sourceURL: sourceURL)
+        XCTAssertEqual(request.action, .navigate)
+        let opened = try await browser.execute(request)
         XCTAssertTrue((opened["url"] as? String)?.hasSuffix("/next") == true)
         XCTAssertFalse((snapshot["text"] as? String)?.contains("opaque") == true)
+        XCTAssertEqual(browser.sourceURL(for: resultID), sourceURL)
+        do {
+            _ = try await browser.execute(ChatWorkRequest(action: .click, elementID: resultID))
+            XCTFail("A live click must still reject an old DOM reference")
+        } catch { XCTAssertTrue(error.localizedDescription.contains("stale")) }
+        let reopened = try await browser.execute(request)
+        XCTAssertEqual(reopened["url"] as? String, sourceURL)
         XCTAssertEqual(snapshot["source_kind"] as? String, "search")
         try browser.navigate(base.absoluteString)
         _ = try await browser.execute(ChatWorkRequest(action: .inspect))
@@ -46,6 +59,18 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(ranked[0]["title"] as? String, "Relative source")
         XCTAssertEqual(ranked[1]["title_previously_opened"] as? Bool, true)
 
+    }
+
+    func testCapturedSearchLinksAreBoundedAndRejectNonWebURLs() {
+        let browser = makeBrowser()
+        var snapshot: [String: Any] = ["source_links": (0..<130).map { ["id": "result-\($0)", "title": "Page \($0)", "url": "https://example.com/\($0)"] }]
+        browser.rememberSearchLinks(in: &snapshot)
+        XCTAssertNil(browser.sourceURL(for: "result-0"))
+        XCTAssertEqual(browser.sourceURL(for: "result-129"), "https://example.com/129")
+        snapshot = ["source_links": [["id": "bad", "title": "Local file", "url": "file:///private/test"]]]
+        browser.rememberSearchLinks(in: &snapshot)
+        XCTAssertNil(browser.sourceURL(for: "bad"))
+        XCTAssertNil(snapshot["source_links"])
     }
 
     private func persistentProfile() -> ChatWorkBrowserProfile {

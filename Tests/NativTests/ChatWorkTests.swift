@@ -5,7 +5,7 @@ import NativServerKit
 final class ChatWorkTests: XCTestCase {
     func testOpeningAnElementUsesClickValidationAndConsent() throws {
         let call = MLXChatToolCall(id: "result", function: .init(name: "chat_work", arguments: #"{"action":"open","element_id":"snapshot:0"}"#))
-        let request = try ChatWorkRequest.decode(call)
+        let request = try ChatWorkRequest.decode(call).resolvingElementOpen()
         XCTAssertEqual(request.action, .click)
         XCTAssertEqual(request.elementID, "snapshot:0")
         XCTAssertEqual(ChatToolOperation.work(request.action), .sensitive)

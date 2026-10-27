@@ -75,6 +75,13 @@ final class ChatWorkBrowserPool {
         let matches = browsers[sessionID]?.filter { $0.value.elementLabels[elementID] != nil } ?? [:]
         return matches.count == 1 ? matches.keys.first : nil
     }
+
+    func sourceLink(for elementID: String, sessionID: UUID) -> (id: UUID, url: String)? {
+        let matches = (browsers[sessionID] ?? [:]).compactMap { id, browser -> (UUID, String)? in
+            browser.sourceURL(for: elementID).map { (id, $0) }
+        }
+        return matches.count == 1 ? matches.first : nil
+    }
 }
 
 /// The pane and the agent use this exact WebKit instance, including its navigation state.
@@ -105,6 +112,23 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
     fileprivate(set) var elementLabels: [String: String] = [:]
     private var searchResultTitles: [String: String] = [:]
     private var openedSearchTitles: [String] = []
+    private var searchLinks: [(id: String, url: String, title: String)] = []
+
+    func sourceURL(for elementID: String) -> String? {
+        searchLinks.first { $0.id == elementID }?.url
+    }
+
+    /// Search links are immutable navigation references, not live DOM controls.
+    /// Keep them across page visits so several results can be opened from one search.
+    func rememberSearchLinks(in snapshot: inout [String: Any]) {
+        let links = snapshot.removeValue(forKey: "source_links") as? [[String: String]] ?? []
+        for link in links {
+            guard let id = link["id"], let rawURL = link["url"], let title = link["title"],
+                  let url = try? ChatWorkState.webURL(rawURL), !searchLinks.contains(where: { $0.id == id }) else { continue }
+            searchLinks.append((id, url.absoluteString, title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()))
+        }
+        searchLinks = Array(searchLinks.suffix(128))
+    }
 
     init(profile: ChatWorkBrowserProfile = .shared) {
         self.profile = profile
@@ -358,6 +382,10 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         switch request.action {
         case .navigate, .search:
             guard let url = try request.navigationURL else { throw ChatWorkError.invalid("navigate requires url.") }
+            if let reference = searchLinks.first(where: { $0.id == request.elementID && $0.url == url.absoluteString }),
+               !openedSearchTitles.contains(reference.title) {
+                openedSearchTitles = Array((openedSearchTitles + [reference.title]).suffix(64))
+            }
             try navigate(url.absoluteString)
         case .back:
             guard webView.canGoBack else { throw ChatWorkError.invalid("This tab has no previous page.") }
@@ -429,6 +457,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                                            "canGoBack": webView.canGoBack,
                                            "canGoForward": webView.canGoForward], in: nil, contentWorld: .defaultClient
         ) as? [String: Any] else { throw ChatWorkError.invalid("The page could not be inspected.") }
+        rememberSearchLinks(in: &object)
         object["http_status"] = httpStatus
         if let status = httpStatus, status >= 400 { object["page_status"] = "blocked" }
         object["runtime_errors"] = runtimeErrors
@@ -518,7 +547,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             || (!!dialog && /cookie|consent|sign in|log in|verify/i.test(dialog.innerText));
         const results = search ? elements.filter(e => resultLinks.includes(refs.get(e.id).el)).slice(0, 10).map(e => ({
             id: e.id, title: resultTitle(refs.get(e.id).el), title_previously_opened: wasOpened(refs.get(e.id).el),
-            open: {action: 'click', element_id: e.id}
+            open: {action: 'open', element_id: e.id}
         })) : [];
         return {id: tabID, kind: 'website', source_kind: search ? 'search' : 'page', url: location.href, title: document.title,
             page_status: blocked ? 'blocked' : search ? 'search' : 'readable',
@@ -526,6 +555,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             text_truncated: !search && body.length > 6000,
             text: search ? (dialog ? dialog.innerText.slice(0, 2000) : 'Use chat_work with a result’s open action to read it. Search results do not count as source-page reads.') : body.slice(0, 6000),
             ...(search ? {results} : {}),
+            source_links: results.map(r => ({id: r.id, title: r.title, url: refs.get(r.id).el.href})),
             elements: search ? elements.filter(e => !resultLinks.includes(refs.get(e.id).el)).slice(0, 8) : elements};
         """
 

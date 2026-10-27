@@ -6,7 +6,7 @@ enum ChatWorkToolRegistry {
     static let sessionPrompt = """
         Use chat_work to search and browse in the shared browser: {"action":"search","query":"search terms"}. \
         For a supplied URL, navigate directly; search is for discovering sources. A search query consisting of an HTTP(S) URL opens that URL. \
-        Search returns results with an open action: copy that action into chat_work to read the result. Use click with its element_id; never reconstruct a URL from a result title or display address. For a URL supplied by the user or a source page, use open or navigate; inspect reads the current tab. \
+        Search returns results with an open action: copy that action into chat_work to read the result. open with its element_id follows the captured source link, including after another source was opened. Never reconstruct a URL from a result title or display address. For a supplied URL, use open or navigate; inspect reads the current tab. \
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
         Search results whose titles were already opened in this tab appear last; prefer unread relevant sources over repeated reads. \
         Browser evidence preserves exact excerpts and unique source visits for the current request. Use it to retain facts across compaction. \
@@ -27,7 +27,7 @@ enum ChatWorkToolRegistry {
         page and returns its tab ID, URL, text, and controls. Navigate with {"action":"navigate",\
         "url":"https://example.com/next"}; an omitted ID uses the selected website or opens a new tab. \
         For search/find requests, use {"action":"search","query":"organization name"} before guessing a URL. \
-        Search uses Google in the shared browser without an API key and reuses the selected website (or the supplied id). Follow results by copying results[].open into chat_work, e.g. {"action":"click","element_id":"ID_FROM_RESULT"}. \
+        Search uses Google in the shared browser without an API key and reuses the selected website (or the supplied id). Follow results by copying results[].open into chat_work, e.g. {"action":"open","element_id":"ID_FROM_RESULT"}. These captured source links remain usable across page visits. \
         On navigation failure, continue research by searching the original subject in the same tab; do not repeat a failed URL. \
         List or read existing items, create a \
         document (Markdown), code file, terminal, or website (self-contained HTML or an http/https URL), update \
@@ -76,7 +76,7 @@ enum ChatWorkToolRegistry {
                     "maxLength": .number(300)
                 ]),
                 "language": field("Optional code language, such as swift, python, or javascript."),
-                "element_id": field("Element ID from the most recent inspect; required for click/type/upload. open with element_id activates that element like click; do not also pass url. Upload targets a file input, including hidden inputs."),
+                "element_id": field("For open, a source result ID from search follows its captured URL across page visits; do not also pass url. Other elements use click semantics. For click/type/upload use only IDs from the most recent inspect. Upload targets a file input, including hidden inputs."),
                 "attachment_ids": .object([
                     "type": .string("array"),
                     "items": .object(["type": .string("string")]),
@@ -178,16 +178,17 @@ struct ChatWorkRequest: Decodable {
               let request = try? JSONDecoder().decode(Self.self, from: data) else {
             throw ChatWorkError.invalid("chat_work requires valid JSON arguments and an action.")
         }
-        return try request.resolvingElementOpen()
+        return request
     }
 
-    func resolvingElementOpen() throws -> Self {
+    func resolvingElementOpen(sourceURL: String? = nil) throws -> Self {
         guard action == .open, elementID != nil else { return self }
         guard url == nil else {
             throw ChatWorkError.invalid("open requires either url or element_id, not both.")
         }
         var resolved = self
-        resolved.action = .click
+        resolved.action = sourceURL == nil ? .click : .navigate
+        resolved.url = sourceURL
         return resolved
     }
 

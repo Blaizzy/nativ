@@ -51,7 +51,11 @@ private final class ChatWorkBenchmarkBridge {
             ]), as: UTF8.self)
         }
         guard input.name == "chat_work" else { throw ChatWorkError.invalid("Use chat_work.") }
-        var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments).resolvingElementOpen()
+        var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments)
+        let source = request.action == .open ? request.elementID.flatMap { pool.sourceLink(for: $0, sessionID: sessionID) } : nil
+        if let source, let id = request.id, id != source.id { throw ChatWorkError.invalid("Source result belongs to another tab.") }
+        request = try request.resolvingElementOpen(sourceURL: source?.url)
+        if let source { request.id = source.id }
         if request.action == .list { return try state.itemListJSON() }
         if request.action == .read {
             guard request.id != nil else { throw ChatWorkError.invalid("read requires id.") }

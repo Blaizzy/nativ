@@ -133,6 +133,7 @@ final class ChatToolRegistryTests: XCTestCase {
         for arguments in [
             #"{"action":"search","query":"local OCR models"}"#,
             #"{"action":"open","url":"https://example.com/ocr"}"#,
+            #"{"action":"open","element_id":"source-1"}"#,
             #"{"action":"inspect"}"#,
         ] {
             let outcome = try await ChatToolDispatcher.execute(
