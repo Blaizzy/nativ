@@ -21,12 +21,13 @@ def main():
     parser.add_argument("--contexts", nargs="+", type=int, default=[8192, 16384])
     parser.add_argument("--cases", nargs="+", choices=["chain", "catalog", "live"])
     parser.add_argument("--repetitions", type=int, default=3)
+    parser.add_argument("--max-output-tokens", type=int, default=2048)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     environment = {"hardware": subprocess.check_output(["system_profiler", "SPHardwareDataType"], text=True),
                    "os": platform.platform(), "python": sys.version,
                    "packages": {p: importlib.metadata.version(p) for p in ["mlx", "mlx-vlm", "transformers"]},
-                   "settings": {"prefix_cache": True, "disk_cache": False, "thinking": False, "temperature": 0}}
+                   "settings": {"prefix_cache": True, "disk_cache": False, "thinking": False, "temperature": 0, "max_output_tokens": args.max_output_tokens}}
     (args.output / "environment.json").write_text(json.dumps(environment, indent=2))
     base = f"http://127.0.0.1:{args.port}"
     for context in args.contexts:
@@ -57,7 +58,7 @@ def main():
                         status = subprocess.run([sys.executable, "-u", str(Path(__file__).with_name("benchmark.py")),
                             "--binary", args.binary, "--base", base, "--model", args.model,
                             "--mode", mode, "--case", case, "--context", str(context),
-                            "--seed", str(123 + rep), "--max-rounds", "36" if case != "live" else "20",
+                            "--seed", str(123 + rep), "--max-output-tokens", str(args.max_output_tokens), "--max-rounds", "36" if case != "live" else "20",
                             "--output", str(args.output / label)], timeout=2100).returncode
                         print("END", label, "status", status, flush=True)
         finally:

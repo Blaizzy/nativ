@@ -29,7 +29,9 @@ def metrics(path):
     tools = [t for s in steps for t in s["tools"]]
     prompts = [s["inference"]["usage"].get("prompt_tokens", 0) for s in steps]
     ttft = [s["inference"]["ttft"] for s in steps if s["inference"]["ttft"] is not None]
-    row = {"name": path.parent.name, "case": config["case"], "context": config["context"],
+    finishes = [c.get("finish_reason") for e in (steps[-1]["inference"]["events"] if steps else [])
+                for c in e.get("choices") or [] if c.get("finish_reason")]
+    row = {"final_finish_reason": finishes[-1] if finishes else None, "name": path.parent.name, "case": config["case"], "context": config["context"],
            "mode": config["mode"], "completed": data["grade"]["completed"],
            "seconds": data["task_seconds"], "pages_read": len(set(data["read_urls"])),
            "rounds": len(steps), "tool_calls": len(tools),
@@ -65,14 +67,16 @@ def main():
     for (case, context, mode), values in sorted(groups.items()):
         aggregates.append({"case": case, "context": context, "mode": mode, "runs": len(values),
                            "completed": sum(r["completed"] for r in values),
+                           "output_limit_finishes": sum(r["final_finish_reason"] == "length" for r in values),
                            **{key: statistics.median(r[key] for r in values if r[key] is not None) if any(r[key] is not None for r in values) else 0 for key in [
                                "seconds", "pages_read", "tool_calls", "tool_errors", "tool_result_bytes",
                                "prompt_tokens_sum", "prompt_tokens_peak", "first_prompt_tokens", "ttft_median"]},
                            "seconds_range": [min(r["seconds"] for r in values), max(r["seconds"] for r in values)],
-                           "known_tokens_recalled": [r.get("known_tokens_recalled") for r in values]})
+                           "known_tokens_recalled": [r.get("known_tokens_recalled") for r in values],
+                           "correct_catalog_records": [r["grade"].get("correct_records") for r in values]})
     (a.results / "summary.json").write_text(json.dumps({"groups": aggregates, "runs": rows}, indent=2))
     table = "".join(f'<tr><td>{r["case"]}</td><td>{r["context"]:,}</td><td>{r["mode"]}</td>'
-                    f'<td>{r["completed"]}/{r["runs"]}</td><td>{r["seconds"]:.1f}</td>'
+                    f'<td>{r["completed"]}/{r["runs"]}</td><td>{r["output_limit_finishes"]}</td><td>{r["seconds"]:.1f}</td>'
                     f'<td>{r["pages_read"]:g}</td><td>{r["prompt_tokens_sum"]:,.0f}</td>'
                     f'<td>{r["tool_result_bytes"]/1024:.1f}</td></tr>' for r in aggregates)
     details = "".join(f'<details><summary>{html.escape(r["name"])} — {"PASS" if r["completed"] else "FAIL"}, '
@@ -88,11 +92,11 @@ th{background:#163c57;color:white}details{background:white;padding:14px;margin:1
 Three trials per condition; temperature 0, thinking off, memory prefix cache on, disk cache off. Model warmup is excluded.</p>
 <p class="note">A faster failed task is not a speed improvement. Completion requires all requested facts and source visits for fixtures.
 The live OCR gate checks five visited source pages and a final answer; it does not certify answer accuracy.</p>
-<table><thead><tr><th>Task</th><th>Context</th><th>Interface</th><th>Completed</th><th>Median seconds</th><th>Median pages</th><th>Reported prompt tokens, sum</th><th>Tool output KiB</th></tr></thead><tbody>''' + table + '''</tbody></table>
+<table><thead><tr><th>Task</th><th>Context</th><th>Interface</th><th>Completed</th><th>Output cap hits</th><th>Median seconds</th><th>Median pages</th><th>Reported prompt tokens, sum</th><th>Tool output KiB</th></tr></thead><tbody>''' + table + '''</tbody></table>
 <p>Chain: 24 dependent pages, ordered tokens, unknown passport check. Catalog: 12 linked specifications and a constrained recommendation.
 Live: the original five-page OCR research prompt. Fixture pages are synthetic and have deterministic ground truth.</p>
 <p>Reported prompt tokens exclude internal compaction-summary generations. Prompt drops indicate context reduction but are not an exact compaction counter.
-This measures browser-tool loops, not Nativ UI timing or the original reporter's M4 machine. Preliminary debugging runs are excluded.</p>
+This uses full-history Chat Completions, not Nativ Responses replay. It measures browser-tool loops, not Nativ UI timing or the original reporter's M4 machine. Preliminary debugging runs are excluded.</p>
 <h2>Captured runs and answers</h2>''' + details + '</html>'
     (a.results / "report.html").write_text(document)
     print(json.dumps(aggregates, indent=2))

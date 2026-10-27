@@ -174,6 +174,7 @@ def main():
     p.add_argument("--context", type=int, default=8192)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--max-rounds", type=int, default=36)
+    p.add_argument("--max-output-tokens", type=int, default=2048)
     p.add_argument("--fixture-port", type=int, default=19465)
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=True)
@@ -195,7 +196,7 @@ def main():
         }
         messages = [{"role": "system", "content": common + route}, {"role": "user", "content": prompts[a.case]}]
         sampling = {"model": a.model, "temperature": 0, "top_p": 1.0, "top_k": 0, "min_p": 0.0,
-                    "repetition_penalty": 1.0, "enable_thinking": False, "seed": a.seed, "max_tokens": 2048}
+                    "repetition_penalty": 1.0, "enable_thinking": False, "seed": a.seed, "max_tokens": a.max_output_tokens}
         result.update(tools=definitions, initial_messages=list(messages), sampling=sampling,
                       fixture_sha256=hashlib.sha256(json.dumps(pages, sort_keys=True).encode()).hexdigest())
         # Unload before every trial; warmup is excluded from measured task time.

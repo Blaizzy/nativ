@@ -2,7 +2,7 @@ import Foundation
 import NativServerKit
 
 /// Experimental flat commands over the same browser engine and profile as Chat Work.
-/// Not advertised in ordinary chats until the long-horizon comparison is evaluated.
+/// Kept separate from ordinary chat registration for controlled evaluation.
 enum ChatBrowserCommands {
     static let definitions = [
         tool("browser_search", "Search Google in the shared browser. Returns source titles, navigation URLs and snippets; snippets are not page reads. Read a result URL to resolve redirects and obtain the source URL for citation.",

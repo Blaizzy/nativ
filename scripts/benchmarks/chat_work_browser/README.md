@@ -28,6 +28,8 @@ Build with Xcode. Run `run_suite.py` using a Python environment containing the t
 MLX-VLM revision, passing `--binary /path/to/Nativ.app/Contents/MacOS/Nativ`,
 `--model /path/to/checkpoint`, and `--output /path/to/results`.
 
+- Use `/v1/chat/completions` with full-history resend and the runtime compaction
+  cache. This does not exercise Nativ’s Responses-API transcript replay.
 - Same checkpoint, tokenizer, host, runtime, temperature zero, thinking disabled,
   memory prefix caching enabled, disk cache disabled, and 2,048 output tokens.
 - 8K and 16K contexts; three trials per interface, reversing order in the middle
@@ -40,6 +42,8 @@ MLX-VLM revision, passing `--binary /path/to/Nativ.app/Contents/MacOS/Nativ`,
 - The original live OCR request is tested at 8K. Search snippets are never counted as
   page reads. Its automatic grade checks five source visits and a final answer only;
   source quality, accuracy and comparison usefulness require manual review.
+- Bound fixture tasks to 36 model rounds and live research to 20, with a 30-minute
+  task deadline. A failure at the round limit is not proof the model would never finish.
 - Record full messages, tool calls/results, streaming usage, TTFT, wall time, health,
   fixture hash, exact schemas and environment. Do not treat fixture success as proof
   of live research quality, or a fast failure as a speed improvement.
@@ -52,3 +56,9 @@ Generate the HTML report and machine-readable summary with `summarize.py /path/t
 The scorer requires the actual expected fixture pages, so the catalog index cannot
 substitute for an unread source. A chain also requires exact order and preservation
 of unknown facts. Report partial token recall separately from complete task success.
+
+Use `--max-output-tokens 4096 --cases catalog --repetitions 1` with the suite runner
+for the separate output-budget diagnostic. Do not pool these single diagnostic runs
+with the primary three-repeat, 2,048-token conditions. A non-search page payload can
+still be an interstitial or an HTTP-200 error page; inspect live sources before
+crediting a completed research answer.
