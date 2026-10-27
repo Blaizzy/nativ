@@ -19,7 +19,8 @@ class RequestDiagnosticsTests(unittest.TestCase):
         imports = set("__future__ atexit asyncio json logging os re sqlite3 time uuid contextvars "
                       "dataclasses datetime threading types typing".split())
         names = set("safe_failure_code safe_diagnostic_version AnalyticsStore MetricsTracker "
-                    "RequestObservation ModelAggregate bucket_start_unix seconds_to_milliseconds".split())
+                    "RequestObservation ModelAggregate bucket_start_unix seconds_to_milliseconds "
+                    "apply_per_model_request_defaults resolve_thinking_enabled".split())
         nodes = []
         for node in ast.parse(source.read_text()).body:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -42,6 +43,18 @@ class RequestDiagnosticsTests(unittest.TestCase):
         self.ns["base"] = self.ns["SimpleNamespace"](logger=self.ns["logging"].getLogger(__name__))
         self.ns["ANALYTICS_STORE"] = self.store
         self.db = self.store._connection
+
+    def test_thinking_alias_precedes_model_defaults_and_metrics_agree(self):
+        self.ns["_PER_MODEL_CONFIGS"] = {"demo": {"thinkingEnabled": True}}
+        self.ns["base"].get_server_enable_thinking = lambda: True
+        for top_level in (None, True, False):
+            payload = {"model": "demo", "chat_template_kwargs": {"enable_thinking": False}}
+            if top_level is not None:
+                payload["enable_thinking"] = top_level
+            self.ns["apply_per_model_request_defaults"](payload)
+            expected = top_level if top_level is not None else False
+            self.assertEqual(payload["enable_thinking"], expected)
+            self.assertEqual(self.ns["resolve_thinking_enabled"](payload), expected)
 
     def test_failure_categories(self):
         class UnprintableError(RuntimeError):

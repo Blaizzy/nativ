@@ -6,7 +6,19 @@ protocol WebBrowsingHTTPClient: Sendable {
 
 struct URLSessionWebBrowsingHTTPClient: WebBrowsingHTTPClient {
     func data(for request: URLRequest) async throws -> (Data, URLResponse) {
-        try await URLSession.shared.data(for: request)
+        guard !request.httpShouldHandleCookies else {
+            return try await URLSession.shared.data(for: request)
+        }
+        let session = URLSession(configuration: .ephemeral, delegate: PublicPageRedirectPolicy(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (bytes, response) = try await session.bytes(for: request)
+        guard response.expectedContentLength <= 2_000_000 else { throw KeylessWebBrowsingError.unavailable }
+        var data = Data()
+        for try await byte in bytes {
+            guard data.count < 2_000_000 else { throw KeylessWebBrowsingError.unavailable }
+            data.append(byte)
+        }
+        return (data, response)
     }
 }
 
@@ -79,5 +91,20 @@ struct WebBrowsingTransport: Sendable {
         } catch {
             throw WebBrowsingError.invalidResponse(provider)
         }
+    }
+}
+
+private final class PublicPageRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        guard let url = request.url, WebReadURLPolicy.normalizedURL(url.absoluteString) != nil else {
+            completionHandler(nil)
+            return
+        }
+        var next = request
+        next.httpShouldHandleCookies = false
+        completionHandler(next)
     }
 }

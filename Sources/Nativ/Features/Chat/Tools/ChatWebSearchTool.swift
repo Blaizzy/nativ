@@ -65,11 +65,16 @@ struct ChatWebSearchToolExecutor {
             throw WebBrowsingError.invalidArguments
         }
 
-        let results = try await runtime.search(query: arguments.query, limit: 3)
+        let results = try await runtime.search(query: arguments.query, limit: 5)
         return try encoded(WebSearchToolSuccessPayload(results: results))
     }
 
     func failurePayload(error: Error) -> String {
+        if let error = error as? KeylessWebBrowsingError {
+            let data = try? JSONSerialization.data(withJSONObject: ["ok": false,
+                "error": ["code": "page_unavailable", "message": error.localizedDescription]])
+            return data.map { String(decoding: $0, as: UTF8.self) } ?? "Text browsing failed."
+        }
         let failure = (error as? WebBrowsingError) ?? .unexpectedFailure
         let payload = WebSearchToolFailurePayload(
             ok: false,

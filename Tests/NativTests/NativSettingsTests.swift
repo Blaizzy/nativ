@@ -5,6 +5,23 @@ import XCTest
 @testable import NativServerKit
 
 final class NativSettingsTests: XCTestCase {
+    func testResetModelConfigurationKeepsFoldersSelectionsAndPersonalSettings() {
+        var settings = NativSettings(modelSearchPath: "/Volumes/Models", additionalModelSearchPaths: ["/Users/shared/models"], languageModelID: "local/model", maxKVSize: 8192)
+        settings.serverAPIKey = "existing-key"
+        settings.disabledToolNames = ["terminal"]
+        settings.personalization.profile.preferredName = "Alex"
+        settings.temperature = 0.99
+        settings.resetModelConfiguration()
+        XCTAssertEqual(settings.modelSearchPath, "/Volumes/Models")
+        XCTAssertEqual(settings.additionalModelSearchPaths, ["/Users/shared/models"])
+        XCTAssertEqual(settings.languageModelID, "local/model")
+        XCTAssertEqual(settings.serverAPIKey, "existing-key")
+        XCTAssertEqual(settings.disabledToolNames, ["terminal"])
+        XCTAssertEqual(settings.personalization.profile.preferredName, "Alex")
+        XCTAssertEqual(settings.maxKVSize, NativSettings().maxKVSize)
+        XCTAssertEqual(settings.temperature, NativSettings().temperature)
+    }
+
     func testCachingAndCompactionDefaultsPreserveExplicitOptOuts() throws {
         for settings in [NativSettings(), try JSONDecoder().decode(NativSettings.self, from: Data("{}".utf8))] {
             XCTAssertTrue(settings.prefixCachingEnabled)

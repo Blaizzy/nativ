@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import urllib.request
 from urllib.parse import quote
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -515,22 +516,35 @@ def install_requirements(
     env = os.environ.copy()
     env["PYTHONNOUSERSITE"] = "1"
 
-    command = [
-        str(python),
-        "-m",
-        "pip",
-        "install",
-        "--only-binary=:all:",
-        "-r",
-        str(requirements),
-    ]
-    if mlx_vlm_source:
-        log(f"Resolving requirements with local mlx-vlm source {mlx_vlm_source}")
-        command.append(str(mlx_vlm_source))
-    if mlx_audio_source:
-        log(f"Resolving requirements with local mlx-audio source {mlx_audio_source}")
-        command.append(str(mlx_audio_source))
-    run([*command, *extra_pip_args], env=env)
+    # A pinned direct URL and an explicit local source cannot both participate
+    # in pip's resolution for the same package. Local development overrides only
+    # that package; keep every other dependency constraint and relative include.
+    overrides = {
+        name for name, source in (("mlx-vlm", mlx_vlm_source), ("mlx-audio", mlx_audio_source))
+        if source is not None
+    }
+    with ExitStack() as stack:
+        resolved_requirements = requirements
+        if overrides:
+            filtered = stack.enter_context(tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", prefix=".nativ-requirements-", dir=requirements.parent
+            ))
+            for line in requirements.read_text().splitlines(keepends=True):
+                match = re.match(r"^\s*([A-Za-z0-9_-]+)(?=[\s<>=!~@;\[]|$)", line)
+                name = match.group(1).lower().replace("_", "-") if match else None
+                if name not in overrides:
+                    filtered.write(line)
+            filtered.flush()
+            resolved_requirements = Path(filtered.name)
+        command = [str(python), "-m", "pip", "install", "--only-binary=:all:",
+                   "-r", str(resolved_requirements)]
+        if mlx_vlm_source:
+            log(f"Resolving requirements with local mlx-vlm source {mlx_vlm_source}")
+            command.append(str(mlx_vlm_source))
+        if mlx_audio_source:
+            log(f"Resolving requirements with local mlx-audio source {mlx_audio_source}")
+            command.append(str(mlx_audio_source))
+        run([*command, *extra_pip_args], env=env)
 
 
 def install_local_mlx_vlm(

@@ -5,6 +5,7 @@ struct WebBrowsingRuntime {
     private let preferences: WebBrowsingPreferences
     private let searchService: WebSearchService
     private let readService: WebReadService
+    private let keyless: KeylessWebBrowsing
 
     init(
         credentials: any WebSearchCredentialStoring = KeychainWebSearchCredentialStore(),
@@ -12,24 +13,29 @@ struct WebBrowsingRuntime {
         client: any WebBrowsingHTTPClient = URLSessionWebBrowsingHTTPClient()
     ) {
         let providers = WebBrowsingProviderRegistry(client: client)
+        keyless = KeylessWebBrowsing(client: client)
         self.credentials = credentials
         self.preferences = preferences
         searchService = WebSearchService(providers: providers)
         readService = WebReadService(providers: providers)
     }
 
-    func isConfigured(_ capability: WebBrowsingCapability) -> Bool {
+    func isConfigured(_ capability: WebBrowsingCapability) -> Bool { true }
+
+    private func hasProvider(_ capability: WebBrowsingCapability) -> Bool {
         guard let provider = preferences.provider(for: capability) else { return false }
         switch provider.metadata.configurationKind {
         case .apiKey:
-            return preferences.credentialIssue(for: provider) == nil
-                && (try? credentials.load(for: provider)) != nil
+            return (try? credentials.load(for: provider)) != nil
         case .instanceURL:
             return preferences.endpoint(for: provider) != nil
         }
     }
 
     func search(query: String, limit: Int) async throws -> [WebSearchResult] {
+        if !hasProvider(.search) {
+            return try await keyless.search(query: query, limit: limit)
+        }
         let provider = preferences.searchProvider
         let access = try searchAccess(for: provider)
         return try await execute(provider: provider) {
@@ -43,6 +49,9 @@ struct WebBrowsingRuntime {
     }
 
     func read(urls: [String], focus: String?) async throws -> [WebReadPage] {
+        if !hasProvider(.read) {
+            return try await keyless.read(urls: urls, focus: focus)
+        }
         guard let provider = preferences.provider(for: .read) else {
             throw WebReadError.pageReaderNotConfigured(preferences.searchProvider)
         }

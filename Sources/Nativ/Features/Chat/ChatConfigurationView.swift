@@ -259,7 +259,7 @@ struct ModelConfigurationView: View {
                     Button("Reset", role: .destructive, action: onReset)
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This will restore all model configuration settings to their defaults.")
+                    Text("This restores generation settings and sets context length to the model default. Model folders, selected models, connections, and personal settings are kept.")
                 }
             }
 

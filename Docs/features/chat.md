@@ -60,6 +60,21 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. **Prefix Caching** is enabled by default in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
+`web_search` and `web_read` are available without API keys. When no provider is
+connected, search retrieves DuckDuckGo HTML and page reading extracts text without
+executing page scripts or opening a browser tab. Connected providers remain in use.
+Blocked searches and pages that need JavaScript report a limitation so the agent can
+use the shared browser. Search snippets do not count as full page reads.
+
+Browsing tool results are saved as bounded excerpts, with omission notices. The
+budget scales with the effective context (4 KB per tool result at 8K context),
+with a conservative 8K fallback when the context limit is unavailable. The runtime also
+bounds oversized tool exchanges using its tokenizer before compaction.
+
+Reset model configuration restores generation defaults, including automatic
+context length, while preserving model folders, selected models, connections,
+and personal settings. The reset dialog describes the context change.
+
 PDF and other document excerpts are sent as current source context, separately
 from the saved conversation. Selecting different passages or fitting them to the
 remaining space preserves the summary; editing a covered message or replacing
