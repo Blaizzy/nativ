@@ -6,12 +6,14 @@ enum ChatBrowsingBudget {
         min(16_000, max(512, (context > 0 ? context : 8_192) / 2))
     }
 
-    static func bound(_ content: String, maximumBytes: Int) -> String {
+    static func bound(_ content: String, maximumBytes: Int, prioritizeText: Bool = false) -> String {
         guard content.utf8.count > maximumBytes,
               let data = content.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return content }
         var textLimit = max(64, maximumBytes / 2)
-        var elementLimit = 24
+        // Research needs the readable passage before navigation chrome. Start
+        // with a few controls so a large menu cannot force text down to a heading.
+        var elementLimit = prioritizeText ? (object["source_kind"] as? String == "search" ? 6 : 2) : 24
         for _ in 0..<12 {
             var bounded = reduce(object, textLimit: textLimit, elementLimit: elementLimit) as? [String: Any] ?? object
             bounded["truncated"] = true

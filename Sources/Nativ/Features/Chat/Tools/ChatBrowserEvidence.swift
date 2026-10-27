@@ -38,7 +38,7 @@ enum ChatBrowserEvidence {
             guard let text = message.textContent,
                   let result = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any],
                   result["ok"] as? Bool != false, result["error"] == nil,
-                  result["page_status"] as? String != "blocked",
+                  !["blocked", "insufficient_text", "preview"].contains(result["page_status"] as? String ?? ""),
                   (result["http_status"] as? Int ?? 200) < 400,
                   result["editable"] as? Bool != true, result["local_page_url"] == nil,
                   result["kind"] as? String == "website", result["source_kind"] as? String != "search",

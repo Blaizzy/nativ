@@ -520,8 +520,9 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             .sort((a, b) => Number(wasOpened(a)) - Number(wasOpened(b))) : [];
         const dialogs = [...document.querySelectorAll('[role="dialog"]')].filter(visible);
         const dialogControls = dialogs.flatMap(d => [...d.querySelectorAll('a[href],button,input,[role="button"]')]);
+        const contentControls = search ? [] : [...document.querySelectorAll('article a[href],main a[href],[role="main"] a[href]')];
         const fileInputs = [...document.querySelectorAll('input[type="file"]')].slice(0, 20);
-        const controls = [...new Set([...dialogControls, ...resultLinks, ...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')])]
+        const controls = [...new Set([...dialogControls, ...resultLinks, ...contentControls, ...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')])]
             .filter(el => el.type !== 'file' && visible(el)).slice(0, 40);
         const elements = [...controls, ...fileInputs].map((el, i) => {
                 const id = token + ':' + i;
@@ -545,12 +546,14 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         const login = [...document.querySelectorAll('input[type="password"]')].some(visible) && article.length < 300;
         const blocked = login || /^(?:\\s*(?:404|page not found|access denied|just a moment|verify you are human)\\b)/i.test(body)
             || (!!dialog && /cookie|consent|sign in|log in|verify/i.test(dialog.innerText));
+        const preview = /member.only story/i.test(body) && article.trim().length < 1500;
+        const insufficient = body.trim().length < 80 && !!document.querySelector('video,audio');
         const results = search ? elements.filter(e => resultLinks.includes(refs.get(e.id).el)).slice(0, 10).map(e => ({
             id: e.id, title: resultTitle(refs.get(e.id).el), title_previously_opened: wasOpened(refs.get(e.id).el),
             open: {action: 'open', element_id: e.id}
         })) : [];
         return {id: tabID, kind: 'website', source_kind: search ? 'search' : 'page', url: location.href, title: document.title,
-            page_status: blocked ? 'blocked' : search ? 'search' : 'readable',
+            page_status: blocked ? 'blocked' : search ? 'search' : preview ? 'preview' : insufficient ? 'insufficient_text' : 'readable',
             can_go_back: canGoBack, can_go_forward: canGoForward, untrusted_page_content: true,
             text_truncated: !search && body.length > 6000,
             text: search ? (dialog ? dialog.innerText.slice(0, 2000) : 'Use chat_work with a result’s open action to read it. Search results do not count as source-page reads.') : body.slice(0, 6000),

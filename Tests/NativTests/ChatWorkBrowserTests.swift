@@ -73,6 +73,20 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertNil(snapshot["source_links"])
     }
 
+    func testPlayerWithoutTranscriptAndShortMemberPreviewAreNotReadableSources() async throws {
+        let browser = makeBrowser()
+        defer { browser.stop() }
+        for (html, status) in [
+            ("<main><video controls></video>0:00 / 1:36:04</main>", "insufficient_text"),
+            ("<article>Member-only story<h1>OCR comparison</h1><p>Subscribe to continue reading.</p></article>", "preview"),
+            ("<article><h1>A short fact</h1><p>The project code is ORCHID.</p></article>", "readable")
+        ] {
+            browser.load(ChatWorkItem(title: "Source", kind: .website, content: html))
+            let result = try await browser.execute(ChatWorkRequest(action: .inspect))
+            XCTAssertEqual(result["page_status"] as? String, status)
+        }
+    }
+
     private func persistentProfile() -> ChatWorkBrowserProfile {
         let identifier = UUID()
         removeProfileAfterTest(identifier)

@@ -52,6 +52,7 @@ private final class ChatWorkBenchmarkBridge {
         }
         guard input.name == "chat_work" else { throw ChatWorkError.invalid("Use chat_work.") }
         var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments)
+        let prioritizeText = [.open, .navigate, .search, .back, .forward].contains(request.action)
         let source = request.action == .open ? request.elementID.flatMap { pool.sourceLink(for: $0, sessionID: sessionID) } : nil
         if let source, let id = request.id, id != source.id { throw ChatWorkError.invalid("Source result belongs to another tab.") }
         request = try request.resolvingElementOpen(sourceURL: source?.url)
@@ -79,6 +80,6 @@ private final class ChatWorkBenchmarkBridge {
         }
         let snapshot = try await browser.execute(request)
         let text = String(decoding: try JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]), as: UTF8.self)
-        return ChatBrowsingBudget.bound(text, maximumBytes: maximumBytes)
+        return ChatBrowsingBudget.bound(text, maximumBytes: maximumBytes, prioritizeText: prioritizeText)
     }
 }

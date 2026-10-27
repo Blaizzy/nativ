@@ -529,7 +529,8 @@ enum ChatToolDispatcher {
         try Task.checkCancellation()
         let content = try await action(request)
         let bounded = request.action.isBrowserAction || (request.action == .open && (request.url != nil || request.elementID != nil))
-            ? ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes) : content
+            ? ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes,
+                                       prioritizeText: [.open, .navigate, .search, .back, .forward].contains(request.action)) : content
         return ChatToolExecutionOutcome(content: bounded, attachments: [])
     }
 
