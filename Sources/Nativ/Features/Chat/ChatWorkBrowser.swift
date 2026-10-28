@@ -546,7 +546,8 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         const dialog = dialogs[0];
         const article = document.querySelector('article')?.innerText || '';
         const login = [...document.querySelectorAll('input[type="password"]')].some(visible) && article.length < 300;
-        const blocked = login || /^(?:\\s*(?:404|page not found|access denied|just a moment|verify you are human)\\b)/i.test(body)
+        const consentPage = /^consent\\.(?:youtube\\.com|google\\.[a-z.]+)$/i.test(location.hostname);
+        const blocked = consentPage || login || /^(?:\\s*(?:404|page not found|access denied|just a moment|verify you are human)\\b)/i.test(body)
             || (!!dialog && /cookie|consent|sign in|log in|verify/i.test(dialog.innerText));
         const preview = /member.only story/i.test(body) && article.trim().length < 1500;
         const insufficient = body.trim().length < 80 && !!document.querySelector('video,audio');

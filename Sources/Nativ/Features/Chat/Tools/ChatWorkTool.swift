@@ -10,7 +10,7 @@ enum ChatWorkToolRegistry {
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
         Search results whose titles were already opened in this tab appear last; prefer unread relevant sources over repeated reads. \
         Browser evidence preserves exact excerpts and unique source visits for the current request. Use it to retain facts across compaction. \
-        Meet the user's requested source count; repeated visits to one URL count once. Once sufficient evidence is collected, answer instead of restarting research. \
+        Count relevant source pages against the user's request; an index does not count as its linked specifications or articles. Cite claims with the exact source URLs from receipts; never invent or reassign citations. Once sufficient evidence is collected, answer instead of restarting research. \
         Use current element IDs for browser actions. The shared side window (work pane or canvas) also holds documents and terminals. \
         If a URL fails, search the original subject; do not retry the same failed URL or claim it was read. \
         Read documents before updating; use the returned id and expected_revision. A revision_conflict includes the \

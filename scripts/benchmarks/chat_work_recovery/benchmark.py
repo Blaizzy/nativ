@@ -60,6 +60,13 @@ def generate(base, payload):
                         **({"tool_calls": list(calls.values())} if calls else {})}}
 
 
+class ResponseStreamFailure(RuntimeError):
+    def __init__(self, payload, events):
+        failed = next((event for event in events if event.get("type") in ("error", "response.failed")), None)
+        super().__init__("Responses stream failed: " + json.dumps(failed) if failed else "Responses stream ended without a completed response")
+        self.capture = {"request": payload, "events": events}
+
+
 def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count, final_instruction=""):
     history = [m for m in messages if m["role"] not in ("system", "developer")]
     items = ([capsule] if capsule else []) + [{"type": "message", **m} for m in history[prefix_count:]]
@@ -86,7 +93,7 @@ def generate_responses(base, sampling, messages, tools, context, limit, capsule,
                 response = event["response"]
                 break
     if response is None:
-        raise RuntimeError("Responses stream ended without a completed response")
+        raise ResponseStreamFailure(payload, events)
     output = response.get("output", [])
     calls = [{"id": item.get("call_id", item.get("id")), "type": "function",
               "function": {"name": item["name"], "arguments": item["arguments"]}}
@@ -307,6 +314,8 @@ def main():
         save()
     except Exception as error:
         result["error"] = str(error)
+        if isinstance(error, ResponseStreamFailure):
+            result["failed_inference"] = error.capture
         save()
         raise
     finally:

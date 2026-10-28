@@ -23,7 +23,7 @@ final class ChatBrowserEvidenceTests: XCTestCase {
         let messages = try [MLXChatMessage(role: "user", content: "Read five sources"),
             receipt("https://example.com/a#one"), receipt("https://example.com/a#two"),
             receipt("https://www.google.com/search?q=ocr"), receipt("https://www.google.com/goto?url=opaque"),
-            receipt("https://consent.google.com/"), receipt("https://www.google.com/sorry/index"), receipt("https://example.com/fail", extra: ["ok": false]),
+            receipt("https://consent.youtube.com/m?continue=video"), receipt("https://consent.google.com/"), receipt("https://www.google.com/sorry/index"), receipt("https://example.com/fail", extra: ["ok": false]),
             receipt("https://example.com/challenge?js_challenge=1", text: "Verify you are human"),
             receipt("https://example.com/missing", extra: ["title": "Page not found"])]
         let context = try XCTUnwrap(ChatBrowserEvidence.context(messages: messages, maximumBytes: 4096))
@@ -49,6 +49,18 @@ final class ChatBrowserEvidenceTests: XCTestCase {
         XCTAssertFalse(context.contains("js_challenge"))
         XCTAssertFalse(context.contains("PAGE NOT FOUND"))
         XCTAssertTrue(ChatBrowserEvidence.missingPageInstruction(messages: messages)?.contains("Only 1") == true)
+    }
+
+    func testRedditChallengeVariantsCountOnceWithoutRemovingMeaningfulQueries() throws {
+        let messages = try [MLXChatMessage(role: "user", content: "Read five sources"),
+            receipt("https://www.reddit.com/r/test/comments/abc/title/?js_challenge=1&solution=a&jsc_token=b&jsc_orig_r="),
+            receipt("https://www.reddit.com/r/test/comments/abc/title/?solution=c&jsc_token=d"),
+            receipt("https://example.com/page?solution=a"), receipt("https://example.com/page?solution=b")]
+        let context = try XCTUnwrap(ChatBrowserEvidence.context(messages: messages, maximumBytes: 4096))
+        XCTAssertTrue(context.contains("\"distinct_source_pages_observed\":3"))
+        XCTAssertFalse(context.contains("jsc_token"))
+        XCTAssertTrue(context.contains("solution=a"))
+        XCTAssertTrue(context.contains("solution=b"))
     }
 
     func testPageRequirementAndRepeatedSearchRecoveryAreBoundedToCurrentTask() throws {
