@@ -31,6 +31,7 @@ final class ChatWorkBrowserTests: XCTestCase {
         XCTAssertEqual(results.first?["title"] as? String, "Source result")
         XCTAssertEqual((snapshot["elements"] as? [[String: Any]])?.first?["label"] as? String, "Accept cookies")
         XCTAssertEqual(snapshot["page_status"] as? String, "blocked")
+        XCTAssertFalse((snapshot["elements"] as? [[String: Any]])?.contains(where: { ($0["label"] as? String)?.hasPrefix("Menu ") == true }) == true)
         let action = try XCTUnwrap(results[1]["open"] as? [String: String])
         XCTAssertEqual(action["action"], "open")
         XCTAssertEqual(action["element_id"], results[1]["id"] as? String)

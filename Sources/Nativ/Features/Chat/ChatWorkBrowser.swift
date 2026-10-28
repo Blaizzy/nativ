@@ -563,7 +563,10 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
             text: search ? (dialog ? dialog.innerText.slice(0, 2000) : 'Use chat_work with a result’s open action to read it. Search results do not count as source-page reads.') : body.slice(0, 6000),
             ...(search ? {results} : {}),
             source_links: results.map(r => ({id: r.id, title: r.title, url: refs.get(r.id).el.href})),
-            elements: search ? elements.filter(e => !resultLinks.includes(refs.get(e.id).el)).slice(0, 8) : elements};
+            elements: search ? elements.filter(e => {
+                const el = refs.get(e.id).el;
+                return !resultLinks.includes(el) && (e.tag !== 'a' || dialogControls.includes(el));
+            }).slice(0, 8) : elements};
         """
 
     private static let actionScript = """
