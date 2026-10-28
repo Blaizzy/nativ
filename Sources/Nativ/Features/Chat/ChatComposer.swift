@@ -1406,6 +1406,7 @@ private struct ChatPromptEditBanner: View {
 private struct ChatAccessPicker: View {
     let selection: ChatAccessMode
     let onSelect: (ChatAccessMode) -> Void
+    @State private var isHovered = false
     @State private var showsOptions = false
     @State private var showsComparison = false
     @Environment(\.colorScheme) private var colorScheme
@@ -1415,14 +1416,16 @@ private struct ChatAccessPicker: View {
             showsOptions.toggle()
         } label: {
             Label(selection.title, systemImage: selection.accessSymbol)
+                .labelStyle(.iconOnly)
                 .font(.body)
                 .foregroundStyle(selection == .fullAccess ? fullAccessColor : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.primary.opacity(0.07), in: Capsule())
-                .contentShape(Capsule())
+                .frame(width: 30, height: 30)
+                .background(Color.primary.opacity(isHovered ? 0.07 : 0), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
         .accessibilityLabel("Tool access: \(selection.title)")
         .help("Choose how Nativ asks for approval")
         .popover(isPresented: $showsOptions, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
