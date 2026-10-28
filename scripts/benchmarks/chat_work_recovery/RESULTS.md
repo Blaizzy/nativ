@@ -5,6 +5,45 @@ The integration faults are fixed, including a separate runtime tool-parser error
 found by the new long-task tests. Research answer quality remains an empirical
 limit; the tables below distinguish page reads from correct answers.
 
+## Evidence and cache efficiency follow-up
+
+The client now sends exact excerpts keyed by tool-call ID in `tool_result_context`.
+MLX-VLM renders only excerpts whose original receipts are absent after compaction,
+in a stable block before retained conversation history. Changing browser state
+stays in `transient_context`; the runtime verifies the stable token prefix and
+prioritizes a checkpoint there. Current-tab navigation guidance omits the optional
+browser UUID. Chat Work remains the shared browser.
+
+Validation on M3 Ultra with the same Qwen3.8-27B 4-bit checkpoint, 24-page fixture,
+32K window, thinking disabled and two-entry/16 GiB memory cache:
+
+| Metric | Previous cache recovery | Conditional evidence and explicit boundary |
+| --- | ---: | ---: |
+| Elapsed | 292.1 s (one run) | 127.5–128.2 s; median 127.7 s (three runs) |
+| Uncached input tokens, matching first run | 71,916 | 19,023 |
+| Generated tokens, matching first run | 2,572 | 1,695 |
+| Correct ordered facts | 24/24 | 24/24 in all three runs |
+| Unknown value preserved | yes | yes in all three runs |
+
+An 8K run also recalled all 24 facts and preserved the unknown value after six
+compactions: 280.8 s versus 411.6 s in the saved earlier 8K run. Summary generation
+still accounts for much of the smaller-window cost; the speedup does not eliminate
+that work.
+
+Live 8K OCR research completed in 353.3 s after five compactions, with no API error
+and a substantive comparison. Manual review still **fails answer quality**:
+project identity was not established correctly and numbers from different
+benchmarks were presented as comparable rankings. The automatic page count also
+includes a soft error and a link preview; manual review excludes them. This PR
+remains draft. Loop completion is not proof of a correct research answer.
+
+Native validation: 84 tests executed, one optional test skipped, no failures;
+32 evidence/compaction tests rerun after removing the unused legacy formatter,
+again with one optional skip and no failures. Seven harness tests passed. The
+final helper build returns identical tool definitions and recovery payloads to
+the measured helper. Production Nativ source: `3ff112a7`; no requirements changed.
+This follow-up additionally requires MLX-VLM [#2617](https://github.com/Blaizzy/mlx-vlm/pull/2617).
+
 ## Implemented changes
 
 - Request-local `transient_context` is budgeted and rendered by MLX-VLM without
