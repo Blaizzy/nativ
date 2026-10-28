@@ -631,7 +631,7 @@ enum ChatAccessMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .workPane: self == .standard
         case .sensitive: self != .fullAccess
         case .command: true
-        case .external: self == .medium
+        case .external: false
         }
     }
 

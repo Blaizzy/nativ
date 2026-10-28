@@ -10,6 +10,8 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     var title: String = ""
     var showsBorder: Bool = true
     var isInteractive: Bool = true
+    var anchorTogglesPresentation: Bool = false
+    var onAnchorHover: ((Bool) -> Void)? = nil
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -17,10 +19,11 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        NSView()
+        ArrowlessPopoverAnchorView()
     }
 
     func updateNSView(_ anchorView: NSView, context: Context) {
+        (anchorView as? ArrowlessPopoverAnchorView)?.onHover = onAnchorHover
         context.coordinator.update(
             anchorView: anchorView,
             isPresented: $isPresented,
@@ -31,6 +34,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             title: title,
             showsBorder: showsBorder,
             isInteractive: isInteractive,
+            anchorTogglesPresentation: anchorTogglesPresentation,
             content: content
         )
     }
@@ -48,6 +52,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
         private var gap: CGFloat = 8
         private var alignment: HorizontalAlignment = .center
         private var edge: VerticalEdge = .top
+        private var anchorTogglesPresentation = false
 
         func update(
             anchorView: NSView,
@@ -59,6 +64,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             title: String,
             showsBorder: Bool,
             isInteractive: Bool,
+            anchorTogglesPresentation: Bool,
             content: () -> Content
         ) {
             self.anchorView = anchorView
@@ -66,6 +72,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             self.gap = gap
             self.alignment = alignment
             self.edge = edge
+            self.anchorTogglesPresentation = anchorTogglesPresentation
 
             guard isPresented.wrappedValue else {
                 dismiss(updateBinding: false)
@@ -117,8 +124,18 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             panel.animationBehavior = .none
             panel.contentView = hostingView
             panel.onDismiss = { [weak self] in
-                guard self?.isPresented?.wrappedValue == true else { return }
-                self?.isPresented?.wrappedValue = false
+                guard let self, self.isPresented?.wrappedValue == true else { return }
+                // A click on the toggle first makes the panel resign key. Leave
+                // the binding alone so the button can toggle it off on mouse-up.
+                if self.anchorTogglesPresentation,
+                   let event = NSApp.currentEvent,
+                   event.type == .leftMouseDown,
+                   let anchorView = self.anchorView,
+                   event.window === anchorView.window,
+                   anchorView.bounds.contains(anchorView.convert(event.locationInWindow, from: nil)) {
+                    return
+                }
+                self.isPresented?.wrappedValue = false
             }
             return panel
         }
@@ -185,6 +202,39 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             }
             panel.setFrameOrigin(origin)
         }
+    }
+}
+
+private final class ArrowlessPopoverAnchorView: NSView {
+    var onHover: ((Bool) -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        // Keep the trigger hoverable when its popover is the key window.
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHover?(false)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
 

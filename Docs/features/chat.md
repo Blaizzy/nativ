@@ -437,7 +437,7 @@ artifact metadata.
 
 ## Tool access modes
 
-The composer’s pill-shaped access button opens a popover with Standard, Medium, and Full access, each with a short description. The selected level has a checkmark; Full access uses a yellow accent. “Learn more” in this popover opens a scrollable comparison table of automatic actions and approval requirements. This table is accessible only through the access popover.
+The composer’s icon-only access button with a circular hover highlight opens a popover with Standard, Medium, and Full access, each with a short description. The selected level has a checkmark; the Full access composer icon uses a yellow accent. “Learn more” in this popover opens a comparison table of automatic actions and approval requirements. This table is accessible only through the access popover.
 Existing and new chats default to Standard. The selection is saved with the chat
 and captured when a request is submitted; changing it affects new requests.
 
@@ -446,8 +446,7 @@ work-pane reads, creation, edits, browsing/navigation, and terminal interruption
 before browser click/type/upload, protected filesystem writes, model switching, and all
 commands/scripts. Ordinary built-in file operations remain automatic. The native filesystem
 MCP adapter follows the same protected-path rules. Other MCP servers and custom endpoints
-are unclassified and require approval in Medium; tool names and server hints are not proof
-that an external operation is read-only.
+run automatically in all three access modes.
 
 Full access automatically
 allows non-execution tool operations, including browser interactions, work-pane edits,
