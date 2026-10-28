@@ -102,13 +102,17 @@ def main():
     protocol = (f'{len(rows)} runs; {"/".join(map(str, counts))} trial(s) per condition; '
                 f'{"/".join(f"{n:,}" for n in budgets)} output-token limit. '
                 'Temperature 0, thinking off, memory prefix cache on, disk cache off. Model warmup is excluded.')
+    comparison = (
+        "Baseline and revised Chat Work, using the same WebKit engine."
+        if {r["mode"] for r in rows} == {"baseline", "recovery"}
+        else "Validation of one Chat Work implementation; this is not a paired speed comparison."
+    )
     document = '''<!doctype html><html lang="en"><meta charset="utf-8"><title>Chat Work: long-horizon browser experiment</title>
 <style>body{font:16px/1.55 system-ui,sans-serif;color:#172536;background:#f3f6f9;max-width:1180px;margin:45px auto;padding:0 24px}
 h1{font-size:32px}table{width:100%;border-collapse:collapse;background:white}td,th{padding:12px;text-align:left;border-bottom:1px solid #dce4ec}
 th{background:#163c57;color:white}details{background:white;padding:14px;margin:12px 0;border-radius:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}.note{background:#fff3cf;padding:18px;border-radius:8px}</style>
-<h1>Chat Work research recovery</h1><p>Nemotron Bolt E4B 4-bit · Apple M3 Ultra, 512 GB · MLX-VLM recovery branch · 27 October 2026</p>
-<p>Baseline <code>chat_work</code> versus the revised <code>chat_work</code>, using the same WebKit engine.
-</p><p>''' + protocol + '''</p>
+<h1>Chat Work research recovery</h1><p>Nemotron Bolt E4B 4-bit · Apple M3 Ultra, 512 GB · MLX-VLM recovery branch</p>
+<p>''' + comparison + '''</p><p>''' + protocol + '''</p>
 <p class="note">A faster failed task is not a speed improvement. Completion requires all requested facts and source visits for fixtures.
 Live completion requires a recorded manual source review in addition to five distinct non-search page payloads and a final answer. The provisional automatic gate is retained in each run's details.</p>
 <table><thead><tr><th>Task</th><th>Context</th><th>Interface</th><th>Completed</th><th>Output cap hits</th><th>Median seconds</th><th>Median pages</th><th>Reported prompt tokens, sum</th><th>Tool output KiB</th></tr></thead><tbody>''' + table + '''</tbody></table>

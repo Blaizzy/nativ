@@ -1,7 +1,9 @@
 # Why recall improved, latency increased, and live research still failed
 
-Follow-up investigation on 27 October 2026. Production source remains at
-`bca5f492`; this investigation changes documentation only. It audits the recorded
+Historical investigation on 27 October 2026, against source `bca5f492`.
+The subsequent fix in Nativ `e70aaf70` and MLX-VLM `40f0a1e8` addresses these
+integration failures; see the new validation in [RESULTS.md](RESULTS.md).
+The evidence below records the pre-fix behavior. It audits the recorded
 comparison and runs 21 controlled, saved-request replays on the same M3 Ultra,
 checkpoint and runtime described in [RESULTS.md](RESULTS.md). Returned browser
 actions in the replays were inspected, not executed.
@@ -128,8 +130,9 @@ is insufficient. Verify the contract with several compaction/replay cycles.
 Next, make following a search result an unambiguous operation within the existing
 Chat Work browser, validate actual readable source content separately from visits,
 and track incomplete/no-progress research before accepting a final answer. Keep
-the tool-round cap as a resource limit. These are proposed fixes, not changes
-implemented or proven by this investigation.
+the tool-round cap as a resource limit. These were proposals at diagnosis time. The subsequent implementation and its
+measured limits are recorded in RESULTS.md; this historical investigation alone
+did not establish their effectiveness.
 
 Artifacts: `diagnosis/capsule-structure.json`, `diagnosis/probe-summary.json`,
 per-replay requests/events, `timing-breakdown.json`, and the two diagnostic scripts

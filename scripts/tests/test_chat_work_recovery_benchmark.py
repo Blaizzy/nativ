@@ -53,6 +53,21 @@ class ChatBrowserBenchmarkGradingTests(unittest.TestCase):
 
 
 class ResponsesReplayTests(unittest.TestCase):
+    def test_failed_stream_preserves_request_and_server_error(self):
+        from unittest.mock import patch
+        from scripts.benchmarks.chat_work_recovery.benchmark import generate_responses, ResponseStreamFailure
+        event = {"type": "response.failed", "response": {"error": {"message": "Tool arguments mismatch"}}}
+        class Stream:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def __iter__(self): return iter([b"data: " + json.dumps(event).encode()])
+        with patch("urllib.request.urlopen", return_value=Stream()), self.assertRaises(ResponseStreamFailure) as caught:
+            generate_responses("http://localhost", {"model": "fixture", "max_tokens": 100},
+                               [{"role": "user", "content": "Research"}], [], "Current evidence", 8192, None, 0)
+        self.assertEqual(caught.exception.capture["events"], [event])
+        self.assertEqual(caught.exception.capture["request"]["transient_context"], "Current evidence")
+        self.assertIn("Tool arguments mismatch", str(caught.exception))
+
     def test_compaction_replay_keeps_fresh_context_outside_saved_prefix(self):
         from unittest.mock import patch
         from scripts.benchmarks.chat_work_recovery.benchmark import generate_responses

@@ -1,4 +1,132 @@
-# Chat Work research recovery — 27 October 2026
+# Chat Work fixes — 28 October 2026
+
+The browser remains the existing `chat_work` tool in the shared WebKit window.
+The integration faults are fixed, including a separate runtime tool-parser error
+found by the new long-task tests. Research answer quality remains an empirical
+limit; the tables below distinguish page reads from correct answers.
+
+## Implemented changes
+
+- Request-local `transient_context` is budgeted and rendered by MLX-VLM without
+  entering summary inputs, stored history or compaction capsules. Nativ sends it
+  separately on both API routes and invalidates old client capsules once.
+- Search results carry stable open actions backed by captured full URLs. They
+  survive navigation away from the result page; live DOM actions retain stale
+  checks and consent. Search snapshots exclude unrelated page-navigation links,
+  while retaining result actions and consent controls.
+- Page reads reserve more space for source text. HTTP/soft errors, login and
+  consent screens, short member previews, and video metadata without a rendered
+  transcript are excluded from the evidence ledger. Repeated Reddit challenge
+  URLs count once.
+- Explicit English page-read requirements, including linked-page requests,
+  receive bounded progress guidance. Supplied index URLs do not count as their
+  requested children. Up to two early-final continuations share the existing
+  32-round cap. These checks do not certify source relevance or truth.
+- Runtime final tool parsing now excludes reasoning, matching incremental parsing.
+  A quoted old call inside reasoning can no longer replace the real next call.
+  Stream/final argument consistency validation remains enabled.
+
+Nativ requirements are unchanged. The client needs MLX-VLM
+[#2612](https://github.com/Blaizzy/mlx-vlm/pull/2612) and the long-loop parser fix
+[#2613](https://github.com/Blaizzy/mlx-vlm/pull/2613) before release. The client
+changes are in [#780](https://github.com/Blaizzy/nativ/pull/780), stacked on #778.
+No keyless search service, separate browser tool or production CLI was added.
+
+## Causal checks
+
+The intermediate v9 batch (`5a09f4de` / `8ee8d5a5`) retained **zero environment
+snapshots in 93 replayed requests**, and all retained the original task. This
+checks actual sealed capsules on their original host, not just request JSON.
+
+One v9 chain failed at checkpoint 14. Capturing and replaying its next request
+reproduced the server failure: reasoning quoted the previous element ID, whereas
+the executable call used the next element ID. The final parser consumed the
+quoted call and disagreed with the streamed call. The exact saved request completed
+with the correct next call in **3/3 fixed replays**. The replayed calls were
+inspected, not executed. The original failed run is preserved.
+
+## Intermediate completed batches
+
+Each row uses three trials per task at 8K. These are different implementations,
+not paired speed comparisons, and are excluded from the final measurements.
+
+| Batch | Nativ / runtime | Chain correct | Catalog correct | Live correct after review |
+| --- | --- | ---: | ---: | ---: |
+| v9 | `5a09f4de` / `8ee8d5a5` | 2/3 | 0/3 | 0/3 |
+| v10 | `e70aaf70` / `40f0a1e8` | 3/3 | 0/3 | 1/3 |
+
+V9 includes the streaming infrastructure failure. Its recorded task timer stops
+at the last successful step, so it is not used as a completed-run latency estimate.
+V10 has no API failures. Its live run failures were a misattributed model list and
+an unrelated Google accessibility page counted as a fifth source. Its catalog
+runs read 11/12 specifications and counted the index as page 12, prompting the
+linked-read guard. All original answers and manual review rationales are retained.
+
+## Final validation
+
+Nine fresh runs using Nativ `6d400d53` and MLX-VLM `40f0a1e8`, three trials
+per task at 8K. These are validation runs of the fixed implementation, not a
+paired baseline speed comparison. Times include answer-quality failures.
+
+| Task | Required pages read | Correct final answer | Median seconds (range) |
+| --- | ---: | ---: | ---: |
+| 24-page dependent chain | 3/3 | 3/3 | 65.1 (50.6–69.2) |
+| 12-page catalog and calculation | 3/3 | 0/3 | 39.7 (38.6–45.3) |
+| Live OCR research, five pages | 3/3 | 2/3 | 65.5 (62.4–83.0) |
+
+- **Chain:** all 24 exact tokens in order and unknown passport preserved as null
+  in every run.
+- **Catalog:** all 12 specifications read, all 12 records correct, and the correct
+  recommendation in every run. The totals were 2,566, 2,467 and 2,466 instead of
+  2,722. The read/recall failure is fixed; arithmetic remains incorrect.
+- **Live:** all three runs read five actual relevant pages. Two returned supported
+  comparisons with correct source links. The third mostly listed sources/models
+  and repeated progress counts instead of synthesizing a useful comparison. It is
+  graded failed even though browsing completed. Public benchmark claims are only
+  checked against captured sources, not independently endorsed.
+
+There were **zero API or tool-execution errors** and **42 compactions**. An audit
+of **106 capsule-replay requests found zero saved environment snapshots**, with
+the original task present in all 106. The isolated benchmark servers and browser
+helpers exited after the suite. No blanket end-to-end speedup or reliable
+open-ended reasoning claim follows from this small sample. Nativ #780 remains
+draft because answer quality is still inconsistent.
+
+## Protocol and limits
+
+Apple M3 Ultra, 512 GB, macOS 27.0; not the original M4/32 GB reporter's machine.
+Same Nemotron Bolt E4B 4-bit checkpoint as the historical experiment below:
+revision `4274caa99dbacb12cbbca9bd9595a5063a33880f`. MLX 0.32.4, Transformers
+5.21.0, Python 3.12.12. `PYTHONPATH` selects the recorded runtime source; installed
+package metadata alone does not identify the executed revision.
+
+Temperature 0, `enable_thinking:false`, 4,096 output tokens, memory prefix cache
+on, disk cache off, 75% compaction, 8,192-token context. The model can still emit
+reasoning despite that request flag. Every trial unloads and performs an excluded
+warmup. The test bridge uses actual native browser code and production request
+context with an isolated cookie profile. Other app tools and interactive consent
+are excluded, so these are browser-component timings rather than full-app latency.
+
+Source excerpts are incomplete and source quality is assessed against captured
+receipts, not by independently verifying every public claim. A relevant model
+directory may count as a page read; search snippets, unrelated help pages and
+blocked pages do not. A successful live answer must provide a comparison grounded
+in at least five actual relevant page reads without inventing a source. The one
+small model and one live prompt do not establish general research reliability.
+
+Validation: **135 focused native tests passed, one optional live test skipped**;
+**839 runtime server/tool-streaming tests passed**, with 14 optional real-model
+cases excluded; **73 processor/tool-parser tests passed**; **7 harness tests
+passed**. Runtime formatting/import checks passed. Frozen patches, source and
+binary hashes, raw requests/results/events, manual reviews and test logs are
+retained in the evidence artifact. Intermediate pilots are labeled separately.
+
+The historical comparison below is unchanged evidence from before these fixes;
+its timings and implementation limitations must not be presented as current.
+
+---
+
+# Historical benchmark — 27 October 2026
 
 The revised existing `chat_work` path preserves exact facts better across
 compaction, at additional latency. It does **not** reliably finish open-ended

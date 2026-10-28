@@ -2,10 +2,22 @@
 
 This experiment keeps the `chat_work` tool and shared WebKit browser. It adds a
 bounded, transient record of exact source excerpts for the current user request,
-plus source-first Google controls, absolute link URLs, direct navigation for URL
+plus structured Google result actions, readable-page checks, direct navigation for URL
 search queries, and an explicit final-answer instruction at the tool-round limit.
 The closing instruction follows the evidence and is also present in the system
-guidance. There are no compact browser tools and no installed CLI entry point.
+guidance. Current clients send environment data in `transient_context`, requiring
+MLX-VLM PR #2612 before release. PR #2613 also fixes reasoning/tool parsing in long loops. It is counted and rendered but never sealed into a
+capsule. Older client capsules rebuild once from the canonical transcript. There
+are no compact browser tools and no installed CLI entry point.
+
+Search result titles already opened in a tab are deprioritized, not hidden. The
+`open` + `element_id` form resolves a captured HTTP(S) search link across page visits;
+other elements use click validation and consent. DOM actions keep stale-reference checks.
+Page reads prioritize text over menus; consent/error screens, short member previews and
+media metadata without a rendered transcript do not count as readable evidence.
+For explicit English numeric page-read requirements, the app permits two early-final
+continuations within the existing round cap. These checks do not establish source
+relevance; the live benchmark still requires manual review.
 
 See [measured results and limitations](RESULTS.md).
 
@@ -31,8 +43,8 @@ production evidence builder. Cookies are isolated in a nonpersistent profile.
 - Same checkpoint, hardware, temperature zero, thinking disabled, memory prefix
   cache enabled, disk cache disabled. Unload and an excluded warmup per trial.
 - `/v1/responses` with a 75% compaction threshold. Replay the returned compaction
-  item plus the new conversation tail; append fresh evidence outside the saved
-  prefix, following Nativ's client request construction.
+  item plus the new conversation tail; send fresh evidence separately in
+  `transient_context`, following Nativ's client request construction.
 - Primary 8K comparison: three trials per condition, reversing the order in the
   middle repetition. Exploratory 16K checks: one trial per condition. Baseline
   and revised arms both expose only `chat_work`.
@@ -69,3 +81,15 @@ For the final comparison, run three repetitions of all tasks at 8K (`--contexts
 8192 --repetitions 3`), then a separate exploratory 16K run (`--contexts 16384
 --cases chain catalog --repetitions 1`). Do not pool the single 16K trials with the
 repeated 8K conditions. Earlier pilot and diagnostic captures remain excluded.
+
+## Fix validation
+
+The latest measured implementation is Nativ `6d400d53` with runtime `40f0a1e8` (PRs #2612 and #2613). Run the
+revised arm alone with `--modes recovery`, keeping new output in a separate directory.
+The historical v2/v3 comparison used the earlier message-based context protocol;
+its source snapshots are retained with its artifacts. Do not rerun current code
+and label it as that historical baseline, or pool the intermediate v4/v5 pilots
+with final measurements. The completed intermediate v9/v10 batches are retained separately:
+they exposed the reasoning/tool streaming error, linked-index counting and additional
+source-quality issues. Final v12 runs are stored separately. Source receipts, model answers, infrastructure failures
+and manual reviews must remain visible even when a run fails.
