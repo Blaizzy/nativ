@@ -3460,12 +3460,12 @@ final class ChatViewModel: ObservableObject {
         request.transientContext = Self.completionContext(
             transcript: precedingMessages, documentContexts: documentContexts, workItems: items
         )
-        if includesWorkContext, let evidence = ChatBrowserEvidence.context(
-            messages: requestMessages, maximumBytes: min(8192, ChatBrowsingBudget.maximumBytes(
-                context: [effectiveContextLimit, settings.maxKVSize].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
-            ))
-        ) {
-            request.transientContext = [request.transientContext, evidence].compactMap { $0 }.joined(separator: "\n\n")
+        if includesWorkContext {
+            request.toolResultContext = ChatBrowserEvidence.recoveryContext(
+                messages: requestMessages, maximumBytes: min(8192, ChatBrowsingBudget.maximumBytes(
+                    context: [effectiveContextLimit, settings.maxKVSize].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
+                ))
+            )
         }
         if queuedRequest.languageModelSupportsTools && !advertisesTools {
             request.completionInstruction = ChatToolRoundGate.finalAnswerPrompt

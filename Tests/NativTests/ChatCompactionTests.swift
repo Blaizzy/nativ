@@ -2,6 +2,22 @@ import XCTest
 @testable import NativServerKit
 
 final class ChatCompactionTests: XCTestCase {
+    func testRecoveryNotesTravelSeparatelyOnBothRoutes() throws {
+        var chat = request([.init(role: "user", content: "Research")])
+        chat.toolResultContext = .init(entries: [.init(toolCallID: "page-1", text: "Exact source excerpt")], maxBytes: 4096)
+        let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)
+        let input = try state.input(for: chat, serverURL: server)
+        let wire = try NativResponsesClient(baseURL: server, tenant: "notes-test").makeResponseRequest(chat, input: input, compactThreshold: 6144)
+        let body = try MLXJSONValue(jsonData: XCTUnwrap(wire.httpBody))
+        let direct = try MLXJSONValue(jsonData: JSONEncoder().encode(chat))
+        XCTAssertEqual(body["tool_result_context"], direct["tool_result_context"])
+        XCTAssertEqual(body["tool_result_context"]?["entries"]?.arrayValue?.first?["tool_call_id"], .string("page-1"))
+        XCTAssertNil(body["transient_context"])
+        XCTAssertEqual(body["input"], .array([capsule]))
+        chat.toolResultContext = nil
+        XCTAssertEqual(try state.input(for: chat, serverURL: server), [capsule])
+    }
+
     func testClosingGuidanceFollowsEvidenceOnBothRoutesWithoutInvalidatingCompaction() throws {
         var chat = request([.init(role: "user", content: "Research five sources")])
         let state = try ChatCompactionState(item: capsule, request: chat, serverURL: server)

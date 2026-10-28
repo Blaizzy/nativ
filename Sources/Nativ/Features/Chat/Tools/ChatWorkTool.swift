@@ -5,11 +5,11 @@ enum ChatWorkToolRegistry {
     static let toolName = "chat_work"
     static let sessionPrompt = """
         Use chat_work to search and browse in the shared browser: {"action":"search","query":"search terms"}. \
-        For a supplied URL, navigate directly; search is for discovering sources. A search query consisting of an HTTP(S) URL opens that URL. \
+        For a supplied URL, navigate directly; search is for discovering sources. Use {"action":"navigate","url":"URL"} for the current tab; omit id unless targeting another tab. A search query consisting of an HTTP(S) URL opens that URL. \
         Search returns results with an open action: copy that action into chat_work to read the result. open with its element_id follows the captured source link, including after another source was opened. Never reconstruct a URL from a result title or display address. For a supplied URL, use open or navigate; inspect reads the current tab. \
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
         Search results whose titles were already opened in this tab appear last; prefer unread relevant sources over repeated reads. \
-        Browser evidence preserves exact excerpts and unique source visits for the current request. Use it to retain facts across compaction. \
+        Page receipts contain source evidence. Recovered excerpts restore sources removed by compaction. \
         Count relevant source pages against the user's request; an index does not count as its linked specifications or articles. Cite claims with the exact source URLs from receipts; never invent or reassign citations. Once sufficient evidence is collected, answer instead of restarting research. \
         Use current element IDs for browser actions. The shared side window (work pane or canvas) also holds documents and terminals. \
         If a URL fails, search the original subject; do not retry the same failed URL or claim it was read. \

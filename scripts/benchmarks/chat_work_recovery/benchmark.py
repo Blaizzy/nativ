@@ -67,12 +67,14 @@ class ResponseStreamFailure(RuntimeError):
         self.capture = {"request": payload, "events": events}
 
 
-def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count, final_instruction=""):
+def generate_responses(base, sampling, messages, tools, context, limit, capsule, prefix_count, final_instruction="", tool_result_context=None):
     history = [m for m in messages if m["role"] not in ("system", "developer")]
     items = ([capsule] if capsule else []) + [{"type": "message", **m} for m in history[prefix_count:]]
     payload = {**sampling, "instructions": "\n\n".join(m["content"] for m in messages if m["role"] == "system"),
                "input": items, "tools": tools, "stream": True, "store": False,
                "context_management": [{"type": "compaction", "compact_threshold": int(limit * .75)}]}
+    if tool_result_context:
+        payload["tool_result_context"] = tool_result_context
     if final_instruction and not tools:
         payload["instructions"] += "\n\n" + final_instruction
     transient = "\n\n".join(text for text in (context, final_instruction) if text)
@@ -271,7 +273,7 @@ def main():
             final_instruction = setup["final_answer_prompt"] if round_index == 32 and a.mode == "recovery" else guidance
             inference, capsule, prefix_count = generate_responses(
                 a.base, sampling, messages, definitions if round_index < 32 else [], context, a.context, capsule, prefix_count,
-                final_instruction)
+                final_instruction, progress.get("tool_result_context"))
             step = {"inference": inference, "tools": [], "evidence_context": context}
             result["steps"].append(step)
             msg = inference["message"]

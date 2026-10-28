@@ -41,14 +41,16 @@ private final class ChatWorkBenchmarkBridge {
         if input.name == "context" {
             struct Context: Decodable { var messages: [MLXChatMessage] }
             let messages = try JSONDecoder().decode(Context.self, from: arguments).messages
-            let evidence = ProcessInfo.processInfo.environment["CHAT_WORK_BENCHMARK_EVIDENCE"] == "1"
-                ? ChatBrowserEvidence.context(messages: messages, maximumBytes: min(8192, maximumBytes)) : nil
             let enabled = ProcessInfo.processInfo.environment["CHAT_WORK_BENCHMARK_EVIDENCE"] == "1"
-            return String(decoding: try JSONEncoder().encode([
-                "text": evidence ?? "",
-                "missing_pages": enabled ? ChatBrowserEvidence.missingPageInstruction(messages: messages) ?? "" : "",
-                "stalled_search": enabled ? ChatBrowserEvidence.stalledSearchInstruction(messages: messages) ?? "" : "",
-            ]), as: UTF8.self)
+            var result: [String: MLXJSONValue] = [
+                "text": .string(""),
+                "missing_pages": .string(enabled ? ChatBrowserEvidence.missingPageInstruction(messages: messages) ?? "" : ""),
+                "stalled_search": .string(enabled ? ChatBrowserEvidence.stalledSearchInstruction(messages: messages) ?? "" : ""),
+            ]
+            if enabled, let context = ChatBrowserEvidence.recoveryContext(messages: messages, maximumBytes: min(8192, maximumBytes)) {
+                result["tool_result_context"] = try MLXJSONValue(jsonData: JSONEncoder().encode(context))
+            }
+            return String(decoding: try JSONEncoder().encode(result), as: UTF8.self)
         }
         guard input.name == "chat_work" else { throw ChatWorkError.invalid("Use chat_work.") }
         var request = try JSONDecoder().decode(ChatWorkRequest.self, from: arguments)

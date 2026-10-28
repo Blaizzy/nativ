@@ -43,8 +43,10 @@ production evidence builder. Cookies are isolated in a nonpersistent profile.
 - Same checkpoint, hardware, temperature zero, thinking disabled, memory prefix
   cache enabled, disk cache disabled. Unload and an excluded warmup per trial.
 - `/v1/responses` with a 75% compaction threshold. Replay the returned compaction
-  item plus the new conversation tail; send fresh evidence separately in
-  `transient_context`, following Nativ's client request construction.
+  item plus the new conversation tail; send exact excerpts keyed by tool-call ID in
+  `tool_result_context`. The server renders only excerpts whose receipts have
+  left context, before the retained history. Mutable environment state remains
+  in `transient_context`, after history. Neither is saved in compaction items.
 - Primary 8K comparison: three trials per condition, reversing the order in the
   middle repetition. Exploratory 16K checks: one trial per condition. Baseline
   and revised arms both expose only `chat_work`.
