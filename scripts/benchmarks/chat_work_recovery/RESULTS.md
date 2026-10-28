@@ -49,8 +49,8 @@ six subtests, with two optional skips.
 An early, less conservative prototype is excluded from these final timings because
 it failed the added single-token padded-prefill check.
 
-These measurements do not resolve the live-research quality failures below, and
-Nativ #780 remains draft. Nativ dependency requirements are unchanged.
+These measurements do not resolve the live-research quality failures below.
+Nativ dependency requirements are unchanged.
 
 ## Evidence and cache efficiency follow-up
 
@@ -81,8 +81,8 @@ Live 8K OCR research completed in 353.3 s after five compactions, with no API er
 and a substantive comparison. Manual review still **fails answer quality**:
 project identity was not established correctly and numbers from different
 benchmarks were presented as comparable rankings. The automatic page count also
-includes a soft error and a link preview; manual review excludes them. This PR
-remains draft. Loop completion is not proof of a correct research answer.
+includes a soft error and a link preview; manual review excludes them.
+Loop completion is not proof of a correct research answer.
 
 Native validation: 84 tests executed, one optional test skipped, no failures;
 32 evidence/compaction tests rerun after removing the unused legacy formatter,
@@ -175,8 +175,8 @@ There were **zero API or tool-execution errors** and **42 compactions**. An audi
 of **106 capsule-replay requests found zero saved environment snapshots**, with
 the original task present in all 106. The isolated benchmark servers and browser
 helpers exited after the suite. No blanket end-to-end speedup or reliable
-open-ended reasoning claim follows from this small sample. Nativ #780 remains
-draft because answer quality is still inconsistent.
+open-ended reasoning claim follows from this small sample. Answer quality is
+still inconsistent.
 
 ## Protocol and limits
 
