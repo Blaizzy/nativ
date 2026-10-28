@@ -1505,10 +1505,22 @@ final class ChatAccessModeTests: XCTestCase {
         let cases: [(ChatToolOperation, [Bool])] = [
             (.routine, [false, false, false]), (.workPane, [true, false, false]),
             (.sensitive, [true, true, false]), (.command, [true, true, true]),
-            (.external, [false, true, false]),
+            (.external, [false, false, false]),
         ]
         for (operation, expected) in cases {
             XCTAssertEqual(ChatAccessMode.allCases.map { $0.requiresApproval(for: operation) }, expected)
+        }
+    }
+
+    func testIncreasingAccessNeverIntroducesApproval() {
+        let transitions: [(ChatAccessMode, ChatAccessMode)] = [
+            (.standard, .medium), (.medium, .fullAccess),
+        ]
+        for (lower, higher) in transitions {
+            for operation in ChatToolOperation.allCases where !lower.requiresApproval(for: operation) {
+                XCTAssertFalse(higher.requiresApproval(for: operation),
+                               "Increasing access from \(lower) to \(higher) must not add approval for \(operation)")
+            }
         }
     }
 
@@ -1538,7 +1550,7 @@ final class ChatAccessModeTests: XCTestCase {
     }
 
     func testApprovalGatePreventsDispatchUntilConfirmedAndStopsDeniedOrCancelledCalls() async throws {
-        for operation: ChatToolOperation in [.command, .external, .sensitive] {
+        for operation: ChatToolOperation in [.command, .sensitive] {
             for resolution in ["confirm", "deny", "cancel", "confirmThenCancel"] {
                 let gate = ChatToolConsentGate()
                 let id = UUID()
