@@ -70,7 +70,7 @@ enum ChatBrowserEvidence {
 
     static func missingPageInstruction(messages: [MLXChatMessage]) -> String? {
         guard let task = messages.last(where: { $0.role == "user" })?.textContent,
-              let expression = try? NSRegularExpression(pattern: #"(?i)\b(?:read|visit|open|consult|review)\s+(?:at\s+least\s+)?(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:(?:different|distinct|separate|source|web)\s+)*(?:pages|sources|websites|sites)\b"#),
+              let expression = try? NSRegularExpression(pattern: #"(?i)\b(?:read|visit|open|consult|review)\s+(?:at\s+least\s+|all\s+)?(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:linked\b|(?:(?:different|distinct|separate|source|web)\s+)*(?:pages|sources|websites|sites)\b)"#),
               let match = expression.firstMatch(in: task, range: NSRange(task.startIndex..., in: task)),
               let range = Range(match.range(at: 1), in: task),
               let commandRange = Range(match.range, in: task),
@@ -81,9 +81,22 @@ enum ChatBrowserEvidence {
         let number = String(task[range]).lowercased()
         let words = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"]
         let requested = Int(number) ?? words.firstIndex(of: number).map { $0 + 1 } ?? 0
-        let observed = sourcePages(messages: messages).count
+        var pages = sourcePages(messages: messages)
+        let linked = task[commandRange].lowercased().hasSuffix("linked")
+        if linked, let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let parents = Set(detector.matches(in: task, range: NSRange(task.startIndex..., in: task)).compactMap { match -> String? in
+                guard var url = match.url.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: false) }),
+                      ["http", "https"].contains(url.scheme ?? "") else { return nil }
+                url.fragment = nil
+                return url.string
+            })
+            // An explicitly supplied index is a starting point, not one of its children.
+            pages.removeAll { parents.contains($0.url) }
+        }
+        let observed = pages.count
         guard requested > observed else { return nil }
-        return "The user requested reading \(requested) distinct pages. Only \(observed) distinct readable page receipts are available; relevance still needs checking. Continue the authorized research using chat_work. Follow a search result's open action to read its page. Search snippets, error pages, login screens and repeated visits do not satisfy the request. If human input is required or sources remain unavailable, state the blocker and incomplete source count honestly."
+        let scope = linked ? "linked pages (excluding the supplied index URLs)" : "distinct pages"
+        return "The user requested reading \(requested) \(scope). Only \(observed) distinct readable page receipts are available; relevance still needs checking. Continue the authorized research using chat_work. Follow a search result's open action to read its page. Search snippets, error pages, login screens and repeated visits do not satisfy the request. If human input is required or sources remain unavailable, state the blocker and incomplete source count honestly."
     }
 
     static func stalledSearchInstruction(messages: [MLXChatMessage]) -> String? {

@@ -77,6 +77,17 @@ final class ChatBrowserEvidenceTests: XCTestCase {
         XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [task] + pages + [.init(role: "user", content: "Thanks")]))
     }
 
+    func testLinkedReadRequirementExcludesSuppliedIndexReceipts() throws {
+        let task = MLXChatMessage(role: "user", content: "Audit https://example.com/catalog. Read all 12 linked model specifications.")
+        let index = try receipt("https://example.com/catalog", text: "Specification links")
+        let children = try (1...12).map { try receipt("https://example.com/spec-\($0)") }
+        let instruction = try XCTUnwrap(ChatBrowserEvidence.missingPageInstruction(messages: [task, index] + children.prefix(11)))
+        XCTAssertTrue(instruction.contains("Only 11"))
+        XCTAssertTrue(instruction.contains("excluding the supplied index"))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [task, index] + children))
+        XCTAssertNil(ChatBrowserEvidence.missingPageInstruction(messages: [.init(role: "user", content: "Do not read all 12 linked specifications"), index]))
+    }
+
     func testNewUserRequestDoesNotReusePreviousResearch() throws {
         let messages = try [MLXChatMessage(role: "user", content: "Previous request"),
                             receipt("https://example.com/a"), MLXChatMessage(role: "user", content: "New request")]
