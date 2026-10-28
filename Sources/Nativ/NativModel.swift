@@ -818,20 +818,7 @@ final class NativModel: ChatModelSwitchingSurface {
     }
 
     func resetSettings() {
-        guard settings.externalModelCache != nil else {
-            settings = NativSettings()
-            return
-        }
-
-        do {
-            try ensureModelCacheCanChange()
-            try switchModelCache(
-                to: NativSettings(modelSearchPath: systemModelCachePath),
-                state: .systemDefault
-            )
-        } catch {
-            appendLog("\nCouldn’t reset settings: \(error.localizedDescription)\n")
-        }
+        settings.resetModelConfiguration()
     }
 
     func selectExternalModelCache(at selectedURL: URL) throws {

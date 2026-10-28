@@ -452,7 +452,7 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
         const refs = new Map();
         const fileInputs = [...document.querySelectorAll('input[type="file"]')].slice(0, 20);
         const controls = [...document.querySelectorAll('a[href],button,input,textarea,select,[role="button"],[contenteditable="true"]')]
-            .filter(el => el.type !== 'file' && visible(el)).slice(0, 150);
+            .filter(el => el.type !== 'file' && visible(el)).slice(0, 40);
         const elements = [...controls, ...fileInputs].map((el, i) => {
                 const id = token + ':' + i;
                 const label = (el.getAttribute('aria-label') || el.labels?.[0]?.innerText || el.innerText
@@ -461,17 +461,18 @@ final class ChatWorkBrowser: NSObject, ObservableObject, WKNavigationDelegate, W
                 refs.set(id, {el, label, value: el.value, type: el.getAttribute('type'), href: el.getAttribute('href'),
                     url: location.href, accept: el.accept, multiple: el.multiple, directory: el.webkitdirectory,
                     formAction: el.form?.action, files: el.files ? [...el.files] : []});
-                const value = ['password','file','hidden'].includes(el.type) ? undefined : el.value;
+                const value = ['password','file','hidden'].includes(el.type) ? undefined : el.value?.slice(0, 500);
                 return {id, tag: el.tagName.toLowerCase(), type: el.getAttribute('type'), label,
                     ...(value === undefined ? {} : {value}),
                     ...(el.type === 'file' ? {accept: el.accept, multiple: el.multiple, hidden: !visible(el),
                         files: [...el.files].map(file => ({name: file.name, type: file.type, size: file.size}))} : {}),
-                    href: el.getAttribute('href'), disabled: !!el.disabled};
+                    href: el.getAttribute('href')?.slice(0, 2048), disabled: !!el.disabled};
             });
         globalThis.__nativWorkRefs = refs;
         return {id: tabID, kind: 'website', url: location.href, title: document.title,
             can_go_back: canGoBack, can_go_forward: canGoForward, untrusted_page_content: true,
-            text: (document.body?.innerText || '').slice(0, 18000), elements};
+            text_truncated: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').length > 6000,
+            text: ((document.querySelector('main,article,[role="main"]') || document.body)?.innerText || '').slice(0, 6000), elements};
         """
 
     private static let actionScript = """

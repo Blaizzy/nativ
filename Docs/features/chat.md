@@ -60,6 +60,21 @@ rebuilds the request from the transcript. Failed or cancelled requests do not re
 saved compaction state. **Prefix Caching** is enabled by default in Model Configuration to reuse
 the new compacted prefix. Compaction also works with caching disabled.
 
+Chat Work is the primary browsing path. Agents search with `chat_work`
+(`action: search`, `query: ...`), open or navigate to source pages, and inspect or
+interact with them in the shared browser the user sees. Browser search requires no
+API key. The optional `web_search` and `web_read` provider tools remain available
+when configured. Search snippets do not count as full page reads.
+
+Browsing tool results are saved as bounded excerpts, with omission notices. The
+budget scales with the effective context (4 KB per tool result at 8K context),
+with a conservative 8K fallback when the context limit is unavailable. The runtime also
+bounds oversized tool exchanges using its tokenizer before compaction.
+
+Reset model configuration restores generation defaults, including automatic
+context length, while preserving model folders, selected models, connections,
+and personal settings. The reset dialog describes the context change.
+
 PDF and other document excerpts are sent as current source context, separately
 from the saved conversation. Selecting different passages or fitting them to the
 remaining space preserves the summary; editing a covered message or replacing
@@ -67,10 +82,11 @@ its attachment still rebuilds the history. Document fitting counts the summary
 and uncovered messages rather than the full pre-compaction transcript.
 
 Compaction requires a server that supports the Responses compaction API and
-budgets output from actual input usage. The bundled requirements pin the server
-revision from [mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
-External servers need that change too. To test a different checkout containing
-the fix, override the bundled source:
+budgets output from actual input usage, as implemented in
+[mlx-vlm PR #2458](https://github.com/Blaizzy/mlx-vlm/pull/2458).
+MLX-VLM will be updated before the Nativ release to include the recovery fixes in
+[mlx-vlm PR #2602](https://github.com/Blaizzy/mlx-vlm/pull/2602).
+To test those fixes before the runtime update, override the bundled source:
 
 ```sh
 MLX_VLM_SOURCE_PATH=/path/to/mlx-vlm-compaction make xcode-build

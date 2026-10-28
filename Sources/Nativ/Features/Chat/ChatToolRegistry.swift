@@ -13,6 +13,7 @@ struct ChatToolExecutionContext: Sendable {
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
+    var browsingMaximumResultBytes = ChatBrowsingBudget.maximumBytes(context: 8192)
     var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
@@ -459,18 +460,18 @@ enum ChatToolDispatcher {
 
     private static func executeWebSearchTool(
         call: MLXChatToolCall,
-        context _: ChatToolExecutionContext
+        context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         let content = try await ChatWebSearchToolExecutor().execute(call: call)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        return ChatToolExecutionOutcome(content: ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes), attachments: [])
     }
 
     private static func executeWebReadTool(
         call: MLXChatToolCall,
-        context _: ChatToolExecutionContext
+        context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         let content = try await ChatWebReadToolExecutor().execute(call: call)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        return ChatToolExecutionOutcome(content: ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes), attachments: [])
     }
 
     private static func executeReadFileTool(
@@ -521,7 +522,9 @@ enum ChatToolDispatcher {
         let request = try ChatWorkRequest.decode(call)
         try Task.checkCancellation()
         let content = try await action(request)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        let bounded = request.action.isBrowserAction || (request.action == .open && request.url != nil)
+            ? ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes) : content
+        return ChatToolExecutionOutcome(content: bounded, attachments: [])
     }
 
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {

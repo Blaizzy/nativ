@@ -2794,7 +2794,7 @@ final class ChatViewModel: ObservableObject {
             characterLimit: ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
         )
         var effectiveContextLimit: Int?
-        if !documentContext.result.contexts.isEmpty {
+        if !documentContext.result.contexts.isEmpty || queuedRequest.languageModelSupportsTools {
             effectiveContextLimit = try? await NativMetricsClient(
                 baseURL: queuedRequest.settings.serverBaseURL
             )
@@ -2856,6 +2856,7 @@ final class ChatViewModel: ObservableObject {
                             break
                         }
                     }
+                    effectiveContextLimit = contextLimit
                     let threshold = ChatCompactionState.threshold(
                         modelContext: contextLimit,
                         configuredContext: activeSettings.maxKVSize,
@@ -3095,6 +3096,10 @@ final class ChatViewModel: ObservableObject {
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
+                        browsingMaximumResultBytes: ChatBrowsingBudget.maximumBytes(
+                            context: [effectiveContextLimit, activeSettings.maxKVSize]
+                                .compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
+                        ),
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
                         fileReadRootPath: queuedRequest.toolScope.isProject
                             ? queuedRequest.toolScope.fileReadRootPath
