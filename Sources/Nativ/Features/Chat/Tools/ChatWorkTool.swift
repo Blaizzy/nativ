@@ -5,8 +5,12 @@ enum ChatWorkToolRegistry {
     static let toolName = "chat_work"
     static let sessionPrompt = """
         Use chat_work to search and browse in the shared browser: {"action":"search","query":"search terms"}. \
-        Open source pages with {"action":"open","url":"https://example.com"} or navigate in the current tab; inspect reads its current state. \
+        For a supplied URL, navigate directly; search is for discovering sources. Use {"action":"navigate","url":"URL"} for the current tab; omit id unless targeting another tab. A search query consisting of an HTTP(S) URL opens that URL. \
+        Search returns results with an open action: copy that action into chat_work to read the result. open with its element_id follows the captured source link, including after another source was opened. Never reconstruct a URL from a result title or display address. For a supplied URL, use open or navigate; inspect reads the current tab. \
         Search snippets are not full page reads. Complete the requested research and cite the sources you actually read. \
+        Search results whose titles were already opened in this tab appear last; prefer unread relevant sources over repeated reads. \
+        Page receipts contain source evidence. Recovered excerpts restore sources removed by compaction. \
+        Count relevant source pages against the user's request; an index does not count as its linked specifications or articles. Cite claims with the exact source URLs from receipts; never invent or reassign citations. Once sufficient evidence is collected, answer instead of restarting research. \
         Use current element IDs for browser actions. The shared side window (work pane or canvas) also holds documents and terminals. \
         If a URL fails, search the original subject; do not retry the same failed URL or claim it was read. \
         Read documents before updating; use the returned id and expected_revision. A revision_conflict includes the \
@@ -23,7 +27,7 @@ enum ChatWorkToolRegistry {
         page and returns its tab ID, URL, text, and controls. Navigate with {"action":"navigate",\
         "url":"https://example.com/next"}; an omitted ID uses the selected website or opens a new tab. \
         For search/find requests, use {"action":"search","query":"organization name"} before guessing a URL. \
-        Search uses Google in the shared browser without an API key and reuses the selected website (or the supplied id). \
+        Search uses Google in the shared browser without an API key and reuses the selected website (or the supplied id). Follow results by copying results[].open into chat_work, e.g. {"action":"open","element_id":"ID_FROM_RESULT"}. These captured source links remain usable across page visits. \
         On navigation failure, continue research by searching the original subject in the same tab; do not repeat a failed URL. \
         List or read existing items, create a \
         document (Markdown), code file, terminal, or website (self-contained HTML or an http/https URL), update \
@@ -72,7 +76,7 @@ enum ChatWorkToolRegistry {
                     "maxLength": .number(300)
                 ]),
                 "language": field("Optional code language, such as swift, python, or javascript."),
-                "element_id": field("Element ID from the most recent inspect; required for click/type/upload. Upload targets a file input, including hidden inputs."),
+                "element_id": field("For open, a source result ID from search follows its captured URL across page visits; do not also pass url. Other elements use click semantics. For click/type/upload use only IDs from the most recent inspect. Upload targets a file input, including hidden inputs."),
                 "attachment_ids": .object([
                     "type": .string("array"),
                     "items": .object(["type": .string("string")]),
@@ -177,6 +181,17 @@ struct ChatWorkRequest: Decodable {
         return request
     }
 
+    func resolvingElementOpen(sourceURL: String? = nil) throws -> Self {
+        guard action == .open, elementID != nil else { return self }
+        guard url == nil else {
+            throw ChatWorkError.invalid("open requires either url or element_id, not both.")
+        }
+        var resolved = self
+        resolved.action = sourceURL == nil ? .click : .navigate
+        resolved.url = sourceURL
+        return resolved
+    }
+
     var navigationURL: URL? {
         get throws {
             guard action == .search else { return try url.map(ChatWorkState.webURL) }
@@ -184,6 +199,9 @@ struct ChatWorkRequest: Decodable {
                   !query.isEmpty, query.count <= 300 else {
                 throw ChatWorkError.invalid("search requires a non-empty query of up to 300 characters.")
             }
+            // Treat an address like the shared browser's address bar. Small models
+            // sometimes send an already-known source URL to search after compaction.
+            if let address = try? ChatWorkState.webURL(query) { return address }
             guard let url = ChatWorkState.searchURL(query) else {
                 throw ChatWorkError.invalid("Could not create a search URL. Try a different search term.")
             }

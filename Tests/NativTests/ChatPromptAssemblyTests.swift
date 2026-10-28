@@ -3,6 +3,16 @@ import XCTest
 
 final class ChatPromptAssemblyTests: XCTestCase {
     @MainActor
+    func testRoundLimitRequestsAnHonestFinalAnswerWithoutDiscardingOriginalGuidance() {
+        let normal = ChatViewModel.systemPrompt(sessionPrompt: "User settings", personalizationPrompt: "", projectPrompt: nil,
+                                                includesChatWork: true, includesToolGuide: true, skills: [])
+        let final = ChatViewModel.systemPrompt(sessionPrompt: "User settings", personalizationPrompt: "", projectPrompt: nil,
+                                               includesChatWork: true, includesToolGuide: true, skills: [], toolRoundLimitReached: true)
+        XCTAssertEqual(final, normal + "\n\n" + ChatToolRoundGate.finalAnswerPrompt)
+        XCTAssertTrue(final.contains("remain incomplete"))
+        XCTAssertFalse(ChatToolRoundGate.advertisesTools(atRound: 32))
+    }
+    @MainActor
     func testUnknownToolCallsAreRemovedFromRecoveryAndLaterPromptsIncludingLegacyFailures() throws {
         let call = MLXChatToolCall(id: "bad-call", function: .init(name: "mcp__update", arguments: "{}"))
         let payloads = [

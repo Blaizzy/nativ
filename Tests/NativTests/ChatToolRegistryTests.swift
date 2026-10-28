@@ -116,6 +116,21 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
     }
 
+    func testBrowserBudgetPreservesReadablePassagesBeforeMenus() throws {
+        let passage = String(repeating: "OCR source facts. ", count: 300)
+        let snapshot: [String: Any] = ["source_kind": "page", "kind": "website", "url": "https://example.com/article", "text": passage,
+            "elements": (0..<40).map { ["id": "control-\($0)", "label": String(repeating: "Navigation ", count: 20), "href": "https://example.com/menu/\($0)"] }]
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: snapshot), as: UTF8.self)
+        let bounded = ChatBrowsingBudget.bound(text, maximumBytes: 4096, prioritizeText: true)
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bounded.utf8)) as? [String: Any])
+        XCTAssertLessThanOrEqual(bounded.utf8.count, 4096)
+        XCTAssertGreaterThan((result["text"] as? String ?? "").utf8.count, 1500)
+        XCTAssertEqual((result["elements"] as? [Any])?.count, 2)
+        let inspection = ChatBrowsingBudget.bound(text, maximumBytes: 4096)
+        let controls = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(inspection.utf8)) as? [String: Any])
+        XCTAssertGreaterThan((controls["elements"] as? [Any])?.count ?? 0, 2)
+    }
+
     @MainActor
     func testChatWorkBrowserResultsAreBoundedBeforeReturningToModel() async throws {
         let tabID = UUID().uuidString
@@ -133,6 +148,7 @@ final class ChatToolRegistryTests: XCTestCase {
         for arguments in [
             #"{"action":"search","query":"local OCR models"}"#,
             #"{"action":"open","url":"https://example.com/ocr"}"#,
+            #"{"action":"open","element_id":"source-1"}"#,
             #"{"action":"inspect"}"#,
         ] {
             let outcome = try await ChatToolDispatcher.execute(
