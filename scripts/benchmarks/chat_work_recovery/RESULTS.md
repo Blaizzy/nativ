@@ -5,6 +5,53 @@ The integration faults are fixed, including a separate runtime tool-parser error
 found by the new long-task tests. Research answer quality remains an empirical
 limit; the tables below distinguish page reads from correct answers.
 
+## Decode-cache follow-up
+
+MLX-VLM `650e79c5` avoids extracting and rebuilding a single-row attention cache
+on every decoded token. Padded prefill retains its row-wise recovery path,
+including one-token chunks after cancellation. A repetition penalty of 1.0
+also stops creating a no-op processor. Chat Work prompts, source excerpts, tool
+schemas and model settings are unchanged from the conditional-evidence run.
+
+Three fresh trials with the same 27B 4-bit model, M3 Ultra, 24-page fixture,
+32K context and two-entry/16 GiB memory cache:
+
+| Metric | Conditional evidence | Decode-cache optimization |
+| --- | ---: | ---: |
+| Median elapsed | 127.7 s | 109.1 s |
+| Range | 127.5–128.2 s | 109.0–109.4 s |
+| Generated tokens per run | 1,695 | 1,695 |
+| Correct ordered facts | 24/24 in 3/3 runs | 24/24 in 3/3 runs |
+| Unknown value preserved | 3/3 | 3/3 |
+| Peak process RSS | 15.51–15.53 GiB | 15.51–15.52 GiB |
+
+This cuts median elapsed time by 14.6%. Input processing remains about
+51 s per task; measured decode time falls from about 70 s to 52 s. Fresh browser
+identifiers cause small input-token differences (18,999–19,063 uncached tokens
+in the new runs); the generated token count is unchanged. No swap was used.
+
+A frozen final-request replay, with exactly the same messages and tools, returns
+the identical 288-token answer in every run. Excluding the cold request, its
+three-repeat median falls from 13.96 s to 9.56 s. Both versions reuse 16,868 of
+16,869 prompt tokens. This isolates generation/cache overhead from browser work.
+
+The 8K check also recalled all 24 facts and preserved the unknown value after six
+compactions: 260.9 s versus 280.8 s in the earlier run, with no API errors and
+1,583 output tokens in both. This is one trial per implementation at 8K.
+
+Runtime validation: 2,476 tests passed, eight optional tests skipped. Coverage
+includes cache growth boundaries, float32/bfloat16 logits and recurrent-state
+parity, padded prefill after cancellation, and active presence/frequency penalties.
+The cache-owner and neutral-penalty regression checks fail on the previous runtime.
+CI additionally exposed an older audio test stub that did not accept checkpoint
+keyword arguments. After updating that stub, the audio file passed 65 tests and
+six subtests, with two optional skips.
+An early, less conservative prototype is excluded from these final timings because
+it failed the added single-token padded-prefill check.
+
+These measurements do not resolve the live-research quality failures below, and
+Nativ #780 remains draft. Nativ dependency requirements are unchanged.
+
 ## Evidence and cache efficiency follow-up
 
 The client now sends exact excerpts keyed by tool-call ID in `tool_result_context`.
