@@ -297,6 +297,7 @@ struct ModelsView: View {
                 activeDownloadBanner
                 modelLoadFailureBanner
                 externalModelCacheBanner
+                runtimeConfigurationBanner
 
                 modelsPage
             }
@@ -467,6 +468,21 @@ struct ModelsView: View {
         hubSortDirection = .descending
         hubCapabilityFilters = [.drafter]
         hubAccessFilter = .all
+    }
+
+    @ViewBuilder
+    private var runtimeConfigurationBanner: some View {
+        if let error = ModelPrimaryTaskResolver.runtimeConfigurationError {
+            ModelsNotice(
+                title: "Model runtime needs repair",
+                message: error,
+                systemImage: "exclamationmark.triangle.fill",
+                color: .orange
+            )
+            .padding(.horizontal, 22)
+            .padding(.vertical, 10)
+            Divider()
+        }
     }
 
     @ViewBuilder
@@ -728,6 +744,7 @@ struct ModelsView: View {
                 )
                 InstalledModelRow(
                     localModel: localModel,
+                    runtimeConfigurationError: ModelPrimaryTaskResolver.runtimeConfigurationError,
                     preloadSlots: preloadSlots,
                     selectedPreloadSlots: selectedSlots,
                     preferredPreloadSlot: preferredPreloadSlot(
@@ -1845,6 +1862,7 @@ private struct ModelReadmePanel: View {
 
 private struct InstalledModelRow: View, @MainActor Equatable {
     let localModel: LocalModel
+    let runtimeConfigurationError: String?
     let preloadSlots: [ModelPreloadSlot]
     let selectedPreloadSlots: Set<ModelPreloadSlot>
     let preferredPreloadSlot: ModelPreloadSlot?
@@ -1869,6 +1887,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.localModel == rhs.localModel
+            && lhs.runtimeConfigurationError == rhs.runtimeConfigurationError
             && lhs.preloadSlots == rhs.preloadSlots
             && lhs.selectedPreloadSlots == rhs.selectedPreloadSlots
             && lhs.preferredPreloadSlot == rhs.preferredPreloadSlot
@@ -1944,7 +1963,9 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                                     color: .orange
                                 )
                             }
-                            if localModel.capabilities.contains(.imageEditing)
+                            if runtimeConfigurationError != nil {
+                                ModelPill(title: "Support unknown", systemImage: "questionmark.circle")
+                            } else if localModel.capabilities.contains(.imageEditing)
                                 && !localModel.capabilities.contains(.imageGeneration)
                             {
                                 ModelPill(
@@ -2041,12 +2062,12 @@ private struct InstalledModelRow: View, @MainActor Equatable {
                 action: onTogglePin
             )
         }
-        .alert("Model isn’t supported", isPresented: $showsUnsupportedModelInformation) {
+        .alert(runtimeConfigurationError == nil ? "Model isn’t supported" : "Model runtime needs repair", isPresented: $showsUnsupportedModelInformation) {
             Button("OK", role: .cancel) {}
                 .keyboardShortcut(.defaultAction)
         } message: {
             Text(
-                "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
+                runtimeConfigurationError ?? "\(localModel.repoID) is installed in your Hugging Face cache, but Nativ can’t use it for chat, image generation, text-to-speech, or speech-to-text."
             )
         }
         .alert("Delete \(modelName(localModel.repoID))?", isPresented: $showsDeleteConfirmation) {
@@ -2126,7 +2147,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
 
     @ViewBuilder
     private var loadButton: some View {
-        if let preferredPreloadSlot {
+        if let preferredPreloadSlot, runtimeConfigurationError == nil {
             let isLoaded = selectedPreloadSlots.contains(preferredPreloadSlot)
             Button {
                 guard !isSelectionDisabled else { return }
@@ -2151,7 +2172,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
             Button {
                 showsUnsupportedModelInformation = true
             } label: {
-                Label("Unavailable", systemImage: "exclamationmark.triangle")
+                Label(runtimeConfigurationError == nil ? "Unavailable" : "Runtime error", systemImage: "exclamationmark.triangle")
                     .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 10)
@@ -2168,6 +2189,7 @@ private struct InstalledModelRow: View, @MainActor Equatable {
     }
 
     private var rowHelp: String {
+        if let runtimeConfigurationError { return runtimeConfigurationError }
         if let preferredPreloadSlot,
             selectedPreloadSlots.contains(preferredPreloadSlot)
         {

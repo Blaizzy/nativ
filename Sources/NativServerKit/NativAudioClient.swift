@@ -290,7 +290,6 @@ public enum NativAudioAnalysisError: LocalizedError {
     case serverNotRunning
     case unavailable
     case invalidResponse
-    case wordTimestampsUnavailable(NativAudioDiarization)
     case httpStatus(Int, String)
 
     public var errorDescription: String? {
@@ -301,8 +300,6 @@ public enum NativAudioAnalysisError: LocalizedError {
             "This server does not support speaker analysis. Update the Nativ server to a release with diarization and speaker embedding endpoints."
         case .invalidResponse:
             "The server returned an invalid speaker analysis response."
-        case .wordTimestampsUnavailable:
-            "The transcription model does not provide word timestamps."
         case .httpStatus(let status, let body):
             NativServerErrorMessage.endpointFailure(endpoint: "Speaker analysis endpoint", statusCode: status, responseBody: body)
         }
@@ -371,12 +368,7 @@ extension NativAudioClient {
                     guard completed == nil else { throw NativAudioAnalysisError.invalidResponse }
                     completed = event
                 case "error":
-                    let message = event.error?.message ?? "Diarized transcription failed"
-                    if completed == nil, let metadata,
-                       message.hasPrefix("diarized_json requires a model with word timestamps") {
-                        throw NativAudioAnalysisError.wordTimestampsUnavailable(metadata)
-                    }
-                    throw NativAudioAnalysisError.httpStatus(500, message)
+                    throw NativAudioAnalysisError.httpStatus(500, event.error?.message ?? "Diarized transcription failed")
                 default: break
                 }
             }

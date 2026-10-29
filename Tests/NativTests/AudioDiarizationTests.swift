@@ -4,153 +4,6 @@ import XCTest
 
 @MainActor
 final class AudioDiarizationTests: XCTestCase {
-    func testTextOnlyModelReusesDiarizationAndTranscribesEachSpanOnce() async throws {
-        let audio = try fallbackAudio()
-        defer { try? FileManager.default.removeItem(at: audio) }
-        var diarizations = 0
-        var progress: [Double] = []
-        let result = try await MeetingDiarizer.transcribe(audio, client: fallbackClient("fallback"),
-            model: "selected-text-only-model") {
-            diarizations += 1
-        } segmentFinished: { progress.append($0) }
-        let turns = try XCTUnwrap(result.diarization.transcriptSegments)
-        XCTAssertEqual(diarizations, 1, "Fallback must reuse completed speaker detection")
-        XCTAssertEqual(turns.map(\.start), [0.5, 1.5, 2.5, 32.5])
-        XCTAssertEqual(turns.map(\.end), [1.5, 2.5, 32.5, 35])
-        XCTAssertEqual(turns.map(\.speakers), [[7], [2, 7], [7], [7]])
-        XCTAssertEqual(turns.map(\.text), ["0:16000", "1:16000", "2:480000", "32:40000"])
-        XCTAssertEqual(result.text, turns.map(\.text).joined(separator: " "))
-        XCTAssertEqual(result.diarization.revision, "fixture-revision")
-        XCTAssertTrue(result.diarization.speakerTranscript?.contains("Speaker 3 + Speaker 8: 1:16000") == true)
-        XCTAssertEqual(progress, [1, 1.5, 2.5, 32.5, 35], "Earlier streamed text must not be duplicated in the saved fallback result")
-    }
-
-    func testTextOnlyFallbackSkipsEmptyTranscriptsAndPropagatesOtherFailures() async throws {
-        let audio = try fallbackAudio()
-        defer { try? FileManager.default.removeItem(at: audio) }
-        let result = try await MeetingDiarizer.transcribe(audio, client: fallbackClient("empty-span"),
-            model: "selected-text-only-model")
-        XCTAssertEqual(result.diarization.transcriptSegments?.map(\.start), [0.5, 2.5, 32.5])
-        for host in ["unrelated-error", "span-error", "invalid-timings"] {
-            do {
-                _ = try await MeetingDiarizer.transcribe(audio, client: fallbackClient(host), model: "selected-text-only-model")
-                XCTFail("\(host) must not produce a completed transcript")
-            } catch NativAudioAnalysisError.httpStatus(let status, let message) {
-                XCTAssertEqual(host, "unrelated-error")
-                XCTAssertEqual(status, 500)
-                XCTAssertEqual(message, "Model execution failed")
-            } catch NativAudioTranscriptionError.httpStatus(let status, _) {
-                XCTAssertEqual(host, "span-error")
-                XCTAssertEqual(status, 503)
-            } catch MeetingDiarizationError.invalidOutput {
-                XCTAssertEqual(host, "invalid-timings")
-            }
-        }
-    }
-
-    func testTextOnlyFallbackHonorsCancellationBetweenSpans() async throws {
-        let audio = try fallbackAudio()
-        defer { try? FileManager.default.removeItem(at: audio) }
-        let task = Task {
-            try await MeetingDiarizer.transcribe(audio, client: fallbackClient("cancel"),
-                model: "selected-text-only-model", segmentFinished: { _ in
-                    withUnsafeCurrentTask { $0?.cancel() }
-                })
-        }
-        do {
-            _ = try await task.value
-            XCTFail("Cancellation must discard incomplete transcription")
-        } catch is CancellationError {}
-    }
-
-    func testTextOnlyModelWithRealServer() async throws {
-        guard let path = ProcessInfo.processInfo.environment["NATIV_DIARIZATION_FALLBACK_AUDIO"],
-              let model = ProcessInfo.processInfo.environment["NATIV_DIARIZATION_FALLBACK_MODEL"] else {
-            throw XCTSkip("Set NATIV_DIARIZATION_FALLBACK_AUDIO and NATIV_DIARIZATION_FALLBACK_MODEL for real-model fallback validation.")
-        }
-        let client = NativAudioClient(baseURL: URL(string: ProcessInfo.processInfo.environment["NATIV_AUDIO_TEST_SERVER"] ?? "http://127.0.0.1:8080")!)
-        let result = try await MeetingDiarizer.transcribe(URL(fileURLWithPath: path), client: client, model: model)
-        let turns = try XCTUnwrap(result.diarization.transcriptSegments)
-        let chunks = try result.diarization.transcriptionWindows()
-        XCTAssertFalse(turns.isEmpty)
-        XCTAssertFalse(result.text.isEmpty)
-        XCTAssertTrue(turns.allSatisfy { turn in
-            chunks.contains { $0.start == turn.start && $0.end == turn.end && $0.speakers == turn.speakers }
-        }, "Text-only ASR must retain the diarizer's speaker windows rather than invent word timestamps")
-        if let output = ProcessInfo.processInfo.environment["NATIV_DIARIZATION_TEST_OUTPUT"] {
-            try result.diarization.speakerTranscript?.write(toFile: output, atomically: true, encoding: .utf8)
-            try JSONEncoder().encode(result.diarization).write(to: URL(fileURLWithPath: output + ".json"))
-        }
-    }
-
-    private func fallbackClient(_ host: String) -> NativAudioClient {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [SpanTranscriptionURLProtocol.self]
-        return NativAudioClient(baseURL: URL(string: "http://\(host)")!, sessionConfiguration: configuration)
-    }
-
-    private func fallbackAudio() throws -> URL {
-        let audio = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
-        let samples = (0..<(36 * 16000)).map { Float($0 / 16000) / 100 }
-        try VoiceWakeWordAudio(samples: samples).wavData.write(to: audio)
-        return audio
-    }
-
-    func testTextOnlyWindowsKeepBriefPausesWithinTheSameSpeaker() throws {
-        let spans: [(Double, Double)] = [
-            (0.05, 1.55), (1.87, 2.37), (3.03, 5.63), (5.94, 7.53),
-            (8.08, 10.78), (10.97, 18.42), (19.04, 22.63), (23.14, 23.78),
-            (24.38, 28.57), (28.92, 29.02), (29.39, 34),
-        ]
-        let value = AudioDiarization(modelID: "model", revision: nil, segments:
-            spans.map { .init(start: $0.0, end: $0.1, speaker: 0) })
-        XCTAssertEqual(try value.transcriptionWindows(), [
-            .init(start: 0.05, end: 29.02, speakers: [0]),
-            .init(start: 29.39, end: 34, speakers: [0]),
-        ])
-        XCTAssertEqual(try value.transcriptionChunks().count, spans.count,
-            "Speaker embeddings and saved legacy transcript timing must retain the original speech intervals")
-    }
-
-    func testTextOnlyWindowsRespectSpeakerChangesOverlapAndLongSilence() throws {
-        let value = AudioDiarization(modelID: "model", revision: nil, segments: [
-            .init(start: 0, end: 3, speaker: 0), .init(start: 3.5, end: 7, speaker: 1),
-            .init(start: 5, end: 10, speaker: 0), .init(start: 14, end: 15, speaker: 0),
-        ])
-        XCTAssertEqual(try value.transcriptionWindows(), [
-            .init(start: 0, end: 3, speakers: [0]), .init(start: 3.5, end: 5, speakers: [1]),
-            .init(start: 5, end: 7, speakers: [0, 1]), .init(start: 7, end: 10, speakers: [0]),
-            .init(start: 14, end: 15, speakers: [0]),
-        ])
-        for gap in [-1.0, .infinity, .nan] {
-            XCTAssertThrowsError(try value.transcriptionWindows(maximumSilenceGap: gap))
-        }
-    }
-
-    func testBriefOverlapsRetainSentenceContextAndAllSpeakerLabels() throws {
-        let value = AudioDiarization(modelID: "model", revision: nil, segments: [
-            .init(start: 58.11, end: 63.36, speaker: 0),
-            .init(start: 61.75, end: 62.06, speaker: 1),
-            .init(start: 64.54, end: 68.81, speaker: 1),
-        ])
-        XCTAssertEqual(try value.transcriptionWindows(), [
-            .init(start: 58.11, end: 63.36, speakers: [0, 1]),
-            .init(start: 64.54, end: 68.81, speakers: [1]),
-        ])
-        XCTAssertEqual(try value.transcriptionChunks().count, 4)
-    }
-
-    func testBriefExchangesDoNotExceedWindowLimitOrCrossLongSilence() throws {
-        let value = AudioDiarization(modelID: "model", revision: nil, segments: [
-            .init(start: 0, end: 30, speaker: 0), .init(start: 30, end: 30.2, speaker: 1),
-            .init(start: 30.2, end: 33, speaker: 0), .init(start: 40, end: 40.5, speaker: 1),
-        ])
-        XCTAssertEqual(try value.transcriptionWindows(), [
-            .init(start: 0, end: 30, speakers: [0]), .init(start: 30, end: 33, speakers: [0, 1]),
-            .init(start: 40, end: 40.5, speakers: [1]),
-        ])
-    }
-
     func testLinkedVoicesBecomeOneParticipantWithoutChangingWordsOrTiming() throws {
         let original = AudioDiarization(modelID: "model", revision: "test", segments: [
             .init(start: 0, end: 2, speaker: 0),
@@ -251,6 +104,39 @@ final class AudioDiarizationTests: XCTestCase {
             _ = try await task.value
             XCTFail("Cancelled diarization must not return a result")
         } catch is CancellationError {}
+    }
+
+    func testDiarizedTextOnlyModelWithRealServer() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["NATIV_DIARIZED_TEXT_ONLY_AUDIO"],
+              let model = environment["NATIV_DIARIZED_TEXT_ONLY_MODEL"] else {
+            throw XCTSkip("Set NATIV_DIARIZED_TEXT_ONLY_AUDIO and NATIV_DIARIZED_TEXT_ONLY_MODEL for live validation.")
+        }
+        let client = NativAudioClient(baseURL: URL(string: environment["NATIV_AUDIO_TEST_SERVER"] ?? "http://127.0.0.1:8080")!)
+        var diarizationCount = 0
+        var streamedEnds: [Double] = []
+        let result = try await MeetingDiarizer.transcribe(URL(fileURLWithPath: path), client: client, model: model) {
+            diarizationCount += 1
+        } segmentFinished: { end in
+            XCTAssertEqual(diarizationCount, 1)
+            streamedEnds.append(end)
+        }
+        XCTAssertEqual(diarizationCount, 1)
+        XCTAssertFalse(result.text.isEmpty)
+        let segments = try XCTUnwrap(result.diarization.transcriptSegments)
+        XCTAssertFalse(segments.isEmpty)
+        XCTAssertEqual(streamedEnds, segments.map(\.end))
+        let duration = try XCTUnwrap(result.diarization.segments.map(\.end).max())
+        for segment in segments {
+            XCTAssertGreaterThanOrEqual(segment.start, 0)
+            XCTAssertLessThanOrEqual(segment.end, duration)
+            XCTAssertGreaterThan(segment.end, segment.start)
+            XCTAssertLessThanOrEqual(segment.end - segment.start, 30.001)
+            XCTAssertTrue(Set(segment.speakers).isSubset(of: Set(result.diarization.speakerIDs)))
+        }
+        if let output = environment["NATIV_DIARIZATION_TEST_OUTPUT"] {
+            try JSONEncoder().encode(result.diarization).write(to: URL(fileURLWithPath: output))
+        }
     }
 
     func testLongTurnsKeepGlobalSpeakerIDsAndAbsoluteTime() throws {
@@ -358,71 +244,6 @@ final class AudioDiarizationTests: XCTestCase {
             diarization: detected)
     }
 
-}
-
-private final class SpanTranscriptionURLProtocol: URLProtocol {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func stopLoading() {}
-    override func startLoading() {
-        do {
-            XCTAssertEqual(request.url?.path, "/v1/audio/transcriptions", "Do not run diarization a second time")
-            var body = request.httpBody ?? Data()
-            if let stream = request.httpBodyStream {
-                stream.open()
-                defer { stream.close() }
-                var buffer = [UInt8](repeating: 0, count: 65536)
-                while true {
-                    let count = stream.read(&buffer, maxLength: buffer.count)
-                    guard count > 0 else { break }
-                    body.append(contentsOf: buffer.prefix(count))
-                }
-            }
-            XCTAssertNotNil(body.range(of: Data("name=\"model\"\r\n\r\nselected-text-only-model\r\n".utf8)))
-            let host = request.url?.host
-            if request.value(forHTTPHeaderField: "Accept") == "text/event-stream" {
-                let end = host == "invalid-timings" ? 1e30 : 33.5
-                let detected = """
-                    {"model":"\(MeetingDiarizer.defaultModelID)","revision":"fixture-revision","speaker_ids":{"A":7,"B":2},
-                     "segments":[{"start":0.5,"end":\(end),"speaker":7},{"start":1.5,"end":2.5,"speaker":2},{"start":34,"end":35,"speaker":7}]}
-                    """.replacingOccurrences(of: "\n", with: "")
-                let message = host == "unrelated-error" ? "Model execution failed"
-                    : "diarized_json requires a model with word timestamps (for example Parakeet)"
-                var events = ["{\"type\":\"diarization.completed\",\"diarization\":\(detected)}"]
-                if host == "fallback" {
-                    events.append(#"{"type":"transcript.text.segment","id":"early","start":0.5,"end":1,"text":"Earlier partial text","speaker":"A"}"#)
-                }
-                events.append("{\"type\":\"error\",\"error\":{\"message\":\"\(message)\"}}")
-                respond(Data(events.map { "data: \($0)\n\n" }.joined().utf8), type: "text/event-stream")
-            } else {
-                XCTAssertFalse(["unrelated-error", "invalid-timings"].contains(host ?? ""))
-                XCTAssertNotNil(body.range(of: Data("name=\"response_format\"\r\n\r\njson\r\n".utf8)))
-                let start = try XCTUnwrap(body.range(of: Data("RIFF".utf8))).lowerBound
-                func word(_ offset: Int) -> UInt32 {
-                    body.withUnsafeBytes { UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: start + offset, as: UInt32.self)) }
-                }
-                XCTAssertEqual(word(24), 16000)
-                XCTAssertEqual(word(20), 0x00010003, "Mono IEEE float WAV")
-                let sampleCount = Int(word(40)) / 4
-                XCTAssertLessThanOrEqual(sampleCount, 30 * 16000)
-                let firstSecond = Int((Float(bitPattern: word(44)) * 100).rounded())
-                if host == "cancel" { XCTAssertEqual(firstSecond, 0, "No later span may be uploaded after cancellation") }
-                let text = host == "empty-span" && firstSecond == 1 ? "" : "\(firstSecond):\(sampleCount)"
-                respond(try JSONSerialization.data(withJSONObject: ["text": text]),
-                    status: host == "span-error" ? 503 : 200, type: "application/json")
-            }
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    private func respond(_ data: Data, status: Int = 200, type: String) {
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
-            headerFields: ["Content-Type": type])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
-        client?.urlProtocolDidFinishLoading(self)
-    }
 }
 
 @MainActor
