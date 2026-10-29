@@ -1397,7 +1397,6 @@ private struct ChatAccessPicker: View {
     let selection: ChatAccessMode
     let onSelect: (ChatAccessMode) -> Void
     @State private var isHovered = false
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.isEnabled) private var isEnabled
     @State private var showsOptions = false
     @State private var showsComparison = false
@@ -1409,7 +1408,7 @@ private struct ChatAccessPicker: View {
             Label(selection.title, systemImage: selection.accessSymbol)
                 .labelStyle(.iconOnly)
                 .font(.body)
-                .foregroundStyle(selection == .fullAccess ? ChatAccessMode.fullAccessColor(in: colorScheme) : .primary)
+                .foregroundStyle(selection == .fullAccess ? Color.orange : .primary)
                 .frame(width: 30, height: 30)
                 .background(Color.primary.opacity(isEnabled && (isHovered || showsOptions) ? 0.07 : 0), in: Circle())
                 .contentShape(Rectangle())
@@ -1444,10 +1443,6 @@ private struct ChatAccessPicker: View {
 }
 
 private extension ChatAccessMode {
-    static func fullAccessColor(in scheme: ColorScheme) -> Color {
-        scheme == .dark ? .yellow : Color(red: 0.48, green: 0.35, blue: 0)
-    }
-
     var accessSymbol: String {
         switch self {
         case .standard: "hand.raised"
