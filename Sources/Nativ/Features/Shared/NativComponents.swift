@@ -11,7 +11,6 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     var showsBorder: Bool = true
     var isInteractive: Bool = true
     var anchorTogglesPresentation: Bool = false
-    var onAnchorHover: ((Bool) -> Void)? = nil
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -23,7 +22,6 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     }
 
     func updateNSView(_ anchorView: NSView, context: Context) {
-        (anchorView as? ArrowlessPopoverAnchorView)?.onHover = onAnchorHover
         context.coordinator.update(
             anchorView: anchorView,
             isPresented: $isPresented,
@@ -53,6 +51,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
         private var alignment: HorizontalAlignment = .center
         private var edge: VerticalEdge = .top
         private var anchorTogglesPresentation = false
+        private var anchorClickMonitor: Any?
 
         func update(
             anchorView: NSView,
@@ -79,7 +78,9 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 return
             }
 
-            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder, cornerRadius: cornerRadius)
+            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder,
+                                                  cornerRadius: cornerRadius,
+                                                  usesNativeShadow: anchorTogglesPresentation)
             if let hostingView {
                 hostingView.rootView = surface
             } else {
@@ -89,11 +90,18 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 self.panel = panel
             }
             panel?.ignoresMouseEvents = !isInteractive
+            // A shadow drawn inside the window extends its mouse-catching area
+            // over the trigger. Native window shadows never intercept input.
+            panel?.hasShadow = anchorTogglesPresentation
             panel?.title = title
             showPanel()
         }
 
         func dismiss(updateBinding: Bool = true) {
+            if let anchorClickMonitor {
+                NSEvent.removeMonitor(anchorClickMonitor)
+                self.anchorClickMonitor = nil
+            }
             if updateBinding, isPresented?.wrappedValue == true {
                 isPresented?.wrappedValue = false
             }
@@ -125,19 +133,34 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             panel.contentView = hostingView
             panel.onDismiss = { [weak self] in
                 guard let self, self.isPresented?.wrappedValue == true else { return }
-                // A click on the toggle first makes the panel resign key. Leave
-                // the binding alone so the button can toggle it off on mouse-up.
-                if self.anchorTogglesPresentation,
-                   let event = NSApp.currentEvent,
-                   event.type == .leftMouseDown,
-                   let anchorView = self.anchorView,
-                   event.window === anchorView.window,
-                   anchorView.bounds.contains(anchorView.convert(event.locationInWindow, from: nil)) {
-                    return
-                }
-                self.isPresented?.wrappedValue = false
+                self.dismiss()
             }
             return panel
+        }
+
+        private func updateAnchorClickMonitor() {
+            guard anchorTogglesPresentation, panel?.isVisible == true,
+                  anchorClickMonitor == nil else { return }
+            anchorClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                let consumed = MainActor.assumeIsolated {
+                    guard let self else { return false }
+                    return self.handleAnchorClick(event) == nil
+                }
+                return consumed ? nil : event
+            }
+        }
+
+        func handleAnchorClick(_ event: NSEvent) -> NSEvent? {
+            guard anchorTogglesPresentation, isPresented?.wrappedValue == true,
+                  event.type == .leftMouseDown,
+                  let anchorView, event.window === anchorView.window,
+                  anchorView.bounds.contains(anchorView.convert(event.locationInWindow, from: nil)) else {
+                return event
+            }
+            // Consume the close click before key-window dismissal and the
+            // SwiftUI button action can race to close and then reopen the panel.
+            dismiss()
+            return nil
         }
 
         private func showPanel() {
@@ -164,13 +187,17 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 }
                 parentWindow.addChildWindow(panel, ordered: .above)
             }
-            guard !wasVisible else { return }
+            if wasVisible {
+                updateAnchorClickMonitor()
+                return
+            }
             panel.alphaValue = 0
             if panel.ignoresMouseEvents {
                 panel.orderFront(nil)
             } else {
                 panel.makeKeyAndOrderFront(nil)
             }
+            updateAnchorClickMonitor()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 panel.animator().alphaValue = 1
@@ -185,7 +212,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             guard let panel else { return }
             let windowRect = anchorView.convert(anchorView.bounds, to: nil)
             let screenRect = parentWindow.convertToScreen(windowRect)
-            let shadowPadding = ArrowlessPopoverSurface<Content>.shadowPadding
+            let shadowPadding: CGFloat = anchorTogglesPresentation ? 0 : ArrowlessPopoverSurface<Content>.shadowPadding
             var origin = NSPoint(
                 x: alignment == .leading ? screenRect.minX - shadowPadding
                     : alignment == .trailing ? screenRect.maxX - size.width + shadowPadding
@@ -206,33 +233,6 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
 }
 
 private final class ArrowlessPopoverAnchorView: NSView {
-    var onHover: ((Bool) -> Void)?
-    private var hoverTrackingArea: NSTrackingArea?
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let hoverTrackingArea {
-            removeTrackingArea(hoverTrackingArea)
-        }
-        // Keep the trigger hoverable when its popover is the key window.
-        let area = NSTrackingArea(
-            rect: .zero,
-            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        hoverTrackingArea = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        onHover?(true)
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        onHover?(false)
-    }
-
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
@@ -264,13 +264,14 @@ private struct ArrowlessPopoverSurface<Content: View>: View {
     let content: Content
     let showsBorder: Bool
     let cornerRadius: CGFloat
+    var usesNativeShadow = false
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
         content
             .clipShape(shape)
-            .padding(Self.shadowPadding)
+            .padding(usesNativeShadow ? 0 : Self.shadowPadding)
             .background {
                 shape
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -279,8 +280,8 @@ private struct ArrowlessPopoverSurface<Content: View>: View {
                             shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
                         }
                     }
-                    .shadow(color: .black.opacity(0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
-                    .padding(Self.shadowPadding)
+                    .shadow(color: .black.opacity(usesNativeShadow ? 0 : 0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
+                    .padding(usesNativeShadow ? 0 : Self.shadowPadding)
                     .drawingGroup()
             }
     }
