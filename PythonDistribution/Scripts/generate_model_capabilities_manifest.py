@@ -20,6 +20,7 @@ CAPABILITY_NAMES = (
     "image_editing",
     "speech_to_text",
     "text_to_speech",
+    "voice_activity_detection",
     "embeddings",
     "reranking",
 )
@@ -391,16 +392,25 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
     tts_types = _loader_packages(
         mlx_audio_root / "tts" / "models", requires_config_type=False
     )
+    # MLX Audio's VAD loader also owns speaker diarization and turn detection.
+    vad_types = _loader_packages(
+        mlx_audio_root / "vad" / "models", requires_config_type=False
+    )
     stt_alias_mapping = _string_mapping(
         mlx_audio_root / "stt" / "utils.py", "MODEL_REMAPPING"
     )
     tts_alias_mapping = _string_mapping(
         mlx_audio_root / "tts" / "utils.py", "MODEL_REMAPPING"
     )
+    vad_alias_mapping = _string_mapping(
+        mlx_audio_root / "vad" / "utils.py", "MODEL_REMAPPING"
+    )
     _validate_mapping_targets(stt_alias_mapping, stt_types)
     _validate_mapping_targets(tts_alias_mapping, tts_types)
+    _validate_mapping_targets(vad_alias_mapping, vad_types)
     stt_types = _apply_alias_precedence(stt_types, stt_alias_mapping)
     tts_types = _apply_alias_precedence(tts_types, tts_alias_mapping)
+    vad_types = _apply_alias_precedence(vad_types, vad_alias_mapping)
 
     embedding_alias_mapping = _string_mapping(
         mlx_vlm_root / "embedding_loader.py", "EMBEDDING_MODEL_REMAPPING"
@@ -440,6 +450,10 @@ def model_capabilities(site_packages: Path) -> dict[str, object]:
         "text_to_speech": _entry(
             tts_types,
             _aliases_for(tts_alias_mapping, tts_types),
+        ),
+        "voice_activity_detection": _entry(
+            vad_types,
+            _aliases_for(vad_alias_mapping, vad_types),
         ),
         "embeddings": _entry(
             embedding_types,

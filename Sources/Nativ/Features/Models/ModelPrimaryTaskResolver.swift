@@ -57,7 +57,9 @@ enum ModelPrimaryTaskResolver {
             || pipeline == "feature-extraction" || pipeline == "sentence-similarity" {
             return capabilities.contains(.embeddings) ? .embeddings : .nonLanguage
         }
-        if !capabilities.isDisjoint(with: [.imageGeneration, .imageEditing, .speculativeDrafters]) {
+        if !capabilities.isDisjoint(with: [
+            .imageGeneration, .imageEditing, .speculativeDrafters, .voiceActivityDetection,
+        ]) {
             return .nonLanguage
         }
         if registry.supportsTextGeneration(for: modelType) == true {

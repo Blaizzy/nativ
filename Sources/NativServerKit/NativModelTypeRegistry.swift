@@ -7,6 +7,8 @@ public enum NativModelCapability: String, CaseIterable, Codable, Sendable {
     case imageEditing = "image_editing"
     case speechToText = "speech_to_text"
     case textToSpeech = "text_to_speech"
+    /// MLX Audio's VAD family includes speaker diarization and turn detection.
+    case voiceActivityDetection = "voice_activity_detection"
     case embeddings
     case reranking
 }

@@ -2,6 +2,39 @@ import NativServerKit
 import XCTest
 
 final class HuggingFaceModelSupportTests: XCTestCase {
+    func testBundledDiarizationModelIsSupported() throws {
+        // Matches the Hub metadata that previously produced an Unsupported badge.
+        let payload: [String: Any] = [
+            "id": "nativ-community/Nemotron-3-Diarization",
+            "pipeline_tag": "voice-activity-detection",
+            "tags": ["mlx-audio", "speaker-diarization", "streaming-sortformer"],
+            "config": ["model_type": "nemotron_diarization", "processor_config": [:]],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let model = try JSONDecoder().decode(HuggingFaceModel.self, from: data)
+
+        XCTAssertEqual(model.support, .supported)
+        XCTAssertEqual(model.provider, .nvidia)
+    }
+
+    func testBundledVADLoadersAndAliasesAreSupported() throws {
+        let registry = try Nativ.modelTypeRegistry()
+        let classifier = HuggingFaceModelSupportClassifier(registry: registry)
+        for modelType in ["nemotron_diarization", "sortformer", "silero_vad", "silero", "silero-vad"] {
+            XCTAssertEqual(registry.capabilities(for: modelType), [.voiceActivityDetection])
+            XCTAssertEqual(classifier.classify(
+                configuration: try configuration(modelType: modelType),
+                pipelineTag: "voice-activity-detection",
+                tags: []
+            ), .supported, modelType)
+        }
+        XCTAssertEqual(classifier.classify(
+            configuration: try configuration(modelType: "unrecognized-diarization"),
+            pipelineTag: "voice-activity-detection",
+            tags: ["speaker-diarization"]
+        ), .unsupported)
+    }
+
     func testCanonicalAndAliasModelTypesAreSupported() throws {
         let classifier = try makeClassifier()
 

@@ -2,6 +2,17 @@ import NativServerKit
 import XCTest
 
 final class ModelPrimaryTaskResolverTests: XCTestCase {
+    func testBundledDiarizationAndVADModelsAreKnownNonLanguage() {
+        for modelType in ["nemotron_diarization", "sortformer", "silero_vad", "silero"] {
+            let task = ModelPrimaryTaskResolver.resolve(
+                model: "org/model", config: ["model_type": modelType]
+            )
+            XCTAssertEqual(task, .nonLanguage, modelType)
+            XCTAssertTrue(task.isKnownNonLanguage, modelType)
+            XCTAssertFalse(task.isLanguageCapable, modelType)
+        }
+    }
+
     func testHiggsAudioIsTextToSpeechDespiteQwenBackbone() {
         let task = resolve(
             model: "bosonai/higgs-audio-v3-tts-4b",
