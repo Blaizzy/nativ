@@ -27,7 +27,7 @@ else:
 
 import mlx.core as mx
 from fastapi import HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
@@ -1357,7 +1357,12 @@ def install_metrics_overlay() -> None:
         remote = remote_engine.engine_for(payload, remote_engine.load_engines())
         try:
             if remote is not None:
-                response = await remote_engine.forward(request, payload, remote)
+                try:
+                    base._require_management_api_key(request)
+                except HTTPException as error:
+                    response = JSONResponse({"detail": error.detail}, status_code=error.status_code)
+                else:
+                    response = await remote_engine.forward(request, payload, remote)
             else:
                 response = await call_next(request)
         except asyncio.CancelledError:

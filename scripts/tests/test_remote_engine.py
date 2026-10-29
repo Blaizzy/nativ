@@ -15,11 +15,20 @@ ENGINE = {"base_url": "http://127.0.0.1:8091/v1", "model": "engine-model", "api_
 
 
 class StubResponse:
+    """Stands in for the fastapi response classes: keeps what it was built with."""
+
     def __init__(self, content=b"{}", status_code=200, headers=None, **kwargs):
         self.content = content
         self.status_code = status_code
         self.headers = headers or {}
-        self.kwargs = kwargs
+
+
+class StubTransportError(Exception):
+    pass
+
+
+class StubInvalidURL(Exception):
+    pass
 
 
 class StubHTTPError(Exception):
@@ -27,11 +36,10 @@ class StubHTTPError(Exception):
 
 
 class StubClient:
-    """Records the request it is asked to send and returns a canned upstream response."""
+    """Plays back a script of upstream responses or errors, recording what was sent."""
 
     sent = []
-    raises = None
-    upstream = None
+    script = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -41,43 +49,49 @@ class StubClient:
 
     async def send(self, request, stream=False):
         StubClient.sent.append(request)
-        if StubClient.raises:
-            raise StubClient.raises
-        return StubClient.upstream
+        step = StubClient.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+class UpstreamResponse:
+    def __init__(self, body=b'{"ok": true}', status_code=200, content_type="application/json", chunks=(), read_error=None):
+        self.status_code = status_code
+        self.headers = {"content-type": content_type, "content-encoding": "gzip", "date": "now",
+                        "server": "engine", "x-extra": "1"}
+        self._body, self._chunks, self._read_error = body, chunks, read_error
+        self.closed = 0
 
     async def aread(self):
-        return b""
+        if self._read_error:
+            raise self._read_error
+        return self._body
+
+    async def aclose(self):
+        self.closed += 1
+
+    async def aiter_raw(self):
+        for chunk in self._chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield chunk
 
 
 def load_module():
     stubs = {
-        "httpx": SimpleNamespace(AsyncClient=StubClient, Timeout=lambda *a, **k: None, HTTPError=StubHTTPError),
+        "httpx": SimpleNamespace(
+            AsyncClient=StubClient, Timeout=lambda *a, **k: None, HTTPError=StubHTTPError,
+            TransportError=StubTransportError, InvalidURL=StubInvalidURL, Response=UpstreamResponse,
+        ),
         "fastapi": ModuleType("fastapi"),
         "fastapi.responses": SimpleNamespace(JSONResponse=StubResponse, Response=StubResponse, StreamingResponse=StubResponse),
-        "starlette": ModuleType("starlette"),
-        "starlette.background": SimpleNamespace(BackgroundTask=lambda *a, **k: None),
     }
     spec = importlib.util.spec_from_file_location("nativ_remote_engine_under_test", SOURCE)
     module = importlib.util.module_from_spec(spec)
     with patch.dict(sys.modules, stubs):
         spec.loader.exec_module(module)
     return module
-
-
-class UpstreamResponse:
-    def __init__(self, body=b'{"ok": true}', status_code=200, content_type="application/json"):
-        self.status_code = status_code
-        self.headers = {"content-type": content_type, "date": "now", "server": "engine", "x-extra": "1"}
-        self._body = body
-
-    async def aread(self):
-        return self._body
-
-    async def aclose(self):
-        pass
-
-    def aiter_raw(self):
-        raise AssertionError("buffered responses must not be streamed")
 
 
 class EnginesFileTests(unittest.TestCase):
@@ -125,41 +139,86 @@ class RoutingTests(unittest.TestCase):
 class ForwardTests(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
-        StubClient.sent, StubClient.raises, StubClient.upstream = [], None, UpstreamResponse()
+        StubClient.sent, StubClient.script = [], []
         self.request = SimpleNamespace(
             url=SimpleNamespace(path="/v1/chat/completions"),
-            headers={"authorization": "Bearer nativ", "content-type": "application/json", "host": "x"},
+            headers={"authorization": "Bearer nativ", "content-type": "application/json", "host": "x",
+                     "cookie": "session=1", "x-api-key": "k", "accept-encoding": "gzip"},
         )
 
-    def run_forward(self, payload=None):
-        return asyncio.run(self.module.forward(self.request, payload or {"model": "qwen", "stream": False}, ENGINE))
+    def forward(self, engine=ENGINE, payload=None):
+        return asyncio.run(self.module.forward(self.request, payload or {"model": "qwen"}, engine))
 
-    def test_the_request_is_sent_to_the_engine_with_its_model_and_key(self):
-        self.run_forward()
+    def collect(self, response):
+        async def gather():
+            return [chunk async for chunk in response.content]
+        return asyncio.run(gather())
+
+    def test_the_request_goes_to_the_engine_with_its_model_and_key(self):
+        StubClient.script = [UpstreamResponse()]
+        self.forward()
         sent = StubClient.sent[0]
         self.assertEqual(sent.url, "http://127.0.0.1:8091/v1/chat/completions")
         self.assertEqual(sent.json["model"], "engine-model")
         self.assertEqual(sent.headers["authorization"], "Bearer secret")
-        self.assertNotIn("host", sent.headers)
 
-    def test_the_apps_own_key_is_not_leaked_to_an_engine_without_one(self):
-        engine = {"base_url": "http://127.0.0.1:8091/v1"}
-        asyncio.run(self.module.forward(self.request, {"model": "qwen"}, engine))
-        self.assertNotIn("authorization", StubClient.sent[0].headers)
+    def test_only_allowed_client_headers_reach_the_engine(self):
+        StubClient.script = [UpstreamResponse()]
+        self.forward(engine={"base_url": "http://127.0.0.1:8091/v1"})
+        self.assertEqual(StubClient.sent[0].headers, {"content-type": "application/json"})
 
-    def test_the_engines_answer_is_returned_without_hop_headers(self):
-        response = self.run_forward()
-        self.assertEqual(response.status_code, 200)
+    def test_a_buffered_answer_drops_hop_headers_and_the_stale_content_encoding(self):
+        upstream = UpstreamResponse()
+        StubClient.script = [upstream]
+        response = self.forward()
         self.assertEqual(response.content, b'{"ok": true}')
         self.assertEqual(response.headers, {"content-type": "application/json", "x-extra": "1"})
+        self.assertEqual(upstream.closed, 1)
 
-    def test_an_unreachable_engine_is_a_503_not_an_exception(self):
-        StubClient.raises = StubHTTPError("connection refused")
-        self.assertEqual(self.run_forward().status_code, 503)
+    def test_an_error_status_from_the_engine_is_passed_through(self):
+        StubClient.script = [UpstreamResponse(body=b"bad", status_code=400, content_type="text/plain")]
+        response = self.forward()
+        self.assertEqual((response.status_code, response.content), (400, b"bad"))
+
+    def test_a_failed_body_read_is_a_503_and_the_connection_is_closed(self):
+        upstream = UpstreamResponse(read_error=StubHTTPError("reset"))
+        StubClient.script = [upstream]
+        self.assertEqual(self.forward().status_code, 503)
+        self.assertEqual(upstream.closed, 1)
+
+    def test_a_stream_is_relayed_chunk_by_chunk_then_closed(self):
+        upstream = UpstreamResponse(content_type="text/event-stream", chunks=[b"data: 1\n\n", b"data: 2\n\n"])
+        StubClient.script = [upstream]
+        response = self.forward()
+        self.assertEqual(self.collect(response), [b"data: 1\n\n", b"data: 2\n\n"])
+        self.assertEqual(upstream.closed, 1)
+        self.assertNotIn("content-length", response.headers)
+
+    def test_a_stream_that_breaks_midway_still_closes_the_connection(self):
+        upstream = UpstreamResponse(content_type="text/event-stream", chunks=[b"data: 1\n\n", StubTransportError("reset")])
+        StubClient.script = [upstream]
+        response = self.forward()
+        with self.assertRaises(StubTransportError):
+            self.collect(response)
+        self.assertEqual(upstream.closed, 1)
+
+    def test_a_stale_pooled_connection_is_retried_once(self):
+        StubClient.script = [StubTransportError("closed by peer"), UpstreamResponse()]
+        self.assertEqual(self.forward().status_code, 200)
+        self.assertEqual(len(StubClient.sent), 2)
+
+    def test_an_engine_that_stays_down_is_a_503(self):
+        StubClient.script = [StubTransportError("refused"), StubTransportError("refused")]
+        self.assertEqual(self.forward().status_code, 503)
+
+    def test_a_malformed_base_url_is_a_503_not_an_exception(self):
+        StubClient.script = [StubInvalidURL("bad url")]
+        self.assertEqual(self.forward().status_code, 503)
+        self.assertEqual(len(StubClient.sent), 1)
 
     def test_compaction_is_a_501_and_never_reaches_the_engine(self):
         self.request.url.path = "/v1/responses/compact"
-        self.assertEqual(self.run_forward().status_code, 501)
+        self.assertEqual(self.forward().status_code, 501)
         self.assertEqual(StubClient.sent, [])
 
 

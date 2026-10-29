@@ -14,19 +14,26 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from starlette.background import BackgroundTask
 
 log = logging.getLogger("nativ.remote_engine")
 
 ENGINES_PATH = os.path.expanduser("~/Library/Application Support/Nativ/remote-engines.json")
 # Paths an external engine answers. Compaction is run by Nativ's own runtime, so it is not forwarded.
 FORWARDED_PATHS = {"/chat/completions": "/chat/completions", "/responses": "/responses"}
-HOP_HEADERS = frozenset({"host", "content-length", "connection", "transfer-encoding", "keep-alive", "date", "server"})
+# Only these client headers reach the engine, so the app's own credentials and cookies never do.
+FORWARDED_REQUEST_HEADERS = frozenset({"accept", "content-type", "user-agent", "x-request-id"})
+# Hop-by-hop headers describe one connection, not the message, and are not passed back to the client.
+HOP_HEADERS = frozenset({
+    "connection", "content-length", "date", "host", "keep-alive", "proxy-authenticate",
+    "proxy-authorization", "server", "te", "trailer", "transfer-encoding", "upgrade",
+})
 CONNECT_TIMEOUT_S = 10
+# An idle pooled connection the engine has since closed fails on first use; one more try opens a new one.
+SEND_ATTEMPTS = 2
 
 _client: httpx.AsyncClient | None = None
 
@@ -69,6 +76,23 @@ def _http_client() -> httpx.AsyncClient:
     return _client
 
 
+def _unavailable(error: Exception) -> JSONResponse:
+    log.warning("remote engine unavailable: %s", error)
+    return JSONResponse(
+        {"error": {"message": f"external engine unavailable: {error}", "type": "engine_unavailable"}},
+        status_code=503,
+    )
+
+
+async def _relay_and_close(response: httpx.Response) -> AsyncIterator[bytes]:
+    """Yield the engine's raw stream, closing the upstream connection however the stream ends."""
+    try:
+        async for chunk in response.aiter_raw():
+            yield chunk
+    finally:
+        await response.aclose()
+
+
 async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str]) -> Response:
     """Send the request to the external engine and return its answer, streaming included."""
     path = upstream_path(request.url.path)
@@ -78,26 +102,32 @@ async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str])
                        "type": "not_implemented"}},
             status_code=501,
         )
-    body = dict(payload)
-    body["model"] = engine.get("model", payload["model"])
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_HEADERS and k.lower() != "authorization"}
+    body = {**payload, "model": engine.get("model", payload["model"])}
+    headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED_REQUEST_HEADERS}
     if engine.get("api_key"):
         headers["authorization"] = f"Bearer {engine['api_key']}"
     client = _http_client()
-    upstream = client.build_request("POST", engine["base_url"].rstrip("/") + path, headers=headers, json=body)
-    try:
-        response = await client.send(upstream, stream=True)
-    except httpx.HTTPError as error:
-        log.warning("remote engine unreachable: %s", error)
-        return JSONResponse(
-            {"error": {"message": f"external engine unreachable: {error}", "type": "engine_unavailable"}},
-            status_code=503,
-        )
+    url = engine["base_url"].rstrip("/") + path
+    last_error: Exception | None = None
+    for _ in range(SEND_ATTEMPTS):
+        try:
+            response = await client.send(client.build_request("POST", url, headers=headers, json=body), stream=True)
+            break
+        except httpx.InvalidURL as error:
+            return _unavailable(error)
+        except httpx.TransportError as error:
+            last_error = error
+    else:
+        return _unavailable(last_error)
     passthrough = {k: v for k, v in response.headers.items() if k.lower() not in HOP_HEADERS}
-    media_type = response.headers.get("content-type", "")
-    if "text/event-stream" in media_type:
-        return StreamingResponse(response.aiter_raw(), status_code=response.status_code,
-                                 headers=passthrough, background=BackgroundTask(response.aclose))
-    content = await response.aread()
-    await response.aclose()
+    if "text/event-stream" in response.headers.get("content-type", ""):
+        return StreamingResponse(_relay_and_close(response), status_code=response.status_code, headers=passthrough)
+    try:
+        content = await response.aread()
+    except httpx.HTTPError as error:
+        return _unavailable(error)
+    finally:
+        await response.aclose()
+    # aread() returns the decoded body, so the engine's content-encoding no longer describes it.
+    passthrough.pop("content-encoding", None)
     return Response(content, status_code=response.status_code, headers=passthrough)
