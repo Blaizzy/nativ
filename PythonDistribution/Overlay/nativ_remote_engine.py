@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterator
 
 import httpx
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -69,6 +69,62 @@ def upstream_path(request_path: str) -> str | None:
     return FORWARDED_PATHS.get(bare)
 
 
+def _flat_tool(tool: Any) -> Any:
+    """Responses tools carry name and parameters at the top level; Nativ nests them under `function`."""
+    function = tool.get("function") if isinstance(tool, dict) else None
+    if isinstance(function, dict) and "name" not in tool:
+        return {"type": tool.get("type", "function"), **function}
+    return tool
+
+
+def _message_content(content: Any) -> Any:
+    """Text parts collapse to a string; image parts become Responses input_image parts."""
+    if not isinstance(content, list):
+        return content
+    if all(isinstance(part, dict) and part.get("type") in (None, "text") for part in content):
+        return "".join(part.get("text", "") for part in content)
+    converted = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            image = part.get("image_url")
+            converted.append({"type": "input_image", "image_url": image.get("url") if isinstance(image, dict) else image})
+        else:
+            converted.append(part)
+    return converted
+
+
+def _input_items(item: Any) -> Iterator[Any]:
+    """Turn one of Nativ's chat-message-shaped input items into engine-native Responses items."""
+    if not isinstance(item, dict) or item.get("type") != "message":
+        yield item
+        return
+    role = item.get("role")
+    if role == "tool":
+        text = _message_content(item.get("content"))
+        yield {"type": "function_call_output", "call_id": item.get("tool_call_id"),
+               "output": text if isinstance(text, str) else json.dumps(text)}
+        return
+    calls = item.get("tool_calls") or []
+    if item.get("content") or not calls:
+        yield {"type": "message", "role": role, "content": _message_content(item.get("content"))}
+    for call in calls:
+        function = call.get("function") or {}
+        yield {"type": "function_call", "call_id": call.get("id"), "name": function.get("name"),
+               "arguments": function.get("arguments") or "{}"}
+
+
+def responses_body_for_engine(body: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite Nativ's Responses request, which follows the bundled server's chat-style extensions,
+    into the standard shape: tool results as function_call_output, assistant tool calls as
+    function_call items, and flat tool definitions."""
+    converted = dict(body)
+    if isinstance(converted.get("input"), list):
+        converted["input"] = [engine_item for item in converted["input"] for engine_item in _input_items(item)]
+    if isinstance(converted.get("tools"), list):
+        converted["tools"] = [_flat_tool(tool) for tool in converted["tools"]]
+    return converted
+
+
 def _http_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
@@ -103,6 +159,8 @@ async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str])
             status_code=501,
         )
     body = {**payload, "model": engine.get("model", payload["model"])}
+    if path == "/responses":
+        body = responses_body_for_engine(body)
     headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED_REQUEST_HEADERS}
     if engine.get("api_key"):
         headers["authorization"] = f"Bearer {engine['api_key']}"

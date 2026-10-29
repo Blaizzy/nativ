@@ -136,6 +136,50 @@ class RoutingTests(unittest.TestCase):
         self.assertIsNone(self.module.upstream_path("/v1/responses/compact"))
 
 
+class ResponsesTranslationTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_module()
+
+    def convert(self, **body):
+        return self.module.responses_body_for_engine(body)
+
+    def test_a_tool_message_becomes_a_function_call_output(self):
+        result = self.convert(input=[{"type": "message", "role": "tool", "tool_call_id": "c1", "content": "42"}])
+        self.assertEqual(result["input"], [{"type": "function_call_output", "call_id": "c1", "output": "42"}])
+
+    def test_an_assistant_message_with_tool_calls_becomes_function_call_items(self):
+        call = {"index": 0, "id": "c1", "type": "function", "function": {"name": "read_file", "arguments": '{"p": 1}'}}
+        result = self.convert(input=[{"type": "message", "role": "assistant", "content": None, "tool_calls": [call]}])
+        self.assertEqual(result["input"], [{"type": "function_call", "call_id": "c1", "name": "read_file", "arguments": '{"p": 1}'}])
+
+    def test_assistant_text_alongside_tool_calls_is_kept(self):
+        call = {"id": "c1", "function": {"name": "f"}}
+        result = self.convert(input=[{"type": "message", "role": "assistant", "content": "Checking", "tool_calls": [call]}])
+        self.assertEqual([item["type"] for item in result["input"]], ["message", "function_call"])
+        self.assertEqual(result["input"][1]["arguments"], "{}")
+
+    def test_plain_messages_lose_chat_extensions_but_keep_their_text(self):
+        item = {"type": "message", "role": "assistant", "content": "hi", "reasoning_content": "thought", "name": "x"}
+        self.assertEqual(self.convert(input=[item])["input"], [{"type": "message", "role": "assistant", "content": "hi"}])
+
+    def test_text_parts_collapse_to_a_string_and_image_parts_become_input_images(self):
+        parts = [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}]
+        self.assertEqual(self.module._message_content(parts), "ab")
+        image = [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "data:x"}}]
+        self.assertEqual(self.module._message_content(image)[1], {"type": "input_image", "image_url": "data:x"})
+
+    def test_nested_tool_definitions_are_flattened(self):
+        nested = {"type": "function", "function": {"name": "read_file", "description": "d", "parameters": {"type": "object"}}}
+        flat = {"type": "function", "name": "read_file", "parameters": {"type": "object"}}
+        result = self.convert(tools=[nested, flat])
+        self.assertEqual(result["tools"], [{"type": "function", "name": "read_file", "description": "d",
+                                            "parameters": {"type": "object"}}, flat])
+
+    def test_other_fields_and_non_message_items_pass_through(self):
+        body = {"model": "m", "stream": True, "input": [{"type": "function_call_output", "call_id": "c", "output": "x"}]}
+        self.assertEqual(self.convert(**body), body)
+
+
 class ForwardTests(unittest.TestCase):
     def setUp(self):
         self.module = load_module()
@@ -215,6 +259,15 @@ class ForwardTests(unittest.TestCase):
         StubClient.script = [StubInvalidURL("bad url")]
         self.assertEqual(self.forward().status_code, 503)
         self.assertEqual(len(StubClient.sent), 1)
+
+    def test_only_responses_bodies_are_translated(self):
+        StubClient.script = [UpstreamResponse(), UpstreamResponse()]
+        messages = [{"role": "tool", "tool_call_id": "c1", "content": "x"}]
+        self.forward(payload={"model": "qwen", "messages": messages})
+        self.assertEqual(StubClient.sent[0].json["messages"], messages)
+        self.request.url.path = "/v1/responses"
+        self.forward(payload={"model": "qwen", "input": [{"type": "message", "role": "tool", "tool_call_id": "c1", "content": "x"}]})
+        self.assertEqual(StubClient.sent[1].json["input"][0]["type"], "function_call_output")
 
     def test_compaction_is_a_501_and_never_reaches_the_engine(self):
         self.request.url.path = "/v1/responses/compact"
