@@ -127,6 +127,19 @@ def main() -> None:
     output = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else default_output()
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    if os.environ.get("NATIV_SKIP_PYTHON_RESOURCE_BUILD") == "YES":
+        if not os.access(output / "bin" / "mlx-vlm-server", os.X_OK):
+            raise SystemExit(
+                "NATIV_SKIP_PYTHON_RESOURCE_BUILD requires an existing complete "
+                f"server resource at {output}"
+            )
+        # Reusing Python must not reuse capability metadata from an older app
+        # schema: one missing capability makes Swift reject the entire registry.
+        from build_mlx_vlm_server import install_model_capabilities_manifest
+
+        install_model_capabilities_manifest(output)
+        return
+
     command = [
         sys.executable,
         str(PYTHON_DISTRIBUTION_ROOT / "Scripts" / "build_mlx_vlm_server.py"),

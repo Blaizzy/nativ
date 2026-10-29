@@ -2275,7 +2275,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nif [[ \"${NATIV_SKIP_PYTHON_RESOURCE_BUILD:-NO}\" == \"YES\" ]]; then\n  resource_root=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Resources/mlx-vlm-server\"\n  if [[ ! -x \"${resource_root}/bin/mlx-vlm-server\" ]]; then\n    echo \"error: NATIV_SKIP_PYTHON_RESOURCE_BUILD requires an existing complete server resource at ${resource_root}\" >&2\n    exit 1\n  fi\n  exit 0\nfi\npython3 \"$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py\"\n";
+			shellScript = "set -euo pipefail\npython3 \"$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
