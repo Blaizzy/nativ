@@ -333,6 +333,39 @@ class ForwardTests(unittest.TestCase):
         self.assertEqual(upstream.closed, 1)
         self.assertNotIn("content-length", response.headers)
 
+    def responses_stream(self, chunks):
+        self.request.url = SimpleNamespace(path="/v1/responses")
+        upstream = UpstreamResponse(content_type="text/event-stream", chunks=chunks)
+        StubClient.script = [upstream]
+        return upstream, self.forward()
+
+    def test_responses_timings_are_hoisted_to_the_event_the_app_reads(self):
+        final = b'event: response.completed\ndata: ' + json.dumps(
+            {"type": "response.completed", "response": {"timings": {"prompt_per_second": 207.0}}}).encode() + b"\n\n"
+        upstream, response = self.responses_stream([b"event: a\ndata: {\"x\": 1}\n\n", final])
+        events = b"".join(self.collect(response)).split(b"\n\n")
+        hoisted = json.loads(events[1].split(b"data: ", 1)[1])
+        self.assertEqual(hoisted["timings"], {"prompt_per_second": 207.0})
+        self.assertEqual(hoisted["response"], {"timings": {"prompt_per_second": 207.0}})
+        self.assertEqual(events[0], b'event: a\ndata: {"x": 1}')
+        self.assertEqual(upstream.closed, 1)
+
+    def test_a_responses_event_split_across_chunks_is_reassembled(self):
+        final = b'data: {"response": {"timings": {"predicted_per_second": 90.0}}}\n\n'
+        _, response = self.responses_stream([final[:20], final[20:]])
+        out = b"".join(self.collect(response))
+        self.assertEqual(json.loads(out.split(b"data: ", 1)[1])["timings"], {"predicted_per_second": 90.0})
+
+    def test_responses_events_without_nested_timings_pass_through_unchanged(self):
+        chunks = [b'data: {"delta": "hi"}\n\n', b"data: [DONE]\n\n", b"tail"]
+        _, response = self.responses_stream(chunks)
+        self.assertEqual(b"".join(self.collect(response)), b"".join(chunks))
+
+    def test_timings_already_on_the_event_are_not_overwritten(self):
+        event = b'data: {"timings": {"a": 1}, "response": {"timings": {"a": 2}}}\n\n'
+        _, response = self.responses_stream([event])
+        self.assertEqual(b"".join(self.collect(response)), event)
+
     def test_a_stream_that_breaks_midway_still_closes_the_connection(self):
         upstream = UpstreamResponse(content_type="text/event-stream", chunks=[b"data: 1\n\n", StubTransportError("reset")])
         StubClient.script = [upstream]

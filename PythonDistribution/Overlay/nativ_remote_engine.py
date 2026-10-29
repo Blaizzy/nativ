@@ -37,6 +37,8 @@ CONNECT_TIMEOUT_S = 10
 # An idle pooled connection the engine has since closed fails on first use; one more try opens a new one.
 SEND_ATTEMPTS = 2
 
+SSE_EVENT_END = b"\n\n"
+
 # Message fields that carry the conversation; everything else Nativ adds is presentation data.
 CHAT_MESSAGE_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
@@ -206,6 +208,45 @@ async def _relay_and_close(response: httpx.Response) -> AsyncIterator[bytes]:
         await response.aclose()
 
 
+def _hoist_timings(event: bytes) -> bytes:
+    """Copy a Responses event's `response.timings` to the top level, where Nativ's client reads it.
+
+    The bundled server puts speed figures on every event; Splash nests them in the final `response`,
+    so without this the app's prefill and decode pills fall back to rough estimates.
+    """
+    if b'"timings"' not in event:
+        return event
+    lines = event.split(b"\n")
+    for index, line in enumerate(lines):
+        if not line.startswith(b"data:"):
+            continue
+        try:
+            data = json.loads(line[len(b"data:"):])
+        except ValueError:
+            return event
+        response = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(response, dict) or "timings" not in response or "timings" in data:
+            return event
+        lines[index] = b"data: " + json.dumps({**data, "timings": response["timings"]}).encode()
+        return b"\n".join(lines)
+    return event
+
+
+async def _relay_responses_and_close(response: httpx.Response) -> AsyncIterator[bytes]:
+    """Relay a Responses stream event by event, hoisting timings, and close the upstream when it ends."""
+    pending = b""
+    try:
+        async for chunk in response.aiter_raw():
+            pending += chunk
+            *events, pending = pending.split(SSE_EVENT_END)
+            for event in events:
+                yield _hoist_timings(event) + SSE_EVENT_END
+        if pending:
+            yield pending
+    finally:
+        await response.aclose()
+
+
 async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str]) -> Response:
     """Send the request to the external engine and return its answer, streaming included."""
     path = upstream_path(request.url.path)
@@ -235,7 +276,8 @@ async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str])
         return _unavailable(last_error)
     passthrough = {k: v for k, v in response.headers.items() if k.lower() not in HOP_HEADERS}
     if "text/event-stream" in response.headers.get("content-type", ""):
-        return StreamingResponse(_relay_and_close(response), status_code=response.status_code, headers=passthrough)
+        relay = _relay_responses_and_close if path == "/responses" else _relay_and_close
+        return StreamingResponse(relay(response), status_code=response.status_code, headers=passthrough)
     try:
         content = await response.aread()
     except httpx.HTTPError as error:
