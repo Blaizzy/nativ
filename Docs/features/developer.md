@@ -46,12 +46,18 @@ List the models in `~/Library/Application Support/Nativ/remote-engines.json`:
 ```
 
 Chat Completions and Responses requests for a listed model are forwarded to its engine and streamed
-back, and are recorded in the same analytics as in-process requests. Nativ's per-model request defaults (sampling and thinking settings) are applied before forwarding, so
-the engine receives them in the request body. The server API key, if set, is enforced as for any other
-model. Models not listed run in-process as before. The file is read per request, so edits apply without a restart. `/v1/responses/compact`
-is not forwarded and returns 501 for these models. Model-load settings such as KV-cache bits, prefix
-caching, and draft models belong to the engine and have no effect on a forwarded model. Select a
-different model for in-process preloading so the server does not also load the forwarded one.
+back, and are recorded in the same analytics as in-process requests. Models not listed run in-process
+as before. The file is read per request, so edits apply without a restart.
+
+- Nativ's per-model request defaults (sampling and thinking settings) are applied before forwarding,
+  so the engine receives them in the request body.
+- The server API key, if set, is enforced as for any other model.
+- The app's pre-turn token count (`/v1/responses/input_tokens`) is answered from the engine's own
+  `/apply-template` and `/tokenize` routes, so the engine must offer them.
+- `/v1/responses/compact` is not forwarded and returns 501 for these models.
+- A listed model is never preloaded in-process, even when it is the active model.
+- Model-load settings such as KV-cache bits, prefix caching, and draft models belong to the engine and
+  have no effect on a forwarded model.
 
 ## Hugging Face token
 
