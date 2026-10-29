@@ -1398,6 +1398,7 @@ private struct ChatAccessPicker: View {
     let onSelect: (ChatAccessMode) -> Void
     @State private var isHovered = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     @State private var showsOptions = false
     @State private var showsComparison = false
 
@@ -1410,17 +1411,23 @@ private struct ChatAccessPicker: View {
                 .font(.body)
                 .foregroundStyle(selection == .fullAccess ? ChatAccessMode.fullAccessColor(in: colorScheme) : .primary)
                 .frame(width: 30, height: 30)
-                .background(Color.primary.opacity(isHovered ? 0.07 : 0), in: Circle())
-                .contentShape(Circle())
+                .background(Color.primary.opacity(isEnabled && (isHovered || showsOptions) ? 0.07 : 0), in: Circle())
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .onHover { isHovered = isEnabled && $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered || showsOptions)
+        .onChange(of: isEnabled) { _, enabled in
+            if !enabled {
+                isHovered = false
+                showsOptions = false
+            }
+        }
         .accessibilityLabel("Tool access: \(selection.title)")
         .help("Choose how Nativ asks for approval")
         .background {
-            NativArrowlessPopoverPresenter(isPresented: $showsOptions, title: "Access level",
-                                          anchorTogglesPresentation: true,
-                                          onAnchorHover: { isHovered = $0 }) {
+            NativArrowlessPopoverPresenter(isPresented: $showsOptions, alignment: .leading, title: "Access level",
+                                          anchorTogglesPresentation: true) {
                 ChatAccessOptions(selection: selection) { mode in
                     onSelect(mode)
                     showsOptions = false
@@ -1467,11 +1474,23 @@ private struct ChatAccessOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Access level")
-                .legacyTextStyle(.supportingEmphasized)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
+            HStack {
+                Text("Access level")
+                    .legacyTextStyle(.supportingEmphasized)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(action: onLearnMore) {
+                    Text("Learn more")
+                        .legacyTextStyle(.supportingEmphasized)
+                        .underline()
+                        .foregroundStyle(isLearnMoreHovered ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .onHover { isLearnMoreHovered = $0 }
+                .accessibilityLabel("Learn more about access levels")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
 
             ForEach(ChatAccessMode.allCases) { mode in
                 Button { onSelect(mode) } label: {
@@ -1485,7 +1504,7 @@ private struct ChatAccessOptions: View {
                                 .legacyTextStyle(.rowTitle)
                             Text(mode.accessDescription)
                                 .legacyTextStyle(.supporting)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(mode == .fullAccess ? Color.orange : .secondary)
                         }
                         Spacer(minLength: 12)
                         Image(systemName: "checkmark")
@@ -1494,7 +1513,7 @@ private struct ChatAccessOptions: View {
                             .opacity(selection == mode ? 1 : 0)
                             .accessibilityHidden(true)
                     }
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(mode == .fullAccess ? Color.orange : .primary)
                     .padding(.horizontal, 9)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
@@ -1510,29 +1529,6 @@ private struct ChatAccessOptions: View {
                 .accessibilityAddTraits(selection == mode ? .isSelected : [])
             }
 
-            Divider().padding(.vertical, 6)
-
-            Button(action: onLearnMore) {
-                HStack {
-                    Text("Learn more")
-                        .legacyTextStyle(.supportingEmphasized)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 9)
-                .frame(height: 30)
-                .contentShape(Rectangle())
-                .background {
-                    RoundedRectangle(cornerRadius: 9)
-                        .fill(Color.primary.opacity(isLearnMoreHovered ? 0.07 : 0))
-                }
-            }
-            .buttonStyle(.plain)
-            .onHover { isLearnMoreHovered = $0 }
-            .accessibilityLabel("Learn more about access levels")
         }
         .padding(10)
         .frame(width: 400)
