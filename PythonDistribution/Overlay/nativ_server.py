@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import time
 import uuid
 from contextvars import ContextVar
@@ -1511,6 +1512,7 @@ def install_metrics_overlay() -> None:
 
 
 def main() -> None:
+    sys.argv[1:] = remote_engine.without_remote_preload(sys.argv[1:], remote_engine.load_engines())
     install_metrics_overlay()
     install_metrics_access_log_filter()
     original_argparse = base_cli.argparse

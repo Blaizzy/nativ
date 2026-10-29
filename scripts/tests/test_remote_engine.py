@@ -136,6 +136,26 @@ class RoutingTests(unittest.TestCase):
         self.assertIsNone(self.module.upstream_path("/v1/responses/compact"))
 
 
+class PreloadTests(unittest.TestCase):
+    def setUp(self):
+        self.module = load_module()
+        self.engines = {"qwen": ENGINE}
+
+    def strip(self, *arguments):
+        return self.module.without_remote_preload(list(arguments), self.engines)
+
+    def test_a_mapped_model_is_not_preloaded(self):
+        self.assertEqual(self.strip("--port", "8080", "--model", "qwen", "--host", "x"), ["--port", "8080", "--host", "x"])
+        self.assertEqual(self.strip("--model=qwen", "--port", "8080"), ["--port", "8080"])
+
+    def test_other_models_and_arguments_are_untouched(self):
+        arguments = ["--model", "other", "--stt-model", "qwen", "--port", "8080"]
+        self.assertEqual(self.strip(*arguments), arguments)
+
+    def test_a_trailing_model_flag_is_kept(self):
+        self.assertEqual(self.strip("--port", "8080", "--model"), ["--port", "8080", "--model"])
+
+
 class ResponsesTranslationTests(unittest.TestCase):
     def setUp(self):
         self.module = load_module()

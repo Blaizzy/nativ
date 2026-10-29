@@ -125,6 +125,23 @@ def responses_body_for_engine(body: dict[str, Any]) -> dict[str, Any]:
     return converted
 
 
+def without_remote_preload(arguments: list[str], engines: dict[str, dict[str, str]]) -> list[str]:
+    """Drop `--model <id>` from the launch arguments when that model is served by an external engine,
+    so the server does not also load it in-process."""
+    result: list[str] = []
+    position = 0
+    while position < len(arguments):
+        argument = arguments[position]
+        if argument == "--model" and position + 1 < len(arguments) and arguments[position + 1] in engines:
+            position += 2
+        elif argument.startswith("--model=") and argument.removeprefix("--model=") in engines:
+            position += 1
+        else:
+            result.append(argument)
+            position += 1
+    return result
+
+
 def _http_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
