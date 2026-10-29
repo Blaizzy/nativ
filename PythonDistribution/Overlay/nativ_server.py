@@ -1319,6 +1319,25 @@ def install_runtime_settings_overlay() -> None:
     RuntimeConfig._nativ_live_settings_installed = True
 
 
+async def request_payload(request: Request) -> Any:
+    """The request's JSON body, or an empty object when it has none or is not JSON."""
+    body = await request.body()
+    try:
+        return json.loads(body.decode("utf-8")) if body else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def authorized_or(request: Request) -> JSONResponse | None:
+    """None when the request carries the server API key (or none is set), else the 401 to return.
+    Forwarding happens before the router dependency that normally checks it."""
+    try:
+        base._require_management_api_key(request)
+    except HTTPException as error:
+        return JSONResponse({"detail": error.detail}, status_code=error.status_code)
+    return None
+
+
 def install_metrics_overlay() -> None:
     if getattr(base.app.state, "mlx_platform_metrics_installed", False):
         return
@@ -1327,14 +1346,16 @@ def install_metrics_overlay() -> None:
 
     @base.app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
+        if request.url.path in remote_engine.COUNT_PATHS:
+            count_payload = await request_payload(request)
+            count_engine = remote_engine.engine_for(count_payload, remote_engine.load_engines())
+            if count_engine is not None:
+                return authorized_or(request) or await remote_engine.count_input_tokens(count_payload, count_engine)
         if request.url.path not in TRACKED_PATHS:
             return await call_next(request)
 
+        payload = await request_payload(request)
         body = await request.body()
-        try:
-            payload = json.loads(body.decode("utf-8")) if body else {}
-        except json.JSONDecodeError:
-            payload = {}
 
         if isinstance(payload, dict) and apply_per_model_request_defaults(payload):
             body = json.dumps(payload).encode("utf-8")
@@ -1358,12 +1379,7 @@ def install_metrics_overlay() -> None:
         remote = remote_engine.engine_for(payload, remote_engine.load_engines())
         try:
             if remote is not None:
-                try:
-                    base._require_management_api_key(request)
-                except HTTPException as error:
-                    response = JSONResponse({"detail": error.detail}, status_code=error.status_code)
-                else:
-                    response = await remote_engine.forward(request, payload, remote)
+                response = authorized_or(request) or await remote_engine.forward(request, payload, remote)
             else:
                 response = await call_next(request)
         except asyncio.CancelledError:

@@ -40,12 +40,21 @@ class StubClient:
 
     sent = []
     script = []
+    posted = []
+    post_script = []
 
     def __init__(self, *args, **kwargs):
         pass
 
     def build_request(self, method, url, headers=None, json=None):
         return SimpleNamespace(method=method, url=url, headers=headers, json=json)
+
+    async def post(self, url, json=None, headers=None):
+        StubClient.posted.append(SimpleNamespace(url=url, json=json, headers=headers))
+        step = StubClient.post_script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
 
     async def send(self, request, stream=False):
         StubClient.sent.append(request)
@@ -134,6 +143,72 @@ class RoutingTests(unittest.TestCase):
 
     def test_compaction_is_not_forwarded(self):
         self.assertIsNone(self.module.upstream_path("/v1/responses/compact"))
+
+
+class JSONReply:
+    """The part of an httpx response that count_input_tokens reads."""
+
+    def __init__(self, data, error=None):
+        self._data, self._error = data, error
+
+    def raise_for_status(self):
+        if self._error:
+            raise self._error
+
+    def json(self):
+        return self._data
+
+
+class CountTokensTests(unittest.TestCase):
+    payload = {
+        "model": "qwen", "instructions": "Be brief.",
+        "input": [
+            {"type": "message", "role": "user", "content": "hi", "reasoning_content": "dropped"},
+            {"type": "message", "role": "tool", "tool_call_id": "c1", "content": "42"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+    }
+
+    def setUp(self):
+        self.module = load_module()
+        StubClient.posted, StubClient.post_script = [], []
+
+    def count(self, payload=None):
+        return asyncio.run(self.module.count_input_tokens(payload or self.payload, ENGINE))
+
+    def test_tokens_are_counted_by_the_engines_template_then_tokenizer(self):
+        StubClient.post_script = [JSONReply({"prompt": "<rendered>"}), JSONReply({"tokens": [1, 2, 3, 4]})]
+        response = self.count()
+        self.assertEqual(response.content, {"input_tokens": 4})
+        template, tokenize = StubClient.posted
+        self.assertEqual(template.url, "http://127.0.0.1:8091/apply-template")
+        self.assertEqual(tokenize.url, "http://127.0.0.1:8091/tokenize")
+        self.assertEqual(tokenize.json, {"content": "<rendered>", "add_special": False})
+        self.assertEqual(template.headers, {"authorization": "Bearer secret"})
+
+    def test_instructions_lead_and_only_conversation_fields_are_sent(self):
+        StubClient.post_script = [JSONReply({"prompt": "p"}), JSONReply({"tokens": []})]
+        self.count()
+        sent = StubClient.posted[0].json
+        self.assertEqual(sent["messages"], [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "hi"},
+            {"role": "tool", "tool_call_id": "c1", "content": "42"},
+        ])
+        self.assertEqual(sent["tools"], self.payload["tools"])
+
+    def test_tools_are_left_out_when_the_request_has_none(self):
+        StubClient.post_script = [JSONReply({"prompt": "p"}), JSONReply({"tokens": []})]
+        self.count({"model": "qwen", "input": []})
+        self.assertNotIn("tools", StubClient.posted[0].json)
+
+    def test_an_engine_failure_is_a_503(self):
+        StubClient.post_script = [JSONReply({}, error=StubHTTPError("boom"))]
+        self.assertEqual(self.count().status_code, 503)
+
+    def test_an_unexpected_engine_reply_is_a_503(self):
+        StubClient.post_script = [JSONReply({"unexpected": 1})]
+        self.assertEqual(self.count().status_code, 503)
 
 
 class PreloadTests(unittest.TestCase):

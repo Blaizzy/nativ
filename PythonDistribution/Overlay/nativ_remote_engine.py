@@ -24,6 +24,8 @@ log = logging.getLogger("nativ.remote_engine")
 ENGINES_PATH = os.path.expanduser("~/Library/Application Support/Nativ/remote-engines.json")
 # Paths an external engine answers. Compaction is run by Nativ's own runtime, so it is not forwarded.
 FORWARDED_PATHS = {"/chat/completions": "/chat/completions", "/responses": "/responses"}
+# Nativ counts a conversation's tokens before each turn so it can compact; the engine counts them exactly.
+COUNT_PATHS = frozenset({"/responses/input_tokens", "/v1/responses/input_tokens"})
 # Only these client headers reach the engine, so the app's own credentials and cookies never do.
 FORWARDED_REQUEST_HEADERS = frozenset({"accept", "content-type", "user-agent", "x-request-id"})
 # Hop-by-hop headers describe one connection, not the message, and are not passed back to the client.
@@ -34,6 +36,9 @@ HOP_HEADERS = frozenset({
 CONNECT_TIMEOUT_S = 10
 # An idle pooled connection the engine has since closed fails on first use; one more try opens a new one.
 SEND_ATTEMPTS = 2
+
+# Message fields that carry the conversation; everything else Nativ adds is presentation data.
+CHAT_MESSAGE_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name")
 
 _client: httpx.AsyncClient | None = None
 
@@ -142,6 +147,41 @@ def without_remote_preload(arguments: list[str], engines: dict[str, dict[str, st
     return result
 
 
+def _engine_headers(engine: dict[str, str]) -> dict[str, str]:
+    return {"authorization": f"Bearer {engine['api_key']}"} if engine.get("api_key") else {}
+
+
+def _count_messages(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """The conversation of a Responses request as Chat-style messages, instructions first."""
+    messages: list[dict[str, Any]] = []
+    if payload.get("instructions"):
+        messages.append({"role": "system", "content": payload["instructions"]})
+    for item in payload.get("input") or []:
+        if isinstance(item, dict):
+            messages.append({key: item[key] for key in CHAT_MESSAGE_KEYS if key in item})
+    return messages
+
+
+async def count_input_tokens(payload: dict[str, Any], engine: dict[str, str]) -> Response:
+    """Answer a Responses token count from the engine's own template and tokenizer, without inference."""
+    root = engine["base_url"].rstrip("/").removesuffix("/v1")
+    template: dict[str, Any] = {"messages": _count_messages(payload)}
+    if payload.get("tools"):
+        template["tools"] = payload["tools"]
+    client = _http_client()
+    try:
+        rendered = await client.post(root + "/apply-template", json=template, headers=_engine_headers(engine))
+        rendered.raise_for_status()
+        counted = await client.post(
+            root + "/tokenize", json={"content": rendered.json()["prompt"], "add_special": False},
+            headers=_engine_headers(engine),
+        )
+        counted.raise_for_status()
+        return JSONResponse({"input_tokens": len(counted.json()["tokens"])})
+    except (httpx.HTTPError, KeyError, ValueError) as error:
+        return _unavailable(error)
+
+
 def _http_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
@@ -179,8 +219,7 @@ async def forward(request: Any, payload: dict[str, Any], engine: dict[str, str])
     if path == "/responses":
         body = responses_body_for_engine(body)
     headers = {k: v for k, v in request.headers.items() if k.lower() in FORWARDED_REQUEST_HEADERS}
-    if engine.get("api_key"):
-        headers["authorization"] = f"Bearer {engine['api_key']}"
+    headers.update(_engine_headers(engine))
     client = _http_client()
     url = engine["base_url"].rstrip("/") + path
     last_error: Exception | None = None
