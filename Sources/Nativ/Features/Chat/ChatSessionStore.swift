@@ -433,14 +433,31 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
 
 struct ChatResponseMetrics: Equatable, Codable {
     let totalTokens: Int?
+    let promptTokens: Int?
+    let cachedTokens: Int?
     let generatedTokens: Int?
     let decodeTokensPerSecond: Double?
     let prefillTokensPerSecond: Double?
     let peakMemoryGB: Double?
     let specAcceptanceRate: Double?
 
+    var uncachedPromptTokens: Int? {
+        guard let promptTokens, let cachedTokens,
+              promptTokens >= 0, cachedTokens >= 0, cachedTokens <= promptTokens else {
+            return nil
+        }
+        return promptTokens - cachedTokens
+    }
+
+    var cacheReuseFraction: Double? {
+        guard let promptTokens, promptTokens > 0, let cachedTokens,
+              uncachedPromptTokens != nil else { return nil }
+        return Double(cachedTokens) / Double(promptTokens)
+    }
+
     var hasVisibleValues: Bool {
         totalTokens != nil
+            || cachedTokens != nil
             || generatedTokens != nil
             || decodeTokensPerSecond != nil
             || prefillTokensPerSecond != nil
@@ -454,9 +471,13 @@ struct ChatResponseMetrics: Equatable, Codable {
         decodeTokensPerSecond: Double? = nil,
         prefillTokensPerSecond: Double? = nil,
         peakMemoryGB: Double? = nil,
-        specAcceptanceRate: Double? = nil
+        specAcceptanceRate: Double? = nil,
+        cachedTokens: Int? = nil,
+        promptTokens: Int? = nil
     ) {
         self.totalTokens = totalTokens
+        self.promptTokens = promptTokens
+        self.cachedTokens = cachedTokens
         self.generatedTokens = generatedTokens
         self.decodeTokensPerSecond = decodeTokensPerSecond
         self.prefillTokensPerSecond = prefillTokensPerSecond
@@ -471,7 +492,9 @@ struct ChatResponseMetrics: Equatable, Codable {
             decodeTokensPerSecond: completion.resolvedDecodeTokensPerSecond,
             prefillTokensPerSecond: completion.usage?.promptTokensPerSecond,
             peakMemoryGB: completion.usage?.peakMemoryGB,
-            specAcceptanceRate: completion.usage?.specAcceptanceRate
+            specAcceptanceRate: completion.usage?.specAcceptanceRate,
+            cachedTokens: completion.usage?.cachedTokens,
+            promptTokens: completion.usage?.promptTokens
         )
     }
 }

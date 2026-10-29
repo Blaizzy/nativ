@@ -11,7 +11,7 @@ final class ChatWorkSplitTests: XCTestCase {
                     let controls = ChatComposerControlsSizing(workspaceWidth: 116, accessWidth: accessWidth,
                                                               modelWidth: modelWidth, showsContext: showsContext)
                     let previousMinimum = 30 + 116 + 12 + modelWidth + 32 + 22
-                        + (showsContext ? 17 + 8 * 5 : 8 * 4)
+                        + (showsContext ? 30 + 8 * 5 : 8 * 4)
                     XCTAssertEqual(controls.minimumWidth, previousMinimum + accessWidth + 8)
                     let minimum = controls.minimumWidth + 64
                     let sizing = ChatWorkSplitSizing(minimumChatWidth: minimum)

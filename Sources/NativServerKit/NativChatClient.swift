@@ -246,6 +246,18 @@ public struct MLXChatImageURL: Codable, Equatable, Sendable {
 
 public struct MLXChatUsage: Decodable, Equatable, Sendable {
     public let promptTokens: Int?
+    private let promptTokensDetails: PromptTokensDetails?
+
+    public var cachedTokens: Int? { promptTokensDetails?.cachedTokens }
+
+    private struct PromptTokensDetails: Decodable, Equatable, Sendable {
+        let cachedTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case cachedTokens = "cached_tokens"
+        }
+    }
+
     public let completionTokens: Int?
     public let totalTokens: Int?
     public let promptTokensPerSecond: Double?
@@ -262,9 +274,11 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
         decodeTokensPerSecond: Double?,
         peakMemoryGB: Double?,
         specDraftKind: String? = nil,
-        specAcceptanceRate: Double? = nil
+        specAcceptanceRate: Double? = nil,
+        cachedTokens: Int? = nil
     ) {
         self.promptTokens = promptTokens
+        self.promptTokensDetails = cachedTokens.map { PromptTokensDetails(cachedTokens: $0) }
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
         self.promptTokensPerSecond = promptTokensPerSecond
@@ -307,6 +321,7 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
+        case promptTokensDetails = "prompt_tokens_details"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
         case promptTokensPerSecond = "prompt_tps"
@@ -326,7 +341,8 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
                 ?? decodeTokensPerSecond,
             peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB,
             specDraftKind: timings?.specDraftKind ?? specDraftKind,
-            specAcceptanceRate: timings?.resolvedSpecAcceptanceRate ?? specAcceptanceRate
+            specAcceptanceRate: timings?.resolvedSpecAcceptanceRate ?? specAcceptanceRate,
+            cachedTokens: cachedTokens
         )
     }
 }

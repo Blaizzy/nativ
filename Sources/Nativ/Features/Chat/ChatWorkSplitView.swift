@@ -37,7 +37,7 @@ struct ChatComposerControlsSizing {
         // Add, workspace, access, spacer, optional context ring, model, Send,
         // plus the row's spacing and horizontal padding.
         30 + workspaceWidth + accessWidth + 12 + modelWidth + 32 + 22
-            + (showsContext ? 17 + 8 * 6 : 8 * 5)
+            + (showsContext ? 30 + 8 * 6 : 8 * 5)
     }
 }
 
