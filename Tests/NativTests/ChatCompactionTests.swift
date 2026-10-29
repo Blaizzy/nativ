@@ -2,6 +2,82 @@ import XCTest
 @testable import NativServerKit
 
 final class ChatCompactionTests: XCTestCase {
+    func testCachedTokenUsageSurvivesCompletionAndPersistence() throws {
+        for cachedTokens: Int? in [768, 0, nil] {
+            var payload: [String: Any] = [
+                "prompt_tokens": 1000, "completion_tokens": 20, "total_tokens": 1020,
+            ]
+            if let cachedTokens {
+                payload["prompt_tokens_details"] = ["cached_tokens": cachedTokens]
+            }
+            let usage = try JSONDecoder().decode(
+                MLXChatUsage.self, from: JSONSerialization.data(withJSONObject: payload)
+            )
+            XCTAssertEqual(usage.cachedTokens, cachedTokens)
+            let completion = MLXChatCompletion(
+                model: "test-model", content: "Hello", reasoningContent: nil,
+                toolCalls: [], finishReason: "stop", usage: usage, requestElapsedSeconds: 1
+            )
+            let metrics = ChatResponseMetrics(completion: completion)
+            let restored = try JSONDecoder().decode(
+                ChatResponseMetrics.self, from: JSONEncoder().encode(metrics)
+            )
+            XCTAssertEqual(restored.cachedTokens, cachedTokens)
+            XCTAssertEqual(restored.promptTokens, 1000)
+            XCTAssertEqual(restored.totalTokens, 1020)
+        }
+        let legacy = try JSONDecoder().decode(
+            ChatResponseMetrics.self, from: Data(#"{"totalTokens":1020}"#.utf8)
+        )
+        XCTAssertNil(legacy.cachedTokens)
+        XCTAssertNil(legacy.promptTokens)
+        XCTAssertNil(legacy.cacheReuseFraction)
+    }
+
+    func testCacheReuseUsesPromptTokensAndHandlesUnavailableCounts() {
+        let cases: [(prompt: Int?, cached: Int?, fresh: Int?, fraction: Double?)] = [
+            (1000, 768, 232, 0.768),
+            (1000, 0, 1000, 0),
+            (1000, 1000, 0, 1),
+            (0, 0, 0, nil),
+            (nil, 768, nil, nil),
+            (1000, nil, nil, nil),
+            (1000, 1001, nil, nil),
+            (1000, -1, nil, nil),
+        ]
+        for value in cases {
+            let metrics = ChatResponseMetrics(
+                totalTokens: 1200, generatedTokens: 200,
+                cachedTokens: value.cached, promptTokens: value.prompt
+            )
+            XCTAssertEqual(metrics.uncachedPromptTokens, value.fresh)
+            XCTAssertEqual(metrics.cacheReuseFraction, value.fraction)
+        }
+    }
+
+    func testResponsesStreamPreservesCachedTokensIncludingZeroAndMissingUsage() throws {
+        for cachedTokens: Int? in [768, 0, nil] {
+            var usage: [String: Any] = ["input_tokens": 1000, "output_tokens": 20]
+            if let cachedTokens {
+                usage["input_tokens_details"] = ["cached_tokens": cachedTokens]
+            }
+            let event: [String: Any] = [
+                "type": "response.completed",
+                "response": [
+                    "status": "completed",
+                    "output": [["type": "message", "content": [["type": "output_text", "text": "Hello"]]]],
+                    "usage": usage,
+                ],
+            ]
+            var stream = MLXResponseStream()
+            _ = try stream.consume(String(decoding: JSONSerialization.data(withJSONObject: event), as: UTF8.self))
+            let result = try stream.result(elapsed: 1)
+            XCTAssertEqual(result.completion.usage?.cachedTokens, cachedTokens)
+            XCTAssertEqual(ChatResponseMetrics(completion: result.completion).cachedTokens, cachedTokens)
+            XCTAssertEqual(ChatResponseMetrics(completion: result.completion).promptTokens, 1000)
+        }
+    }
+
     func testRecoveryNotesTravelSeparatelyOnBothRoutes() throws {
         var chat = request([.init(role: "user", content: "Research")])
         chat.toolResultContext = .init(entries: [.init(toolCallID: "page-1", text: "Exact source excerpt")], maxBytes: 4096)

@@ -5,6 +5,39 @@ import XCTest
 
 @MainActor
 final class ChatViewModelTests: XCTestCase {
+    func testCachedTokensFollowTheSelectedChatInEachWindow() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ChatSessionStore(chatDirectory: directory)
+        func session(cachedTokens: Int?) -> ChatSession {
+            ChatSession(id: UUID(), title: "Cache test", createdAt: .now, updatedAt: .now, messages: [
+                ChatTranscriptMessage(role: .user, content: "Hello"),
+                ChatTranscriptMessage(role: .assistant, content: "Hello", responseMetrics: .init(cachedTokens: 99)),
+                // Tool-only responses also carry cache usage, even when hidden in the transcript.
+                ChatTranscriptMessage(
+                    role: .assistant, content: "", responseMetrics: .init(cachedTokens: cachedTokens),
+                    toolCalls: [.init(id: "read-1", function: .init(name: "read", arguments: "{}"))]
+                ),
+            ])
+        }
+        let first = session(cachedTokens: 768)
+        let second = session(cachedTokens: 0)
+        let legacy = session(cachedTokens: nil)
+        for value in [first, second, legacy] { XCTAssertTrue(store.saveSession(value)) }
+        let firstWindow = ChatViewModel(sessionDirectory: directory)
+        let secondWindow = ChatViewModel(sessionDirectory: directory)
+        firstWindow.selectSession(first.id)
+        secondWindow.selectSession(second.id)
+        XCTAssertEqual(firstWindow.currentSessionLatestResponseMetrics?.cachedTokens, 768)
+        XCTAssertEqual(secondWindow.currentSessionLatestResponseMetrics?.cachedTokens, 0)
+
+        firstWindow.selectSession(legacy.id)
+        XCTAssertNil(firstWindow.currentSessionLatestResponseMetrics?.cachedTokens)
+        XCTAssertEqual(secondWindow.currentSessionLatestResponseMetrics?.cachedTokens, 0)
+        firstWindow.createSession()
+        XCTAssertNil(firstWindow.currentSessionLatestResponseMetrics)
+    }
+
     func testDraftChangesNotifyComposerReadersWithoutPublishingTranscriptChanges() {
         let subject = ChatViewModel()
         var transcriptNotifications = 0

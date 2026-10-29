@@ -5,6 +5,11 @@ import SwiftUI
 private struct ChatContextWindowUsage: Equatable {
     let usedTokens: Int
     let capacityTokens: Int
+    let apcEnabled: Bool
+    let promptTokens: Int?
+    let cachedTokens: Int?
+    let uncachedPromptTokens: Int?
+    let cacheReuseFraction: Double?
 
     var usedFraction: Double {
         guard capacityTokens > 0 else { return 0 }
@@ -55,15 +60,44 @@ private enum ChatContextWindowFormatting {
 private struct ChatContextWindowRing: View, Equatable {
     let usage: ChatContextWindowUsage
     @State private var showsDetails = false
+    @State private var isHovered = false
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.usage == rhs.usage
     }
 
     var body: some View {
+        Button {
+            showsDetails.toggle()
+        } label: {
+            ring
+                .frame(width: 30, height: 30)
+                .background(Color.primary.opacity(isHovered || showsDetails ? 0.10 : 0), in: Circle())
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered || showsDetails)
+        .help("View context capacity and prompt cache reuse")
+        .background {
+            NativArrowlessPopoverPresenter(
+                isPresented: $showsDetails, gap: 6, alignment: .leading,
+                cornerRadius: 12, title: "Context window",
+                anchorTogglesPresentation: true
+            ) {
+                ChatContextWindowDetails(usage: usage)
+            }
+        }
+        .accessibilityLabel("Model context window")
+        .accessibilityValue(Text(verbatim: accessibilityValue))
+        .accessibilityHint("Show context and cache details")
+        .accessibilityIdentifier("chatContextWindowButton")
+    }
+
+    private var ring: some View {
         ZStack {
             Circle()
-                .stroke(.quaternary, lineWidth: 2)
+                .stroke(Color.primary.opacity(isHovered || showsDetails ? 0.45 : 0.28), lineWidth: 2)
 
             Circle()
                 .trim(from: 0, to: usage.usedFraction)
@@ -74,45 +108,23 @@ private struct ChatContextWindowRing: View, Equatable {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 17, height: 17)
-        .contentShape(.circle)
-        .onHover { showsDetails = $0 }
-        .background {
-            NativArrowlessPopoverPresenter(isPresented: $showsDetails, gap: 6, isInteractive: false) {
-                VStack(alignment: .center, spacing: 4) {
-                    Text(verbatim: "Context window:")
-                        .foregroundStyle(.secondary)
-                    Text(verbatim: "\(remainingPercentageText) remaining")
-                    Text(verbatim: "\(tokenUsageText) tokens used")
-                }
-                .monospacedDigit()
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Model context window")
-        .accessibilityValue(Text(verbatim: accessibilityValue))
-    }
-
-    private var remainingPercentageText: String {
-        ChatContextWindowFormatting.percentage(1 - usage.usedFraction)
-    }
-
-    private var tokenUsageText: String {
-        "\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens)) / "
-            + ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)
+        .accessibilityHidden(true)
     }
 
     private var accessibilityValue: String {
-        "\(usage.remainingPercentage) percent remaining, "
+        let context = "\(usage.remainingPercentage) percent remaining, "
             + "\(ChatContextWindowFormatting.tokenCount(usage.usedTokens)) of "
             + "\(ChatContextWindowFormatting.tokenCount(usage.capacityTokens)) tokens used"
+        return usage.apcEnabled
+            ? context + ", cached tokens for the last response: "
+                + (usage.cachedTokens.map(ChatContextWindowFormatting.tokenCount) ?? "Not reported")
+            : context
     }
 
     private var ringColor: Color {
         switch usage.usedFraction {
         case ..<0.75:
-            .secondary
+            .primary.opacity(0.9)
         case ..<0.9:
             .orange
         default:
@@ -120,6 +132,88 @@ private struct ChatContextWindowRing: View, Equatable {
         }
     }
 
+}
+
+private struct ChatContextWindowDetails: View {
+    let usage: ChatContextWindowUsage
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeader("Context capacity", detail: "\(ChatContextWindowFormatting.percentage(1 - usage.usedFraction)) available")
+                HStack(alignment: .firstTextBaseline) {
+                    percentageLabel(ChatContextWindowFormatting.percentage(usage.usedFraction), label: "used")
+                    Spacer(minLength: 8)
+                    Text("\(ChatContextWindowFormatting.compactTokenCount(usage.usedTokens)) / \(ChatContextWindowFormatting.compactTokenCount(usage.capacityTokens)) tokens")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                usageBar(usage.usedFraction, color: .secondary)
+            }
+            if usage.apcEnabled {
+                Divider()
+                VStack(alignment: .leading, spacing: 10) {
+                    sectionHeader("Last prompt cache", detail: "APC on")
+                    if let fraction = usage.cacheReuseFraction {
+                        percentageLabel(fraction.formatted(.percent.precision(.fractionLength(0...1))), label: "reused")
+                        usageBar(fraction, color: .green.opacity(0.55))
+                    } else {
+                        Text("Reuse rate not reported")
+                            .foregroundStyle(.secondary)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let cachedTokens = usage.cachedTokens {
+                            if let processedTokens = usage.uncachedPromptTokens {
+                                Text("\(tokenCount(cachedTokens)) reused · \(tokenCount(processedTokens)) processed")
+                            } else {
+                                Text("\(tokenCount(cachedTokens)) reused · processed count unavailable")
+                            }
+                        }
+                        if let promptTokens = usage.promptTokens {
+                            Text("\(tokenCount(promptTokens)) prompt tokens in total")
+                        }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.caption)
+        .monospacedDigit()
+        .frame(width: 242)
+        .padding(16)
+    }
+
+    private func sectionHeader(_ title: String, detail: String) -> some View {
+        HStack {
+            Text(title).fontWeight(.medium)
+            Spacer()
+            Text(detail).font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+
+    private func percentageLabel(_ value: String, label: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(value).font(.system(size: 21, weight: .medium))
+            Text(label)
+        }
+    }
+
+    private func usageBar(_ fraction: Double, color: Color) -> some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.secondary.opacity(0.12))
+                Capsule().fill(color)
+                    .frame(width: geometry.size.width * fraction)
+            }
+        }
+        .frame(height: 5)
+        .accessibilityHidden(true)
+    }
+
+    private func tokenCount(_ count: Int) -> String {
+        ChatContextWindowFormatting.tokenCount(count)
+    }
 }
 
 private struct ChatAttachmentThumbnail: View {
@@ -634,7 +728,12 @@ struct ChatComposer<ContextHeader: View>: View {
 
         return ChatContextWindowUsage(
             usedTokens: usedTokens,
-            capacityTokens: capacity
+            capacityTokens: capacity,
+            apcEnabled: model.metrics?.server.apc.enabled ?? model.settings.prefixCachingEnabled,
+            promptTokens: viewModel.currentSessionLatestResponseMetrics?.promptTokens,
+            cachedTokens: viewModel.currentSessionLatestResponseMetrics?.cachedTokens,
+            uncachedPromptTokens: viewModel.currentSessionLatestResponseMetrics?.uncachedPromptTokens,
+            cacheReuseFraction: viewModel.currentSessionLatestResponseMetrics?.cacheReuseFraction
         )
     }
 

@@ -266,7 +266,8 @@ struct MLXResponseStream {
                 totalTokens: $0["total_tokens"]?.intValue,
                 promptTokensPerSecond: prefillRate,
                 decodeTokensPerSecond: decodeRate,
-                peakMemoryGB: peakMemoryGB
+                peakMemoryGB: peakMemoryGB,
+                cachedTokens: $0["input_tokens_details"]?["cached_tokens"]?.intValue
             )
         }
         return MLXResponseCompletion(

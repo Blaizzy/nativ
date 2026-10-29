@@ -407,6 +407,12 @@ final class ChatViewModel: ObservableObject {
         activeRequestSessionID != nil || !requestQueue.isEmpty
     }
 
+    var currentSessionLatestResponseMetrics: ChatResponseMetrics? {
+        messages.last {
+            $0.role == .assistant && !$0.isStreaming
+        }?.responseMetrics
+    }
+
     var isCurrentSessionActiveInAnotherWindow: Bool {
         guard let currentSessionID else {
             return false
@@ -3884,7 +3890,9 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.decodeTokensPerSecond,
                     prefillTokensPerSecond: message.responseMetrics?.prefillTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
-                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
+                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate,
+                    cachedTokens: message.responseMetrics?.cachedTokens,
+                    promptTokens: message.responseMetrics?.promptTokens
                 )
             }
         }
