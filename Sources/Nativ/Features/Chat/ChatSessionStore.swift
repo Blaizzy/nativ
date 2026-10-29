@@ -210,6 +210,41 @@ struct ChatPastedText: Identifiable, Equatable, Codable {
     }
 }
 
+struct ChatResponseResumption: Equatable {
+    let userMessageID: UUID
+    let responseMessageID: UUID
+
+    static func streamingMessage(from response: ChatTranscriptMessage, settings: NativSettings) -> ChatTranscriptMessage {
+        var message = response
+        if message.role == .error || message.content == "Response canceled." { message.content = "" }
+        message.role = .assistant
+        message.isStreaming = true
+        message.isInterrupted = false
+        message.isCompacting = false
+        message.isThinkingEnabled = settings.thinkingEnabled
+        message.modelID = settings.languageModelID
+        message.streamingToolCalls = []
+        message.responseMetrics = nil
+        return message
+    }
+
+    static func pending(in messages: [ChatTranscriptMessage]) -> Self? {
+        guard let response = messages.last(where: { $0.role != .tool }),
+              response.isInterrupted, !response.isStreaming,
+              let user = messages.last(where: { $0.role == .user }) else { return nil }
+        return Self(userMessageID: user.id, responseMessageID: response.id)
+    }
+
+    /// Tool cancellation can finish after Stop is pressed. Resolve the insertion
+    /// point when generation starts so all of those receipts precede the response.
+    static func insertionAnchor(after responseID: UUID, in messages: [ChatTranscriptMessage]) -> UUID? {
+        guard let index = messages.firstIndex(where: { $0.id == responseID && $0.isInterrupted }) else {
+            return nil
+        }
+        return messages[(index + 1)...].prefix(while: { $0.role == .tool }).last?.id ?? responseID
+    }
+}
+
 struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     enum Role: String, Equatable, Codable {
         case user
@@ -236,6 +271,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
     var modelID: String?
     var createdAt: Date
     var isStreaming: Bool
+    var isInterrupted = false
+    var continuation: MLXGenerationContinuation?
     var isThinkingEnabled: Bool
     var thinkingDuration: TimeInterval?
     var imageAttachments: [ChatImageAttachment]
@@ -297,6 +334,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         case modelID
         case createdAt
         case isStreaming
+        case isInterrupted
+        case continuation
         case isThinkingEnabled
         case thinkingDuration
         case imageAttachments
@@ -322,6 +361,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         isStreaming = false
+        isInterrupted = try container.decodeIfPresent(Bool.self, forKey: .isInterrupted) ?? false
+        continuation = try container.decodeIfPresent(MLXGenerationContinuation.self, forKey: .continuation)
         isThinkingEnabled =
             try container.decodeIfPresent(Bool.self, forKey: .isThinkingEnabled) ?? false
         thinkingDuration = try container.decodeIfPresent(
@@ -362,6 +403,8 @@ struct ChatTranscriptMessage: Identifiable, Equatable, Codable {
         try container.encodeIfPresent(modelID, forKey: .modelID)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(false, forKey: .isStreaming)
+        if isInterrupted { try container.encode(true, forKey: .isInterrupted) }
+        try container.encodeIfPresent(continuation, forKey: .continuation)
         try container.encode(isThinkingEnabled, forKey: .isThinkingEnabled)
         try container.encodeIfPresent(thinkingDuration, forKey: .thinkingDuration)
         try container.encode(imageAttachments, forKey: .imageAttachments)

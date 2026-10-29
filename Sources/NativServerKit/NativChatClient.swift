@@ -347,25 +347,37 @@ public struct MLXChatCompletion: Equatable, Sendable {
     }
 }
 
+/// Opaque server checkpoint paired with the exact text delivered in a stream event.
+public struct MLXGenerationContinuation: Codable, Equatable, Sendable {
+    public let id: String
+    public let cursor: Int
+    public let content: Int
+    public let reasoning: Int
+    public let responses: Bool
+}
+
 public struct MLXChatStreamDelta: Equatable, Sendable {
     public let content: String?
     public let reasoningContent: String?
     public let toolCalls: [MLXChatToolCall]?
     public let decodeTokensPerSecond: Double?
     public let generatedTokens: Int?
+    public var continuation: MLXGenerationContinuation?
 
     public init(
         content: String? = nil,
         reasoningContent: String? = nil,
         toolCalls: [MLXChatToolCall]? = nil,
         decodeTokensPerSecond: Double? = nil,
-        generatedTokens: Int? = nil
+        generatedTokens: Int? = nil,
+        continuation: MLXGenerationContinuation? = nil
     ) {
         self.content = content
         self.reasoningContent = reasoningContent
         self.toolCalls = toolCalls
         self.decodeTokensPerSecond = decodeTokensPerSecond
         self.generatedTokens = generatedTokens
+        self.continuation = continuation
     }
 }
 
@@ -484,6 +496,10 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var toolResultContext: MLXToolResultContext? = nil
     /// One-request closing guidance, placed after environment data without changing the saved prefix.
     public var completionInstruction: String? = nil
+    public var continuation: MLXGenerationContinuation? = nil
+    /// For older interrupted transcripts that predate raw-generation checkpoints.
+    public var continueFinalMessage = false
+    public var resumable = false
 
     public var maxTokens: Int
     public var temperature: Double
@@ -554,6 +570,9 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case model
         case messages
+        case continuation
+        case continueFinalMessage = "continue_final_message"
+        case resumable
         case requestContext = "transient_context"
         case toolResultContext = "tool_result_context"
         case maxTokens = "max_tokens"
@@ -577,6 +596,9 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
         try container.encode(messages, forKey: .messages)
+        if resumable { try container.encode(true, forKey: .resumable) }
+        if continueFinalMessage { try container.encode(true, forKey: .continueFinalMessage) }
+        try container.encodeIfPresent(continuation, forKey: .continuation)
         try container.encodeIfPresent(requestContext, forKey: .requestContext)
         try container.encodeIfPresent(toolResultContext, forKey: .toolResultContext)
         try container.encode(maxTokens, forKey: .maxTokens)
@@ -752,6 +774,10 @@ public final class NativChatClient: @unchecked Sendable {
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw NativChatError.httpStatus(httpResponse.statusCode, await readErrorBody(from: bytes))
         }
+        if (request.continuation != nil || request.continueFinalMessage),
+           httpResponse.value(forHTTPHeaderField: "X-MLX-Continuation") != "1" {
+            throw NativChatError.serverError("This server does not support continuing an interrupted response. Update the server and retry.")
+        }
 
         var content = ""
         var reasoningContent = ""
@@ -835,7 +861,7 @@ public final class NativChatClient: @unchecked Sendable {
                 if contentDelta?.isEmpty == false
                     || reasoningDelta?.isEmpty == false
                     || toolCallDeltas?.isEmpty == false
-                    || liveDecodeTokensPerSecond != nil {
+                    || liveDecodeTokensPerSecond != nil || chunk.continuation != nil {
                     await onEvent(
                         MLXChatStreamDelta(
                             content: contentDelta,
@@ -843,22 +869,25 @@ public final class NativChatClient: @unchecked Sendable {
                             toolCalls: toolCallDeltas,
                             decodeTokensPerSecond: liveDecodeTokensPerSecond,
                             generatedTokens: chunk.usage?.completionTokens
-                                ?? streamedGeneratedTokens
+                                ?? streamedGeneratedTokens,
+                            continuation: chunk.continuation
                         )
                     )
                 }
-            } else if chunk.usage?.completionTokens != nil || decodeTokensPerSecond != nil {
+            } else if chunk.usage?.completionTokens != nil || decodeTokensPerSecond != nil || chunk.continuation != nil {
                 await onEvent(
                     MLXChatStreamDelta(
                         decodeTokensPerSecond: decodeTokensPerSecond,
                         generatedTokens: chunk.usage?.completionTokens
-                            ?? streamedGeneratedTokens
+                            ?? streamedGeneratedTokens,
+                        continuation: chunk.continuation
                     )
                 )
             }
         }
 
-        let resolvedContent = try validatedAssistantContent(
+        let resolvedContent = request.continuation != nil && content.isEmpty && reasoningContent.isEmpty
+            && toolCallAccumulator.toolCalls.isEmpty ? (content: "", reasoningContent: nil) : try validatedAssistantContent(
             content: content,
             reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent,
             toolCalls: toolCallAccumulator.toolCalls
@@ -1057,6 +1086,12 @@ private struct ChatStreamChunk: Decodable {
     let choices: [Choice]
     let usage: MLXChatUsage?
     let timings: MLXChatTimings?
+    let continuation: MLXGenerationContinuation?
+
+    enum CodingKeys: String, CodingKey {
+        case model, choices, usage, timings
+        case continuation
+    }
 
     struct Choice: Decodable {
         let finishReason: String?
