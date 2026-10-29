@@ -15,16 +15,73 @@ enum MeetingDiarizer {
         let pcmURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".f32")
         defer { try? FileManager.default.removeItem(at: pcmURL) }
         try await MeetingAudioBuffer.write(recordingURL, to: pcmURL)
-        let response = try await client.transcribeDiarized(
-            pcmURL: pcmURL, model: model, diarizationModel: defaultModelID,
-            onDiarization: { await diarizationFinished() }, onSegment: { await segmentFinished($0.end) }
-        )
-        return try Transcription(response)
+        do {
+            let response = try await client.transcribeDiarized(
+                pcmURL: pcmURL, model: model, diarizationModel: defaultModelID,
+                onDiarization: { await diarizationFinished() }, onSegment: { await segmentFinished($0.end) }
+            )
+            return try Transcription(response)
+        } catch NativAudioAnalysisError.wordTimestampsUnavailable(let detected) {
+            return try await transcribeSpans(pcmURL, detected: detected, client: client,
+                model: model, segmentFinished: segmentFinished)
+        }
+    }
+
+    /// Reuse completed diarization when ASR returns text without aligned words.
+    /// Preserve context across brief pauses and retain every contributing speaker.
+    @MainActor
+    private static func transcribeSpans(
+        _ pcmURL: URL, detected: NativAudioDiarization, client: NativAudioClient, model: String,
+        segmentFinished: @escaping @MainActor @Sendable (Double) -> Void
+    ) async throws -> Transcription {
+        try Task.checkCancellation()
+        guard detected.model == defaultModelID else { throw MeetingDiarizationError.invalidOutput }
+        var diarization = AudioDiarization(modelID: detected.model, revision: detected.revision,
+            segments: detected.segments.map { .init(start: $0.start, end: $0.end, speaker: $0.speaker) })
+        let input = try FileHandle(forReadingFrom: pcmURL)
+        defer { try? input.close() }
+        let byteCount = try input.seekToEnd()
+        let duration = Double(byteCount / 4) / 16000
+        try diarization.validate()
+        guard byteCount.isMultiple(of: 4), diarization.segments.allSatisfy({ $0.end <= duration }) else {
+            throw MeetingDiarizationError.invalidOutput
+        }
+        let chunks = try diarization.transcriptionWindows()
+        var turns: [AudioDiarization.TranscriptSegment] = []
+        for chunk in chunks {
+            try Task.checkCancellation()
+            let start = UInt64((chunk.start * 16000).rounded())
+            let end = UInt64((chunk.end * 16000).rounded())
+            try input.seek(toOffset: start * 4)
+            let count = Int((end - start) * 4)
+            guard let pcm = try input.read(upToCount: count), pcm.count == count else {
+                throw MeetingDiarizationError.invalidOutput
+            }
+            do {
+                let response = try await client.transcribe(audioData: MeetingAudioBuffer.wavData(pcm),
+                    fileName: "speaker-span.wav", model: model)
+                turns.append(.init(start: chunk.start, end: chunk.end, speakers: chunk.speakers,
+                    text: response.text.trimmingCharacters(in: .whitespacesAndNewlines)))
+            } catch NativAudioTranscriptionError.emptyTranscript {
+                // A detected speech span can contain no intelligible words.
+            }
+            try Task.checkCancellation()
+            segmentFinished(chunk.end)
+        }
+        try Task.checkCancellation()
+        diarization.transcriptSegments = turns
+        diarization.speakerTranscript = diarization.formattedTranscript
+        return Transcription(text: turns.map(\.text).joined(separator: " "), diarization: diarization)
     }
 
     struct Transcription {
         let text: String
         let diarization: AudioDiarization
+
+        init(text: String, diarization: AudioDiarization) {
+            self.text = text
+            self.diarization = diarization
+        }
 
         init(_ response: NativDiarizedTranscription) throws {
             let detected = response.diarization
@@ -54,6 +111,25 @@ enum MeetingDiarizer {
 final class MeetingAudioBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+
+    /// Wrap one bounded span of 16 kHz mono float PCM for ordinary ASR uploads.
+    static func wavData(_ pcm: Data) -> Data {
+        var data = Data()
+        func word<T: FixedWidthInteger>(_ value: T) {
+            var littleEndian = value.littleEndian
+            withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
+        }
+        data.append(contentsOf: "RIFF".utf8)
+        word(UInt32(36 + pcm.count))
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        word(UInt32(16)); word(UInt16(3)); word(UInt16(1))
+        word(UInt32(16000)); word(UInt32(64000))
+        word(UInt16(4)); word(UInt16(32))
+        data.append(contentsOf: "data".utf8)
+        word(UInt32(pcm.count))
+        data.append(pcm)
+        return data
+    }
 
     private func checkCancellation() throws {
         try lock.withLock { if cancelled { throw CancellationError() } }

@@ -185,6 +185,69 @@ struct AudioDiarization: Codable, Equatable, Sendable {
         }
     }
 
+    /// Text-only ASR needs sentence context across a speaker's brief pauses.
+    /// Keep the original speech intervals for profiles and legacy transcripts;
+    /// only inference windows include the intervening silence.
+    func transcriptionWindows(maximumDuration: Double = 30, maximumSilenceGap: Double = 2) throws -> [Chunk] {
+        guard maximumSilenceGap.isFinite, maximumSilenceGap >= 0 else {
+            throw MeetingDiarizationError.invalidOutput
+        }
+        var windows: [Chunk] = []
+        for chunk in try transcriptionChunks(maximumDuration: maximumDuration) {
+            if let previous = windows.last, previous.speakers == chunk.speakers,
+               chunk.start - previous.end <= maximumSilenceGap,
+               chunk.end - previous.start <= maximumDuration {
+                windows[windows.count - 1].end = chunk.end
+            } else {
+                windows.append(chunk)
+            }
+        }
+
+        // A brief overlap or acknowledgement must not become an isolated ASR
+        // request. Include it in a neighbouring window and label all voices;
+        // text-only models cannot assign individual words inside that exchange.
+        func canJoin(_ first: Chunk, _ last: Chunk) -> Bool {
+            last.start - first.end <= maximumSilenceGap && last.end - first.start <= maximumDuration
+        }
+        func join(_ lower: Int, _ upper: Int) {
+            let window = Chunk(start: windows[lower].start, end: windows[upper].end,
+                speakers: Set(windows[lower...upper].flatMap(\.speakers)).sorted())
+            windows.replaceSubrange(lower...upper, with: [window])
+        }
+        var index = 0
+        while index < windows.count {
+            let window = windows[index]
+            guard window.end - window.start < 1 else { index += 1; continue }
+            let before = index > 0 ? index - 1 : nil
+            let after = index + 1 < windows.count ? index + 1 : nil
+            if let before, let after, windows[before].speakers == windows[after].speakers,
+               canJoin(windows[before], window), canJoin(window, windows[after]),
+               windows[after].end - windows[before].start <= maximumDuration {
+                join(before, after)
+                index = max(0, before - 1)
+                continue
+            }
+            let candidates = [before, after].compactMap { $0 }.filter {
+                canJoin(windows[min(index, $0)], windows[max(index, $0)])
+            }
+            let neighbour = candidates.max { lhs, rhs in
+                let left = windows[lhs], right = windows[rhs]
+                let leftSharesVoice = !Set(left.speakers).isDisjoint(with: window.speakers)
+                let rightSharesVoice = !Set(right.speakers).isDisjoint(with: window.speakers)
+                if leftSharesVoice != rightSharesVoice { return !leftSharesVoice }
+                return left.end - left.start < right.end - right.start
+            }
+            if let neighbour {
+                let lower = min(index, neighbour)
+                join(lower, max(index, neighbour))
+                index = max(0, lower - 1)
+            } else {
+                index += 1
+            }
+        }
+        return windows
+    }
+
     /// Partition speech once, preserving recording-wide IDs and absolute times.
     /// Overlap is transcribed once with all active speakers; silence is omitted.
     func transcriptionChunks(maximumDuration: Double = 30) throws -> [Chunk] {
