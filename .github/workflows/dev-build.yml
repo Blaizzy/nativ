@@ -37,6 +37,9 @@ jobs:
       - name: Test runtime model capability detection
         run: python3 -m unittest discover -s scripts/tests -p 'test_model_capabilities.py' -v
 
+      - name: Test external engine forwarding
+        run: python3 -m unittest discover -s scripts/tests -p 'test_remote_engine.py' -v
+
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4
         with:

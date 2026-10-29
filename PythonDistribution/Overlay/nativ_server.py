@@ -35,6 +35,8 @@ import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
 import mlx_vlm.server.openai as base_openai
 
+import nativ_remote_engine as remote_engine
+
 
 def safe_failure_code(error: BaseException | None = None, status: int | None = None) -> str:
     """Classify types and HTTP status only; never inspect or store exception messages."""
@@ -1352,8 +1354,12 @@ def install_metrics_overlay() -> None:
         metrics_capture: dict[str, Any] = {}
         capture_token = _BASE_METRICS_CAPTURE.set(metrics_capture)
 
+        remote = remote_engine.engine_for(payload, remote_engine.load_engines())
         try:
-            response = await call_next(request)
+            if remote is not None:
+                response = await remote_engine.forward(request, payload, remote)
+            else:
+                response = await call_next(request)
         except asyncio.CancelledError:
             TRACKER.record_failed(observation, cancelled=True)
             raise
