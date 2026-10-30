@@ -407,6 +407,12 @@ final class ChatViewModel: ObservableObject {
         activeRequestSessionID != nil || !requestQueue.isEmpty
     }
 
+    var currentSessionLatestResponseMetrics: ChatResponseMetrics? {
+        messages.last {
+            $0.role == .assistant && !$0.isStreaming
+        }?.responseMetrics
+    }
+
     var isCurrentSessionActiveInAnotherWindow: Bool {
         guard let currentSessionID else {
             return false
@@ -939,6 +945,12 @@ final class ChatViewModel: ObservableObject {
     }
 
     func resolvedWorkRequest(_ request: ChatWorkRequest, in sessionID: UUID) throws -> ChatWorkRequest {
+        let source = request.action == .open ? request.elementID.flatMap { workBrowsers.sourceLink(for: $0, sessionID: sessionID) } : nil
+        if let source, let id = request.id, id != source.id {
+            throw ChatWorkError.invalid("The source result belongs to another tab. Use its original tab id or omit id.")
+        }
+        var request = try request.resolvingElementOpen(sourceURL: source?.url)
+        if let source { request.id = source.id }
         if request.action == .upload {
             _ = try ChatWorkAttachments.resolve(request.attachmentIDs, in: sessionMessages(for: sessionID) ?? [])
         }
@@ -2773,6 +2785,7 @@ final class ChatViewModel: ObservableObject {
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
+        var researchContinuations = 0
         var tracksWorkSaves = workState(for: request.sessionID)?.items.contains(where: \.canEdit) == true
         var savedWorkFiles: [UUID: String] = [:]
         var activeSettings = queuedRequest.settings
@@ -2794,7 +2807,7 @@ final class ChatViewModel: ObservableObject {
             characterLimit: ChatDocumentContextBuilder.defaultMaximumCharactersPerRequest
         )
         var effectiveContextLimit: Int?
-        if !documentContext.result.contexts.isEmpty {
+        if !documentContext.result.contexts.isEmpty || queuedRequest.languageModelSupportsTools {
             effectiveContextLimit = try? await NativMetricsClient(
                 baseURL: queuedRequest.settings.serverBaseURL
             )
@@ -2821,15 +2834,23 @@ final class ChatViewModel: ObservableObject {
                 for: queuedRequest.sessionID
             )
             guard
-                let request = makeCompletionRequest(
+                var request = makeCompletionRequest(
                     for: queuedRequest,
                     before: assistantMessageID,
                     advertisesTools: advertisesTools,
                     settings: activeSettings,
-                    documentContexts: documentContext.result.contexts
+                    documentContexts: documentContext.result.contexts,
+                    effectiveContextLimit: effectiveContextLimit
                 )
             else {
                 throw NativChatError.invalidResponse
+            }
+
+            if advertisesTools, request.tools?.contains(where: { $0.function.name == ChatWorkToolRegistry.toolName }) == true {
+                request.completionInstruction = [
+                    ChatBrowserEvidence.missingPageInstruction(messages: request.messages),
+                    ChatBrowserEvidence.stalledSearchInstruction(messages: request.messages),
+                ].compactMap { $0 }.joined(separator: "\n\n")
             }
 
             let streamingMessageID = assistantMessageID
@@ -2856,6 +2877,7 @@ final class ChatViewModel: ObservableObject {
                             break
                         }
                     }
+                    effectiveContextLimit = contextLimit
                     let threshold = ChatCompactionState.threshold(
                         modelContext: contextLimit,
                         configuredContext: activeSettings.maxKVSize,
@@ -2912,8 +2934,14 @@ final class ChatViewModel: ObservableObject {
                 isCancelled: false
             )
 
-            guard advertisesTools, !toolCalls.isEmpty else {
-                return
+            guard advertisesTools else { return }
+            if toolCalls.isEmpty {
+                guard researchContinuations < 2,
+                      request.tools?.contains(where: { $0.function.name == ChatWorkToolRegistry.toolName }) == true,
+                      ChatBrowserEvidence.missingPageInstruction(messages: request.messages) != nil else { return }
+                // A prose response is not completion when an explicit page-read
+                // requirement is still unmet. Retry within the same round budget.
+                researchContinuations += 1
             }
 
             var insertionAnchor = assistantMessageID
@@ -3095,6 +3123,10 @@ final class ChatViewModel: ObservableObject {
                         modelSearchPath: queuedRequest.settings.expandedModelSearchPath,
                         additionalModelSearchPaths: queuedRequest.settings
                             .additionalModelSearchPaths,
+                        browsingMaximumResultBytes: ChatBrowsingBudget.maximumBytes(
+                            context: [effectiveContextLimit, activeSettings.maxKVSize]
+                                .compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
+                        ),
                         huggingFaceToken: imageModelPreparationContext.huggingFaceToken,
                         fileReadRootPath: queuedRequest.toolScope.isProject
                             ? queuedRequest.toolScope.fileReadRootPath
@@ -3297,7 +3329,8 @@ final class ChatViewModel: ObservableObject {
                         before: assistantMessageID,
                         advertisesTools: advertisesTools,
                         settings: settings,
-                        documentContexts: prepared.result.contexts
+                        documentContexts: prepared.result.contexts,
+                        effectiveContextLimit: effectiveContextLimit
                     )
                 else { return prepared }
                 guard let promptTokens = try await count(request) else { return prepared }
@@ -3315,7 +3348,8 @@ final class ChatViewModel: ObservableObject {
                             before: assistantMessageID,
                             advertisesTools: advertisesTools,
                             settings: settings,
-                            documentContexts: [:]
+                            documentContexts: [:],
+                            effectiveContextLimit: effectiveContextLimit
                         )
                     else { return prepared }
                     measuredBasePromptTokens = try await count(baseRequest)
@@ -3363,7 +3397,8 @@ final class ChatViewModel: ObservableObject {
         before assistantMessageID: UUID,
         advertisesTools: Bool,
         settings: NativSettings,
-        documentContexts: [UUID: String]
+        documentContexts: [UUID: String],
+        effectiveContextLimit: Int?
     ) -> MLXChatCompletionRequest? {
         guard let modelID = settings.languageModelID,
             let sessionMessages = sessionMessages(for: queuedRequest.sessionID),
@@ -3386,7 +3421,11 @@ final class ChatViewModel: ObservableObject {
             : []
         let tools = toolDefinitions.isEmpty ? nil : toolDefinitions
 
-        let includesWorkContext = toolDefinitions.contains { $0.function.name == ChatWorkToolRegistry.toolName }
+        // Keep source evidence available for the final answer after the tool-round
+        // gate removes tool definitions, while still honoring disabled tools.
+        let includesWorkContext = queuedRequest.languageModelSupportsTools && toolIsAvailable(
+            ChatWorkToolRegistry.toolName, settings: settings, scope: queuedRequest.toolScope
+        )
         let requestMessages = Self.completionMessages(
             systemPrompt: Self.systemPrompt(
                 sessionPrompt: settings.systemPrompt,
@@ -3394,7 +3433,8 @@ final class ChatViewModel: ObservableObject {
                 projectPrompt: queuedRequest.toolScope.systemPrompt,
                 includesChatWork: queuedRequest.languageModelSupportsTools,
                 includesToolGuide: !toolDefinitions.isEmpty,
-                skills: settings.skills.filter(\.isEnabled)
+                skills: settings.skills.filter(\.isEnabled),
+                toolRoundLimitReached: queuedRequest.languageModelSupportsTools && !advertisesTools
             ),
             transcript: precedingMessages,
             includesImages: queuedRequest.languageModelSupportsVision
@@ -3426,6 +3466,16 @@ final class ChatViewModel: ObservableObject {
         request.transientContext = Self.completionContext(
             transcript: precedingMessages, documentContexts: documentContexts, workItems: items
         )
+        if includesWorkContext {
+            request.toolResultContext = ChatBrowserEvidence.recoveryContext(
+                messages: requestMessages, maximumBytes: min(8192, ChatBrowsingBudget.maximumBytes(
+                    context: [effectiveContextLimit, settings.maxKVSize].compactMap { $0 }.filter { $0 > 0 }.min() ?? 8192
+                ))
+            )
+        }
+        if queuedRequest.languageModelSupportsTools && !advertisesTools {
+            request.completionInstruction = ChatToolRoundGate.finalAnswerPrompt
+        }
         return request
     }
 
@@ -3440,7 +3490,8 @@ final class ChatViewModel: ObservableObject {
         projectPrompt: String?,
         includesChatWork: Bool,
         includesToolGuide: Bool,
-        skills: [NativSkill]
+        skills: [NativSkill],
+        toolRoundLimitReached: Bool = false
     ) -> String {
         let sections: [String?] = [
             corePrompt,
@@ -3449,7 +3500,7 @@ final class ChatViewModel: ObservableObject {
             personalizationPrompt,
             projectPrompt,
             includesToolGuide ? NativSkill.builtInToolGuide.instructions : nil,
-        ] + skills.map(\.instructions)
+        ] + skills.map(\.instructions) + [toolRoundLimitReached ? ChatToolRoundGate.finalAnswerPrompt : nil]
         return sections.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
@@ -3839,7 +3890,9 @@ final class ChatViewModel: ObservableObject {
                         ?? message.responseMetrics?.decodeTokensPerSecond,
                     prefillTokensPerSecond: message.responseMetrics?.prefillTokensPerSecond,
                     peakMemoryGB: message.responseMetrics?.peakMemoryGB,
-                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate
+                    specAcceptanceRate: message.responseMetrics?.specAcceptanceRate,
+                    cachedTokens: message.responseMetrics?.cachedTokens,
+                    promptTokens: message.responseMetrics?.promptTokens
                 )
             }
         }

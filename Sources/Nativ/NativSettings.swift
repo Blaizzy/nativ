@@ -1325,6 +1325,42 @@ struct NativSettings: Codable, Equatable {
         chatFontScale = steps[min(max(current + delta, 0), steps.count - 1)]
     }
 
+    mutating func resetModelConfiguration() {
+        let defaults = NativSettings()
+        maxTokens = defaults.maxTokens
+        maxKVSize = defaults.maxKVSize
+        compactionEnabled = defaults.compactionEnabled
+        compactionThresholdPercent = defaults.compactionThresholdPercent
+        systemPrompt = defaults.systemPrompt
+        temperature = defaults.temperature
+        topK = defaults.topK
+        topP = defaults.topP
+        minP = defaults.minP
+        repetitionPenaltyEnabled = defaults.repetitionPenaltyEnabled
+        repetitionPenalty = defaults.repetitionPenalty
+        kvQuantizationEnabled = defaults.kvQuantizationEnabled
+        kvBits = defaults.kvBits
+        kvGroupSize = defaults.kvGroupSize
+        quantizedKVStart = defaults.quantizedKVStart
+        turboQuantEnabled = defaults.turboQuantEnabled
+        thinkingEnabled = defaults.thinkingEnabled
+        thinkingBudgetEnabled = defaults.thinkingBudgetEnabled
+        thinkingBudget = defaults.thinkingBudget
+        thinkingStartToken = defaults.thinkingStartToken
+        thinkingEndToken = defaults.thinkingEndToken
+        speculativeDecodingEnabled = defaults.speculativeDecodingEnabled
+        draftModelID = defaults.draftModelID
+        draftKind = defaults.draftKind
+        draftBlockSize = defaults.draftBlockSize
+        structuredOutputEnabled = defaults.structuredOutputEnabled
+        structuredOutputName = defaults.structuredOutputName
+        structuredOutputSchema = defaults.structuredOutputSchema
+        prefixCachingEnabled = defaults.prefixCachingEnabled
+        prefixCacheBlocks = defaults.prefixCacheBlocks
+        prefixCacheBlockSize = defaults.prefixCacheBlockSize
+        if let languageModelID { rememberProfile(forModel: languageModelID) }
+    }
+
     mutating func resetChatFontScale() {
         chatFontScale = Self.defaultChatFontScale
     }

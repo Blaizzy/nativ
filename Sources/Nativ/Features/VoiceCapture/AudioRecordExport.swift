@@ -91,7 +91,7 @@ struct AudioRecordExport: Sendable {
     private var sections: [(title: String, text: String, markdown: Bool)] {
         [
             ("Summary", record.summary ?? "", true),
-            ("Transcript", record.transcript, false),
+            ("Transcript", record.displayTranscript, false),
         ]
     }
 

@@ -182,9 +182,9 @@ final class MarkdownSelectionTests: XCTestCase {
                                            windowNumber: window.windowNumber, context: nil,
                                            eventNumber: 0, clickCount: 1, pressure: 1))
         }
-        NSApp.postEvent(try event(.leftMouseDragged, at: end), atStart: false)
-        NSApp.postEvent(try event(.leftMouseUp, at: end), atStart: false)
-        first.mouseDown(with: try event(.leftMouseDown, at: start))
+        let mouseDown = try event(.leftMouseDown, at: start)
+        let trackingEvents = try [event(.leftMouseDragged, at: end), event(.leftMouseUp, at: end)]
+        window.withTrackingEvents(trackingEvents) { first.mouseDown(with: mouseDown) }
         XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
         XCTAssertGreaterThan(surface.selection.range.length, 50)
         XCTAssertLessThan(surface.visibleTextViews.count, 40)
@@ -429,8 +429,8 @@ final class MarkdownSelectionTests: XCTestCase {
         }
     }
 
-    private func fixture(_ source: String, width: CGFloat = 600, height: CGFloat) -> (NSWindow, NSScrollView, MarkdownSurface) {
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: height),
+    private func fixture(_ source: String, width: CGFloat = 600, height: CGFloat) -> (SelectionTestWindow, NSScrollView, MarkdownSurface) {
+        let window = SelectionTestWindow(contentRect: CGRect(x: 0, y: 0, width: width, height: height),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .aqua)
@@ -454,10 +454,10 @@ final class MarkdownSelectionTests: XCTestCase {
     }
 
     private func drag(from first: MarkdownSelectableTextView, offset: Int, to last: MarkdownSelectableTextView,
-                      offset end: Int, window: NSWindow, flags: NSEvent.ModifierFlags = []) throws {
+                      offset end: Int, window: SelectionTestWindow, flags: NSEvent.ModifierFlags = []) throws {
         let startRect = try XCTUnwrap(first.selectionRects(for: NSRange(location: offset, length: 0)).first)
         let endRect = try XCTUnwrap(last.selectionRects(for: NSRange(location: end, length: 0)).first)
-        // Posted mouse events round coordinates; stay just inside the insertion boundary.
+        // Keep event coordinates just inside the intended insertion boundary.
         let startPoint = CGPoint(x: ceil(startRect.minX) + 1, y: startRect.midY)
         let endPoint = CGPoint(x: ceil(endRect.minX) + 1, y: endRect.midY)
         XCTAssertEqual(first.characterIndexForInsertion(at: startPoint), offset)
@@ -469,8 +469,36 @@ final class MarkdownSelectionTests: XCTestCase {
                                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil,
                                            eventNumber: 0, clickCount: 1, pressure: 1))
         }
-        NSApp.postEvent(try event(.leftMouseDragged, finish), atStart: false)
-        NSApp.postEvent(try event(.leftMouseUp, finish), atStart: false)
-        first.mouseDown(with: try event(.leftMouseDown, start))
+        let mouseDown = try event(.leftMouseDown, start)
+        let trackingEvents = try [event(.leftMouseDragged, finish), event(.leftMouseUp, finish)]
+        window.withTrackingEvents(trackingEvents) { first.mouseDown(with: mouseDown) }
+    }
+}
+
+/// Exercise the real selection tracker without sharing synthetic drags with
+/// AppKit's process-wide queue or unrelated window and pointer events on CI.
+@MainActor
+private final class SelectionTestWindow: NSWindow {
+    private var trackingEvents: [NSEvent]?
+
+    func withTrackingEvents(_ events: [NSEvent], perform action: () -> Void) {
+        XCTAssertNil(trackingEvents)
+        trackingEvents = events
+        defer {
+            XCTAssertEqual(trackingEvents?.count, 0, "The tracker must consume the complete gesture")
+            trackingEvents = nil
+        }
+        action()
+    }
+
+    override func nextEvent(matching mask: NSEvent.EventTypeMask, until expiration: Date?,
+                            inMode mode: RunLoop.Mode, dequeue deqFlag: Bool) -> NSEvent? {
+        guard let events = trackingEvents else {
+            return super.nextEvent(matching: mask, until: expiration, inMode: mode, dequeue: deqFlag)
+        }
+        guard let event = events.first else { return nil }
+        XCTAssertTrue(mask.contains(NSEvent.EventTypeMask(rawValue: 1 << event.type.rawValue)))
+        if deqFlag { trackingEvents?.removeFirst() }
+        return event
     }
 }

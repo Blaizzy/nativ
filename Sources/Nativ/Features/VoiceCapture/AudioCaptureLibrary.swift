@@ -184,11 +184,15 @@ final class AudioCaptureLibrary: ObservableObject {
     @Published private(set) var activeIncludesSystemAudio = false
     @Published private(set) var processingRecordIDs = Set<String>()
     @Published private(set) var transcribingRecordIDs = Set<String>()
+    @Published private(set) var diarizingRecordIDs = Set<String>()
     @Published var lastErrorMessage: String?
     @Published private(set) var permissionRequiringSettings: NativPermission?
     @Published private(set) var playingRecordID: String?
     @Published private(set) var isPlaybackPaused = false
+    let playback = AudioPlaybackState()
+    private var playbackTask: Task<Void, Never>?
 
+    var audioServerProvider: (@MainActor @Sendable () async throws -> NativAudioClient)?
     var transcriptionConfigurationProvider:
         (@MainActor @Sendable () -> VoiceTranscriptionConfiguration?)?
 
@@ -206,6 +210,21 @@ final class AudioCaptureLibrary: ObservableObject {
     private let meetingJoinMonitor = MeetingJoinMonitor()
     private let meetingSuggestion = MeetingTranscriptionSuggestionController()
     private let analytics: AudioAnalyticsStore
+    lazy var speakerRecognition = AudioSpeakerRecognition(store: analytics, audioURL: { [weak self] record in
+        self?.audioURL(for: record)
+    }, extract: { [weak self] url, diarization, speakerID in
+        guard let self else { throw CancellationError() }
+        let client = try await self.audioAnalysisClient()
+        return try await SpeakerVoiceEmbeddingExtractor.extract(recordingURL: url, diarization: diarization,
+                                                                  speakerID: speakerID, client: client)
+    }, prepareMeeting: { [weak self] recordID in
+        guard let self else { throw CancellationError() }
+        try await self.prepareMeetingForSpeakerMatching(recordID: recordID)
+    }, canProcessRecord: { [weak self] recordID in
+        guard let self else { return false }
+        return self.phase == .idle && !self.processingRecordIDs.contains(recordID)
+    }, preferences: .standard)
+    private var isShuttingDown = false
     private var elapsedTask: Task<Void, Never>?
     private var captureStartedAt: Date?
     private var shouldSummarizeCurrentCapture = false
@@ -280,7 +299,13 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
+    isolated deinit {
+        playbackTask?.cancel()
+        audioPlayer?.stop()
+    }
+
     func start() {
+        isShuttingDown = false
         meetingJoinMonitor.start()
         sleepMonitor.onWake = { [weak self] in
             self?.presentInterruptedRecordingNotice()
@@ -379,6 +404,7 @@ final class AudioCaptureLibrary: ObservableObject {
         }
 
         clearLastError()
+        speakerRecognition.pauseMeetingUpdates()
         guard (try? AudioInputDeviceResolver.captureDeviceID(
             preferredID: AudioInputDevicePreferences.shared.selectedDeviceID
         )) != nil else {
@@ -589,7 +615,11 @@ final class AudioCaptureLibrary: ObservableObject {
                 return
             }
             do {
-                let summary = try await self.generateSummary(for: record.transcript)
+                guard let current = self.analytics.record(withID: record.id) else { throw AudioSpeakerProfileError.recordingChanged }
+                let summary = try await self.generateSummary(for: current)
+                guard let latest = self.analytics.record(withID: record.id),
+                      latest.transcript == current.transcript, latest.diarization == current.diarization,
+                      latest.summary == current.summary else { throw AudioSpeakerProfileError.recordingChanged }
                 self.analytics.updateSummary(summary, for: record.id)
                 try self.writeSummary(summary, recordID: record.id)
             } catch {
@@ -691,6 +721,7 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func togglePlayback(for record: AudioTranscriptionRecord) {
+        playback.excerpt = nil
         if playingRecordID == record.id {
             if isPlaybackPaused {
                 if audioPlayer?.play() == true {
@@ -707,7 +738,65 @@ final class AudioCaptureLibrary: ObservableObject {
         startPlayback(for: record)
     }
 
-    private func startPlayback(for record: AudioTranscriptionRecord) {
+    func seekPlayback(for record: AudioTranscriptionRecord, to time: TimeInterval) {
+        guard time.isFinite else { return }
+        playback.excerpt = nil
+        if playingRecordID != record.id {
+            startPlayback(for: record, at: time)
+        } else if let audioPlayer {
+            audioPlayer.currentTime = min(max(0, time), audioPlayer.duration)
+            playback.position = audioPlayer.currentTime
+            if audioPlayer.play() { isPlaybackPaused = false }
+        }
+    }
+
+    /// Review samples use the same player as the full recording. The requested
+    /// bounds are clipped to the decoded duration; no audio file is created.
+    func toggleExcerptPlayback(for record: AudioTranscriptionRecord, start: TimeInterval, end: TimeInterval) {
+        guard start.isFinite, end.isFinite, end > max(0, start) else { return }
+        guard playingRecordID == record.id, let audioPlayer else {
+            startPlayback(for: record, at: start, excerptEnd: end)
+            return
+        }
+        guard let excerpt = AudioPlaybackExcerpt(start: start, end: end, duration: audioPlayer.duration) else { return }
+        if playback.excerpt == excerpt, !isPlaybackPaused {
+            audioPlayer.pause()
+            isPlaybackPaused = true
+            playback.position = audioPlayer.currentTime
+            return
+        }
+        if playback.excerpt != excerpt || audioPlayer.currentTime < excerpt.start || audioPlayer.currentTime >= excerpt.end {
+            audioPlayer.currentTime = excerpt.start
+        }
+        playback.excerpt = excerpt
+        playback.position = audioPlayer.currentTime
+        if audioPlayer.play() {
+            isPlaybackPaused = false
+            startPlaybackUpdates()
+        } else {
+            stopPlayback()
+            lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
+        }
+    }
+
+    func isPlayingExcerpt(for record: AudioTranscriptionRecord, start: TimeInterval, end: TimeInterval) -> Bool {
+        guard playingRecordID == record.id, !isPlaybackPaused,
+              let excerpt = AudioPlaybackExcerpt(start: start, end: end, duration: playback.duration) else { return false }
+        return playback.excerpt == excerpt
+    }
+
+    /// Call when leaving the review inbox or changing its selected speaker.
+    func stopExcerptPlayback() {
+        if playback.excerpt != nil { stopPlayback() }
+    }
+
+    func setPlaybackRate(_ rate: Float) {
+        guard rate.isFinite else { return }
+        playback.rate = min(max(rate, 0.5), 2)
+        audioPlayer?.rate = playback.rate
+    }
+
+    private func startPlayback(for record: AudioTranscriptionRecord, at time: TimeInterval = 0, excerptEnd: TimeInterval? = nil) {
         stopPlayback()
         guard let url = audioURL(for: record) else {
             lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
@@ -715,7 +804,12 @@ final class AudioCaptureLibrary: ObservableObject {
         }
         do {
             let player = try AVAudioPlayer(contentsOf: url)
+            let excerpt = excerptEnd.flatMap { AudioPlaybackExcerpt(start: time, end: $0, duration: player.duration) }
+            guard excerptEnd == nil || excerpt != nil else { return }
             player.delegate = playbackDelegate
+            player.enableRate = true
+            player.rate = playback.rate
+            player.currentTime = min(max(0, time), player.duration)
             guard player.play() else {
                 lastErrorMessage = AudioCaptureLibraryError.recordingUnavailable.localizedDescription
                 return
@@ -723,16 +817,42 @@ final class AudioCaptureLibrary: ObservableObject {
             audioPlayer = player
             playingRecordID = record.id
             isPlaybackPaused = false
+            playback.recordID = record.id
+            playback.duration = player.duration
+            playback.position = player.currentTime
+            playback.excerpt = excerpt
+            startPlaybackUpdates()
         } catch {
             lastErrorMessage = error.localizedDescription
         }
     }
 
+    private func startPlaybackUpdates() {
+        playbackTask?.cancel()
+        playbackTask = Task { [weak self] in
+            while !Task.isCancelled {
+                // Check excerpt ends frequently, including after a rate
+                // change; full recordings keep the lighter progress cadence.
+                let interval = self?.playback.excerpt == nil ? 200 : 20
+                try? await Task.sleep(for: .milliseconds(interval))
+                guard !Task.isCancelled, let self, let player = self.audioPlayer else { return }
+                if let excerpt = self.playback.excerpt, player.currentTime >= excerpt.end {
+                    self.stopPlayback()
+                    return
+                }
+                self.playback.position = player.currentTime
+            }
+        }
+    }
+
     func stopPlayback() {
+        playbackTask?.cancel()
+        playbackTask = nil
         audioPlayer?.stop()
         audioPlayer = nil
         playingRecordID = nil
         isPlaybackPaused = false
+        playback.reset()
     }
 
     func stopPlaybackIfPlaying(_ recordID: String) {
@@ -777,6 +897,9 @@ final class AudioCaptureLibrary: ObservableObject {
     }
 
     func shutdown() {
+        isShuttingDown = true
+        stopPlayback()
+        speakerRecognition.cancelMeetingUpdates()
         sleepMonitor.stop()
         activationObservers.forEach { NotificationCenter.default.removeObserver($0) }
         activationObservers.removeAll()
@@ -813,38 +936,34 @@ final class AudioCaptureLibrary: ObservableObject {
         preserveExistingSummary: Bool = true
     ) async {
         let recordID = recordingURL.deletingPathExtension().lastPathComponent
-        transcribingRecordIDs.insert(recordID)
         defer {
             transcribingRecordIDs.remove(recordID)
+            diarizingRecordIDs.remove(recordID)
             processingRecordIDs.remove(recordID)
         }
 
         do {
-            let (transcript, modelID) = try await transcribe(recordingURL)
-            let transcriptURL = recordingURL
-                .deletingPathExtension()
-                .appendingPathExtension("txt")
-            try transcript.write(to: transcriptURL, atomically: true, encoding: .utf8)
-            analytics.upsertTranscription(
-                recordingURL: recordingURL,
-                transcript: transcript,
-                durationSeconds: duration,
-                modelID: modelID,
-                applicationName: nil,
-                kind: kind,
-                title: analytics.record(withID: recordID)?.title ?? title,
-                persistAudioReference: true,
-                preserveExistingSummary: preserveExistingSummary
-            )
+            try await transcribeAndSaveRecording(recordingURL,
+                kind: kind, title: title, duration: duration, preserveExistingSummary: preserveExistingSummary)
             transcribingRecordIDs.remove(recordID)
 
             if !preserveExistingSummary {
                 removeSummaryFile(recordID: recordID)
             }
 
+            // Resolve known people after ASR and before summary generation, so
+            // attribution uses confirmed names and merged speaker assignments.
+            if kind == .meeting {
+                do { try await speakerRecognition.updateMeeting(recordID: recordID) }
+                catch { speakerRecognition.errorMessage = error.localizedDescription }
+            }
             if automaticallySummarize {
                 do {
-                    let summary = try await generateSummary(for: transcript)
+                    guard let current = analytics.record(withID: recordID) else { throw AudioSpeakerProfileError.recordingChanged }
+                    let summary = try await generateSummary(for: current)
+                    guard let latest = analytics.record(withID: recordID),
+                          latest.transcript == current.transcript, latest.diarization == current.diarization,
+                          latest.summary == current.summary else { throw AudioSpeakerProfileError.recordingChanged }
                     analytics.updateSummary(summary, for: recordID)
                     try writeSummary(summary, recordID: recordID)
                 } catch {
@@ -856,16 +975,102 @@ final class AudioCaptureLibrary: ObservableObject {
         }
     }
 
-    private func transcribe(_ recordingURL: URL) async throws -> (String, String) {
+    /// Backfill uses the capture pipeline, including ASR, before recognition
+    /// sees the meeting. Do not call processRecording here: it also invokes
+    /// recognition for that one recording.
+    private func prepareMeetingForSpeakerMatching(recordID: String) async throws {
+        try Task.checkCancellation()
+        guard !isShuttingDown, phase == .idle, !processingRecordIDs.contains(recordID),
+              let record = analytics.record(withID: recordID), record.resolvedKind == .meeting,
+              let url = audioURL(for: record) else { throw AudioSpeakerProfileError.recordingChanged }
+        guard record.diarization?.hasCompletedTranscription != true else { return }
+        processingRecordIDs.insert(recordID)
+        defer {
+            transcribingRecordIDs.remove(recordID)
+            diarizingRecordIDs.remove(recordID)
+            processingRecordIDs.remove(recordID)
+        }
+        try await transcribeAndSaveRecording(url, kind: .meeting, title: record.displayTitle,
+            duration: record.durationSeconds ?? 0, preserveExistingSummary: true, expectedRecord: record)
+    }
+
+    /// Both new and past meetings must save a finished diarized transcript
+    /// before their voices can create or link profiles.
+    private func transcribeAndSaveRecording(
+        _ recordingURL: URL, kind: AudioRecordKind, title: String, duration: TimeInterval,
+        preserveExistingSummary: Bool, expectedRecord: AudioTranscriptionRecord? = nil
+    ) async throws {
+        let recordID = recordingURL.deletingPathExtension().lastPathComponent
+        let analysisClient = kind == .meeting ? try await audioAnalysisClient() : nil
+        let transcript: String
+        let modelID: String
+        var diarization: AudioDiarization?
+        if let analysisClient {
+            guard let configuration = transcriptionConfigurationProvider?() else { throw AudioCaptureLibraryError.serverNotRunning }
+            let selected = configuration.selectedModelID
+            if selected == nil || selected == DefaultSpeechModel.identifier {
+                modelID = MeetingDiarizer.defaultTranscriptionModelID
+            } else {
+                modelID = selected!
+            }
+            diarizingRecordIDs.insert(recordID)
+            speakerRecognition.reportMeetingProgress(recordID: recordID, status: "Diarizing meeting…")
+            let result = try await MeetingDiarizer.transcribe(recordingURL, client: analysisClient, model: modelID) {
+                self.diarizingRecordIDs.remove(recordID)
+                self.transcribingRecordIDs.insert(recordID)
+                self.speakerRecognition.reportMeetingProgress(recordID: recordID, status: "Transcribing meeting…")
+            } segmentFinished: { end in
+                self.speakerRecognition.reportMeetingProgress(recordID: recordID,
+                    status: "Transcribing meeting… \(Int(end)) / \(Int(duration)) sec")
+            }
+            transcript = result.text
+            diarization = result.diarization
+        } else {
+            let backend = try await transcriptionBackend()
+            modelID = backend.modelID
+            transcribingRecordIDs.insert(recordID)
+            transcript = try await backend.transcribe(recordingURL).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard !transcript.isEmpty else { throw AudioCaptureLibraryError.emptyTranscript }
+        try Task.checkCancellation()
+        if let expectedRecord, analytics.record(withID: recordID) != expectedRecord {
+            // A user edit or deletion during background ASR takes precedence.
+            throw AudioSpeakerProfileError.recordingChanged
+        }
+        let displayTranscript = diarization?.speakerTranscript ?? transcript
+        let transcriptURL = recordingURL.deletingPathExtension().appendingPathExtension("txt")
+        try displayTranscript.write(to: transcriptURL, atomically: true, encoding: .utf8)
+        try analytics.saveTranscription(
+            recordingURL: recordingURL,
+            transcript: transcript,
+            durationSeconds: duration,
+            modelID: modelID,
+            applicationName: nil,
+            kind: kind,
+            title: analytics.record(withID: recordID)?.title ?? title,
+            persistAudioReference: true,
+            preserveExistingSummary: preserveExistingSummary,
+            diarization: diarization
+        )
+    }
+
+    private func audioAnalysisClient() async throws -> NativAudioClient {
+        try Task.checkCancellation()
+        guard let audioServerProvider else { throw AudioCaptureLibraryError.serverNotRunning }
+        return try await audioServerProvider()
+    }
+
+    private func transcriptionBackend() async throws -> (
+        modelID: String, transcribe: (URL) async throws -> String
+    ) {
         guard let configuration = transcriptionConfigurationProvider?() else {
             throw AudioCaptureLibraryError.serverNotRunning
         }
         if #available(macOS 27.0, *),
            DefaultSpeechModel.isPreferred(selectedModelID: configuration.selectedModelID) {
-            let result = try await ParakeetTranscriber.shared.transcribe(contentsOf: recordingURL)
-            try Task.checkCancellation()
-            guard !result.text.isEmpty else { throw AudioCaptureLibraryError.emptyTranscript }
-            return (result.text, DefaultSpeechModel.identifier)
+            return (DefaultSpeechModel.identifier, { url in
+                try await ParakeetTranscriber.shared.transcribe(contentsOf: url).text
+            })
         }
         guard configuration.serverIsRunning else {
             throw AudioCaptureLibraryError.serverNotRunning
@@ -882,19 +1087,15 @@ final class AudioCaptureLibrary: ObservableObject {
         ) else {
             throw AudioCaptureLibraryError.missingSpeechModel
         }
-        let client = NativAudioClient(
-            baseURL: configuration.serverBaseURL,
-            apiKey: configuration.serverAPIKey
-        )
-        let result = try await client.transcribe(fileURL: recordingURL, model: modelID)
-        let transcript = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !transcript.isEmpty else {
-            throw AudioCaptureLibraryError.emptyTranscript
-        }
-        return (transcript, modelID)
+        let baseURL = configuration.serverBaseURL
+        let apiKey = configuration.serverAPIKey
+        return (modelID, { url in
+            let client = NativAudioClient(baseURL: baseURL, apiKey: apiKey)
+            return try await client.transcribe(fileURL: url, model: modelID).text
+        })
     }
 
-    private func generateSummary(for transcript: String) async throws -> String {
+    private func generateSummary(for record: AudioTranscriptionRecord) async throws -> String {
         // Snapshot both stages so editing preferences cannot change a summary in progress.
         let summaryLanguage = AudioCapturePreferences.summaryLanguage
         let summaryPrompt = AudioCapturePreferences.summaryPrompt
@@ -923,74 +1124,11 @@ final class AudioCaptureLibrary: ObservableObject {
             apiKey: configuration.serverAPIKey,
             resourceTimeout: 1_800
         )
-        let chunks = Self.transcriptChunks(transcript, maximumCharacters: 14_000)
-        var partialSummaries: [String] = []
-        for chunk in chunks {
-            try Task.checkCancellation()
-            let prompt = """
-                TRANSCRIPT:
-                \(chunk)
-                """
-            let completion = try await client.completeChat(
-                Self.summaryRequest(
-                    modelID: modelID,
-                    prompt: prompt,
-                    language: summaryLanguage,
-                    summaryPrompt: summaryPrompt,
-                    maxTokens: configuration.maxTokens
-                )
-            )
-            partialSummaries.append(completion.content)
-        }
-
-        if partialSummaries.count == 1 {
-            return partialSummaries[0].trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        let combinedPrompt = """
-            SECTION SUMMARIES:
-            \(partialSummaries.joined(separator: "\n\n---\n\n"))
-            """
-        let completion = try await client.completeChat(
-            Self.summaryRequest(
-                modelID: modelID,
-                prompt: combinedPrompt,
-                language: summaryLanguage,
-                summaryPrompt: mergePrompt,
-                maxTokens: configuration.maxTokens
-            )
-        )
-        return completion.content.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func summaryRequest(
-        modelID: String,
-        prompt: String,
-        language: AudioSummaryLanguage,
-        summaryPrompt: String,
-        maxTokens: Int
-    ) -> MLXChatCompletionRequest {
-        let systemPrompt = """
-            \(summaryPrompt)
-
-            OUTPUT LANGUAGE:
-            \(language.instruction)
-            This output language rule takes precedence over language requests elsewhere in the prompt or source material.
-            """
-        return MLXChatCompletionRequest(
-            model: modelID,
-            messages: [
-                MLXChatMessage(
-                    role: "system",
-                    content: systemPrompt
-                ),
-                MLXChatMessage(role: "user", content: prompt),
-            ],
-            maxTokens: maxTokens,
-            temperature: 0.2,
-            topK: 0,
-            topP: 1,
-            minP: 0,
-            enableThinking: false
+        return try await AudioSummaryGenerator.generate(
+            record: record, client: client, modelID: modelID, maxTokens: configuration.maxTokens,
+            supportsReasoning: languageModels.first { $0.repoID == modelID }?.capabilities.contains(.reasoning) == true,
+            contextSize: languageModels.first { $0.repoID == modelID }?.contextSize,
+            summaryPrompt: summaryPrompt, mergePrompt: mergePrompt, languageInstruction: summaryLanguage.instruction
         )
     }
 
@@ -1171,32 +1309,7 @@ final class AudioCaptureLibrary: ObservableObject {
         "\(kind.title) · \(date.formatted(date: .abbreviated, time: .shortened))"
     }
 
-    private static func transcriptChunks(
-        _ transcript: String,
-        maximumCharacters: Int
-    ) -> [String] {
-        guard transcript.count > maximumCharacters else {
-            return [transcript]
-        }
-        var chunks: [String] = []
-        var start = transcript.startIndex
-        while start < transcript.endIndex {
-            let proposedEnd = transcript.index(
-                start,
-                offsetBy: maximumCharacters,
-                limitedBy: transcript.endIndex
-            ) ?? transcript.endIndex
-            var end = proposedEnd
-            if proposedEnd < transcript.endIndex,
-               let newline = transcript[start..<proposedEnd].lastIndex(of: "\n")
-            {
-                end = transcript.index(after: newline)
-            }
-            chunks.append(String(transcript[start..<end]))
-            start = end
-        }
-        return chunks
-    }
+
 }
 
 struct MeetingApplication: Equatable {

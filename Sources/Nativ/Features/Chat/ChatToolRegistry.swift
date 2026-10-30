@@ -13,6 +13,7 @@ struct ChatToolExecutionContext: Sendable {
     let imageReferences: [ChatImageAttachment]
     let modelSearchPath: String
     let additionalModelSearchPaths: [String]
+    var browsingMaximumResultBytes = ChatBrowsingBudget.maximumBytes(context: 8192)
     var huggingFaceToken: String? = nil
     var analyticsDatabaseURL: URL? = nil
     var imageToolDependencies = ChatImageToolDependencies.live
@@ -44,6 +45,12 @@ struct ChatToolExecutionOutcome: Sendable {
 
 enum ChatToolRoundGate {
     static let maximumRounds = 32
+    static let finalAnswerPrompt = """
+        The tool round limit for this request has been reached. Tools are no longer available. \
+        Write your final answer to the user's original request using the evidence already collected. \
+        Do not emit or attempt further tool calls. Clearly state any requested work or source reads \
+        that remain incomplete; do not claim that missing work was done.
+        """
 
     static func advertisesTools(atRound round: Int) -> Bool {
         round < maximumRounds
@@ -459,18 +466,18 @@ enum ChatToolDispatcher {
 
     private static func executeWebSearchTool(
         call: MLXChatToolCall,
-        context _: ChatToolExecutionContext
+        context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         let content = try await ChatWebSearchToolExecutor().execute(call: call)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        return ChatToolExecutionOutcome(content: ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes), attachments: [])
     }
 
     private static func executeWebReadTool(
         call: MLXChatToolCall,
-        context _: ChatToolExecutionContext
+        context: ChatToolExecutionContext
     ) async throws -> ChatToolExecutionOutcome {
         let content = try await ChatWebReadToolExecutor().execute(call: call)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        return ChatToolExecutionOutcome(content: ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes), attachments: [])
     }
 
     private static func executeReadFileTool(
@@ -521,7 +528,10 @@ enum ChatToolDispatcher {
         let request = try ChatWorkRequest.decode(call)
         try Task.checkCancellation()
         let content = try await action(request)
-        return ChatToolExecutionOutcome(content: content, attachments: [])
+        let bounded = request.action.isBrowserAction || (request.action == .open && (request.url != nil || request.elementID != nil))
+            ? ChatBrowsingBudget.bound(content, maximumBytes: context.browsingMaximumResultBytes,
+                                       prioritizeText: [.open, .navigate, .search, .back, .forward].contains(request.action)) : content
+        return ChatToolExecutionOutcome(content: bounded, attachments: [])
     }
 
     private static func failurePayloadForImageTool(name: String, error: Error) -> String {
@@ -621,7 +631,7 @@ enum ChatAccessMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .workPane: self == .standard
         case .sensitive: self != .fullAccess
         case .command: true
-        case .external: self == .medium
+        case .external: false
         }
     }
 

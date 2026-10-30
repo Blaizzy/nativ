@@ -34,6 +34,9 @@ jobs:
       - name: Test request diagnostics
         run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
 
+      - name: Test runtime build and model capability detection
+        run: python3 -m unittest scripts.tests.test_python_resource_reuse scripts.tests.test_model_capabilities -v
+
       - name: Cache bundled mlx-vlm server distribution
         uses: actions/cache@v4
         with:
@@ -50,7 +53,7 @@ jobs:
           restore-keys: |
             spm-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build app and test update channels, hardware history, and filesystem safety (unsigned Debug)
+      - name: Build app and run targeted regression tests (unsigned Debug)
         run: |
           make xcode-generate
           xcodebuild -project Nativ.xcodeproj -scheme Nativ -configuration Debug \
@@ -66,9 +69,26 @@ jobs:
             -only-testing:NativTests/ArtifactCatalogTests \
             -only-testing:NativTests/ArtifactRefreshTests \
             -only-testing:NativTests/ArtifactDeletionTests \
-            -only-testing:NativTests/MarkdownParserTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
+            -only-testing:NativTests/AudioAnalyticsStoreTests \
+            -only-testing:NativTests/AudioPlaybackStateTests \
+            -only-testing:NativTests/NativAudioClientTests \
+            -only-testing:NativTests/AudioDiarizationTests \
+            -only-testing:NativTests/AudioDiarizationStorageTests \
+            -only-testing:NativTests/AudioSpeakerProfileTests \
+            -only-testing:NativTests/AudioLibraryFilterTests \
+            -only-testing:NativTests/AudioRecordExportTests \
+            -only-testing:NativTests/AudioSummaryReferenceTests \
+            -only-testing:NativTests/AudioSummaryDocumentTests \
+            -only-testing:NativTests/MarkdownParserTests \
+            -only-testing:NativTests/MarkdownGeometryTests \
+            -only-testing:NativTests/MarkdownSelectionTests \
+            -only-testing:NativTests/ModelPrimaryTaskResolverTests \
+            -only-testing:NativTests/LocalModelDiscoveryTests \
+            -only-testing:NativTests/HuggingFaceModelSupportTests \
+            -only-testing:NativTests/MLXImageModelResolverTests \
+            -only-testing:NativTests/NativModelTypeRegistryDrafterTests \
             -only-testing:NativTests/ChatResponseSpeechTests \
             -only-testing:NativTests/NativAudioSpeechClientTests \
             -only-testing:NativTests/HuggingFaceCapabilityFilterTests \

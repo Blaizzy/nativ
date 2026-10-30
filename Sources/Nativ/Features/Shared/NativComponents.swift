@@ -10,6 +10,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     var title: String = ""
     var showsBorder: Bool = true
     var isInteractive: Bool = true
+    var anchorTogglesPresentation: Bool = false
     @ViewBuilder let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
@@ -17,7 +18,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSView {
-        NSView()
+        ArrowlessPopoverAnchorView()
     }
 
     func updateNSView(_ anchorView: NSView, context: Context) {
@@ -31,6 +32,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             title: title,
             showsBorder: showsBorder,
             isInteractive: isInteractive,
+            anchorTogglesPresentation: anchorTogglesPresentation,
             content: content
         )
     }
@@ -48,6 +50,8 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
         private var gap: CGFloat = 8
         private var alignment: HorizontalAlignment = .center
         private var edge: VerticalEdge = .top
+        private var anchorTogglesPresentation = false
+        private var anchorClickMonitor: Any?
 
         func update(
             anchorView: NSView,
@@ -59,6 +63,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             title: String,
             showsBorder: Bool,
             isInteractive: Bool,
+            anchorTogglesPresentation: Bool,
             content: () -> Content
         ) {
             self.anchorView = anchorView
@@ -66,13 +71,16 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             self.gap = gap
             self.alignment = alignment
             self.edge = edge
+            self.anchorTogglesPresentation = anchorTogglesPresentation
 
             guard isPresented.wrappedValue else {
                 dismiss(updateBinding: false)
                 return
             }
 
-            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder, cornerRadius: cornerRadius)
+            let surface = ArrowlessPopoverSurface(content: content(), showsBorder: showsBorder,
+                                                  cornerRadius: cornerRadius,
+                                                  usesNativeShadow: anchorTogglesPresentation)
             if let hostingView {
                 hostingView.rootView = surface
             } else {
@@ -82,11 +90,18 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 self.panel = panel
             }
             panel?.ignoresMouseEvents = !isInteractive
+            // A shadow drawn inside the window extends its mouse-catching area
+            // over the trigger. Native window shadows never intercept input.
+            panel?.hasShadow = anchorTogglesPresentation
             panel?.title = title
             showPanel()
         }
 
         func dismiss(updateBinding: Bool = true) {
+            if let anchorClickMonitor {
+                NSEvent.removeMonitor(anchorClickMonitor)
+                self.anchorClickMonitor = nil
+            }
             if updateBinding, isPresented?.wrappedValue == true {
                 isPresented?.wrappedValue = false
             }
@@ -117,10 +132,35 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             panel.animationBehavior = .none
             panel.contentView = hostingView
             panel.onDismiss = { [weak self] in
-                guard self?.isPresented?.wrappedValue == true else { return }
-                self?.isPresented?.wrappedValue = false
+                guard let self, self.isPresented?.wrappedValue == true else { return }
+                self.dismiss()
             }
             return panel
+        }
+
+        private func updateAnchorClickMonitor() {
+            guard anchorTogglesPresentation, panel?.isVisible == true,
+                  anchorClickMonitor == nil else { return }
+            anchorClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                let consumed = MainActor.assumeIsolated {
+                    guard let self else { return false }
+                    return self.handleAnchorClick(event) == nil
+                }
+                return consumed ? nil : event
+            }
+        }
+
+        func handleAnchorClick(_ event: NSEvent) -> NSEvent? {
+            guard anchorTogglesPresentation, isPresented?.wrappedValue == true,
+                  event.type == .leftMouseDown,
+                  let anchorView, event.window === anchorView.window,
+                  anchorView.bounds.contains(anchorView.convert(event.locationInWindow, from: nil)) else {
+                return event
+            }
+            // Consume the close click before key-window dismissal and the
+            // SwiftUI button action can race to close and then reopen the panel.
+            dismiss()
+            return nil
         }
 
         private func showPanel() {
@@ -147,13 +187,17 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
                 }
                 parentWindow.addChildWindow(panel, ordered: .above)
             }
-            guard !wasVisible else { return }
+            if wasVisible {
+                updateAnchorClickMonitor()
+                return
+            }
             panel.alphaValue = 0
             if panel.ignoresMouseEvents {
                 panel.orderFront(nil)
             } else {
                 panel.makeKeyAndOrderFront(nil)
             }
+            updateAnchorClickMonitor()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.12
                 panel.animator().alphaValue = 1
@@ -168,7 +212,7 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             guard let panel else { return }
             let windowRect = anchorView.convert(anchorView.bounds, to: nil)
             let screenRect = parentWindow.convertToScreen(windowRect)
-            let shadowPadding = ArrowlessPopoverSurface<Content>.shadowPadding
+            let shadowPadding: CGFloat = anchorTogglesPresentation ? 0 : ArrowlessPopoverSurface<Content>.shadowPadding
             var origin = NSPoint(
                 x: alignment == .leading ? screenRect.minX - shadowPadding
                     : alignment == .trailing ? screenRect.maxX - size.width + shadowPadding
@@ -185,6 +229,12 @@ struct NativArrowlessPopoverPresenter<Content: View>: NSViewRepresentable {
             }
             panel.setFrameOrigin(origin)
         }
+    }
+}
+
+private final class ArrowlessPopoverAnchorView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
 
@@ -214,13 +264,14 @@ private struct ArrowlessPopoverSurface<Content: View>: View {
     let content: Content
     let showsBorder: Bool
     let cornerRadius: CGFloat
+    var usesNativeShadow = false
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
         content
             .clipShape(shape)
-            .padding(Self.shadowPadding)
+            .padding(usesNativeShadow ? 0 : Self.shadowPadding)
             .background {
                 shape
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -229,8 +280,8 @@ private struct ArrowlessPopoverSurface<Content: View>: View {
                             shape.strokeBorder(.primary.opacity(0.08), lineWidth: 0.5)
                         }
                     }
-                    .shadow(color: .black.opacity(0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
-                    .padding(Self.shadowPadding)
+                    .shadow(color: .black.opacity(usesNativeShadow ? 0 : 0.08), radius: Self.shadowRadius, x: 0, y: Self.shadowRadius / 3)
+                    .padding(usesNativeShadow ? 0 : Self.shadowPadding)
                     .drawingGroup()
             }
     }

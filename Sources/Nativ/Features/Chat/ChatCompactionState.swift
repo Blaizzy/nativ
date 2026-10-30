@@ -22,13 +22,14 @@ struct ChatCompactionState: Codable, Equatable {
         self.messageCount = messages.count
         self.prefixDigest = try Self.digest(messages)
         self.item = item
-        self.formatVersion = 1
+        self.formatVersion = 2
     }
 
     func input(for request: MLXChatCompletionRequest, serverURL: URL) throws -> [MLXJSONValue] {
         let messages = NativResponsesClient.conversationMessages(request.messages)
-        // Older capsules may carry instructions, so rebuild them once from the transcript.
-        guard formatVersion == 1, model == request.model, self.serverURL == serverURL,
+        // Older capsules may carry instructions or environment snapshots. Rebuild
+        // once from the transcript instead of trying to edit an opaque capsule.
+        guard formatVersion == 2, model == request.model, self.serverURL == serverURL,
               messageCount >= 0, messageCount <= messages.count,
               prefixDigest == (try Self.digest(Array(messages.prefix(messageCount)))) else {
             return try NativResponsesClient.inputItems(messages)

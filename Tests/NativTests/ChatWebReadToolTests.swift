@@ -131,6 +131,16 @@ final class ChatWebReadToolTests: XCTestCase {
         }
     }
 
+    func testBrowsingBudgetPreservesValidJSONAndSourceIdentity() throws {
+        let data = try JSONSerialization.data(withJSONObject: ["pages": [["url": "https://example.com/ocr", "content": String(repeating: "piña 🍍 ", count: 10000)]]])
+        let input = String(decoding: data, as: UTF8.self)
+        let output = ChatBrowsingBudget.bound(input, maximumBytes: ChatBrowsingBudget.maximumBytes(context: 8192))
+        XCTAssertLessThanOrEqual(output.utf8.count, 4096)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any])
+        XCTAssertEqual(object["truncated"] as? Bool, true)
+        XCTAssertEqual((object["pages"] as? [[String: Any]])?.first?["url"] as? String, "https://example.com/ocr")
+    }
+
     func testExaReadsURLsInOneBoundedBatch() async throws {
         let content = String(repeating: "a", count: 7_000)
         let response = try jsonString([

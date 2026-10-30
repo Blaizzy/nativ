@@ -5,6 +5,43 @@ import XCTest
 @testable import NativServerKit
 
 @MainActor
+final class AudioPlaybackStateTests: XCTestCase {
+    func testExcerptClampsToAvailableAudio() throws {
+        let full = try XCTUnwrap(AudioPlaybackExcerpt(start: -1, end: 20, duration: 10))
+        XCTAssertEqual(full.start, 0)
+        XCTAssertEqual(full.end, 10)
+        let tail = try XCTUnwrap(AudioPlaybackExcerpt(start: 9.5, end: 12, duration: 10))
+        XCTAssertEqual(tail.start, 9.5)
+        XCTAssertEqual(tail.end, 10)
+    }
+
+    func testInvalidOrEmptyExcerptsCannotStartPlayback() {
+        for (start, end, duration): (Double, Double, Double) in [
+            (0, 1, 0), (0, 1, -1), (1, 1, 10), (2, 1, 10),
+            (10, 12, 10), (20, 22, 10), (-2, -1, 10),
+            (.nan, 1, 10), (0, .infinity, 10), (0, 1, .infinity),
+        ] {
+            XCTAssertNil(AudioPlaybackExcerpt(start: start, end: end, duration: duration))
+        }
+    }
+
+    func testStoppingPlaybackClearsExcerptAndPositionButKeepsPreferredRate() throws {
+        let playback = AudioPlaybackState()
+        playback.recordID = "meeting"
+        playback.duration = 60
+        playback.position = 23
+        playback.rate = 1.5
+        playback.excerpt = try XCTUnwrap(AudioPlaybackExcerpt(start: 20, end: 28, duration: 60))
+        playback.reset()
+        XCTAssertNil(playback.recordID)
+        XCTAssertNil(playback.excerpt)
+        XCTAssertEqual(playback.position, 0)
+        XCTAssertEqual(playback.duration, 0)
+        XCTAssertEqual(playback.rate, 1.5)
+    }
+}
+
+@MainActor
 final class NativSystemPermissionControllerTests: XCTestCase {
     func testAuthorizedMicrophoneAccessDoesNotRequestAgain() async {
         var requestCount = 0
@@ -857,6 +894,116 @@ final class PushToTalkHoldStateTests: XCTestCase {
 }
 
 final class NativAudioClientTests: XCTestCase {
+    func testDiarizedStreamKeepsSpeakerMappingAndRejectsIncompleteResults() async throws {
+        let pcm = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try Data(repeating: 0, count: 2048).write(to: pcm)
+        defer { try? FileManager.default.removeItem(at: pcm) }
+        for host in ["success", "truncated", "failed", "duplicate", "invalid-time"] {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [DiarizedURLProtocol.self]
+            let client = NativAudioClient(baseURL: URL(string: "http://\(host)")!, sessionConfiguration: configuration)
+            do {
+                let response = try await client.transcribeDiarized(pcmURL: pcm, model: "asr", diarizationModel: "diarizer")
+                XCTAssertEqual(host, "success")
+                XCTAssertNil(response.diarization.revision)
+                XCTAssertEqual(response.text, "Hello")
+                XCTAssertEqual(response.diarization.speaker_ids, ["A": 7])
+                XCTAssertEqual(response.segments.first?.speakers, ["A"])
+            } catch {
+                XCTAssertNotEqual(host, "success", "\(error)")
+            }
+        }
+    }
+
+    func testSpeakerEndpointsWithRealServer() async throws {
+        guard let address = ProcessInfo.processInfo.environment["NATIV_AUDIO_TEST_SERVER"],
+              let path = ProcessInfo.processInfo.environment["NATIV_AUDIO_TEST_PCM"] else {
+            throw XCTSkip("Set NATIV_AUDIO_TEST_SERVER and NATIV_AUDIO_TEST_PCM for real-model HTTP validation.")
+        }
+        let client = NativAudioClient(baseURL: try XCTUnwrap(URL(string: address)), timeout: 300)
+        let result = try await client.diarize(pcmURL: URL(fileURLWithPath: path),
+            model: MeetingDiarizer.defaultModelID)
+        XCTAssertEqual(Set(result.segments.map(\.speaker)), Set(0..<8))
+        XCTAssertEqual(result.segments.count, 31)
+        let span = try XCTUnwrap(result.segments.first { $0.end - $0.start > 3.3 })
+        let start = Int(((span.start + 0.15) * 16000).rounded())
+        let end = min(Int(((span.end - 0.15) * 16000).rounded()), start + 10 * 16000)
+        let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        defer { try? file.close() }
+        try file.seek(toOffset: UInt64(start * 4))
+        let pcm = try XCTUnwrap(file.read(upToCount: (end - start) * 4))
+        let excerpt = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: excerpt) }
+        try pcm.write(to: excerpt)
+        let duration = Double(end - start) / 16000
+        let response = try await client.speakerEmbedding(pcmURL: excerpt, windows: [.init(start: 0, end: duration)],
+            model: SpeakerVoiceEmbeddingExtractor.modelID)
+        try SpeakerVoiceEmbedding(modelID: response.model, revision: response.revision,
+            vector: response.embedding, durationSeconds: response.duration).validate()
+        XCTAssertEqual(response.duration, duration, accuracy: 1 / 16000)
+    }
+
+    func testSpeakerAnalysisUploadPreservesPCMAndUsesConfiguredServer() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pcm = directory.appendingPathComponent("voice.f32")
+        let data = Data(repeating: 0x5a, count: 1_048_580)
+        try data.write(to: pcm)
+        let original = try FileManager.default.attributesOfItem(atPath: pcm.path)
+        let body = directory.appendingPathComponent("request")
+        let client = NativAudioClient(baseURL: URL(string: "http://localhost:49444")!, apiKey: "speaker-test", timeout: 7200)
+        let request = try client.makeAnalysisRequest(pcmURL: pcm, endpoint: "speaker_embeddings",
+            fields: ["model": "ecapa", "revision": "revision", "windows": "[{\"start\":0,\"end\":3}]"],
+            bodyURL: body, boundary: "TestBoundary")
+        XCTAssertEqual(request.url?.absoluteString, "http://localhost:49444/v1/audio/speaker_embeddings")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer speaker-test")
+        XCTAssertEqual(request.timeoutInterval, 7200)
+        XCTAssertNil(request.httpBody, "Large uploads must be sent from disk")
+        let uploaded = try Data(contentsOf: body)
+        XCTAssertTrue(uploaded.range(of: Data("name=\"input_format\"\r\n\r\npcm_f32le".utf8)) != nil)
+        XCTAssertTrue(uploaded.range(of: Data("name=\"windows\"\r\n\r\n[{\"start\":0,\"end\":3}]".utf8)) != nil)
+        XCTAssertTrue(uploaded.range(of: data) != nil)
+        XCTAssertTrue(uploaded.suffix(20).elementsEqual(Data("\r\n--TestBoundary--\r\n".utf8)))
+        XCTAssertEqual(try Data(contentsOf: pcm), data)
+        let after = try FileManager.default.attributesOfItem(atPath: pcm.path)
+        XCTAssertEqual(original[.modificationDate] as? Date, after[.modificationDate] as? Date)
+    }
+
+    func testServerAnalysisResponsesPreserveModelRevisionAndSpeakerIDs() throws {
+        for revision in ["", #","revision":null"#] {
+            let diarization = try JSONDecoder().decode(NativAudioDiarization.self,
+                from: Data("{\"model\":\"nemotron\",\"segments\":[]\(revision)}".utf8))
+            XCTAssertNil(diarization.revision)
+            let embedding = try JSONDecoder().decode(NativSpeakerEmbedding.self,
+                from: Data("{\"model\":\"ecapa\",\"embedding\":[1],\"duration\":3\(revision)}".utf8))
+            XCTAssertNil(embedding.revision)
+        }
+        let diarization = try JSONDecoder().decode(NativAudioDiarization.self,
+            from: Data(#"{"model":"nemotron","revision":"pinned","segments":[{"start":61.5,"end":64,"speaker":7}]}"#.utf8))
+        XCTAssertEqual(diarization.revision, "pinned")
+        XCTAssertEqual(diarization.segments.first?.speaker, 7)
+        XCTAssertEqual(diarization.segments.first?.start, 61.5)
+        let embedding = try JSONDecoder().decode(NativSpeakerEmbedding.self,
+            from: Data(#"{"model":"ecapa","revision":"pinned","embedding":[0.6,0.8],"duration":7}"#.utf8))
+        XCTAssertEqual(embedding.model, "ecapa")
+        XCTAssertEqual(embedding.embedding, [0.6, 0.8])
+        XCTAssertEqual(embedding.duration, 7)
+    }
+
+    func testCancelledSpeakerRequestDoesNotReadOrUploadAudio() async throws {
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await NativAudioClient(baseURL: URL(string: "http://127.0.0.1:1")!).diarize(
+                pcmURL: URL(fileURLWithPath: "/nonexistent.f32"), model: "model", revision: "revision")
+        }
+        do {
+            _ = try await task.value
+            XCTFail("Cancelled analysis must fail before reading audio")
+        } catch is CancellationError {}
+    }
+
+
     func testTranscriptionRequestUsesExpectedMultipartFields() throws {
         let serverURL = try XCTUnwrap(URL(string: "http://speech-runtime.local:49152"))
         let client = NativAudioClient(
@@ -1260,5 +1407,31 @@ final class VoiceShortcutPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.recordShortcut, customRecord)
         XCTAssertEqual(restored.retryShortcut, .retryDefault)
         XCTAssertTrue(restored.isHandsFreeEnabled)
+    }
+}
+
+
+private final class DiarizedURLProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        let metadata = #"{"model":"diarizer","revision":null,"segments":[{"start":0,"end":2,"speaker":7}],"speaker_ids":{"A":7}}"#
+        let segment = #"{"type":"transcript.text.segment","id":"seg_0","start":0,"end":1,"text":"Hello","speaker":"A","speakers":["A"]}"#
+        var events = ["{\"type\":\"diarization.completed\",\"diarization\":\(metadata)}", segment]
+        switch request.url?.host {
+        case "truncated": break
+        case "failed": events.append(#"{"type":"error","error":{"message":"ASR failed"}}"#)
+        case "duplicate": events.append(segment)
+        case "invalid-time": events.append(segment.replacingOccurrences(of: #""id":"seg_0""#, with: #""id":"seg_1""#).replacingOccurrences(of: #""start":0"#, with: #""start":-1"#))
+        default: events.append("{\"type\":\"transcript.text.done\",\"text\":\"Hello\",\"duration\":2,\"diarization\":\(metadata)}")
+        }
+        let data = Data(events.map { "data: \($0)\n\n" }.joined().utf8)
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type":"text/event-stream"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        for offset in stride(from: 0, to: data.count, by: 17) {
+            client?.urlProtocol(self, didLoad: data.subdata(in: offset..<min(offset + 17, data.count)))
+        }
+        client?.urlProtocolDidFinishLoading(self)
     }
 }

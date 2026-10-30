@@ -86,14 +86,6 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          if [[ "${NATIV_SKIP_PYTHON_RESOURCE_BUILD:-NO}" == "YES" ]]; then
-            resource_root="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Resources/mlx-vlm-server"
-            if [[ ! -x "${resource_root}/bin/mlx-vlm-server" ]]; then
-              echo "error: NATIV_SKIP_PYTHON_RESOURCE_BUILD requires an existing complete server resource at ${resource_root}" >&2
-              exit 1
-            fi
-            exit 0
-          fi
           python3 "$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py"
     settings:
       base:
@@ -163,9 +155,9 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Nativ
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         EX_ENABLE_EXTENSION_POINT_GENERATION: YES
-        MARKETING_VERSION: 0.4.3
+        MARKETING_VERSION: 0.4.4
         NATIV_RELEASE_VERSION: $(MARKETING_VERSION)
-        CURRENT_PROJECT_VERSION: 22
+        CURRENT_PROJECT_VERSION: 23
   VoiceDictationExtensionRuntime:
     type: extensionkit-extension
     platform: macOS
@@ -186,8 +178,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(NATIV_VOICE_EXTENSION_BUNDLE_IDENTIFIER)
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Configuration/AudioExtension-Info.plist
-        MARKETING_VERSION: 0.4.3
-        CURRENT_PROJECT_VERSION: 22
+        MARKETING_VERSION: 0.4.4
+        CURRENT_PROJECT_VERSION: 23
         SKIP_INSTALL: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
   NativTests:
@@ -238,6 +230,14 @@ targets:
       - path: Sources/Nativ/Features/VoiceCapture/VoiceWakeWordPowerPolicy.swift
       - path: Sources/Nativ/Features/VoiceCapture/VoiceAnimationPreferences.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioAnalyticsStore.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioDiarization.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioLibraryFilter.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSpeakerProfile.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSpeakerRecognition.swift
+      - path: Sources/Nativ/Features/VoiceCapture/MeetingAudioAnalysis.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSummaryView.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioSummaryGenerator.swift
+      - path: Sources/Nativ/Features/VoiceCapture/AudioPlaybackState.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioRecordExport.swift
       - path: Sources/Nativ/Features/VoiceCapture/AudioCaptureSleepMonitor.swift
       - path: Sources/Nativ/Features/VoiceCapture/SystemAudioMeetingRecorder.swift
@@ -280,6 +280,8 @@ targets:
       - path: Sources/Nativ/Features/Chat/Tools/ChatSwitchModelTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebSearchTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatWebReadTool.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatBrowserEvidence.swift
+      - path: Sources/Nativ/Features/Chat/Tools/ChatBrowsingBudget.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatReadFileTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatSearchFilesTool.swift
       - path: Sources/Nativ/Features/Chat/Tools/ChatFileWriteTools.swift

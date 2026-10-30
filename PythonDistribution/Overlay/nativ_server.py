@@ -849,6 +849,8 @@ def iter_message_media(messages: list[Any]) -> tuple[int, int]:
 
 def resolve_thinking_enabled(payload: dict[str, Any]) -> bool:
     value = payload.get("enable_thinking")
+    if value is None and isinstance(payload.get("chat_template_kwargs"), dict):
+        value = payload["chat_template_kwargs"].get("enable_thinking")
     if isinstance(value, bool):
         return value
     return bool(base.get_server_enable_thinking())
@@ -869,14 +871,20 @@ _PER_MODEL_CONFIGS = _load_per_model_configs()
 
 
 def apply_per_model_request_defaults(payload: dict[str, Any]) -> bool:
+    changed = False
+    options = payload.get("chat_template_kwargs")
+    if payload.get("enable_thinking") is None and isinstance(options, dict):
+        alias = options.get("enable_thinking")
+        if isinstance(alias, bool):
+            payload["enable_thinking"] = alias
+            changed = True
     model_id = payload.get("model")
     if not isinstance(model_id, str):
-        return False
+        return changed
     profile = _PER_MODEL_CONFIGS.get(model_id)
     if not isinstance(profile, dict):
-        return False
+        return changed
 
-    changed = False
     thinking_enabled = profile.get("thinkingEnabled")
     if "enable_thinking" not in payload and isinstance(thinking_enabled, bool):
         payload["enable_thinking"] = thinking_enabled

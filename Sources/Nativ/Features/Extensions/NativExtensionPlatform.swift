@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import NativServerKit
 @preconcurrency import ExtensionFoundation
 import Foundation
 import NativExtensionSDK
@@ -35,6 +36,7 @@ struct NativExtensionPageContext {
 struct NativExtensionHostContext {
     let transcriptionConfiguration:
         @MainActor @Sendable () -> VoiceTranscriptionConfiguration?
+    let audioServer: @MainActor @Sendable () async throws -> NativAudioClient
     let openSpeechModels: () -> Void
     let showMainWindow: () -> Void
 }

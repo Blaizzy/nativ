@@ -4,16 +4,24 @@ import WebKit
 import XCTest
 
 final class ChatWorkSplitTests: XCTestCase {
-    func testAccessPickerWrapsOtherControlsWithoutCollapsingExistingSplit() {
-        for accessWidth: CGFloat in [96, 104, 115] {
-            let controls = ChatComposerControlsSizing(workspaceWidth: 116, accessWidth: accessWidth,
-                                                      modelWidth: 180, showsContext: true)
-            let sizing = ChatWorkSplitSizing(minimumChatWidth: max(480, controls.minimumWidth + 64))
-            XCTAssertTrue(sizing.canSplit(834))
-            let chatWidth = sizing.chatWidth(preferred: nil, available: 834)
-            XCTAssertLessThan(chatWidth - 64, controls.singleRowWidth)
-            XCTAssertGreaterThanOrEqual(chatWidth - 64, controls.minimumWidth)
-            XCTAssertGreaterThanOrEqual(CGFloat(680), controls.singleRowWidth)
+    func testDividerReservesEntireControlsRowIncludingAccessPicker() {
+        for accessWidth: CGFloat in [30, 96, 104, 115] {
+            for modelWidth: CGFloat in [180, 300] {
+                for showsContext in [false, true] {
+                    let controls = ChatComposerControlsSizing(workspaceWidth: 116, accessWidth: accessWidth,
+                                                              modelWidth: modelWidth, showsContext: showsContext)
+                    let previousMinimum = 30 + 116 + 12 + modelWidth + 32 + 22
+                        + (showsContext ? 30 + 8 * 5 : 8 * 4)
+                    XCTAssertEqual(controls.minimumWidth, previousMinimum + accessWidth + 8)
+                    let minimum = controls.minimumWidth + 64
+                    let sizing = ChatWorkSplitSizing(minimumChatWidth: minimum)
+                    XCTAssertEqual(sizing.chatWidth(preferred: minimum - 10, available: 1_600), minimum)
+                    XCTAssertFalse(sizing.shouldCollapse(proposed: minimum - 10, available: 1_600))
+                    XCTAssertTrue(sizing.shouldCollapse(proposed: minimum - 25, available: 1_600))
+                    XCTAssertFalse(sizing.canSplit(minimum + 320))
+                    XCTAssertTrue(sizing.canSplit(minimum + 321))
+                }
+            }
         }
     }
 

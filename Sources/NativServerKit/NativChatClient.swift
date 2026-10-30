@@ -246,6 +246,18 @@ public struct MLXChatImageURL: Codable, Equatable, Sendable {
 
 public struct MLXChatUsage: Decodable, Equatable, Sendable {
     public let promptTokens: Int?
+    private let promptTokensDetails: PromptTokensDetails?
+
+    public var cachedTokens: Int? { promptTokensDetails?.cachedTokens }
+
+    private struct PromptTokensDetails: Decodable, Equatable, Sendable {
+        let cachedTokens: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case cachedTokens = "cached_tokens"
+        }
+    }
+
     public let completionTokens: Int?
     public let totalTokens: Int?
     public let promptTokensPerSecond: Double?
@@ -262,9 +274,11 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
         decodeTokensPerSecond: Double?,
         peakMemoryGB: Double?,
         specDraftKind: String? = nil,
-        specAcceptanceRate: Double? = nil
+        specAcceptanceRate: Double? = nil,
+        cachedTokens: Int? = nil
     ) {
         self.promptTokens = promptTokens
+        self.promptTokensDetails = cachedTokens.map { PromptTokensDetails(cachedTokens: $0) }
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
         self.promptTokensPerSecond = promptTokensPerSecond
@@ -307,6 +321,7 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
+        case promptTokensDetails = "prompt_tokens_details"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
         case promptTokensPerSecond = "prompt_tps"
@@ -326,7 +341,8 @@ public struct MLXChatUsage: Decodable, Equatable, Sendable {
                 ?? decodeTokensPerSecond,
             peakMemoryGB: timings?.peakMemoryGB ?? peakMemoryGB,
             specDraftKind: timings?.specDraftKind ?? specDraftKind,
-            specAcceptanceRate: timings?.resolvedSpecAcceptanceRate ?? specAcceptanceRate
+            specAcceptanceRate: timings?.resolvedSpecAcceptanceRate ?? specAcceptanceRate,
+            cachedTokens: cachedTokens
         )
     }
 }
@@ -456,11 +472,34 @@ public struct MLXChatJSONSchema: Encodable, Equatable, Sendable {
     }
 }
 
+public struct MLXToolResultContext: Encodable, Equatable, Sendable {
+    public struct Entry: Encodable, Equatable, Sendable {
+        public var toolCallID: String
+        public var text: String
+        public init(toolCallID: String, text: String) {
+            self.toolCallID = toolCallID
+            self.text = text
+        }
+        enum CodingKeys: String, CodingKey { case toolCallID = "tool_call_id", text }
+    }
+    public var entries: [Entry]
+    public var maxBytes: Int
+    public init(entries: [Entry], maxBytes: Int) {
+        self.entries = entries
+        self.maxBytes = maxBytes
+    }
+    enum CodingKeys: String, CodingKey { case entries, maxBytes = "max_bytes" }
+}
+
 public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var model: String
     public var messages: [MLXChatMessage]
     /// Current environment state, sent after history without becoming part of the stored conversation.
     public var transientContext: String? = nil
+    /// Exact excerpts restored by the server only when their tool receipts leave context.
+    public var toolResultContext: MLXToolResultContext? = nil
+    /// One-request closing guidance, placed after environment data without changing the saved prefix.
+    public var completionInstruction: String? = nil
 
     public var maxTokens: Int
     public var temperature: Double
@@ -479,8 +518,15 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public var streamOptions: MLXChatStreamOptions?
 
     public var contextMessages: [MLXChatMessage] {
-        guard let transientContext, !transientContext.isEmpty else { return [] }
-        return [MLXChatMessage(role: "user", content: transientContext)]
+        [transientContext, completionInstruction].compactMap { content in
+            guard let content, !content.isEmpty else { return nil }
+            return MLXChatMessage(role: "user", content: content)
+        }
+    }
+
+    public var requestContext: String? {
+        let text = contextMessages.compactMap(\.textContent).joined(separator: "\n\n")
+        return text.isEmpty ? nil : text
     }
 
     public init(
@@ -524,6 +570,8 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case model
         case messages
+        case requestContext = "transient_context"
+        case toolResultContext = "tool_result_context"
         case maxTokens = "max_tokens"
         case temperature
         case topK = "top_k"
@@ -544,7 +592,9 @@ public struct MLXChatCompletionRequest: Encodable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(model, forKey: .model)
-        try container.encode(messages + contextMessages, forKey: .messages)
+        try container.encode(messages, forKey: .messages)
+        try container.encodeIfPresent(requestContext, forKey: .requestContext)
+        try container.encodeIfPresent(toolResultContext, forKey: .toolResultContext)
         try container.encode(maxTokens, forKey: .maxTokens)
         try container.encode(temperature, forKey: .temperature)
         try container.encode(topK, forKey: .topK)
@@ -927,6 +977,7 @@ public final class NativChatClient: @unchecked Sendable {
 
 private struct PromptTokenCountRequest: Encodable {
     let input: [MLXChatMessage]
+    let requestContext: String?
     let model: String
     let tools: [MLXChatToolDefinition]?
     let toolChoice: String?
@@ -936,7 +987,8 @@ private struct PromptTokenCountRequest: Encodable {
     let thinkingEndToken: String?
 
     init(_ request: MLXChatCompletionRequest) {
-        input = request.messages + request.contextMessages
+        input = request.messages
+        requestContext = request.requestContext
         model = request.model
         tools = request.tools
         toolChoice = request.toolChoice
@@ -948,6 +1000,7 @@ private struct PromptTokenCountRequest: Encodable {
 
     enum CodingKeys: String, CodingKey {
         case input
+        case requestContext = "transient_context"
         case model
         case tools
         case toolChoice = "tool_choice"

@@ -743,12 +743,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not install mlx-vlm",
     )
-    parser.add_argument(
+    cache_mode = parser.add_mutually_exclusive_group()
+    cache_mode.add_argument(
         "--verify-only",
         action="store_true",
         help="Only verify an existing output tree",
     )
-    parser.add_argument("--force", action="store_true", help="Rebuild even if output exists")
+    cache_mode.add_argument(
+        "--reuse-only",
+        action="store_true",
+        help="Require an existing runtime with a matching build signature; never rebuild",
+    )
+    cache_mode.add_argument("--force", action="store_true", help="Rebuild even if output exists")
     return parser.parse_args()
 
 
@@ -804,6 +810,13 @@ def main() -> None:
         log(f"Using existing stamped build at {output}")
         verify_distribution(output, expect_mlx_vlm=not args.skip_install)
         return
+
+    if args.reuse_only:
+        raise SystemExit(
+            f"Cached Python runtime is missing or stale at {output}. "
+            "Rebuild without NATIV_SKIP_PYTHON_RESOURCE_BUILD (or --reuse-only) "
+            "to synchronize the runtime with this checkout."
+        )
 
     if output.exists():
         shutil.rmtree(output)

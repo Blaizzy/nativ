@@ -116,6 +116,53 @@ final class ChatToolRegistryTests: XCTestCase {
         XCTAssertTrue(names.contains(ChatWebReadToolRegistry.toolName))
     }
 
+    func testBrowserBudgetPreservesReadablePassagesBeforeMenus() throws {
+        let passage = String(repeating: "OCR source facts. ", count: 300)
+        let snapshot: [String: Any] = ["source_kind": "page", "kind": "website", "url": "https://example.com/article", "text": passage,
+            "elements": (0..<40).map { ["id": "control-\($0)", "label": String(repeating: "Navigation ", count: 20), "href": "https://example.com/menu/\($0)"] }]
+        let text = String(decoding: try JSONSerialization.data(withJSONObject: snapshot), as: UTF8.self)
+        let bounded = ChatBrowsingBudget.bound(text, maximumBytes: 4096, prioritizeText: true)
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bounded.utf8)) as? [String: Any])
+        XCTAssertLessThanOrEqual(bounded.utf8.count, 4096)
+        XCTAssertGreaterThan((result["text"] as? String ?? "").utf8.count, 1500)
+        XCTAssertEqual((result["elements"] as? [Any])?.count, 2)
+        let inspection = ChatBrowsingBudget.bound(text, maximumBytes: 4096)
+        let controls = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(inspection.utf8)) as? [String: Any])
+        XCTAssertGreaterThan((controls["elements"] as? [Any])?.count ?? 0, 2)
+    }
+
+    @MainActor
+    func testChatWorkBrowserResultsAreBoundedBeforeReturningToModel() async throws {
+        let tabID = UUID().uuidString
+        let url = "https://example.com/ocr"
+        let snapshot = try JSONSerialization.data(withJSONObject: [
+            "id": tabID, "url": url,
+            "text": String(repeating: "piña 🍍 ", count: 10_000),
+            "elements": [["id": "link-1", "label": "Read source", "href": url]],
+        ])
+        let content = String(decoding: snapshot, as: UTF8.self)
+        var context = makeContext()
+        context.browsingMaximumResultBytes = ChatBrowsingBudget.maximumBytes(context: 8192)
+        context.workAction = { _ in content }
+
+        for arguments in [
+            #"{"action":"search","query":"local OCR models"}"#,
+            #"{"action":"open","url":"https://example.com/ocr"}"#,
+            #"{"action":"open","element_id":"source-1"}"#,
+            #"{"action":"inspect"}"#,
+        ] {
+            let outcome = try await ChatToolDispatcher.execute(
+                call: makeCall(name: ChatWorkToolRegistry.toolName, arguments: arguments), context: context
+            )
+            XCTAssertLessThanOrEqual(outcome.content.utf8.count, 4096)
+            let object = try decode(outcome.content)
+            XCTAssertEqual(object["truncated"] as? Bool, true)
+            XCTAssertEqual(object["id"] as? String, tabID)
+            XCTAssertEqual(object["url"] as? String, url)
+            XCTAssertEqual((object["elements"] as? [[String: Any]])?.first?["id"] as? String, "link-1")
+        }
+    }
+
     func testWebSearchCarriesConfigurationMetadata() {
         let descriptor = ChatToolRegistry.descriptors(canEditImage: false).first {
             $0.definition.function.name == ChatWebSearchToolRegistry.toolName
@@ -1458,10 +1505,22 @@ final class ChatAccessModeTests: XCTestCase {
         let cases: [(ChatToolOperation, [Bool])] = [
             (.routine, [false, false, false]), (.workPane, [true, false, false]),
             (.sensitive, [true, true, false]), (.command, [true, true, true]),
-            (.external, [false, true, false]),
+            (.external, [false, false, false]),
         ]
         for (operation, expected) in cases {
             XCTAssertEqual(ChatAccessMode.allCases.map { $0.requiresApproval(for: operation) }, expected)
+        }
+    }
+
+    func testIncreasingAccessNeverIntroducesApproval() {
+        let transitions: [(ChatAccessMode, ChatAccessMode)] = [
+            (.standard, .medium), (.medium, .fullAccess),
+        ]
+        for (lower, higher) in transitions {
+            for operation in ChatToolOperation.allCases where !lower.requiresApproval(for: operation) {
+                XCTAssertFalse(higher.requiresApproval(for: operation),
+                               "Increasing access from \(lower) to \(higher) must not add approval for \(operation)")
+            }
         }
     }
 
@@ -1491,7 +1550,7 @@ final class ChatAccessModeTests: XCTestCase {
     }
 
     func testApprovalGatePreventsDispatchUntilConfirmedAndStopsDeniedOrCancelledCalls() async throws {
-        for operation: ChatToolOperation in [.command, .external, .sensitive] {
+        for operation: ChatToolOperation in [.command, .sensitive] {
             for resolution in ["confirm", "deny", "cancel", "confirmThenCancel"] {
                 let gate = ChatToolConsentGate()
                 let id = UUID()
