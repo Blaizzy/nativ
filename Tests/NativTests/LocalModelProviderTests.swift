@@ -1,3 +1,4 @@
+import CryptoKit
 import NativServerKit
 import XCTest
 
@@ -928,11 +929,47 @@ final class ModelDownloadProgressPresentationTests: XCTestCase {
 }
 
 final class HuggingFaceXetDownloadTests: XCTestCase {
+    private let content = Data(0..<100)
+    private var etag: String { SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined() }
+
     func testForwardsWrittenBytesWithoutDoubleCounting() throws {
         let result = try run(helper: "print(20)\nprint(80)\nprint(100)")
         XCTAssertEqual(result.status, 0, result.output)
         XCTAssertTrue(result.output.contains("written=[20, 60, 20]"))
         XCTAssertTrue(result.output.contains("speed=[20, 60, 20]"))
+    }
+
+    func testResumesVerifiedPartialFileCountingItAsProgressButNotTransfer() throws {
+        let result = try run(helper: appendRest + "\nprint(100)", resumed: content.prefix(40))
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("written=[40, 60]"), result.output)
+        XCTAssertTrue(result.output.contains("speed=[60]"), result.output)
+        XCTAssertTrue(result.output.contains("files=['blob.attempt.incomplete', 'other.old.incomplete']"), result.output)
+    }
+
+    func testRejectsResumedFileThatFailsVerification() throws {
+        let result = try run(helper: appendRest + "\nprint(100)", resumed: Data(repeating: 0xFF, count: 40))
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("files=['blob.attempt.incomplete', 'other.old.incomplete']"), result.output)
+    }
+
+    func testDiscardsPartialFileLargerThanExpected() throws {
+        let result = try run(helper: "print(100)", resumed: Data(count: 150))
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("written=[100]"), result.output)
+    }
+
+    func testDownloadsIntoStableBlobPathAndRemovesOrphans() throws {
+        let result = try run(helper: "print(100)")
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("helper_path=blob.incomplete"), result.output)
+        XCTAssertTrue(result.output.contains("files=['blob.attempt.incomplete', 'other.old.incomplete']"), result.output)
+    }
+
+    func testKeepsResumableFileWhenDownloadFails() throws {
+        let result = try run(helper: "print(20)\nexit(1)")
+        XCTAssertNotEqual(result.status, 0, result.output)
+        XCTAssertTrue(result.output.contains("files=['blob.attempt.incomplete', 'blob.incomplete', 'other.old.incomplete']"), result.output)
     }
 
     func testRejectsFailedIncompleteAndInvalidDownloads() throws {
@@ -943,16 +980,33 @@ final class HuggingFaceXetDownloadTests: XCTestCase {
         }
     }
 
-    private func run(helper: String) throws -> (status: Int32, output: String) {
+    private let appendRest = "open(sys.argv[4], 'ab').write(bytes(range(40, 100)))"
+
+    private func run(helper: String, resumed: Data? = nil) throws -> (status: Int32, output: String) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
+        let blobs = directory.appendingPathComponent("blobs")
+        try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
+        for name in ["\(etag).attempt.incomplete", "\(etag).part.incomplete", "other.old.incomplete"] {
+            FileManager.default.createFile(atPath: blobs.appendingPathComponent(name).path, contents: nil)
+        }
+        if let resumed {
+            try resumed.write(to: blobs.appendingPathComponent("\(etag).incomplete"))
+        }
         let executable = directory.appendingPathComponent("helper")
-        try "#!/usr/bin/python3\n\(helper)\n".write(to: executable, atomically: true, encoding: .utf8)
+        let preamble = """
+        import os, sys
+        open(sys.argv[4], 'a').close()
+        print('helper_path=' + os.path.basename(sys.argv[4]).replace('\(etag)', 'blob'), file=sys.stderr)
+        """
+        try "#!/usr/bin/python3\n\(preamble)\n\(helper)\n".write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let script = """
-        import os, sys, types
+        import atexit, os, pathlib, sys, types
         written, speed = [], []
+        blobs = pathlib.Path(\(String(reflecting: blobs.path)))
+        atexit.register(lambda: print('files=' + str(sorted(p.name.replace('\(etag)', 'blob') for p in blobs.iterdir()))))
         class Bar:
             def __enter__(self): return self
             def __exit__(self, *args): pass
@@ -966,7 +1020,7 @@ final class HuggingFaceXetDownloadTests: XCTestCase {
         sys.modules['huggingface_hub.file_download'] = download
         \(HuggingFaceXetDownload.script)
         download.xet_get(
-            incomplete_path='unused', expected_size=100, headers={},
+            incomplete_path=blobs / '\(etag).attempt.incomplete', expected_size=100, headers={},
             xet_file_data=types.SimpleNamespace(file_hash='hash', refresh_route='url'),
         )
         print('written=' + str(written))
@@ -982,5 +1036,100 @@ final class HuggingFaceXetDownloadTests: XCTestCase {
         let output = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus, String(decoding: output, as: UTF8.self))
+    }
+}
+
+final class HuggingFaceXetResumeTests: XCTestCase {
+    private let source = Data((0..<25).map { UInt8($0) })
+
+    func testResumesFromUnalignedPrefixInSegments() async throws {
+        let destination = try temporaryFile(contents: source.prefix(11))
+        let recorder = Recorder()
+        let written = try await resume(destination, recorder: recorder)
+        XCTAssertEqual(written, 25)
+        XCTAssertEqual(try Data(contentsOf: destination), source)
+        XCTAssertEqual(recorder.ranges, [11..<19, 19..<25])
+        XCTAssertEqual(recorder.progress, [19, 25])
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: destination.deletingLastPathComponent().appendingPathComponent("blob.part.incomplete").path
+        ))
+    }
+
+    func testKeepsCompletedSegmentsWhenALaterSegmentFails() async throws {
+        let destination = try temporaryFile(contents: nil)
+        do {
+            _ = try await resume(destination, recorder: Recorder(failAfter: 1))
+            XCTFail("Expected the second segment to fail")
+        } catch {}
+        XCTAssertEqual(try Data(contentsOf: destination), source.prefix(8))
+
+        let written = try await resume(destination, recorder: Recorder())
+        XCTAssertEqual(written, 25)
+        XCTAssertEqual(try Data(contentsOf: destination), source)
+    }
+
+    func testCompleteOrEmptyFilesNeedNoFetch() async throws {
+        let complete = try temporaryFile(contents: source)
+        let recorder = Recorder()
+        let completeSize = try await resume(complete, recorder: recorder)
+        XCTAssertEqual(completeSize, 25)
+
+        let empty = try temporaryFile(contents: nil)
+        let emptySize = try await resume(empty, recorder: recorder, expectedSize: 0)
+        XCTAssertEqual(emptySize, 0)
+        XCTAssertEqual(try Data(contentsOf: empty), Data())
+        XCTAssertEqual(recorder.ranges, [])
+    }
+
+    private func resume(_ destination: URL, recorder: Recorder, expectedSize: Int64? = nil) async throws -> Int64 {
+        try await HuggingFaceXetDownload.resume(
+            destination: destination,
+            expectedSize: expectedSize ?? Int64(source.count),
+            segmentSize: 8,
+            progress: { recorder.record(progress: $0) }
+        ) { range, segmentURL, progress in
+            try recorder.fetch(range)
+            let bytes = source[Int(range.lowerBound)..<Int(range.upperBound)]
+            try Data(bytes).write(to: segmentURL)
+            progress(Int64(bytes.count))
+            return Int64(bytes.count)
+        }
+    }
+
+    private func temporaryFile(contents: Data?) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("blob.incomplete")
+        if let contents {
+            try contents.write(to: url)
+        }
+        return url
+    }
+
+    private final class Recorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private let failAfter: Int?
+        private(set) var ranges: [Range<UInt64>] = []
+        private(set) var progress: [Int64] = []
+
+        init(failAfter: Int? = nil) {
+            self.failAfter = failAfter
+        }
+
+        func fetch(_ range: Range<UInt64>) throws {
+            lock.lock()
+            defer { lock.unlock() }
+            if let failAfter, ranges.count >= failAfter {
+                throw URLError(.networkConnectionLost)
+            }
+            ranges.append(range)
+        }
+
+        func record(progress value: Int64) {
+            lock.lock()
+            progress.append(value)
+            lock.unlock()
+        }
     }
 }
