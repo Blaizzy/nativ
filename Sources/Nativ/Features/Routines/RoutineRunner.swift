@@ -201,9 +201,8 @@ final class RoutineRunner {
     ) async throws -> ScheduledExecutionResult {
         let client = NativChatClient(
             baseURL: baseURL, apiKey: settings.serverAPIKey,
-            idleTimeout: settings.responseTimeout.clientTimeout,
-            resourceTimeout: settings.responseTimeout.clientTimeout,
-            requestTimeout: settings.responseTimeout.seconds
+            idleTimeout: settings.chatResponseTimeout.idleTimeout,
+            resourceTimeout: settings.chatResponseTimeout.resourceTimeout
         )
         var requestMessages: [MLXChatMessage] = []
         let systemPrompt = Self.systemPrompt(for: capabilities)

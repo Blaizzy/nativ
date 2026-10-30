@@ -621,27 +621,31 @@ public struct MLXPromptTokenCount: Decodable, Equatable, Sendable {
     }
 }
 
-/// Shared server deadline. The client allows a small grace period to receive
-/// the server's error and close the connection before its own fallback fires.
-public enum NativResponseTimeout: Int, CaseIterable, Codable, Identifiable, Sendable {
+public enum NativChatTimeout: Int, CaseIterable, Codable, Identifiable, Sendable {
     case tenMinutes = 600
     case twentyMinutes = 1200
     case thirtyMinutes = 1800
     case sixtyMinutes = 3600
-    case twoHours = 7200
+    case unlimited = 0
 
     public var id: Self { self }
-    public var seconds: TimeInterval { TimeInterval(rawValue) }
-    public var clientTimeout: TimeInterval { seconds + 15 }
 
     public var displayName: String {
         switch self {
-        case .tenMinutes: "10 minutes"
+        case .tenMinutes: "10 minutes (default)"
         case .twentyMinutes: "20 minutes"
-        case .thirtyMinutes: "30 minutes (default)"
+        case .thirtyMinutes: "30 minutes"
         case .sixtyMinutes: "60 minutes"
-        case .twoHours: "120 minutes"
+        case .unlimited: "No limit"
         }
+    }
+
+    public var idleTimeout: TimeInterval {
+        self == .unlimited ? .greatestFiniteMagnitude : TimeInterval(rawValue)
+    }
+
+    public var resourceTimeout: TimeInterval {
+        self == .unlimited ? .greatestFiniteMagnitude : max(3600, idleTimeout * 2)
     }
 }
 
@@ -650,25 +654,24 @@ public final class NativChatClient: @unchecked Sendable {
     private let apiKey: String?
     private let session: URLSession
     private let timeout: TimeInterval
-    private let requestTimeout: TimeInterval?
 
 
-    public static let defaultIdleTimeout = NativResponseTimeout.thirtyMinutes.clientTimeout
+    public static let defaultIdleTimeout: TimeInterval = 600
 
-    /// Fallback budget; the server normally ends the request first.
-    public static let defaultResourceTimeout = NativResponseTimeout.thirtyMinutes.clientTimeout
+    /// Total budget for one request. Long generations legitimately run for many
+    /// minutes, so this only exists to stop a connection leaking forever; stalls
+    /// are caught by `idleTimeout`, not here.
+    public static let defaultResourceTimeout: TimeInterval = 3_600
 
     public init(
         baseURL: URL = URL(string: "http://127.0.0.1:8080")!,
         apiKey: String? = nil,
         idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
-        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout,
-        requestTimeout: TimeInterval? = nil
+        resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.timeout = idleTimeout
-        self.requestTimeout = requestTimeout
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = idleTimeout
@@ -906,9 +909,6 @@ public final class NativChatClient: @unchecked Sendable {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(accepts, forHTTPHeaderField: "Accept")
-        if let requestTimeout {
-            request.setValue(String(requestTimeout), forHTTPHeaderField: "X-Nativ-Request-Timeout")
-        }
         NativServerAuthorization.authorize(&request, apiKey: apiKey)
         request.httpBody = try JSONEncoder().encode(payload)
         return request

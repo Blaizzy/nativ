@@ -688,7 +688,7 @@ struct NativSettings: Codable, Equatable {
     /// Set once the Up-arrow recall has been used, which retires its hint.
     var hasUsedPromptRecall: Bool
     var chatFontScale: Double
-    var responseTimeout: NativResponseTimeout
+    var chatResponseTimeout: NativChatTimeout
     var sidebarPinnedCollapsed: Bool
     var sidebarProjectsCollapsed: Bool
     var sidebarSessionsCollapsed: Bool
@@ -749,7 +749,7 @@ struct NativSettings: Codable, Equatable {
         prefixCacheBlockSize: Int = 16,
         hasUsedPromptRecall: Bool = false,
         chatFontScale: Double = Self.defaultChatFontScale,
-        responseTimeout: NativResponseTimeout = .thirtyMinutes,
+        chatResponseTimeout: NativChatTimeout = .tenMinutes,
         sidebarPinnedCollapsed: Bool = false,
         sidebarProjectsCollapsed: Bool = false,
         sidebarSessionsCollapsed: Bool = false,
@@ -809,7 +809,7 @@ struct NativSettings: Codable, Equatable {
         self.prefixCacheBlockSize = prefixCacheBlockSize
         self.hasUsedPromptRecall = hasUsedPromptRecall
         self.chatFontScale = chatFontScale
-        self.responseTimeout = responseTimeout
+        self.chatResponseTimeout = chatResponseTimeout
         self.sidebarPinnedCollapsed = sidebarPinnedCollapsed
         self.sidebarProjectsCollapsed = sidebarProjectsCollapsed
         self.sidebarSessionsCollapsed = sidebarSessionsCollapsed
@@ -872,9 +872,7 @@ struct NativSettings: Codable, Equatable {
         case prefixCacheBlockSize
         case hasUsedPromptRecall
         case chatFontScale
-        case responseTimeout
-        case chatResponseTimeout // Legacy idle setting; migrate its total budget.
-        case serverStreamingTimeout // Earlier server deadline setting.
+        case chatResponseTimeout
         case sidebarPinnedCollapsed
         case sidebarProjectsCollapsed
         case sidebarSessionsCollapsed
@@ -1032,20 +1030,8 @@ struct NativSettings: Codable, Equatable {
         chatFontScale =
             try container.decodeIfPresent(Double.self, forKey: .chatFontScale)
             ?? defaults.chatFontScale
-        if let value = try container.decodeIfPresent(Int.self, forKey: .responseTimeout),
-           let timeout = NativResponseTimeout(rawValue: value) {
-            responseTimeout = timeout
-        } else if let value = try container.decodeIfPresent(Int.self, forKey: .serverStreamingTimeout),
-                  let timeout = NativResponseTimeout(rawValue: value) {
-            responseTimeout = timeout
-        } else if let oldIdle = try container.decodeIfPresent(Int.self, forKey: .chatResponseTimeout),
-                  [0, 600, 1200, 1800, 3600].contains(oldIdle) {
-            // Preserve the old total client budget. "No limit" migrates to the
-            // longest finite option now that all requests must have a deadline.
-            responseTimeout = oldIdle == 0 || oldIdle == 3600 ? .twoHours : .sixtyMinutes
-        } else {
-            responseTimeout = defaults.responseTimeout
-        }
+        chatResponseTimeout = (try container.decodeIfPresent(Int.self, forKey: .chatResponseTimeout))
+            .flatMap(NativChatTimeout.init(rawValue:)) ?? defaults.chatResponseTimeout
         sidebarPinnedCollapsed =
             try container.decodeIfPresent(Bool.self, forKey: .sidebarPinnedCollapsed)
             ?? defaults.sidebarPinnedCollapsed
@@ -1114,7 +1100,7 @@ struct NativSettings: Codable, Equatable {
         try container.encode(prefixCacheBlockSize, forKey: .prefixCacheBlockSize)
         try container.encode(hasUsedPromptRecall, forKey: .hasUsedPromptRecall)
         try container.encode(chatFontScale, forKey: .chatFontScale)
-        try container.encode(responseTimeout, forKey: .responseTimeout)
+        try container.encode(chatResponseTimeout, forKey: .chatResponseTimeout)
         try container.encode(sidebarPinnedCollapsed, forKey: .sidebarPinnedCollapsed)
         try container.encode(sidebarProjectsCollapsed, forKey: .sidebarProjectsCollapsed)
         try container.encode(sidebarSessionsCollapsed, forKey: .sidebarSessionsCollapsed)
@@ -1435,7 +1421,6 @@ struct NativSettings: Codable, Equatable {
     var runtimeSettings: [String: MLXJSONValue] {
         let settings = normalized()
         return [
-            "token_queue_timeout": .number(settings.responseTimeout.seconds),
             "apc_enabled": .bool(settings.prefixCachingEnabled),
             "apc_num_blocks": .number(Double(settings.prefixCacheBlocks)),
             "apc_block_size": .number(Double(settings.prefixCacheBlockSize)),
@@ -1464,9 +1449,6 @@ struct NativSettings: Codable, Equatable {
         if let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
             environment["NATIV_APP_VERSION"] = appVersion
         }
-        environment["NATIV_STREAM_KEEPALIVE_INTERVAL"] = "15"
-        environment["NATIV_STREAM_REQUEST_TIMEOUT"] = String(settings.responseTimeout.rawValue)
-        environment["MLX_VLM_TOKEN_QUEUE_TIMEOUT"] = String(settings.responseTimeout.rawValue)
         environment["APC_ENABLED"] = settings.prefixCachingEnabled ? "1" : "0"
         if let serverAPIKey = settings.serverAPIKey {
             environment["MLX_VLM_SERVER_API_KEY"] = serverAPIKey

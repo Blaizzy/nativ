@@ -40,7 +40,6 @@ class StreamingRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         namespace = dict(
             asyncio=asyncio, anyio=anyio, math=math, os=os, json=json, time=time, Request=object,
             base=types.SimpleNamespace(app=app, logger=Mock()),
-            base_generation=types.SimpleNamespace(runtime=types.SimpleNamespace(config=None)),
             TRACKER=tracker, TRACKED_PATHS={path},
             install_base_metrics_capture=lambda: None,
             apply_per_model_request_defaults=lambda _: False,
