@@ -316,7 +316,7 @@ struct ArtifactsView: View {
     }
 
     private func documentTextChunks(for artifact: Artifact) async -> [String] {
-        let url = store.fileURL(for: artifact)
+        guard let url = store.fileURL(for: artifact) else { return [] }
         switch artifact.kind {
         case .image:
             // On-device OCR (Apple Vision) so text inside screenshots/photos is searchable.
@@ -406,7 +406,7 @@ struct ArtifactsView: View {
     }
 
     private func visualDataURLs(for artifact: Artifact) async -> [String] {
-        let url = store.fileURL(for: artifact)
+        guard let url = store.fileURL(for: artifact) else { return [] }
         switch artifact.kind {
         case .image:
             let mimeType = artifact.mimeType
@@ -760,7 +760,7 @@ struct ArtifactsView: View {
             }
         ) {
             Button {
-                ArtifactShare.present(urls: artifacts.map { store.fileURL(for: $0) })
+                ArtifactShare.present(urls: artifacts.compactMap { store.fileURL(for: $0) })
             } label: {
                 Image(systemName: "square.and.arrow.up")
             }
@@ -975,7 +975,7 @@ struct ArtifactsView: View {
         }
         Button("Go to Chat") { onOpenChat(artifact) }
         Divider()
-        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)]) }
+        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)].compactMap { $0 }) }
         Button("Reveal in Finder") { store.revealInFinder(artifact) }
         Button("Export…") { store.export(artifact) }
         Button("Copy") { store.copyToPasteboard(artifact) }
@@ -1000,7 +1000,7 @@ struct ArtifactsView: View {
             : [artifact.id]
         return filtered
             .filter { ids.contains($0.id) }
-            .map { store.fileURL(for: $0) }
+            .compactMap { store.fileURL(for: $0) }
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {

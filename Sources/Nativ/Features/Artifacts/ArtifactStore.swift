@@ -37,6 +37,7 @@ final class ArtifactStore: ObservableObject {
     struct CatalogSnapshot: Sendable {
         let fingerprint: String?
         let artifacts: [Artifact]
+        var candidates: [Artifact]? = nil
     }
 
     typealias Rebuild = @Sendable (URL, URL, CatalogSnapshot) -> CatalogSnapshot
@@ -51,6 +52,7 @@ final class ArtifactStore: ObservableObject {
 
     private var mutationRevision = 0
     private var knownFingerprint: String?
+    private var knownCandidates: [Artifact]?
     let trash: ArtifactTrash?
     private var trashCancellable: AnyCancellable?
     private let mediaStore: MediaAssetStore
@@ -97,6 +99,7 @@ final class ArtifactStore: ObservableObject {
         let stored = Self.loadIndex(indexURL)
         artifacts = stored.artifacts.filter { artifact in !((trash?.records ?? []).contains { $0.id == artifact.id }) }
         knownFingerprint = stored.fingerprint
+        knownCandidates = stored.candidates
         persistedDataChangeCancellable = persistedDataChanges?.changes
             .sink { [weak self] change in
                 switch change.kind {
@@ -119,8 +122,8 @@ final class ArtifactStore: ObservableObject {
         }
     }
 
-    func fileURL(for artifact: Artifact) -> URL {
-        if let url = artifact.workFileURL { return url }
+    func fileURL(for artifact: Artifact) -> URL? {
+        if artifact.workFileURL != nil { return artifact.validatedWorkFileURL }
         if let asset = artifact.asset, let url = mediaStore.fileURL(for: asset) { return url }
         return cacheDirectory.appendingPathComponent(artifact.relativePath)
     }
@@ -184,7 +187,7 @@ final class ArtifactStore: ObservableObject {
     }
 
     func textPreview(for artifact: Artifact, lineLimit: Int = 12) async -> String? {
-        let url = fileURL(for: artifact)
+        guard let url = fileURL(for: artifact) else { return nil }
         return await Task.detached(priority: .utility) {
             guard let data = try? Data(contentsOf: url) else {
                 return nil
@@ -242,7 +245,6 @@ final class ArtifactStore: ObservableObject {
     }
 
     func rescan() {
-        knownFingerprint = nil // Work files may change outside the chat.
         trash?.reconcile()
         refresh()
     }
@@ -255,7 +257,7 @@ final class ArtifactStore: ObservableObject {
         isRefreshing = true
         let cache = cacheDirectory
         let index = indexURL
-        let known = CatalogSnapshot(fingerprint: knownFingerprint, artifacts: artifacts)
+        let known = CatalogSnapshot(fingerprint: knownFingerprint, artifacts: artifacts, candidates: knownCandidates)
         let revision = mutationRevision
         let rebuild = rebuildIndex
         Task.detached(priority: .utility) {
@@ -265,6 +267,7 @@ final class ArtifactStore: ObservableObject {
                     let deletedIDs = Set(self.trash?.records.map(\.id) ?? [])
                     self.artifacts = rebuilt.artifacts.filter { !deletedIDs.contains($0.id) }
                     self.knownFingerprint = rebuilt.fingerprint
+                    self.knownCandidates = rebuilt.candidates
                 } else {
                     self.refreshPending = true
                 }
@@ -301,11 +304,13 @@ final class ArtifactStore: ObservableObject {
     }
 
     func revealInFinder(_ artifact: Artifact) {
-        NSWorkspace.shared.activateFileViewerSelecting([fileURL(for: artifact)])
+        guard let url = fileURL(for: artifact) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func open(_ artifact: Artifact) {
-        NSWorkspace.shared.open(fileURL(for: artifact))
+        guard let url = fileURL(for: artifact) else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func export(_ artifact: Artifact) {
@@ -315,8 +320,9 @@ final class ArtifactStore: ObservableObject {
         guard panel.runModal() == .OK, let destination = panel.url else {
             return
         }
+        guard let url = fileURL(for: artifact) else { return }
         try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.copyItem(at: fileURL(for: artifact), to: destination)
+        try? FileManager.default.copyItem(at: url, to: destination)
     }
 
     func exportToDirectory(_ toExport: [Artifact]) {
@@ -329,13 +335,14 @@ final class ArtifactStore: ObservableObject {
             return
         }
         for artifact in toExport {
+            guard let url = fileURL(for: artifact) else { continue }
             let destination = directory.appendingPathComponent(artifact.filename)
-            try? FileManager.default.copyItem(at: fileURL(for: artifact), to: destination)
+            try? FileManager.default.copyItem(at: url, to: destination)
         }
     }
 
     func copyToPasteboard(_ artifact: Artifact) {
-        let url = fileURL(for: artifact)
+        guard let url = fileURL(for: artifact) else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
 
@@ -347,7 +354,8 @@ final class ArtifactStore: ObservableObject {
     }
 
     func dragProvider(for artifact: Artifact) -> NSItemProvider {
-        NSItemProvider(contentsOf: fileURL(for: artifact)) ?? NSItemProvider()
+        guard let url = fileURL(for: artifact) else { return NSItemProvider() }
+        return NSItemProvider(contentsOf: url) ?? NSItemProvider()
     }
 
     func chatAttachment(for artifact: Artifact) -> ChatImageAttachment? {
@@ -365,7 +373,7 @@ final class ArtifactStore: ObservableObject {
         if let cached = thumbnailCache.object(forKey: key) {
             return cached
         }
-        let url = fileURL(for: artifact)
+        guard let url = fileURL(for: artifact) else { return nil }
         let image = artifact.kind == .image
             ? await Self.downsampledImage(url, size: size)
             : await Self.generateThumbnail(url, size: size)
@@ -403,20 +411,26 @@ final class ArtifactStore: ObservableObject {
     ) -> CatalogSnapshot {
         let chats = ChatSessionStore()
         let images = ImageGenerationSessionStore()
-        let fingerprint = "unified-v3-work-files#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
-        if !known.artifacts.isEmpty,
-           known.fingerprint == fingerprint,
-           known.artifacts.allSatisfy({ artifact in
-               artifact.workFileURL == nil && artifact.asset.flatMap(MediaAssetStore.shared.fileURL) != nil
-           }) {
-            return known
+        let fingerprint = "unified-v4-work-files#" + chats.sessionsFingerprint() + "#" + images.fingerprint()
+        let rebuilt = catalogSnapshot(fingerprint: fingerprint, known: known) {
+            ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions(),
+                                      chatStore: chats, includeUnavailableWorkFiles: true)
         }
-
-        let artifacts = ArtifactCatalog.artifacts(chats: chats.loadSessions(), images: images.loadSessions(), chatStore: chats)
-            .filter { $0.workFileURL != nil || $0.asset.flatMap(MediaAssetStore.shared.fileURL) != nil }
-        writeIndex(artifacts, fingerprint: fingerprint, to: indexURL)
+        if rebuilt.artifacts != known.artifacts || fingerprint != known.fingerprint {
+            writeIndex(rebuilt.artifacts, fingerprint: fingerprint, to: indexURL, candidates: rebuilt.candidates)
+        }
         removeLegacyCache(cacheDirectory: cacheDirectory, indexURL: indexURL)
-        return CatalogSnapshot(fingerprint: fingerprint, artifacts: artifacts)
+        return rebuilt
+    }
+
+    nonisolated static func catalogSnapshot(fingerprint: String, known: CatalogSnapshot,
+                                           load: () -> [Artifact]) -> CatalogSnapshot {
+        let candidates = known.fingerprint == fingerprint ? known.candidates ?? load() : load()
+        let artifacts = candidates.compactMap { candidate -> Artifact? in
+            if candidate.workFileURL != nil { return ArtifactCatalog.availableWorkFile(candidate) }
+            return candidate.asset.flatMap(MediaAssetStore.shared.fileURL) == nil ? nil : candidate
+        }
+        return CatalogSnapshot(fingerprint: fingerprint, artifacts: artifacts, candidates: candidates)
     }
 
     // MARK: - Thumbnails
@@ -467,6 +481,7 @@ final class ArtifactStore: ObservableObject {
     private struct StoredIndex: Codable {
         let fingerprint: String?
         let artifacts: [Artifact]
+        var candidates: [Artifact]? = nil
     }
 
     nonisolated static func loadIndex(_ url: URL) -> CatalogSnapshot {
@@ -476,14 +491,14 @@ final class ArtifactStore: ObservableObject {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         if let stored = try? decoder.decode(StoredIndex.self, from: data) {
-            return CatalogSnapshot(fingerprint: stored.fingerprint, artifacts: stored.artifacts)
+            return CatalogSnapshot(fingerprint: stored.fingerprint, artifacts: stored.artifacts, candidates: stored.candidates)
         }
         let legacy = (try? decoder.decode([Artifact].self, from: data)) ?? []
         return CatalogSnapshot(fingerprint: nil, artifacts: legacy)
     }
 
     nonisolated static func writeIndex(
-        _ artifacts: [Artifact], fingerprint: String?, to url: URL
+        _ artifacts: [Artifact], fingerprint: String?, to url: URL, candidates: [Artifact]? = nil
     ) {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
@@ -492,7 +507,7 @@ final class ArtifactStore: ObservableObject {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let stored = StoredIndex(fingerprint: fingerprint, artifacts: artifacts)
+        let stored = StoredIndex(fingerprint: fingerprint, artifacts: artifacts, candidates: candidates)
         guard let data = try? encoder.encode(stored) else {
             return
         }

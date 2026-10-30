@@ -14,7 +14,7 @@ enum ChatWorkDocument {
 
     static func sourcePreview(_ source: String, language: String) -> String {
         let fence = String(repeating: "`", count: max(3, (source.components(separatedBy: .newlines)
-            .map { $0.prefix(while: { $0 == "`" }).count }.max() ?? 0) + 1))
+            .map { $0.drop(while: { $0 == " " || $0 == "\t" }).prefix(while: { $0 == "`" }).count }.max() ?? 0) + 1))
         return "\(fence)\(language)\n\(source)\n\(fence)"
     }
 

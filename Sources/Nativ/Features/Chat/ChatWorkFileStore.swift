@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Readable files for session-owned work. IDs keep duplicate names and different chats separate.
 struct ChatWorkFileStore {
@@ -21,6 +22,23 @@ struct ChatWorkFileStore {
         let directory = directory(for: sessionID)
         try checkLocation(directory, isDirectory: true)
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    func validatedURL(_ url: URL) -> URL? {
+        guard url.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/"),
+              (try? checkLocation(url)) != nil else { return nil }
+        let relative = String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
+        return Self.canonicalRoot(root).appendingPathComponent(relative)
+    }
+
+    static func canonicalRoot(_ root: URL) -> URL {
+        guard let path = Darwin.realpath(root.path, nil) else {
+            let parent = root.deletingLastPathComponent()
+            guard parent.path != root.path else { return root }
+            return canonicalRoot(parent).appendingPathComponent(root.lastPathComponent)
+        }
+        defer { free(path) }
+        return URL(fileURLWithPath: String(cString: path))
     }
 
     /// Keep the source recoverable, and restore it if removing its chat reference fails.
@@ -171,7 +189,7 @@ struct ChatWorkFileStore {
         }
         var component = url
         while component.path.count >= root.path.count {
-            if let values = try? component.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),
+            if let values = try? URL(fileURLWithPath: component.path).resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]),
                values.isSymbolicLink == true || ((component != url || isDirectory) && values.isDirectory == false) {
                 throw ChatWorkError.invalid("The chat files folder contains a link or invalid folder: \(component.path)")
             }

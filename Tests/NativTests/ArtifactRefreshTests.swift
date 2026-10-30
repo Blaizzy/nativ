@@ -92,7 +92,7 @@ final class ArtifactRefreshTests: XCTestCase {
         let renamed = makeArtifact()
         let semantic = makeArtifact()
         let excluded = makeArtifact()
-        let originalURL = store.fileURL(for: renamed)
+        let originalURL = try XCTUnwrap(store.fileURL(for: renamed))
         let originalBytes = Data("Original file content".utf8)
         try FileManager.default.createDirectory(at: originalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try originalBytes.write(to: originalURL)

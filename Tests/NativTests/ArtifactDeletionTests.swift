@@ -65,8 +65,8 @@ final class ArtifactDeletionTests: XCTestCase {
 
         XCTAssertEqual(deletedIDs, Set([allowed.id]))
         XCTAssertEqual(store.artifacts.map(\.id), [rejected.id])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(for: allowed).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL(for: rejected).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(store.fileURL(for: allowed)).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(store.fileURL(for: rejected)).path))
         XCTAssertEqual(ArtifactStore.loadIndex(storage.indexURL).artifacts.map(\.id), [rejected.id])
     }
 
