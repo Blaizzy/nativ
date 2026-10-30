@@ -133,6 +133,8 @@ def main() -> None:
         "--output",
         str(output),
     ]
+    if os.environ.get("NATIV_SKIP_PYTHON_RESOURCE_BUILD") == "YES":
+        command.append("--reuse-only")
     mlx_vlm_source = default_mlx_vlm_source()
     if mlx_vlm_source is not None:
         print(f"Using local mlx-vlm source {mlx_vlm_source}")

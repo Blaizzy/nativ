@@ -106,6 +106,39 @@ final class AudioDiarizationTests: XCTestCase {
         } catch is CancellationError {}
     }
 
+    func testDiarizedTextOnlyModelWithRealServer() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["NATIV_DIARIZED_TEXT_ONLY_AUDIO"],
+              let model = environment["NATIV_DIARIZED_TEXT_ONLY_MODEL"] else {
+            throw XCTSkip("Set NATIV_DIARIZED_TEXT_ONLY_AUDIO and NATIV_DIARIZED_TEXT_ONLY_MODEL for live validation.")
+        }
+        let client = NativAudioClient(baseURL: URL(string: environment["NATIV_AUDIO_TEST_SERVER"] ?? "http://127.0.0.1:8080")!)
+        var diarizationCount = 0
+        var streamedEnds: [Double] = []
+        let result = try await MeetingDiarizer.transcribe(URL(fileURLWithPath: path), client: client, model: model) {
+            diarizationCount += 1
+        } segmentFinished: { end in
+            XCTAssertEqual(diarizationCount, 1)
+            streamedEnds.append(end)
+        }
+        XCTAssertEqual(diarizationCount, 1)
+        XCTAssertFalse(result.text.isEmpty)
+        let segments = try XCTUnwrap(result.diarization.transcriptSegments)
+        XCTAssertFalse(segments.isEmpty)
+        XCTAssertEqual(streamedEnds, segments.map(\.end))
+        let duration = try XCTUnwrap(result.diarization.segments.map(\.end).max())
+        for segment in segments {
+            XCTAssertGreaterThanOrEqual(segment.start, 0)
+            XCTAssertLessThanOrEqual(segment.end, duration)
+            XCTAssertGreaterThan(segment.end, segment.start)
+            XCTAssertLessThanOrEqual(segment.end - segment.start, 30.001)
+            XCTAssertTrue(Set(segment.speakers).isSubset(of: Set(result.diarization.speakerIDs)))
+        }
+        if let output = environment["NATIV_DIARIZATION_TEST_OUTPUT"] {
+            try JSONEncoder().encode(result.diarization).write(to: URL(fileURLWithPath: output))
+        }
+    }
+
     func testLongTurnsKeepGlobalSpeakerIDsAndAbsoluteTime() throws {
         let result = AudioDiarization(modelID: "model", revision: "test", segments: [
             .init(start: 0, end: 65, speaker: 7),

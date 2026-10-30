@@ -86,14 +86,6 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -euo pipefail
-          if [[ "${NATIV_SKIP_PYTHON_RESOURCE_BUILD:-NO}" == "YES" ]]; then
-            resource_root="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Resources/mlx-vlm-server"
-            if [[ ! -x "${resource_root}/bin/mlx-vlm-server" ]]; then
-              echo "error: NATIV_SKIP_PYTHON_RESOURCE_BUILD requires an existing complete server resource at ${resource_root}" >&2
-              exit 1
-            fi
-            exit 0
-          fi
           python3 "$SRCROOT/PythonDistribution/Scripts/build_xcode_framework_resource.py"
     settings:
       base:
