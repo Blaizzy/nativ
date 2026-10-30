@@ -3,6 +3,17 @@ import SwiftUI
 import XCTest
 
 final class MarkdownParserTests: XCTestCase {
+    func testSourcePreviewKeepsIndentedFencesAndImagesInsideCode() {
+        for indentation in ["", " ", "  ", "   ", "\t"] {
+            for fence in ["```", "````", "``````"] {
+                let source = indentation + fence + "\n![image](https://example.invalid/image.png)"
+                let nodes = MarkdownParser.parse(ChatWorkDocument.sourcePreview(source, language: "text"))
+                XCTAssertEqual(nodes.map(\.kind), ["code_block"])
+                XCTAssertEqual(nodes.first?.literal, source + "\n")
+            }
+        }
+    }
+
     func testGFMStructureReferencesAndLiteralCode() throws {
         let nodes = MarkdownParser.parse(
             """

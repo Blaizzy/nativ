@@ -339,6 +339,62 @@ final class ArtifactCatalogTests: XCTestCase {
                                                                "Site.html", "Page.html", "Mislabelled.html"])
     }
 
+    @MainActor
+    func testCatalogAndCachedActionsRejectSymlinkedWorkFiles() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let item = ChatWorkItem(title: "Notes.md", kind: .document, content: "Safe")
+        var session = fixture.chat(messages: [])
+        session.workState = ChatWorkState(items: [item])
+        let files = fixture.chats.workFiles
+        try files.save(session.workState!, previous: nil, sessionID: session.id)
+        let artifact = try XCTUnwrap(ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats).first)
+        let store = ArtifactStore(storage: fixture.storage, refreshesAutomatically: false)
+        let url = try XCTUnwrap(files.fileURL(for: item, sessionID: session.id))
+        let outside = fixture.root.appendingPathComponent("Outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "Private".write(to: outside.appendingPathComponent(item.storedFilename), atomically: true, encoding: .utf8)
+        for linkedURL in [url, url.deletingLastPathComponent()] {
+            try FileManager.default.removeItem(at: linkedURL)
+            let destination = linkedURL == url ? outside.appendingPathComponent(item.storedFilename) : outside
+            try FileManager.default.createSymbolicLink(at: linkedURL, withDestinationURL: destination)
+            XCTAssertNil(store.fileURL(for: artifact), "Cached actions must revalidate paths")
+            XCTAssertTrue(ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats).isEmpty)
+            try FileManager.default.removeItem(at: linkedURL)
+            try files.save(session.workState!, previous: nil, sessionID: session.id)
+        }
+    }
+
+    func testUnchangedCatalogChecksFilesWithoutReloadingSessions() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let item = ChatWorkItem(title: "Notes.md", kind: .document, content: "Saved")
+        var session = fixture.chat(messages: [])
+        session.workState = ChatWorkState(items: [item])
+        try fixture.chats.workFiles.save(session.workState!, previous: nil, sessionID: session.id)
+        let url = try XCTUnwrap(fixture.chats.workFiles.fileURL(for: item, sessionID: session.id))
+        var loads = 0
+        func load() -> [Artifact] {
+            loads += 1
+            return ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats,
+                                             includeUnavailableWorkFiles: true)
+        }
+        var snapshot = ArtifactStore.catalogSnapshot(fingerprint: "saved", known: .init(fingerprint: nil, artifacts: []), load: load)
+        XCTAssertEqual(snapshot.artifacts.count, 1)
+        try FileManager.default.removeItem(at: url)
+        snapshot = ArtifactStore.catalogSnapshot(fingerprint: "saved", known: snapshot, load: load)
+        XCTAssertTrue(snapshot.artifacts.isEmpty)
+        ArtifactStore.writeIndex(snapshot.artifacts, fingerprint: snapshot.fingerprint,
+                                 to: fixture.storage.indexURL, candidates: snapshot.candidates)
+        snapshot = ArtifactStore.loadIndex(fixture.storage.indexURL)
+        try "Restored with more content".write(to: url, atomically: true, encoding: .utf8)
+        snapshot = ArtifactStore.catalogSnapshot(fingerprint: "saved", known: snapshot, load: load)
+        XCTAssertEqual(snapshot.artifacts.first?.byteSize, "Restored with more content".utf8.count)
+        XCTAssertEqual(loads, 1, "Deletion, restoration and reload must reuse saved metadata")
+        _ = ArtifactStore.catalogSnapshot(fingerprint: "changed", known: snapshot, load: load)
+        XCTAssertEqual(loads, 2, "A changed session must invalidate cached metadata")
+    }
+
     private struct Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         var media: MediaAssetStore { MediaAssetStore(rootDirectory: root.appendingPathComponent("Media")) }
