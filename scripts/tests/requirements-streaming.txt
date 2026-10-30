@@ -1,0 +1,5 @@
+# Keep these dependencies aligned with the bundled server requirements.
+anyio==4.13.0
+fastapi==0.136.1
+httpx==0.28.1
+starlette>=1.0.1

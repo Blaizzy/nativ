@@ -2747,8 +2747,9 @@ final class ChatViewModel: ObservableObject {
         let client = NativChatClient(
             baseURL: request.settings.serverBaseURL,
             apiKey: request.settings.serverAPIKey,
-            idleTimeout: request.settings.chatResponseTimeout.idleTimeout,
-            resourceTimeout: request.settings.chatResponseTimeout.resourceTimeout
+            idleTimeout: request.settings.responseTimeout.clientTimeout,
+            resourceTimeout: request.settings.responseTimeout.clientTimeout,
+            requestTimeout: request.settings.responseTimeout.seconds
         )
         let firstPrompt = sessionMessages(for: request.sessionID)?.first(where: { $0.role == .user })?.content ?? ""
         try await prepareWorktree(in: request.sessionID, firstPrompt: firstPrompt) { prompt in
@@ -2780,8 +2781,9 @@ final class ChatViewModel: ObservableObject {
             baseURL: queuedRequest.settings.serverBaseURL,
             apiKey: queuedRequest.settings.serverAPIKey,
             tenant: queuedRequest.sessionID.uuidString,
-            idleTimeout: queuedRequest.settings.chatResponseTimeout.idleTimeout,
-            resourceTimeout: queuedRequest.settings.chatResponseTimeout.resourceTimeout
+            idleTimeout: queuedRequest.settings.responseTimeout.clientTimeout,
+            resourceTimeout: queuedRequest.settings.responseTimeout.clientTimeout,
+            requestTimeout: queuedRequest.settings.responseTimeout.seconds
         )
         var assistantMessageID = queuedRequest.assistantMessageID
         var toolRounds = 0
@@ -3978,7 +3980,7 @@ final class ChatViewModel: ObservableObject {
                     message.role = .error
                     message.streamingToolCalls = []
                     if let urlError = error as? URLError, urlError.code == .timedOut {
-                        message.content = "The response timed out. For large prompts, increase Chat Response Timeout in Settings → Advanced, then try again."
+                        message.content = "The response timed out. For large prompts, increase Response Timeout in Settings → Advanced, then try again."
                     } else {
                         message.content = error.localizedDescription
                     }
