@@ -34,6 +34,10 @@ struct SafeLocalFileReader: Sendable {
     }
 
     func read(url: URL) async throws -> SafeLocalFileSnapshot {
+        try readSynchronously(url: url)
+    }
+
+    func readSynchronously(url: URL) throws -> SafeLocalFileSnapshot {
         try Task.checkCancellation()
 
         let descriptor = Self.openWithoutFollowingSymlinks(url)
@@ -88,6 +92,61 @@ struct SafeLocalFileReader: Sendable {
             openedURL: url,
             stamp: finalStamp
         )
+    }
+
+    /// Resolve only macOS system aliases, never the mutable work-file directory.
+    static func systemAliasURL(_ url: URL) -> URL {
+        let path = url.path
+        for alias in ["tmp", "var", "etc"] {
+            let prefix = "/" + alias
+            if path == prefix || path.hasPrefix(prefix + "/") {
+                return URL(fileURLWithPath: "/private" + path)
+            }
+        }
+        return url
+    }
+
+    /// Open the source without following links and publish a complete copy atomically.
+    /// A failed copy leaves the existing destination intact, including the source itself.
+    static func exportCopy(from source: URL, to destination: URL, replaceExisting: Bool = true) throws {
+        let sourceFD = openWithoutFollowingSymlinks(systemAliasURL(source))
+        guard sourceFD >= 0 else { throw error(for: errno) }
+        defer { Darwin.close(sourceFD) }
+        var initial = stat()
+        guard Darwin.fstat(sourceFD, &initial) == 0 else { throw error(for: errno) }
+        guard initial.st_mode & S_IFMT == S_IFREG else {
+            throw SafeLocalFileReaderError.unsupportedFileType
+        }
+
+        // The user chooses this directory. Pin it so replacement cannot be redirected later.
+        let directoryFD = Darwin.open(destination.deletingLastPathComponent().path,
+                                      O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directoryFD >= 0 else { throw error(for: errno) }
+        defer { Darwin.close(directoryFD) }
+        let name = destination.lastPathComponent
+        var existing = stat()
+        if fstatat(directoryFD, name, &existing, AT_SYMLINK_NOFOLLOW) == 0,
+           initial.st_dev == existing.st_dev, initial.st_ino == existing.st_ino { return }
+
+        let temporary = ".nativ-export-" + UUID().uuidString
+        let outputFD = openat(directoryFD, temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+        guard outputFD >= 0 else { throw error(for: errno) }
+        defer {
+            Darwin.close(outputFD)
+            unlinkat(directoryFD, temporary, 0)
+        }
+        guard fcopyfile(sourceFD, outputFD, nil, copyfile_flags_t(COPYFILE_DATA)) == 0 else {
+            throw error(for: errno)
+        }
+        var final = stat()
+        guard Darwin.fstat(sourceFD, &final) == 0 else { throw error(for: errno) }
+        guard stamp(from: initial) == stamp(from: final) else {
+            throw SafeLocalFileReaderError.changedDuringRead
+        }
+        let flags = replaceExisting ? UInt32(0) : UInt32(RENAME_EXCL)
+        guard renameatx_np(directoryFD, temporary, directoryFD, name, flags) == 0 else {
+            throw error(for: errno)
+        }
     }
 
     private static func stamp(from info: stat) -> FileReadFileStamp {

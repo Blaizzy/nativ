@@ -1,6 +1,29 @@
 import Foundation
 
 enum ChatWorkDocument {
+    static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd"]
+    static let sourceLanguages = [
+        "swift": "swift", "py": "python", "js": "javascript", "jsx": "javascript",
+        "ts": "typescript", "tsx": "typescript", "json": "json", "css": "css", "scss": "scss",
+        "sh": "bash", "bash": "bash", "zsh": "bash", "html": "html", "htm": "html",
+        "java": "java", "kt": "kotlin", "c": "c", "cpp": "cpp", "cc": "cpp", "h": "c",
+        "hpp": "cpp", "rb": "ruby", "go": "go", "rs": "rust", "php": "php",
+        "xml": "xml", "yaml": "yaml", "yml": "yaml", "toml": "toml",
+        "txt": "text", "text": "text", "log": "text", "csv": "text", "tsv": "text"
+    ]
+
+    static func sourcePreview(_ source: String, language: String) -> String {
+        let fence = String(repeating: "`", count: max(3, (source.components(separatedBy: .newlines)
+            .map { $0.drop(while: { $0 == " " || $0 == "\t" }).prefix(while: { $0 == "`" }).count }.max() ?? 0) + 1))
+        return "\(fence)\(language)\n\(source)\n\(fence)"
+    }
+
+    static func filePreview(_ source: String, filename: String) -> String {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        return markdownExtensions.contains(ext) ? renderedMarkdown(source)
+            : sourcePreview(source, language: sourceLanguages[ext] ?? "text")
+    }
+
     static func renderedMarkdown(_ source: String) -> String {
         MathPreprocessor.preprocess(source)
     }

@@ -119,10 +119,13 @@ struct Artifact: Identifiable, Codable, Equatable {
     let filename: String
     let mimeType: String
     let relativePath: String
-    let byteSize: Int
-    let createdAt: Date
+    var byteSize: Int
+    var createdAt: Date
     let prompt: String?
     let sessionTitle: String
+    var workFileURL: URL? = nil
+    var workFileRoot: URL? = nil
+    var workFileWorktree: ChatGitWorktree? = nil
     var asset: MediaAssetReference? = nil
     var generation: ArtifactGeneration? = nil
     var usages: [ArtifactUsage]? = nil
@@ -132,6 +135,11 @@ struct Artifact: Identifiable, Codable, Equatable {
             workspace: source == .generated ? .imageGeneration : .chat,
             sessionID: sessionID, messageID: messageID, attachmentID: id
         )]
+    }
+
+    var validatedWorkFileURL: URL? {
+        guard let workFileURL, let workFileRoot else { return nil }
+        return ChatWorkFileStore(root: workFileRoot, worktree: workFileWorktree).validatedURL(workFileURL)
     }
 
     var workspace: ArtifactUsage.Workspace {

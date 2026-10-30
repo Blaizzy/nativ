@@ -3,6 +3,15 @@ import SwiftTerm
 import NativServerKit
 
 final class ChatWorkTests: XCTestCase {
+    func testFilePreviewsRenderMarkdownAndFenceSourceWithoutExecutingIt() {
+        XCTAssertEqual(ChatWorkDocument.filePreview("# Title", filename: "Notes.MD"), "# Title")
+        XCTAssertEqual(ChatWorkDocument.filePreview("let n = 1", filename: "main.swift"), "```swift\nlet n = 1\n```")
+        XCTAssertEqual(ChatWorkDocument.filePreview("a { color: red; }", filename: "main.css"),
+                       "```css\na { color: red; }\n```")
+        XCTAssertEqual(ChatWorkDocument.sourcePreview("```\nexample", language: "text"),
+                       "````text\n```\nexample\n````")
+    }
+
     func testOpeningAnElementUsesClickValidationAndConsent() throws {
         let call = MLXChatToolCall(id: "result", function: .init(name: "chat_work", arguments: #"{"action":"open","element_id":"snapshot:0"}"#))
         let request = try ChatWorkRequest.decode(call).resolvingElementOpen()

@@ -1,9 +1,12 @@
 import Foundation
+import UniformTypeIdentifiers
 
 enum ArtifactCatalog {
-    static func artifacts(chats: [ChatSession], images: [ImageGenerationSession]) -> [Artifact] {
+    static func artifacts(chats: [ChatSession], images: [ImageGenerationSession],
+                          chatStore: ChatSessionStore = .init(), includeUnavailableWorkFiles: Bool = false) -> [Artifact] {
         var entries: [Artifact] = []
         for session in chats {
+            entries += workDocuments(in: session, store: chatStore, includeUnavailable: includeUnavailableWorkFiles)
             for message in session.messages {
                 for attachment in message.imageAttachments {
                     let generation = message.artifactGeneration(for: attachment)
@@ -78,6 +81,42 @@ enum ArtifactCatalog {
             if $0.createdAt != $1.createdAt { return $0.createdAt > $1.createdAt }
             return $0.id.uuidString < $1.id.uuidString
         }
+    }
+
+    private static func workDocuments(in session: ChatSession, store: ChatSessionStore, includeUnavailable: Bool) -> [Artifact] {
+        if session.workFilesInWorktree == true, session.worktree?.isReady != true { return [] }
+        let files = session.workFilesInWorktree == true
+            ? store.workFiles(for: session.worktree) : store.workFiles
+        return (session.workState?.items ?? []).compactMap { item in
+            guard item.canEdit, let url = files.fileURL(for: item, sessionID: session.id) else { return nil }
+            let values = files.validatedURL(url).flatMap {
+                try? $0.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .creationDateKey])
+            }
+            guard includeUnavailable || values?.isRegularFile == true else { return nil }
+            // Forked chats can retain item IDs but own different files.
+            let id = ArtifactFileManifest.artifactID(session: session.id, item: item.id)
+            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "text/plain"
+            return Artifact(
+                id: id, kind: .document, source: .unknown,
+                sessionID: session.id, messageID: session.id,
+                filename: url.lastPathComponent, mimeType: mime, relativePath: "",
+                byteSize: values?.fileSize ?? 0, createdAt: values?.creationDate ?? session.createdAt,
+                prompt: nil, sessionTitle: session.displayTitle, workFileURL: url,
+                workFileRoot: files.root, workFileWorktree: files.worktree,
+                usages: [ArtifactUsage(workspace: .chat, sessionID: session.id,
+                                       messageID: nil, attachmentID: item.id)]
+            )
+        }
+    }
+
+    static func availableWorkFile(_ candidate: Artifact) -> Artifact? {
+        guard let url = candidate.validatedWorkFileURL,
+              let values = try? URL(fileURLWithPath: url.path).resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .creationDateKey]),
+              values.isRegularFile == true else { return nil }
+        var artifact = candidate
+        artifact.byteSize = values.fileSize ?? 0
+        artifact.createdAt = values.creationDate ?? candidate.createdAt
+        return artifact
     }
 
     private static func append(

@@ -5,7 +5,7 @@ import SwiftUI
 struct ArtifactPreview: View {
     let artifacts: [Artifact]
     @Binding var selectedID: Artifact.ID?
-    let fileURL: (Artifact) -> URL
+    let fileURL: (Artifact) -> URL?
     let displayName: (Artifact) -> String
     let onClose: () -> Void
     let onOpenChat: (Artifact) -> Void
@@ -87,21 +87,23 @@ struct ArtifactPreview: View {
 
     @ViewBuilder
     private func content(_ artifact: Artifact) -> some View {
-        let url = fileURL(artifact)
-        switch artifact.kind {
-        case .image:
-            if let image = NSImage(contentsOf: url) {
-                FilePreviewImage(image: image)
-            } else {
-                unavailable
+        if let url = fileURL(artifact) {
+            switch artifact.kind {
+            case .image:
+                if let image = NSImage(contentsOf: url) {
+                    FilePreviewImage(image: image)
+                } else {
+                    unavailable
+                }
+            case .video:
+                ArtifactVideoPlayer(url: url)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            case .document:
+                ArtifactDocumentPreview(url: url, isWorkFile: artifact.workFileURL != nil)
+                    .id(url)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-        case .video:
-            ArtifactVideoPlayer(url: url)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        case .document:
-            QuickLookFilePreview(url: url)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-        }
+        } else { unavailable }
     }
 
     private func footer(_ artifact: Artifact) -> some View {
@@ -192,5 +194,54 @@ private struct ArtifactVideoPlayer: NSViewRepresentable {
     static func dismantleNSView(_ nsView: AVPlayerView, coordinator: ()) {
         nsView.player?.pause()
         nsView.player = nil
+    }
+}
+
+private struct ArtifactDocumentPreview: View {
+    let url: URL
+    let isWorkFile: Bool
+    @State private var source: String?
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if let source {
+                ScrollView {
+                    MarkdownRenderer(content: ChatWorkDocument.filePreview(source, filename: url.lastPathComponent),
+                                     baseURL: url, fontSize: 15, imagePolicy: .document)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(24)
+                }
+                .background(Color(nsColor: .textBackgroundColor))
+            } else if isLoading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isWorkFile {
+                ContentUnavailableView("File unavailable", systemImage: "doc.badge.ellipsis",
+                    description: Text("The file cannot be read safely as a text document."))
+            } else {
+                QuickLookFilePreview(url: url)
+            }
+        }
+        .task(id: url) {
+            let ext = url.pathExtension.lowercased()
+            if isWorkFile || ChatWorkDocument.markdownExtensions.contains(ext)
+                || ChatWorkDocument.sourceLanguages[ext] != nil {
+                let loaded = await Task.detached(priority: .userInitiated) {
+                    // Open each path component without following links, including links
+                    // swapped in after the catalog was validated.
+                    guard let snapshot = try? await SafeLocalFileReader(maximumBytes: 2_000_000).read(url: url)
+                    else { return nil as String? }
+                    return String(data: snapshot.data, encoding: .utf8)
+                }.value
+                guard !Task.isCancelled else { return }
+                source = loaded
+            }
+            guard !Task.isCancelled else { return }
+            isLoading = false
+        }
+        .onDisappear {
+            source = nil
+            isLoading = true
+        }
     }
 }

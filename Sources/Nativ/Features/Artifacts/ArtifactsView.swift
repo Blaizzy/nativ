@@ -69,6 +69,8 @@ struct ArtifactsView: View {
     private static let pdfTextExtractor = PDFDocumentTextExtractor()
 
     @ObservedObject var store: ArtifactStore
+    @ObservedObject var fileIndex: ArtifactFileIndexCoordinator
+    @State private var fileSearch = ArtifactFileSearch()
     let semanticSearch: ArtifactSemanticSearchConfig?
     var titleLeadingInset: CGFloat = 0
     let onOpenChat: (Artifact) -> Void
@@ -90,6 +92,7 @@ struct ArtifactsView: View {
     @State private var layout: ArtifactLayout = .grid
     @State private var previewID: Artifact.ID?
     @State private var artifactSelection = NativBulkSelection<Artifact.ID>()
+    @State private var showsWorkFileDeletionNotice = false
     @State private var pendingDelete: [Artifact] = []
     @State private var isConfirmingDelete = false
     @State private var showsDeletionFailure = false
@@ -154,7 +157,8 @@ struct ArtifactsView: View {
         return store.searchResults(
             in: sorted,
             query: search,
-            semanticMatches: smartSearchActive ? semanticMatches : nil
+            semanticMatches: smartSearchActive ? semanticMatches : nil,
+            contentMatches: fileSearch.matches(for: search)
         )
     }
 
@@ -315,7 +319,7 @@ struct ArtifactsView: View {
     }
 
     private func documentTextChunks(for artifact: Artifact) async -> [String] {
-        let url = store.fileURL(for: artifact)
+        guard let url = store.fileURL(for: artifact) else { return [] }
         switch artifact.kind {
         case .image:
             // On-device OCR (Apple Vision) so text inside screenshots/photos is searchable.
@@ -405,7 +409,7 @@ struct ArtifactsView: View {
     }
 
     private func visualDataURLs(for artifact: Artifact) async -> [String] {
-        let url = store.fileURL(for: artifact)
+        guard let url = store.fileURL(for: artifact) else { return [] }
         switch artifact.kind {
         case .image:
             let mimeType = artifact.mimeType
@@ -457,8 +461,16 @@ struct ArtifactsView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+                .alert("Delete from the work pane", isPresented: $showsWorkFileDeletionNotice) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("This selection includes work-pane files. Open their chat to delete them from the work pane.")
+                }
             semanticBanner
             filterBar
+            if let error = fileSearch.error {
+                Text(error).font(.caption).foregroundStyle(.secondary).padding(8)
+            }
             Divider()
             if artifactSelection.isActive {
                 selectionBar
@@ -472,6 +484,9 @@ struct ArtifactsView: View {
         .task {
             store.rescan()
             warmSemanticIndex()
+        }
+        .task(id: ArtifactFileSearch.Request(query: search, revision: fileIndex.revision)) {
+            await fileSearch.update(search, using: fileIndex.worker)
         }
         .onChange(of: search) { _, _ in
             scheduleSemanticSearch()
@@ -750,12 +765,11 @@ struct ArtifactsView: View {
                 artifactSelection.toggleAll(visibleArtifactIDs)
             },
             onDelete: {
-                pendingDelete = artifacts
-                isConfirmingDelete = true
+                requestDeletion(artifacts)
             }
         ) {
             Button {
-                ArtifactShare.present(urls: artifacts.map { store.fileURL(for: $0) })
+                ArtifactShare.present(urls: artifacts.compactMap { store.fileURL(for: $0) })
             } label: {
                 Image(systemName: "square.and.arrow.up")
             }
@@ -970,15 +984,23 @@ struct ArtifactsView: View {
         }
         Button("Go to Chat") { onOpenChat(artifact) }
         Divider()
-        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)]) }
+        Button("Share…") { ArtifactShare.present(urls: [store.fileURL(for: artifact)].compactMap { $0 }) }
         Button("Reveal in Finder") { store.revealInFinder(artifact) }
         Button("Export…") { store.export(artifact) }
         Button("Copy") { store.copyToPasteboard(artifact) }
         Divider()
         Button("Delete", role: .destructive) {
-            pendingDelete = [artifact]
-            isConfirmingDelete = true
+            requestDeletion([artifact])
         }
+    }
+
+    private func requestDeletion(_ artifacts: [Artifact]) {
+        guard artifacts.allSatisfy({ $0.workFileURL == nil }) else {
+            showsWorkFileDeletionNotice = true
+            return
+        }
+        pendingDelete = artifacts
+        isConfirmingDelete = true
     }
 
     private func selectedFileURLs(including artifact: Artifact) -> [URL] {
@@ -987,7 +1009,7 @@ struct ArtifactsView: View {
             : [artifact.id]
         return filtered
             .filter { ids.contains($0.id) }
-            .map { store.fileURL(for: $0) }
+            .compactMap { store.fileURL(for: $0) }
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
@@ -1015,8 +1037,7 @@ struct ArtifactsView: View {
             return .handled
         case .delete:
             if let index {
-                pendingDelete = [items[index]]
-                isConfirmingDelete = true
+                requestDeletion([items[index]])
             }
             return .handled
         default:
@@ -1216,7 +1237,7 @@ struct ArtifactTile: View {
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .bottom) {
-                if isHovering, !isSelecting {
+                if (isHovering || artifact.kind == .document), !isSelecting {
                     Text(store.displayName(for: artifact))
                         .legacyTextStyle(.supportingEmphasized)
                         .foregroundStyle(.white)
@@ -1333,25 +1354,9 @@ private struct ArtifactThumbnail: View {
     let size: CGSize
 
     @State private var image: NSImage?
-    @State private var textPreview: String?
-
-    static let textPreviewExtensions: Set<String> = [
-        "md", "markdown", "mdown", "mkd", "txt", "text", "log", "json", "csv", "tsv",
-        "py", "js", "ts", "jsx", "tsx", "swift", "java", "kt", "c", "cpp", "cc", "h",
-        "hpp", "rb", "go", "rs", "sh", "bash", "zsh", "php", "html", "htm", "css",
-        "scss", "xml", "yaml", "yml", "toml",
-    ]
-
-    private var isTextDocument: Bool {
-        artifact.kind == .document
-            && Self.textPreviewExtensions.contains(artifact.fileExtension.lowercased())
-    }
-
     var body: some View {
         Group {
-            if isTextDocument, let textPreview {
-                textCard(textPreview)
-            } else if let image {
+            if let image {
                 Color.clear
                     .overlay {
                         Image(nsImage: image)
@@ -1364,35 +1369,13 @@ private struct ArtifactThumbnail: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .textSelection(.disabled)
+        .allowsHitTesting(false)
         .task(id: artifact.id) {
-            if isTextDocument {
-                textPreview = await store.textPreview(for: artifact)
-            } else {
-                image = await store.thumbnail(for: artifact, size: size)
-            }
-        }
-    }
-
-    private func textCard(_ text: String) -> some View {
-        ZStack(alignment: .bottom) {
-            Color(nsColor: .textBackgroundColor)
-            Text(text)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.leading)
-                .lineSpacing(1)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(8)
-            LinearGradient(
-                colors: [Color(nsColor: .textBackgroundColor).opacity(0), Color(nsColor: .textBackgroundColor)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 44)
-            .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            FileTypeIcon(fileExtension: artifact.fileExtension, size: 20).padding(6)
+            guard artifact.kind != .document else { return }
+            let thumbnail = await store.thumbnail(for: artifact, size: size)
+            guard !Task.isCancelled else { return }
+            image = thumbnail
         }
     }
 

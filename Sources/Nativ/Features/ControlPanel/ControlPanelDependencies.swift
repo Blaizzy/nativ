@@ -9,6 +9,7 @@ final class ControlPanelSharedDependencies {
     let inferenceActivity = InferenceActivityCoordinator()
     let projects = ChatProjectStore()
     let chatSearch = ChatSearchLibrary(storageURL: ChatSearchStore.defaultURL)
+    let fileIndex = ArtifactFileIndexCoordinator()
     private let artifactChangeOrigin = UUID()
     lazy var artifactTrash = ArtifactTrash(
         isActive: { [inferenceActivity] workspace, id in
@@ -36,6 +37,7 @@ final class ControlPanelDependencies: ObservableObject {
     let persistedDataChanges: PersistedDataChangeHub
     let inferenceActivity: InferenceActivityCoordinator
     let projects: ChatProjectStore
+    let fileIndex: ArtifactFileIndexCoordinator
     let chatSearch: ChatSearchLibrary
     let artifactTrash: ArtifactTrash
 
@@ -51,7 +53,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity
     )
-    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, trash: artifactTrash)
+    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, fileIndex: fileIndex, trash: artifactTrash)
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
@@ -68,6 +70,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges = shared.persistedDataChanges
         inferenceActivity = shared.inferenceActivity
         projects = shared.projects
+        fileIndex = shared.fileIndex
         chatSearch = shared.chatSearch
         artifactTrash = shared.artifactTrash
     }

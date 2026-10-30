@@ -92,7 +92,7 @@ final class ArtifactRefreshTests: XCTestCase {
         let renamed = makeArtifact()
         let semantic = makeArtifact()
         let excluded = makeArtifact()
-        let originalURL = store.fileURL(for: renamed)
+        let originalURL = try XCTUnwrap(store.fileURL(for: renamed))
         let originalBytes = Data("Original file content".utf8)
         try FileManager.default.createDirectory(at: originalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try originalBytes.write(to: originalURL)
@@ -112,6 +112,16 @@ final class ArtifactRefreshTests: XCTestCase {
                 semanticMatches: [excluded.id, semantic.id, renamed.id, semantic.id]
             ).map(\.id),
             [renamed.id, semantic.id]
+        )
+        XCTAssertEqual(
+            reloaded.searchResults(in: [semantic, renamed], query: "amber",
+                semanticMatches: [semantic.id], contentMatches: [excluded.id, semantic.id, renamed.id]).map(\.id),
+            [renamed.id, semantic.id]
+        )
+        XCTAssertEqual(
+            reloaded.searchResults(in: [semantic, renamed], query: "body-only",
+                semanticMatches: nil, contentMatches: [semantic.id, semantic.id]).map(\.id),
+            [semantic.id]
         )
         reloaded.rename(renamed, to: " ")
         XCTAssertEqual(reloaded.displayName(for: renamed), renamed.filename)

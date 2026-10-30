@@ -428,12 +428,27 @@ reference image and a model that supports it. See [Models](models.md) for capabi
 Every image and document generated or uploaded across chats is collected in the **Artifacts**
 gallery ([`Sources/Nativ/Features/Artifacts/`](../../Sources/Nativ/Features/Artifacts/)). It
 supports filtering by kind, source (uploaded vs generated), date, and favorites; sorting; and
-grouping by chat. Rendered files are cached under Application Support.
+grouping by chat. All saved work-pane files, including documents, code, and local HTML websites, also appear here,
+with export, Reveal in Finder, and Go to Chat. Document cards show a file icon and name;
+contents are loaded and rendered only when opened. Markdown is formatted and code is
+syntax highlighted, with native previews for other supported formats. They reference the original file
+in chat storage or its checkout, without creating another copy. Missing files, remote
+web tabs and terminals are excluded because they have no source file. Delete work-pane files from their chat for now;
+Artifacts trash and recovery apply to attachments.
 
 **Smart search** ranks artifacts semantically using an on-device embedding model. It activates
 only after that model is installed; until then, search falls back to plain text matching over
 artifact metadata.
 
+Saved work-pane files are indexed silently in the background on launch. The persistent
+SQLite index backfills older chats, resumes pending files after interruption, and
+updates after saves or filesystem changes. Unchanged launches check metadata without
+reading file contents again. Extraction uses one worker with bounded reads and pauses
+between files; binary or oversized replacements are indexed by metadata only. The
+index is local and rebuildable. Artifacts search includes indexed file contents
+alongside metadata and optional semantic matches. App-wide search shows saved files
+alongside matching messages; selecting a file opens its preview. File queries are
+debounced and use the index without rereading file contents or requiring an embedding model.
 
 ## Tool access modes
 
