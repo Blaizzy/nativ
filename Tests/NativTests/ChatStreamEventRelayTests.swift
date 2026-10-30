@@ -3,6 +3,27 @@ import XCTest
 
 @MainActor
 final class ChatStreamEventRelayTests: XCTestCase {
+    func testCheckpointStaysPairedWithDeliveredTextAcrossCoalescingAndCancellation() throws {
+        func checkpoint(_ cursor: Int) throws -> MLXGenerationContinuation {
+            try JSONDecoder().decode(MLXGenerationContinuation.self, from: Data(
+                "{\"id\":\"generation\",\"cursor\":\(cursor),\"content\":\(cursor),\"reasoning\":0,\"responses\":true}".utf8))
+        }
+        var deliveries: [MLXChatStreamDelta] = []
+        let relay = ChatStreamEventRelay(deliveryInterval: .seconds(60)) { deliveries.append($0) }
+        relay.submit(.init(content: "a", continuation: try checkpoint(1)))
+        relay.submit(.init(content: "b", continuation: try checkpoint(2)))
+        relay.finish()
+        XCTAssertEqual(deliveries.first?.content, "ab")
+        XCTAssertEqual(deliveries.first?.continuation, try checkpoint(2))
+
+        let cancelled = ChatStreamEventRelay(deliveryInterval: .seconds(60)) { deliveries.append($0) }
+        cancelled.submit(.init(content: "c", continuation: try checkpoint(3)))
+        cancelled.cancel()
+        cancelled.finish()
+        XCTAssertEqual(deliveries.count, 1)
+        XCTAssertEqual(deliveries.last?.continuation, try checkpoint(2))
+    }
+
     func testFinishCoalescesBurstAndPreservesLatestMetrics() async {
         var deliveries: [MLXChatStreamDelta] = []
         let relay = ChatStreamEventRelay(

@@ -143,8 +143,12 @@ public final class NativResponsesClient: @unchecked Sendable {
             for try await byte in bytes { body.append(byte) }
             throw NativChatError.httpStatus(httpResponse.statusCode, String(decoding: body, as: UTF8.self))
         }
+        if (request.continuation != nil || request.continueFinalMessage),
+           httpResponse.value(forHTTPHeaderField: "X-MLX-Continuation") != "1" {
+            throw NativChatError.serverError("This server does not support continuing an interrupted response. Update the server and retry.")
+        }
 
-        var stream = MLXResponseStream()
+        var stream = MLXResponseStream(allowsEmpty: request.continuation != nil)
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard line.hasPrefix("data:") else { continue }
@@ -189,15 +193,33 @@ public final class NativResponsesClient: @unchecked Sendable {
 }
 
 struct MLXResponseStream {
+    private let allowsEmpty: Bool
     private(set) var response: MLXJSONValue?
     private var decodeRate: Double?
     private var prefillRate: Double?
     private var peakMemoryGB: Double?
     private var toolCalls = MLXChatToolCallAccumulator()
+    private var continuation: MLXGenerationContinuation?
+
+    init(allowsEmpty: Bool = false) {
+        self.allowsEmpty = allowsEmpty
+    }
 
     mutating func consume(_ data: String) throws -> MLXChatStreamDelta? {
         if data == "[DONE]" { return nil }
         let event = try MLXJSONValue(jsonData: Data(data.utf8))
+        if let value = event["continuation"] {
+            continuation = try JSONDecoder().decode(MLXGenerationContinuation.self, from: JSONEncoder().encode(value))
+        }
+        var delta = try consumeEvent(event)
+        if continuation != nil {
+            if delta == nil { delta = MLXChatStreamDelta() }
+            delta?.continuation = continuation
+        }
+        return delta
+    }
+
+    private mutating func consumeEvent(_ event: MLXJSONValue) throws -> MLXChatStreamDelta? {
         let type = event["type"]?.stringValue
         if type == "error" || type == "response.failed" || event["error"] != nil {
             throw NativChatError.serverError(
@@ -262,7 +284,7 @@ struct MLXResponseStream {
             .flatMap { $0["summary"]?.arrayValue ?? [] }
             .compactMap { $0["text"]?.stringValue }.joined()
         let calls = output.compactMap(Self.toolCall)
-        guard !text.isEmpty || !reasoning.isEmpty || !calls.isEmpty else {
+        guard !text.isEmpty || !reasoning.isEmpty || !calls.isEmpty || allowsEmpty else {
             throw NativChatError.missingAssistantContent
         }
         let usage = response["usage"].map {
