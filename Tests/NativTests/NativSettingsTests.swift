@@ -1355,40 +1355,52 @@ final class ServerPortProbeTests: XCTestCase {
 
 @MainActor
 final class ChatTimeoutTests: XCTestCase {
-    func testPreferencesMigrateAndRoundTripWithoutChangingServerArguments() throws {
-        for json in ["{}", "{\"chatResponseTimeout\":123}"] {
+    func testUnifiedTimeoutMigrationAndRoundTrip() throws {
+        let cases: [(String, NativResponseTimeout)] = [
+            ("{}", .thirtyMinutes),
+            (#"{"chatResponseTimeout":600}"#, .sixtyMinutes),
+            (#"{"chatResponseTimeout":3600}"#, .twoHours),
+            (#"{"chatResponseTimeout":0}"#, .twoHours),
+            (#"{"chatResponseTimeout":123}"#, .thirtyMinutes),
+            (#"{"serverStreamingTimeout":1200,"chatResponseTimeout":600}"#, .twentyMinutes),
+            (#"{"responseTimeout":600,"serverStreamingTimeout":1200}"#, .tenMinutes),
+        ]
+        for (json, expected) in cases {
             let settings = try JSONDecoder().decode(NativSettings.self, from: Data(json.utf8))
-            XCTAssertEqual(settings.chatResponseTimeout, .tenMinutes)
+            XCTAssertEqual(settings.responseTimeout, expected)
         }
-        let defaults = NativSettings()
-        for timeout in NativChatTimeout.allCases {
-            var settings = defaults
-            settings.chatResponseTimeout = timeout
-            let decoded = try PropertyListDecoder().decode(
-                NativSettings.self, from: PropertyListEncoder().encode(settings)
-            ).normalized()
-            XCTAssertEqual(decoded.chatResponseTimeout, timeout)
-            XCTAssertEqual(decoded.launchArguments, defaults.normalized().launchArguments)
-            if timeout == .unlimited {
-                XCTAssertEqual(timeout.resourceTimeout, .greatestFiniteMagnitude)
-            } else {
-                XCTAssertGreaterThan(timeout.resourceTimeout, timeout.idleTimeout)
-            }
+        for timeout in NativResponseTimeout.allCases {
+            var settings = NativSettings()
+            settings.responseTimeout = timeout
+            let data = try PropertyListEncoder().encode(settings)
+            let decoded = try PropertyListDecoder().decode(NativSettings.self, from: data)
+            XCTAssertEqual(decoded.responseTimeout, timeout)
+            XCTAssertEqual(decoded.launchEnvironment["NATIV_STREAM_KEEPALIVE_INTERVAL"], "15")
+            XCTAssertEqual(decoded.launchEnvironment["MLX_VLM_TOKEN_QUEUE_TIMEOUT"], String(timeout.rawValue))
+            XCTAssertEqual(decoded.runtimeSettings["token_queue_timeout"], .number(timeout.seconds))
+            XCTAssertEqual(timeout.clientTimeout, timeout.seconds + 15)
+            let saved = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            XCTAssertNil(saved?["chatResponseTimeout"])
+            XCTAssertNil(saved?["serverStreamingTimeout"])
         }
     }
 
     func testSelectedTimeoutReachesBothWireRequests() throws {
         let url = URL(string: "http://127.0.0.1:8080")!
-        for timeout in NativChatTimeout.allCases {
+        for timeout in NativResponseTimeout.allCases {
             let responses = NativResponsesClient(
-                baseURL: url, tenant: "test", idleTimeout: timeout.idleTimeout,
-                resourceTimeout: timeout.resourceTimeout
+                baseURL: url, tenant: "test", idleTimeout: timeout.clientTimeout,
+                resourceTimeout: timeout.clientTimeout, requestTimeout: timeout.seconds
             )
             let chat = NativChatClient(
-                baseURL: url, idleTimeout: timeout.idleTimeout, resourceTimeout: timeout.resourceTimeout
+                baseURL: url, idleTimeout: timeout.clientTimeout,
+                resourceTimeout: timeout.clientTimeout, requestTimeout: timeout.seconds
             )
-            XCTAssertEqual(try responses.makeResponseRequest(request, input: [], compactThreshold: 1000).timeoutInterval, timeout.idleTimeout)
-            XCTAssertEqual(try chat.makeURLRequest(payload: request, accepts: "text/event-stream").timeoutInterval, timeout.idleTimeout)
+            for wire in [try responses.makeResponseRequest(request, input: [], compactThreshold: 1000),
+                         try chat.makeURLRequest(payload: request, accepts: "text/event-stream")] {
+                XCTAssertEqual(wire.timeoutInterval, timeout.clientTimeout)
+                XCTAssertEqual(wire.value(forHTTPHeaderField: "X-Nativ-Request-Timeout"), String(timeout.seconds))
+            }
             XCTAssertEqual(try chat.makePromptTokenCountURLRequest(for: request).timeoutInterval, 10)
         }
     }
@@ -1425,26 +1437,26 @@ final class ChatTimeoutTests: XCTestCase {
         }
     }
 
-    func testUnlimitedRequestsCanCompleteAndBeCancelled() async throws {
+    func testRequestsWithLongBudgetsCanCompleteAndBeCancelled() async throws {
         let server = try ChatTimeoutHTTPFixture(delays: [2])
         let url = try await server.start()
         defer { server.stop() }
-        let unlimited = NativChatTimeout.unlimited
+        let timeout = NativResponseTimeout.thirtyMinutes
         for responses in [true, false] {
             let result = try await completion(
-                url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+                url: url, responses: responses, idle: timeout.clientTimeout, resource: timeout.clientTimeout
             )
             XCTAssertEqual(result.content, "Done")
             let task = Task {
                 try await completion(
-                    url: url, responses: responses, idle: unlimited.idleTimeout, resource: unlimited.resourceTimeout
+                    url: url, responses: responses, idle: timeout.clientTimeout, resource: timeout.clientTimeout
                 )
             }
             try await Task.sleep(for: .milliseconds(200))
             task.cancel()
             do {
                 _ = try await task.value
-                XCTFail("An unlimited request must remain cancellable")
+                XCTFail("A request with a long budget must remain cancellable")
             } catch is CancellationError {
             } catch let error as URLError {
                 XCTAssertEqual(error.code, .cancelled)
