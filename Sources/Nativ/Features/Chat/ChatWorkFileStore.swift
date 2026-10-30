@@ -1,6 +1,16 @@
 import Foundation
 import Darwin
 
+struct ChatWorkFileAccess: Codable, Sendable {
+    let url: URL
+    let root: URL
+    let worktree: ChatGitWorktree?
+
+    var validatedURL: URL? {
+        ChatWorkFileStore(root: root, worktree: worktree).validatedURL(url)
+    }
+}
+
 /// Readable files for session-owned work. IDs keep duplicate names and different chats separate.
 struct ChatWorkFileStore {
     let root: URL

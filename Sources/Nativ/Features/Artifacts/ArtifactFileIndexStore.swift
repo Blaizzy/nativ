@@ -10,6 +10,7 @@ final class ArtifactFileIndexStore {
         let name: String
         let title: String
         let revision: String
+        var access: String = ""
     }
     struct Pending: Sendable {
         let file: File
@@ -33,14 +34,24 @@ final class ArtifactFileIndexStore {
             try execute("PRAGMA synchronous=NORMAL")
             try execute("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             let version = try rows("SELECT value FROM metadata WHERE key='version'").first?.first
-            guard version == nil || version == "1" else { throw failure("Unsupported file index version") }
-            try execute("INSERT OR IGNORE INTO metadata VALUES ('version', '1')")
+            guard version == nil || version == "1" || version == "2" else { throw failure("Unsupported file index version") }
+            if version == "1" {
+                // Old entries contain resolved paths without their original access boundary.
+                // Rebuild instead of retaining potentially out-of-bounds indexed content.
+                try transaction {
+                    for table in ["files", "file_text", "sessions", "session_jobs", "metadata"] {
+                        try execute("DROP TABLE IF EXISTS \(table)")
+                    }
+                    try execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+                }
+            }
+            try execute("INSERT OR IGNORE INTO metadata VALUES ('version', '2')")
             try execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, stamp TEXT NOT NULL)")
             try execute("CREATE TABLE IF NOT EXISTS session_jobs (id TEXT PRIMARY KEY, retry REAL NOT NULL)")
             try execute("""
                 CREATE TABLE IF NOT EXISTS files (
                   id TEXT UNIQUE NOT NULL, session TEXT NOT NULL, path TEXT NOT NULL, name TEXT NOT NULL,
-                  title TEXT NOT NULL, revision TEXT NOT NULL, stamp TEXT NOT NULL DEFAULT '',
+                  title TEXT NOT NULL, revision TEXT NOT NULL, access TEXT NOT NULL, stamp TEXT NOT NULL DEFAULT '',
                   hash TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', pending INTEGER NOT NULL DEFAULT 1,
                   force INTEGER NOT NULL DEFAULT 1, retry REAL NOT NULL DEFAULT 0, available INTEGER NOT NULL DEFAULT 1)
                 """)
@@ -76,14 +87,14 @@ final class ArtifactFileIndexStore {
                 try execute("DELETE FROM files WHERE id=?", [row[0]])
             }
             for file in files {
-                let old = try rows("SELECT path,name,title,revision FROM files WHERE id=?", [file.id]).first
-                let values = [file.path, file.name, file.title, file.revision]
+                let old = try rows("SELECT path,name,title,revision,access FROM files WHERE id=?", [file.id]).first
+                let values = [file.path, file.name, file.title, file.revision, file.access]
                 guard old != values else { continue }
                 if let old {
-                    try execute("UPDATE files SET path=?,name=?,title=?,revision=?,pending=1,force=MAX(force,CAST(? AS INTEGER)),retry=0 WHERE id=?",
-                                values + [old[0] != file.path || old[3] != file.revision ? "1" : "0", file.id])
+                    try execute("UPDATE files SET path=?,name=?,title=?,revision=?,access=?,pending=1,force=MAX(force,CAST(? AS INTEGER)),retry=0 WHERE id=?",
+                                values + [old[0] != file.path || old[3] != file.revision || old[4] != file.access ? "1" : "0", file.id])
                 } else {
-                    try execute("INSERT INTO files(id,session,path,name,title,revision) VALUES(?,?,?,?,?,?)",
+                    try execute("INSERT INTO files(id,session,path,name,title,revision,access) VALUES(?,?,?,?,?,?,?)",
                                 [file.id, file.session] + values)
                 }
             }
@@ -100,7 +111,9 @@ final class ArtifactFileIndexStore {
         }
     }
     func sessionIDs() throws -> [String] { try rows("SELECT id FROM sessions UNION SELECT id FROM session_jobs").map { $0[0] } }
-    func paths() throws -> [(String, String, String)] { try rows("SELECT id,path,stamp FROM files").map { ($0[0], $0[1], $0[2]) } }
+    func paths() throws -> [(String, String, String, String)] {
+        try rows("SELECT id,path,stamp,access FROM files").map { ($0[0], $0[1], $0[2], $0[3]) }
+    }
     func markPending(id: String, force: Bool = false) throws {
         try execute("UPDATE files SET pending=1,force=MAX(force,CAST(? AS INTEGER)),retry=0 WHERE id=?", [force ? "1" : "0", id])
     }
@@ -108,9 +121,9 @@ final class ArtifactFileIndexStore {
         try execute("UPDATE files SET pending=1,retry=0 WHERE path=?", [path])
     }
     func pending() throws -> Pending? {
-        guard let row = try rows("SELECT id,session,path,name,title,revision,stamp,hash,force FROM files WHERE pending=1 AND retry<=? LIMIT 1",
+        guard let row = try rows("SELECT id,session,path,name,title,revision,stamp,hash,force,access FROM files WHERE pending=1 AND retry<=? LIMIT 1",
                                  [String(Date.now.timeIntervalSince1970)]).first else { return nil }
-        return Pending(file: File(id: row[0], session: row[1], path: row[2], name: row[3], title: row[4], revision: row[5]),
+        return Pending(file: File(id: row[0], session: row[1], path: row[2], name: row[3], title: row[4], revision: row[5], access: row[9]),
                        stamp: row[6], hash: row[7], force: row[8] == "1")
     }
     func deferSession(_ id: String) throws {
@@ -123,7 +136,7 @@ final class ArtifactFileIndexStore {
         try !rows("SELECT id FROM files WHERE pending=1 UNION ALL SELECT id FROM session_jobs LIMIT 1").isEmpty
     }
     func deferFile(_ id: String) throws {
-        try execute("UPDATE files SET available=0,retry=? WHERE id=?", [String(Date.now.addingTimeInterval(60).timeIntervalSince1970), id])
+        try execute("UPDATE files SET available=0,body='',hash='',stamp='',force=1,retry=? WHERE id=?", [String(Date.now.addingTimeInterval(60).timeIntervalSince1970), id])
     }
     func finish(_ id: String, stamp: String, hash: String, body: String?) throws {
         try transaction {
@@ -192,17 +205,24 @@ struct ArtifactFileManifest: Sendable {
 
     private init(root: URL, id: UUID, title: String, state: ChatWorkState?,
                  worktree: ChatGitWorktree?, inWorktree: Bool, stamp: String) {
-        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
+        self.root = ChatWorkFileStore.canonicalRoot(root)
         sessionID = id
         self.stamp = stamp
         let directory: URL
         if inWorktree, let worktree { directory = URL(fileURLWithPath: worktree.projectPath).appending(path: "Nativ Files") }
-        else { directory = root.appending(path: "Files/\(id.uuidString)") }
+        else { directory = self.root.appending(path: "Files/\(id.uuidString)") }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let accessRoot = inWorktree ? directory : self.root.appending(path: "Files")
         files = (state?.items ?? []).filter(\.canEdit).map { item in
             let name = item.storedFilename
+            let url = directory.appending(path: item.id.uuidString).appendingPathComponent(name)
+            let access = ChatWorkFileAccess(url: url, root: accessRoot,
+                                           worktree: inWorktree ? worktree : nil)
             return .init(id: Self.artifactID(session: id, item: item.id).uuidString,
-                         session: id.uuidString, path: directory.appending(path: item.id.uuidString).resolvingSymlinksInPath().appendingPathComponent(name).path,
-                         name: name, title: title, revision: String(item.revision))
+                         session: id.uuidString, path: url.path,
+                         name: name, title: title, revision: String(item.revision),
+                         access: (try? encoder.encode(access)).flatMap { String(data: $0, encoding: .utf8) } ?? "")
         }
     }
 

@@ -1,5 +1,6 @@
 import XCTest
 import Darwin
+import SQLite3
 
 final class ArtifactCatalogTests: XCTestCase {
     func testConcurrentRootReplacementNeverReadsOutsideWorkFiles() async throws {
@@ -468,6 +469,61 @@ final class ArtifactCatalogTests: XCTestCase {
         XCTAssertEqual(loads, 1, "Deletion, restoration and reload must reuse saved metadata")
         _ = ArtifactStore.catalogSnapshot(fingerprint: "changed", known: snapshot, load: load)
         XCTAssertEqual(loads, 2, "A changed session must invalidate cached metadata")
+    }
+
+    func testIndexRejectsSymlinksAndRecoversOriginalPath() async throws {
+        for linkFilesRoot in [false, true] {
+            let fixture = Fixture()
+            defer { fixture.remove() }
+            let item = ChatWorkItem(title: "Notes.md", kind: .document, content: "originalsentinel")
+            var session = fixture.chat(messages: [])
+            session.workState = ChatWorkState(items: [item])
+            XCTAssertTrue(fixture.chats.saveSession(session))
+            let root = fixture.root.appendingPathComponent("Chat")
+            let worker = ArtifactFileIndexer(root: root, indexURL: fixture.root.appendingPathComponent("Index.sqlite"))
+            try await worker.discover(); try await worker.drain()
+            let initial = try await worker.search("originalsentinel")
+            XCTAssertEqual(initial.count, 1)
+            let url = try XCTUnwrap(fixture.chats.workFiles.fileURL(for: item, sessionID: session.id))
+            let directory = linkFilesRoot ? fixture.chats.workFiles.root : url.deletingLastPathComponent()
+            let relative = String(url.path.dropFirst(directory.path.count + 1))
+            let outside = fixture.root.appendingPathComponent("Outside")
+            // Keep the inode and timestamps: path validation must run even when stamps match.
+            try FileManager.default.moveItem(at: directory, to: outside)
+            try FileManager.default.createSymbolicLink(at: directory, withDestinationURL: outside)
+            try await worker.discover(); try await worker.drain()
+            let blocked = try await worker.search("originalsentinel")
+            XCTAssertTrue(blocked.isEmpty)
+            try "privatesentinel".write(to: outside.appendingPathComponent(relative), atomically: true, encoding: .utf8)
+            try await worker.changed(paths: [url.path]); try await worker.drain()
+            let leaked = try await worker.search("privatesentinel")
+            XCTAssertTrue(leaked.isEmpty)
+            try FileManager.default.removeItem(at: directory)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "restoredsentinel".write(to: url, atomically: true, encoding: .utf8)
+            try await worker.changed(paths: [url.path]); try await worker.drain()
+            let restored = try await worker.search("restoredsentinel")
+            XCTAssertEqual(restored.count, 1)
+        }
+    }
+
+    func testOldIndexIsRebuiltWithoutRetainingUnsafeContent() throws {
+        let fixture = Fixture()
+        defer { fixture.remove() }
+        let url = fixture.root.appendingPathComponent("Index.sqlite")
+        do {
+            let database = try ArtifactFileIndexStore(url: url)
+            let file = ArtifactFileIndexStore.File(id: "file", session: "session", path: "/outside", name: "Notes.md", title: "Test", revision: "1")
+            try database.synchronize(session: "session", stamp: "stamp", files: [file])
+            try database.finish(file.id, stamp: "stamp", hash: "hash", body: "privatesentinel")
+        }
+        var handle: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &handle), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(handle, "UPDATE metadata SET value='1' WHERE key='version'", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(handle)
+        let reopened = try ArtifactFileIndexStore(url: url)
+        XCTAssertTrue(try reopened.search("privatesentinel").isEmpty)
+        XCTAssertTrue(try reopened.sessionIDs().isEmpty, "Sessions must be discovered again using validated paths")
     }
 
     private struct Fixture {

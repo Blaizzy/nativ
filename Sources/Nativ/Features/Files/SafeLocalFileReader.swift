@@ -34,6 +34,10 @@ struct SafeLocalFileReader: Sendable {
     }
 
     func read(url: URL) async throws -> SafeLocalFileSnapshot {
+        try readSynchronously(url: url)
+    }
+
+    func readSynchronously(url: URL) throws -> SafeLocalFileSnapshot {
         try Task.checkCancellation()
 
         let descriptor = Self.openWithoutFollowingSymlinks(url)

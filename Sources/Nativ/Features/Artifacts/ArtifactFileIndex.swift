@@ -20,24 +20,24 @@ final class ArtifactFileIndexCoordinator {
     private static let logger = Logger(subsystem: "Nativ", category: "FileIndex")
 
     init(root: URL = URL.applicationSupportDirectory.appending(path: "Nativ/Chat"), indexURL: URL? = nil) {
-        self.root = root.standardizedFileURL.resolvingSymlinksInPath()
+        self.root = ChatWorkFileStore.canonicalRoot(root)
         worker = ArtifactFileIndexer(root: root, indexURL: indexURL ?? root.deletingLastPathComponent().appending(path: "Artifact Files.sqlite"))
         changes = NotificationCenter.default.publisher(for: ArtifactFileManifest.changed).sink { [weak self] event in
             guard let manifest = event.object as? ArtifactFileManifest else { return }
             Task { @MainActor [weak self] in
-                guard let self, manifest.root.standardizedFileURL.resolvingSymlinksInPath().path == self.root.path else { return }
+                guard let self, ChatWorkFileStore.canonicalRoot(manifest.root).path == self.root.path else { return }
                 self.manifests[manifest.sessionID] = manifest
                 self.schedule()
             }
         }
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            watcher = ArtifactFileWatcher(root: root) { [weak self] paths, reconcile in
+            watcher = ArtifactFileWatcher(root: self.root) { [weak self] paths, reconcile in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.paths.formUnion(paths.map { path in
                         let url = URL(fileURLWithPath: path)
-                        return url.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(url.lastPathComponent).path
+                        return ArtifactFileIndexer.canonicalPath(url, root: self.root)
                     }.filter {
                         $0.hasPrefix(self.root.appending(path: "Sessions").path + "/")
                             || $0.hasPrefix(self.root.appending(path: "Files").path + "/")
@@ -101,7 +101,13 @@ actor ArtifactFileIndexer {
     private(set) var sessionReads = 0
     private static let logger = Logger(subsystem: "Nativ", category: "FileIndex")
 
-    init(root: URL, indexURL: URL) { self.root = root.standardizedFileURL.resolvingSymlinksInPath(); self.indexURL = indexURL }
+    init(root: URL, indexURL: URL) { self.root = ChatWorkFileStore.canonicalRoot(root); self.indexURL = indexURL }
+
+    nonisolated static func canonicalPath(_ url: URL, root: URL) -> String {
+        let alias = root.standardizedFileURL.path + "/"
+        if url.path.hasPrefix(alias) { return root.path + "/" + url.path.dropFirst(alias.count) }
+        return url.path
+    }
 
     private func store() throws -> ArtifactFileIndexStore {
         if let storage { return storage }
@@ -125,7 +131,7 @@ actor ArtifactFileIndexer {
     }
 
     func receive(_ manifest: ArtifactFileManifest) throws {
-        guard manifest.root.standardizedFileURL.resolvingSymlinksInPath().path == root.path else { return }
+        guard ChatWorkFileStore.canonicalRoot(manifest.root).path == root.path else { return }
         let url = root.appending(path: "Sessions/\(manifest.sessionID).json")
         guard Self.stamp(url) == manifest.stamp else { return }
         try store().synchronize(session: manifest.sessionID.uuidString, stamp: manifest.stamp, files: manifest.files)
@@ -149,8 +155,11 @@ actor ArtifactFileIndexer {
             && !FileManager.default.fileExists(atPath: directory.appending(path: "\(id).json").path) {
             try database.removeSession(id)
         }
-        for (id, path, stamp) in try database.paths() where Self.stamp(URL(fileURLWithPath: path)) != stamp {
-            try database.markPending(id: id)
+        for (id, path, stamp, encodedAccess) in try database.paths() {
+            let access = try? JSONDecoder().decode(ChatWorkFileAccess.self, from: Data(encodedAccess.utf8))
+            if access?.validatedURL == nil || Self.stamp(URL(fileURLWithPath: path)) != stamp {
+                try database.markPending(id: id)
+            }
         }
         discovered = true
     }
@@ -175,7 +184,7 @@ actor ArtifactFileIndexer {
         let sessions = root.appending(path: "Sessions").path + "/"
         for original in Set(paths) {
             let source = URL(fileURLWithPath: original)
-            let path = source.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent(source.lastPathComponent).path
+            let path = Self.canonicalPath(source, root: root)
             if path.hasPrefix(sessions), path.hasSuffix(".json") {
                 let url = URL(fileURLWithPath: path)
                 if Self.stamp(url) != nil { try discoverSession(url) }
@@ -211,16 +220,20 @@ actor ArtifactFileIndexer {
     }
 
     private func index(_ pending: ArtifactFileIndexStore.Pending) throws {
-        let url = URL(fileURLWithPath: pending.file.path)
+        let access = try JSONDecoder().decode(ChatWorkFileAccess.self, from: Data(pending.file.access.utf8))
+        guard let url = access.validatedURL, url.path == pending.file.path else { throw CocoaError(.fileReadNoPermission) }
         guard let before = Self.stamp(url) else { throw CocoaError(.fileReadNoSuchFile) }
         if !pending.force, before == pending.stamp {
             try store().finish(pending.file.id, stamp: before, hash: pending.hash, body: nil)
             return
         }
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
         contentReads += 1
-        let bytes = try handle.read(upToCount: 2_000_001) ?? Data()
+        let bytes: Data
+        do { bytes = try SafeLocalFileReader(maximumBytes: 2_000_000).readSynchronously(url: url).data }
+        catch SafeLocalFileReaderError.fileTooLarge {
+            try store().finish(pending.file.id, stamp: before, hash: "oversized", body: "")
+            return
+        }
         guard before == Self.stamp(url) else { throw CocoaError(.fileReadUnknown) }
         let hash = Data(SHA256.hash(data: bytes)).base64EncodedString()
         let body = bytes.count <= 2_000_000 && !bytes.contains(0) ? String(data: bytes, encoding: .utf8) ?? "" : ""
