@@ -1,6 +1,81 @@
 import XCTest
+import Darwin
 
 final class ArtifactCatalogTests: XCTestCase {
+    func testConcurrentRootReplacementNeverReadsOutsideWorkFiles() async throws {
+        let fm = FileManager.default
+        let base = ChatWorkFileStore.canonicalRoot(fm.temporaryDirectory)
+            .appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("Files")
+        let outside = base.appendingPathComponent("Outside")
+        let swap = base.appendingPathComponent("Swap")
+        for directory in [root, outside] {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try (directory == root ? "safe" : "outside").write(
+                to: directory.appendingPathComponent("Notes.md"), atomically: true, encoding: .utf8)
+        }
+        try fm.createSymbolicLink(at: swap, withDestinationURL: outside)
+        let replacement = Task.detached {
+            for _ in 0..<10_000 {
+                _ = renameatx_np(AT_FDCWD, root.path, AT_FDCWD, swap.path, UInt32(RENAME_SWAP))
+            }
+        }
+        defer { try? fm.removeItem(at: base) }
+        let files = ChatWorkFileStore(root: root)
+        let original = root.appendingPathComponent("Notes.md")
+        for _ in 0..<2_000 {
+            guard let validated = files.validatedURL(original) else { continue }
+            XCTAssertEqual(validated.path, original.path)
+            if let snapshot = try? await SafeLocalFileReader().read(url: validated) {
+                XCTAssertEqual(String(decoding: snapshot.data, as: UTF8.self), "safe")
+            }
+        }
+        await replacement.value
+    }
+
+    func testExportOntoSourceOrHardLinkPreservesContent() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let source = base.appendingPathComponent("source.md")
+        let alias = base.appendingPathComponent("alias.md")
+        try "original".write(to: source, atomically: true, encoding: .utf8)
+        try fm.linkItem(at: source, to: alias)
+        try SafeLocalFileReader.exportCopy(from: source, to: source)
+        try SafeLocalFileReader.exportCopy(from: source, to: alias)
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "original")
+        XCTAssertEqual(try String(contentsOf: alias, encoding: .utf8), "original")
+    }
+
+    func testExportFailurePreservesDestinationAndRejectsReplacedSource() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let root = base.appendingPathComponent("Files")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let source = root.appendingPathComponent("source.md")
+        let destination = base.appendingPathComponent("destination.md")
+        try "source".write(to: source, atomically: true, encoding: .utf8)
+        try "destination".write(to: destination, atomically: true, encoding: .utf8)
+        let validated = try XCTUnwrap(ChatWorkFileStore(root: root).validatedURL(source))
+        let moved = base.appendingPathComponent("Moved")
+        try fm.moveItem(at: root, to: moved)
+        try fm.createSymbolicLink(at: root, withDestinationURL: moved)
+        XCTAssertThrowsError(try SafeLocalFileReader.exportCopy(from: validated, to: destination))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "destination")
+        try fm.removeItem(at: root)
+        try fm.moveItem(at: moved, to: root)
+        XCTAssertThrowsError(try SafeLocalFileReader.exportCopy(
+            from: validated, to: destination, replaceExisting: false))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "destination")
+        try SafeLocalFileReader.exportCopy(from: validated, to: destination)
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "source")
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "source")
+        XCTAssertFalse(try fm.contentsOfDirectory(atPath: base.path).contains { $0.hasPrefix(".nativ-export-") })
+    }
+
     func testMissingProvenanceIsUnknownRegardlessOfRoleOrFilename() throws {
         let fixture = Fixture()
         defer { fixture.remove() }

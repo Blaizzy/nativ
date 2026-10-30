@@ -321,8 +321,11 @@ final class ArtifactStore: ObservableObject {
             return
         }
         guard let url = fileURL(for: artifact) else { return }
-        try? FileManager.default.removeItem(at: destination)
-        try? FileManager.default.copyItem(at: url, to: destination)
+        do {
+            try SafeLocalFileReader.exportCopy(from: url, to: destination)
+        } catch {
+            NSAlert(error: error).runModal()
+        }
     }
 
     func exportToDirectory(_ toExport: [Artifact]) {
@@ -337,7 +340,12 @@ final class ArtifactStore: ObservableObject {
         for artifact in toExport {
             guard let url = fileURL(for: artifact) else { continue }
             let destination = directory.appendingPathComponent(artifact.filename)
-            try? FileManager.default.copyItem(at: url, to: destination)
+            do {
+                try SafeLocalFileReader.exportCopy(from: url, to: destination, replaceExisting: false)
+            } catch {
+                NSAlert(error: error).runModal()
+                return
+            }
         }
     }
 

@@ -28,7 +28,7 @@ struct ChatWorkFileStore {
         guard url.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/"),
               (try? checkLocation(url)) != nil else { return nil }
         let relative = String(url.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1))
-        return Self.canonicalRoot(root).appendingPathComponent(relative)
+        return SafeLocalFileReader.systemAliasURL(root).appendingPathComponent(relative)
     }
 
     static func canonicalRoot(_ root: URL) -> URL {
