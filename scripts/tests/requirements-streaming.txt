@@ -1,0 +1,2 @@
+# Keep these dependencies aligned with the bundled server requirements.
+anyio==4.13.0

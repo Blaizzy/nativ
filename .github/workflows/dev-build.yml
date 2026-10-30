@@ -31,8 +31,18 @@ jobs:
       - name: Test release metadata and preview feeds
         run: python3 -m unittest discover -s scripts/tests -p 'test_macos_release.py'
 
-      - name: Test request diagnostics
-        run: python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
+      - name: Set up Python for server regression tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install server test dependencies
+        run: python3 -m pip install -r scripts/tests/requirements-streaming.txt
+
+      - name: Test request diagnostics and streaming
+        run: |
+          python3 -m unittest discover -s scripts/tests -p 'test_request_diagnostics*.py' -v
+          python3 -m unittest scripts.tests.test_stream_keepalives -v
 
       - name: Test runtime build and model capability detection
         run: python3 -m unittest scripts.tests.test_python_resource_reuse scripts.tests.test_model_capabilities -v

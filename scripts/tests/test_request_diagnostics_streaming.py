@@ -4,9 +4,12 @@ import ast
 import asyncio
 import contextvars
 import json
+import math
+import os
 import time
 import types
 import unittest
+import anyio
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -16,8 +19,8 @@ class StreamingRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
     def setUpClass(cls):
         source = Path(__file__).resolve().parents[2] / 'PythonDistribution/Overlay/nativ_server.py'
         parsed = ast.parse(source.read_text())
-        names = {'StreamAccumulator', 'install_metrics_overlay'}
-        definitions = [node for node in parsed.body if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names]
+        names = {'StreamAccumulator', 'install_metrics_overlay', 'stream_with_keepalives', 'stream_keepalive_interval'}
+        definitions = [node for node in parsed.body if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
         cls.code = compile(ast.fix_missing_locations(ast.Module(
             body=ast.parse('from __future__ import annotations').body + definitions,
             type_ignores=[],
@@ -34,7 +37,7 @@ class StreamingRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         observation = types.SimpleNamespace(model='test-model', start_time=time.perf_counter(), first_token_at=None)
         tracker = Mock()
         namespace = dict(
-            asyncio=asyncio, json=json, time=time, Request=object,
+            asyncio=asyncio, anyio=anyio, math=math, os=os, json=json, time=time, Request=object,
             base=types.SimpleNamespace(app=app, logger=Mock()),
             TRACKER=tracker, TRACKED_PATHS={path},
             install_base_metrics_capture=lambda: None,
@@ -91,6 +94,7 @@ class StreamingRequestDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIs(actual_observation, observation)
                 self.assertEqual(completion['prompt_tokens'], 4)
                 self.assertEqual(completion['completion_tokens'], 1)
+
 
 
 if __name__ == '__main__':

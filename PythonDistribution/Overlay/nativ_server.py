@@ -4,6 +4,7 @@ import atexit
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -26,6 +27,7 @@ else:
     truststore.inject_into_ssl()
 
 import mlx.core as mx
+import anyio
 from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from mlx.utils import tree_flatten
@@ -989,6 +991,7 @@ class StreamAccumulator:
         self.finish_reason: str | None = None
         self.tool_calls = False
         self.failed = False
+        self.terminal = False
 
     def feed(self, block: str) -> None:
         lines = [line for line in block.splitlines() if line]
@@ -1008,6 +1011,7 @@ class StreamAccumulator:
 
         data_text = "\n".join(data_parts)
         if data_text == "[DONE]":
+            self.terminal = True
             return
 
         try:
@@ -1018,6 +1022,10 @@ class StreamAccumulator:
         if not isinstance(payload, dict):
             return
         response = payload.get("response")
+        if event_name in {"response.completed", "response.failed", "response.incomplete", "error"} or payload.get("type") in {
+            "response.completed", "response.failed", "response.incomplete", "error"
+        }:
+            self.terminal = True
         if (
             event_name in {"error", "response.failed"}
             or payload.get("type") in {"error", "response.failed"}
@@ -1025,6 +1033,7 @@ class StreamAccumulator:
             or (isinstance(response, dict) and response.get("status") == "failed")
         ):
             self.failed = True
+            self.terminal = True
             return
 
         if self.kind == "chat":
@@ -1316,6 +1325,77 @@ def install_runtime_settings_overlay() -> None:
     RuntimeConfig._nativ_live_settings_installed = True
 
 
+def stream_keepalive_interval() -> float:
+    """Seconds of stream silence before a comment; zero disables keepalives."""
+    raw = os.environ.get("NATIV_STREAM_KEEPALIVE_INTERVAL", "15")
+    try:
+        interval = float(raw)
+        if math.isfinite(interval) and interval >= 0:
+            return interval
+    except ValueError:
+        pass
+    base.logger.warning("Invalid NATIV_STREAM_KEEPALIVE_INTERVAL; using 15 seconds")
+    return 15.0
+
+
+async def stream_with_keepalives(source, interval: float, is_terminal=lambda: False):
+    """Add SSE comments without cancelling a slow read or splitting an event.
+
+    Transport chunks can split even a CRLF delimiter. Track framing with
+    constant memory and defer comments until a complete event boundary.
+    Heartbeats deliberately do not alter the engine's token queue timeout.
+    """
+    iterator = aiter(source)
+    pending = None
+    boundary = True
+    line_has_data = False
+    after_cr = False
+    try:
+        if interval == 0:
+            async for chunk in iterator:
+                yield chunk
+            return
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(iterator), name="nativ-sse-read")
+            heartbeat_allowed = interval > 0 and boundary and not after_cr and not is_terminal()
+            wait = interval if heartbeat_allowed else None
+            if wait is not None:
+                done, _ = await asyncio.wait({pending}, timeout=wait)
+                if not done:
+                    if heartbeat_allowed:
+                        yield b": keepalive\n\n"
+                    continue
+            try:
+                chunk = await pending
+            except StopAsyncIteration:
+                return
+            pending = None
+            data = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+            for char in data:
+                if after_cr and char == 10:
+                    after_cr = False
+                    continue
+                after_cr = char == 13
+                if char in (10, 13):
+                    boundary = not line_has_data
+                    line_has_data = False
+                else:
+                    line_has_data = True
+                    boundary = False
+            yield chunk
+    finally:
+        # Starlette cancels the response's AnyIO scope on disconnect. Shield
+        # cleanup so its cancellation cannot interrupt closing the source.
+        with anyio.CancelScope(shield=True):
+            if pending is not None:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+            close = getattr(iterator, "aclose", None)
+            if close is not None:
+                await close()
+
+
 def install_metrics_overlay() -> None:
     if getattr(base.app.state, "mlx_platform_metrics_installed", False):
         return
@@ -1373,7 +1453,10 @@ def install_metrics_overlay() -> None:
                 observation,
                 "chat" if request.url.path.endswith("chat/completions") else "responses",
             )
-            original_iterator = response.body_iterator
+            original_iterator = stream_with_keepalives(
+                response.body_iterator, stream_keepalive_interval(),
+                is_terminal=lambda: accumulator.terminal or accumulator.failed,
+            )
 
             async def wrapped_iterator():
                 buffer = ""
@@ -1414,6 +1497,9 @@ def install_metrics_overlay() -> None:
                 except Exception as error:
                     TRACKER.record_failed(observation, safe_failure_code(error))
                     raise
+                finally:
+                    with anyio.CancelScope(shield=True):
+                        await original_iterator.aclose()
 
             response.body_iterator = wrapped_iterator()
             return response
