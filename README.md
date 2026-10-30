@@ -183,6 +183,35 @@ The server includes:
 - Anthropic-compatible `/v1/messages` and token-counting routes.
 - `/health`, `/metrics`, cache statistics, cache reset, and model unload endpoints.
 
+Streaming Chat Completions and Responses requests send an invisible SSE comment
+when the stream is silent for 15 seconds. Settings → Advanced → **Response
+Timeout** controls the maximum duration of each streaming request, including
+queueing, prefill, reasoning, and generation. It applies to Nativ chats and
+external clients. Heartbeats and model output never extend the deadline.
+
+The default is 30 minutes, with options from 10 to 120 minutes. Changes apply
+live to new server requests; existing requests retain their deadline. Nativ's
+chat client derives its network limits from the same selection, allowing 15 extra
+seconds to receive the server's timeout error. It also sends its selected budget
+with each request so the server cannot outlive that client after a settings change.
+External clients may enforce their own earlier deadlines.
+
+Older saved Chat Response Timeout preferences migrate to their previous total
+request budget (60 or 120 minutes). The former “No limit” option migrates to the
+longest finite option, 120 minutes. Earlier Server Streaming Timeout selections
+are preserved. Only the unified Response Timeout is saved going forward.
+
+For a standalone Python server, `MLX_VLM_TOKEN_QUEUE_TIMEOUT` supplies the shared
+timeout. `NATIV_STREAM_REQUEST_TIMEOUT` remains a startup fallback; values must be
+positive, finite seconds. Advanced troubleshooting can override the heartbeat
+interval through `NATIV_STREAM_KEEPALIVE_INTERVAL`; the app always sets it to 15.
+
+At the deadline, the server cancels the request task and closes the stream. It
+sends a `request_timeout` error at a safe SSE boundary, or HTTP 504 if headers have
+not been sent. Underlying GPU cancellation remains cooperative; this does not
+forcibly restart a hung inference worker. Use `curl -N` with `"stream": true` to
+inspect heartbeat comments and timeout errors.
+
 ## Project layout
 
 ```text

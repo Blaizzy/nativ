@@ -76,6 +76,8 @@ jobs:
             -only-testing:NativTests/MCPServerCatalogTests \
             -only-testing:NativTests/ChatProjectStoreTests \
             -only-testing:NativTests/ChatCompactionTests \
+            -only-testing:NativTests/ChatTimeoutTests \
+            -only-testing:NativTests/NativRuntimeSettingsTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
             -only-testing:NativTests/AudioAnalyticsStoreTests \

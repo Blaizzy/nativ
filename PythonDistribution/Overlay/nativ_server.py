@@ -32,6 +32,10 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from mlx.utils import tree_flatten
 
+# One setting governs the engine's wait and the streaming request deadline.
+# Preserve explicitly configured standalone-server values.
+os.environ.setdefault("MLX_VLM_TOKEN_QUEUE_TIMEOUT", os.environ.get("NATIV_STREAM_REQUEST_TIMEOUT", "1800"))
+
 import mlx_vlm.server as base
 import mlx_vlm.server.cli as base_cli
 import mlx_vlm.server.generation as base_generation
@@ -1338,15 +1342,28 @@ def stream_keepalive_interval() -> float:
     return 15.0
 
 
-def stream_request_timeout() -> float:
+def stream_request_timeout(request=None) -> float:
+    # Read a snapshot of the engine's live settings for each new request.
+    config = getattr(base_generation.runtime, "config", None)
+    value = config.current().get("token_queue_timeout") if config is not None else None
     try:
-        value = float(os.environ.get("NATIV_STREAM_REQUEST_TIMEOUT", "1800"))
-        if math.isfinite(value) and value > 0:
-            return value
-    except ValueError:
-        pass
-    base.logger.warning("Invalid NATIV_STREAM_REQUEST_TIMEOUT; using 1800 seconds")
-    return 1800.0
+        value = float(value if value is not None else os.environ.get("NATIV_STREAM_REQUEST_TIMEOUT", "1800"))
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        base.logger.warning("Invalid response timeout; using 1800 seconds")
+        value = 1800.0
+    # A native chat retains its selected budget across tool rounds. A later
+    # settings change must not let the server outlive that client's fallback.
+    # This hint can only shorten the server limit, never extend it.
+    if request is not None:
+        try:
+            requested = float(request.headers.get("x-nativ-request-timeout", ""))
+            if math.isfinite(requested) and requested > 0:
+                value = min(value, requested)
+        except ValueError:
+            pass
+    return value
 
 
 class StreamDeadlineExceeded(TimeoutError):
@@ -1479,7 +1496,7 @@ def install_metrics_overlay() -> None:
         TRACKER.record_started(observation)
         metrics_capture: dict[str, Any] = {}
         capture_token = _BASE_METRICS_CAPTURE.set(metrics_capture)
-        deadline = time.monotonic() + stream_request_timeout() if isinstance(payload, dict) and payload.get("stream") is True else None
+        deadline = time.monotonic() + stream_request_timeout(request) if isinstance(payload, dict) and payload.get("stream") is True else None
 
         try:
             if deadline is None:

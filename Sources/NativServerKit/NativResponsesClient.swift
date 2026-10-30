@@ -12,6 +12,7 @@ public final class NativResponsesClient: @unchecked Sendable {
     private let tenant: String
     private let session: URLSession
     private let idleTimeout: TimeInterval
+    private let requestTimeout: TimeInterval?
     private let ownsSession: Bool
 
     public init(
@@ -20,12 +21,14 @@ public final class NativResponsesClient: @unchecked Sendable {
         tenant: String,
         idleTimeout: TimeInterval = NativChatClient.defaultIdleTimeout,
         resourceTimeout: TimeInterval = NativChatClient.defaultResourceTimeout,
+        requestTimeout: TimeInterval? = nil,
         session: URLSession? = nil
     ) {
         self.baseURL = baseURL
         self.apiKey = apiKey
         self.tenant = tenant
         self.idleTimeout = idleTimeout
+        self.requestTimeout = requestTimeout
         self.ownsSession = session == nil
         if let session {
             self.session = session
@@ -106,6 +109,9 @@ public final class NativResponsesClient: @unchecked Sendable {
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        if let requestTimeout {
+            urlRequest.setValue(String(requestTimeout), forHTTPHeaderField: "X-Nativ-Request-Timeout")
+        }
         urlRequest.httpBody = try JSONEncoder().encode(payload)
         return urlRequest
     }

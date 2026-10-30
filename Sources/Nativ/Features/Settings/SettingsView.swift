@@ -249,11 +249,11 @@ struct SettingsView: View {
 
             VStack(spacing: 0) {
                 settingsRow(
-                    title: "Chat Response Timeout",
-                    description: "How long Nativ waits without receiving response data. Longer waits can help with large prompts.",
+                    title: "Response Timeout",
+                    description: "Maximum duration of each streaming response, including prefill and generation, in Nativ and connected apps. Automatic heartbeats keep the connection alive without extending this timeout. Applies to new requests.",
                     systemImage: "clock"
                 ) {
-                    chatResponseTimeoutControl
+                    responseTimeoutControl
                 }
 
                 Divider()
@@ -282,17 +282,16 @@ struct SettingsView: View {
         }
     }
 
-    private var chatResponseTimeoutControl: some View {
+    private var responseTimeoutControl: some View {
         @Bindable var model = model
-        return Picker("Chat Response Timeout", selection: $model.settings.chatResponseTimeout) {
-            ForEach(NativChatTimeout.allCases) { timeout in
+        return Picker("Response Timeout", selection: $model.settings.responseTimeout) {
+            ForEach(NativResponseTimeout.allCases) { timeout in
                 Text(timeout.displayName).tag(timeout)
             }
         }
         .labelsHidden()
         .pickerStyle(.menu)
         .fixedSize()
-        .accessibilityHint("Applies to new requests. You can still stop a response when No limit is selected.")
     }
 
     private var projectSettings: some View {

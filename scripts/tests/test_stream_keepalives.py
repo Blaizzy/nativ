@@ -20,7 +20,8 @@ names = {'stream_with_keepalives', 'stream_keepalive_interval', 'stream_request_
 nodes = [n for n in ast.parse(SOURCE.read_text()).body
          if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names]
 namespace = dict(asyncio=asyncio, anyio=anyio, math=math, os=os, time=time,
-                 base=SimpleNamespace(logger=Mock()))
+                 base=SimpleNamespace(logger=Mock()),
+                 base_generation=SimpleNamespace(runtime=SimpleNamespace(config=None)))
 exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), namespace)
 wrap = namespace['stream_with_keepalives']
 HEARTBEAT = b': keepalive\n\n'
@@ -222,6 +223,13 @@ class KeepaliveTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, NATIV_STREAM_KEEPALIVE_INTERVAL=value):
                 self.assertEqual(namespace['stream_keepalive_interval'](), expected)
 
+    def test_deadline_uses_live_engine_setting_and_client_can_only_shorten_it(self):
+        runtime = namespace['base_generation'].runtime
+        with patch.object(runtime, 'config', SimpleNamespace(current=lambda: {'token_queue_timeout': 1200})):
+            self.assertEqual(namespace['stream_request_timeout'](), 1200)
+            for hint, expected in [('600', 600), ('7200', 1200), ('nan', 1200), ('0', 1200), ('bad', 1200)]:
+                request = SimpleNamespace(headers={'x-nativ-request-timeout': hint})
+                self.assertEqual(namespace['stream_request_timeout'](request), expected)
 
 
 if __name__ == '__main__':
