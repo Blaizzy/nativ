@@ -81,6 +81,7 @@ jobs:
             -only-testing:NativTests/ArtifactDeletionTests \
             -only-testing:NativTests/ChatTimeoutTests \
             -only-testing:NativTests/NativRuntimeSettingsTests \
+            -only-testing:NativTests/ArtifactFileIndexTests \
             -only-testing:NativTests/ChatFileWriteToolTests \
             -only-testing:NativTests/ChatReadFileToolTests \
             -only-testing:NativTests/AudioAnalyticsStoreTests \

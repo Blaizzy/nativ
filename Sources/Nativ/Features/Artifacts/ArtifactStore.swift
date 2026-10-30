@@ -58,6 +58,7 @@ final class ArtifactStore: ObservableObject {
     private let mediaStore: MediaAssetStore
     private let rebuildIndex: Rebuild
     private var persistedDataChangeCancellable: AnyCancellable?
+    private var fileIndexCancellable: AnyCancellable?
     private var refreshPending = false
     private let deletionHandler: DeletionHandler
     private let indexURL: URL
@@ -70,6 +71,7 @@ final class ArtifactStore: ObservableObject {
         storage: StorageLocations = .application,
         refreshesAutomatically: Bool = true,
         persistedDataChanges: PersistedDataChangeHub? = nil,
+        fileIndex: ArtifactFileIndexCoordinator? = nil,
         rebuild: Rebuild? = nil,
         mediaStore: MediaAssetStore = .shared,
         trash: ArtifactTrash? = nil,
@@ -116,6 +118,9 @@ final class ArtifactStore: ObservableObject {
             let deletedIDs = Set(records.map(\.id))
             artifacts.removeAll { deletedIDs.contains($0.id) }
             refresh()
+        }
+        fileIndexCancellable = fileIndex?.$revision.dropFirst().sink { [weak self] _ in
+            self?.refresh()
         }
         if refreshesAutomatically {
             refresh()

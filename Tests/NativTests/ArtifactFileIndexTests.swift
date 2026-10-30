@@ -54,6 +54,37 @@ final class ArtifactFileIndexTests: XCTestCase {
         XCTAssertEqual(reads, 2)
     }
 
+    @MainActor
+    func testFilesystemChangesRefreshOpenCatalogWithoutReloadingSessions() async throws {
+        let fixture = try fixture(), session = fixture.session()
+        XCTAssertTrue(fixture.chats.saveSession(session))
+        let coordinator = ArtifactFileIndexCoordinator(root: fixture.chatRoot, indexURL: fixture.database)
+        let candidates = ArtifactCatalog.artifacts(chats: [session], images: [], chatStore: fixture.chats,
+                                                   includeUnavailableWorkFiles: true)
+        let store = ArtifactStore(storage: .init(indexURL: fixture.root.appending(path: "catalog.json"),
+            cacheDirectory: fixture.root.appending(path: "Cache"), favoritesURL: fixture.root.appending(path: "favorites.json"),
+            displayNamesURL: fixture.root.appending(path: "names.json")), fileIndex: coordinator,
+            rebuild: { _, _, known in
+                ArtifactStore.catalogSnapshot(fingerprint: "unchanged", known: known) {
+                    XCTAssertNil(known.candidates, "Filesystem changes must reuse cached session metadata")
+                    return candidates
+                }
+            })
+        for _ in 0..<100 where store.artifacts.count != 2 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(store.artifacts.count, 2)
+        let item = session.workState!.items[0], url = fixture.file(item, in: session)
+        try FileManager.default.removeItem(at: url)
+        for _ in 0..<100 where store.artifacts.count != 1 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(store.artifacts.count, 1, "An open gallery must drop externally deleted files")
+        XCTAssertTrue(store.searchResults(in: store.artifacts, query: "Notes.md", semanticMatches: nil).isEmpty)
+        try "restoredwallaby".write(to: url, atomically: true, encoding: .utf8)
+        for _ in 0..<100 where store.artifacts.count != 2 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(store.artifacts.count, 2)
+        let hits = try await coordinator.worker.search("restoredwallaby").compactMap(UUID.init(uuidString:))
+        XCTAssertEqual(store.searchResults(in: store.artifacts, query: "restoredwallaby", semanticMatches: nil,
+                                          contentMatches: hits).count, 1)
+    }
+
     func testSearchReturnsAllMatchesAndTreatsQueryAsLiteralText() throws {
         let fixture = try fixture()
         let database = try ArtifactFileIndexStore(url: fixture.database)

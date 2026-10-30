@@ -53,7 +53,7 @@ final class ControlPanelDependencies: ObservableObject {
         persistedDataChanges: persistedDataChanges,
         inferenceActivity: inferenceActivity
     )
-    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, trash: artifactTrash)
+    lazy var artifacts = ArtifactStore(persistedDataChanges: persistedDataChanges, fileIndex: fileIndex, trash: artifactTrash)
     lazy var dashboard = DashboardViewModel()
     lazy var downloads = HuggingFaceDownloadManager.shared
     lazy var embeddingLibrary = LocalModelLibrary()
