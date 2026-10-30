@@ -4,7 +4,6 @@ import atexit
 import asyncio
 import json
 import logging
-import math
 import os
 import re
 import sqlite3
@@ -27,9 +26,8 @@ else:
     truststore.inject_into_ssl()
 
 import mlx.core as mx
-import anyio
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from mlx.utils import tree_flatten
 
 import mlx_vlm.server as base
@@ -991,7 +989,6 @@ class StreamAccumulator:
         self.finish_reason: str | None = None
         self.tool_calls = False
         self.failed = False
-        self.terminal = False
 
     def feed(self, block: str) -> None:
         lines = [line for line in block.splitlines() if line]
@@ -1011,7 +1008,6 @@ class StreamAccumulator:
 
         data_text = "\n".join(data_parts)
         if data_text == "[DONE]":
-            self.terminal = True
             return
 
         try:
@@ -1022,10 +1018,6 @@ class StreamAccumulator:
         if not isinstance(payload, dict):
             return
         response = payload.get("response")
-        if event_name in {"response.completed", "response.failed", "response.incomplete", "error"} or payload.get("type") in {
-            "response.completed", "response.failed", "response.incomplete", "error"
-        }:
-            self.terminal = True
         if (
             event_name in {"error", "response.failed"}
             or payload.get("type") in {"error", "response.failed"}
@@ -1033,7 +1025,6 @@ class StreamAccumulator:
             or (isinstance(response, dict) and response.get("status") == "failed")
         ):
             self.failed = True
-            self.terminal = True
             return
 
         if self.kind == "chat":
@@ -1325,130 +1316,11 @@ def install_runtime_settings_overlay() -> None:
     RuntimeConfig._nativ_live_settings_installed = True
 
 
-def stream_keepalive_interval() -> float:
-    """Seconds of stream silence before a comment; zero disables keepalives."""
-    raw = os.environ.get("NATIV_STREAM_KEEPALIVE_INTERVAL", "15")
-    try:
-        interval = float(raw)
-        if math.isfinite(interval) and interval >= 0:
-            return interval
-    except ValueError:
-        pass
-    base.logger.warning("Invalid NATIV_STREAM_KEEPALIVE_INTERVAL; using 15 seconds")
-    return 15.0
-
-
-def stream_request_timeout() -> float:
-    try:
-        value = float(os.environ.get("NATIV_STREAM_REQUEST_TIMEOUT", "1800"))
-        if math.isfinite(value) and value > 0:
-            return value
-    except ValueError:
-        pass
-    base.logger.warning("Invalid NATIV_STREAM_REQUEST_TIMEOUT; using 1800 seconds")
-    return 1800.0
-
-
-class StreamDeadlineExceeded(TimeoutError):
-    def __init__(self, safe_to_emit: bool):
-        super().__init__("Server streaming request deadline exceeded")
-        self.safe_to_emit = safe_to_emit
-
-
-class RequestCancellationMiddleware:
-    """Expose the downstream request task to the outer deadline handler.
-
-    BaseHTTPMiddleware runs the endpoint in a separate task; cancelling only
-    call_next() leaves that task running when headers have not arrived yet.
-    """
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return await self.app(scope, receive, send)
-        scope["nativ.request_task"] = asyncio.current_task()
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            scope.pop("nativ.request_task", None)
-
-
-async def stream_with_keepalives(source, interval: float, is_terminal=lambda: False, deadline=None):
-    """Add SSE comments without cancelling a slow read or splitting an event.
-
-    Transport chunks can split even a CRLF delimiter. Track framing with
-    constant memory and defer comments until a complete event boundary.
-    Heartbeats deliberately do not alter the engine's token queue timeout.
-    """
-    iterator = aiter(source)
-    pending = None
-    boundary = True
-    line_has_data = False
-    after_cr = False
-    try:
-        if interval == 0 and deadline is None:
-            async for chunk in iterator:
-                yield chunk
-            return
-        while True:
-            remaining = None if deadline is None else deadline - time.monotonic()
-            if remaining is not None and remaining <= 0:
-                if is_terminal():
-                    return
-                raise StreamDeadlineExceeded(boundary and not after_cr and not is_terminal())
-            if pending is None:
-                pending = asyncio.create_task(anext(iterator), name="nativ-sse-read")
-            heartbeat_allowed = interval > 0 and boundary and not after_cr and not is_terminal()
-            wait = min(interval, remaining) if heartbeat_allowed and remaining is not None else (
-                interval if heartbeat_allowed else remaining
-            )
-            if wait is not None:
-                done, _ = await asyncio.wait({pending}, timeout=wait)
-                if not done:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        if is_terminal():
-                            return
-                        raise StreamDeadlineExceeded(boundary and not after_cr and not is_terminal())
-                    if heartbeat_allowed:
-                        yield b": keepalive\n\n"
-                    continue
-            try:
-                chunk = await pending
-            except StopAsyncIteration:
-                return
-            pending = None
-            data = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
-            for char in data:
-                if after_cr and char == 10:
-                    after_cr = False
-                    continue
-                after_cr = char == 13
-                if char in (10, 13):
-                    boundary = not line_has_data
-                    line_has_data = False
-                else:
-                    line_has_data = True
-                    boundary = False
-            yield chunk
-    finally:
-        # Starlette cancels the response's AnyIO scope on disconnect. Shield
-        # cleanup so its cancellation cannot interrupt closing the source.
-        with anyio.CancelScope(shield=True):
-            if pending is not None:
-                pending.cancel()
-                await asyncio.gather(pending, return_exceptions=True)
-            close = getattr(iterator, "aclose", None)
-            if close is not None:
-                await close()
-
-
 def install_metrics_overlay() -> None:
     if getattr(base.app.state, "mlx_platform_metrics_installed", False):
         return
     base.app.state.mlx_platform_metrics_installed = True
     install_base_metrics_capture()
-    base.app.add_middleware(RequestCancellationMiddleware)
 
     @base.app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
@@ -1479,22 +1351,9 @@ def install_metrics_overlay() -> None:
         TRACKER.record_started(observation)
         metrics_capture: dict[str, Any] = {}
         capture_token = _BASE_METRICS_CAPTURE.set(metrics_capture)
-        deadline = time.monotonic() + stream_request_timeout() if isinstance(payload, dict) and payload.get("stream") is True else None
 
         try:
-            if deadline is None:
-                response = await call_next(request)
-            else:
-                response = await asyncio.wait_for(call_next(request), max(0, deadline - time.monotonic()))
-        except TimeoutError:
-            upstream_task = request.scope.get("nativ.request_task")
-            if upstream_task is not None:
-                upstream_task.cancel()
-            TRACKER.record_failed(observation, "timeout")
-            return JSONResponse(status_code=504, content={"error": {
-                "message": "Server streaming request deadline exceeded.",
-                "type": "timeout_error", "code": "request_timeout",
-            }})
+            response = await call_next(request)
         except asyncio.CancelledError:
             TRACKER.record_failed(observation, cancelled=True)
             raise
@@ -1514,11 +1373,7 @@ def install_metrics_overlay() -> None:
                 observation,
                 "chat" if request.url.path.endswith("chat/completions") else "responses",
             )
-            original_iterator = stream_with_keepalives(
-                response.body_iterator, stream_keepalive_interval(),
-                is_terminal=lambda: accumulator.terminal or accumulator.failed,
-                deadline=deadline,
-            )
+            original_iterator = response.body_iterator
 
             async def wrapped_iterator():
                 buffer = ""
@@ -1553,25 +1408,12 @@ def install_metrics_overlay() -> None:
                         TRACKER.record_completed(observation, completion)
                     except Exception as error:
                         base.logger.warning("metrics completion instrumentation failed: %s", error)
-                except StreamDeadlineExceeded as error:
-                    TRACKER.record_failed(observation, "timeout")
-                    if error.safe_to_emit:
-                        message = "Server streaming request deadline exceeded."
-                        if request.url.path.endswith("chat/completions"):
-                            payload = {"error": {"message": message, "type": "timeout_error", "code": "request_timeout"}}
-                            yield f"data: {json.dumps(payload)}\n\n".encode()
-                        else:
-                            payload = {"type": "error", "code": "request_timeout", "message": message, "param": None}
-                            yield f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
                 except asyncio.CancelledError:
                     TRACKER.record_failed(observation, cancelled=True)
                     raise
                 except Exception as error:
                     TRACKER.record_failed(observation, safe_failure_code(error))
                     raise
-                finally:
-                    with anyio.CancelScope(shield=True):
-                        await original_iterator.aclose()
 
             response.body_iterator = wrapped_iterator()
             return response
