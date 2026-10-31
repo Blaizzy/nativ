@@ -1867,6 +1867,7 @@ private final class HuggingFaceCapturedOutput: @unchecked Sendable {
 
 enum HuggingFaceXetDownload {
     static let script = """
+    import hashlib
     import subprocess
     from huggingface_hub import file_download
 
@@ -1883,10 +1884,23 @@ enum HuggingFaceXetDownload {
             log_level=20, name="huggingface_hub.xet_get",
             tqdm_class=tqdm_class, _tqdm_bar=_tqdm_bar,
         ) as progress:
-            completed = 0
+            # huggingface_hub hands each attempt a fresh uuid-named temp file; download into a
+            # stable per-etag file instead so the helper resumes it, then move it into place.
+            stem = incomplete_path.name.rsplit(".", 2)[0]
+            resumable_path = incomplete_path.with_name(f"{stem}.incomplete")
+            for orphan in incomplete_path.parent.glob(f"{stem}.*.incomplete"):
+                if orphan != incomplete_path:
+                    orphan.unlink(missing_ok=True)
+            resumed = resumable_path.stat().st_size if resumable_path.exists() else 0
+            if resumed > expected_size:
+                resumable_path.unlink()
+                resumed = 0
+            if resumed:
+                progress.update(resumed)
+            completed = resumed
             with subprocess.Popen(
                 [sys.argv[5], "--xet-download", xet_file_data.file_hash, xet_file_data.refresh_route,
-                 str(incomplete_path), str(expected_size)],
+                 str(resumable_path), str(expected_size)],
                 env=environment, stdout=subprocess.PIPE, text=True,
             ) as helper:
                 try:
@@ -1905,9 +1919,25 @@ enum HuggingFaceXetDownload {
                     if helper.poll() is None:
                         helper.kill()
                         helper.wait()
+            # A prefix from an earlier attempt may not have survived a crash intact;
+            # cache etags are the file's sha256, so verify before installing it.
+            etag = stem.rsplit(".", 1)[-1]
+            if resumed and len(etag) == 64:
+                digest = hashlib.sha256()
+                with resumable_path.open("rb") as file:
+                    while chunk := file.read(8 << 20):
+                        digest.update(chunk)
+                if digest.hexdigest() != etag:
+                    resumable_path.unlink()
+                    raise RuntimeError("Resumed Xet download failed verification")
+            os.replace(resumable_path, incomplete_path)
 
     file_download.xet_get = native_xet_get
     """
+
+    /// Segments are appended only once fully fetched, since swift-xet writes chunks
+    /// out of order; the partial file is then always a valid prefix to resume from.
+    static let segmentSize: Int64 = 256 * 1024 * 1024
 
     static func run() async -> Never {
         do {
@@ -1921,11 +1951,20 @@ enum HuggingFaceXetDownload {
                 refreshURL: refreshURL,
                 hubToken: ProcessInfo.processInfo.environment["HF_TOKEN"]
             ) { downloader in
-                try await downloader.download(
-                    arguments[0], to: URL(fileURLWithPath: arguments[2])
-                ) { completed, _ in
-                    print(completed)
-                    fflush(stdout)
+                try await resume(
+                    destination: URL(fileURLWithPath: arguments[2]),
+                    expectedSize: expectedSize,
+                    progress: { completed in
+                        print(completed)
+                        fflush(stdout)
+                    }
+                ) { range, segmentURL, progress in
+                    // swift-xet counts progress from zero within the range.
+                    try await downloader.download(
+                        arguments[0], byteRange: range, to: segmentURL
+                    ) { completed, _ in
+                        progress(completed)
+                    }
                 }
             }
             guard written == expectedSize else {
@@ -1936,6 +1975,42 @@ enum HuggingFaceXetDownload {
             FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    /// Appends the rest of `destination` in segments after the prefix already on disk,
+    /// reporting absolute progress, and returns the final size.
+    static func resume(
+        destination: URL,
+        expectedSize: Int64,
+        segmentSize: Int64 = segmentSize,
+        progress: @escaping @Sendable (Int64) -> Void,
+        fetch: (Range<UInt64>, URL, @escaping @Sendable (Int64) -> Void) async throws -> Int64
+    ) async throws -> Int64 {
+        let fileManager = FileManager.default
+        if !fileManager.fileExists(atPath: destination.path) {
+            guard fileManager.createFile(atPath: destination.path, contents: nil) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+        }
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+        var written = Int64(try handle.seekToEnd())
+        // Named like the other partial files so cache scans and orphan cleanup see it.
+        let segmentURL = destination.deletingPathExtension().appendingPathExtension("part.incomplete")
+        defer { try? fileManager.removeItem(at: segmentURL) }
+        while written < expectedSize {
+            let start = written
+            let end = min(start + segmentSize, expectedSize)
+            let count = try await fetch(UInt64(start)..<UInt64(end), segmentURL) { progress(start + $0) }
+            guard count == end - start else { throw CocoaError(.fileReadCorruptFile) }
+            let segment = try FileHandle(forReadingFrom: segmentURL)
+            defer { try? segment.close() }
+            while let chunk = try segment.read(upToCount: 8 << 20), !chunk.isEmpty {
+                try handle.write(contentsOf: chunk)
+            }
+            written = end
+        }
+        return written
     }
 }
 
