@@ -2,6 +2,8 @@
 
 Nativ is now maintained by **[Neywa Labs](https://github.com/Neywa-Labs)**.
 
+[![Nativ on StartupScores](https://startupscores.com/badge/nativ.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/nativ)
+
 - **Source code, issues, and contributions:** [Neywa-Labs/nativ](https://github.com/Neywa-Labs/nativ)
 - **Official website:** [runnativ.ai](https://runnativ.ai/)
 - **Downloads:** [Nativ releases](https://github.com/Neywa-Labs/nativ/releases)
